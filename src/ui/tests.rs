@@ -1518,7 +1518,8 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
 #[test]
 fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
     let mut model = model_with_plugins(&["flow"]);
-    model.steps_taken = [uze_keys::Action::StartFilter.name()].into_iter().collect();
+    let taken = crate::ui::management::FIRST_STEPS[0];
+    model.steps_taken = [taken.name()].into_iter().collect();
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -1548,7 +1549,7 @@ fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
         assert!(row.contains(&action.label()), "{row:?}");
         assert_eq!(
             row.contains(&tick),
-            action == uze_keys::Action::StartFilter,
+            action == taken,
             "only what has been done is ticked: {row:?}"
         );
     }
@@ -1625,24 +1626,50 @@ fn a_finished_list_offers_to_leave() {
 fn taking_a_step_any_way_at_all_marks_it_taken() {
     let mut model = model_with_plugins(&["flow"]);
     assert!(model.steps_taken.is_empty());
-    model.act(uze_keys::Action::StartFilter);
+    model.act(uze_keys::Action::OpenActionIndex);
     assert!(
         model
             .steps_taken
-            .contains(&uze_keys::Action::StartFilter.name())
+            .contains(&uze_keys::Action::OpenActionIndex.name())
     );
 
     // And an action that is not a step leaves the list alone.
     let before = model.steps_taken.clone();
-    model.act(uze_keys::Action::Refresh);
+    model.act(uze_keys::Action::StartFilter);
     assert_eq!(model.steps_taken, before);
 }
 
-/// Two of the management steps belong to a screen with a list. On one
-/// without, they used to do nothing at all — which is what a broken key
-/// looks like — and the list ticked them off anyway.
+/// The property the list needs and nothing was checking: a step must be
+/// takeable from wherever the list is drawn, which is every screen.
+///
+/// Two steps were screen-specific — asking a row what can be done to it,
+/// and searching a list — so on the screen uze opens on they were rows
+/// that did nothing when clicked, in a checklist that could never be
+/// finished from there.
 #[test]
-fn a_step_that_does_nothing_here_says_so_and_is_not_ticked() {
+fn every_first_step_can_be_taken_from_every_screen() {
+    for route in ROUTES {
+        for action in crate::ui::management::FIRST_STEPS {
+            let mut model = TuiModel {
+                route,
+                focus: Focus::Content,
+                ..model_with_data()
+            };
+            model.act(action);
+            assert!(
+                model.steps_taken.contains(&action.name()),
+                "{action} did not land on {route:?} — a step the list offers \
+                 everywhere has to be takeable everywhere"
+            );
+        }
+    }
+}
+
+/// An action that belongs to a screen with a list still answers on one
+/// without, rather than doing nothing — which is what a broken key looks
+/// like — and is never recorded as something that happened.
+#[test]
+fn a_key_with_nothing_to_act_on_here_says_so() {
     let mut model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
@@ -1656,7 +1683,6 @@ fn a_step_that_does_nothing_here_says_so_and_is_not_ticked() {
         "and the key says so: {:?}",
         model.status
     );
-    assert!(model.steps_taken.is_empty(), "and nothing was ticked");
 
     model.act(uze_keys::Action::OpenRowActions);
     assert!(model.row_menu.is_none());
@@ -1665,9 +1691,12 @@ fn a_step_that_does_nothing_here_says_so_and_is_not_ticked() {
         "{:?}",
         model.status
     );
-    assert!(model.steps_taken.is_empty());
+    assert!(
+        model.steps_taken.is_empty(),
+        "neither is a first step, and nothing was recorded either way"
+    );
 
-    // On a screen that has them, both land — and both are ticked.
+    // On a screen that has them, both land.
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
@@ -1678,7 +1707,6 @@ fn a_step_that_does_nothing_here_says_so_and_is_not_ticked() {
     model.filtering = false;
     model.act(uze_keys::Action::OpenRowActions);
     assert!(model.row_menu.is_some());
-    assert_eq!(model.steps_taken.len(), 2, "{:?}", model.steps_taken);
 }
 
 /// The Keys screen draws a search field and answers clicks on it, but `/`

@@ -2120,7 +2120,19 @@ mod workspace_tests {
             !text.contains("shipped"),
             "delivered work is not preserved work"
         );
-        assert!(text.contains("[d] discard"));
+        let discard = uze_keys::active()
+            .chord_for(
+                uze_keys::Action::DiscardTask,
+                &[uze_keys::Scope::Global, uze_keys::Scope::PreservedWork],
+            )
+            .expect("discard is bound here");
+        assert!(
+            text.contains(&format!(
+                "{discard} {}",
+                uze_keys::Action::DiscardTask.label().to_lowercase()
+            )),
+            "the key it names is the one the keymap binds: {text}"
+        );
     }
 
     /// A one-agent session whose only tab runs in `cwd`.
@@ -2798,6 +2810,86 @@ mod workspace_tests {
         assert!(model.first_steps_collapsed);
     }
 
+    /// A dialog is held to a reading width, and its own selection does not
+    /// decide that width. Filling the selected row to the frame's edge
+    /// before anything had measured the popup made the popup the width of
+    /// the terminal.
+    #[test]
+    fn the_preserved_dialog_keeps_a_reading_width() {
+        let model = WorkspaceModel {
+            preserved: Some(PreservedOverlay {
+                selected: 0,
+                confirm_discard: false,
+            }),
+            ..WorkspaceModel::default()
+        };
+        let overlay = model.preserved.as_ref().expect("open");
+        let mut terminal = Terminal::new(TestBackend::new(200, 20)).unwrap();
+        terminal
+            .draw(|frame| render_preserved(frame, frame.area(), &model, overlay))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let drawn: Vec<String> = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        let top = drawn
+            .iter()
+            .find(|row| row.contains('┌'))
+            .expect("the dialog drew a border");
+        let width = top.trim_end().chars().count()
+            - top.find('┌').map_or(0, |byte| top[..byte].chars().count());
+        assert!(
+            (30..=72).contains(&width),
+            "held to a reading width, not the terminal's: {width}"
+        );
+    }
+
+    /// Every key this dialog names comes from the keymap. Five of them
+    /// were written into the string by hand — the last place in the client
+    /// that claimed a key nothing had resolved.
+    #[test]
+    fn the_preserved_dialog_reads_its_keys_off_the_keymap() {
+        let model = WorkspaceModel {
+            preserved: Some(PreservedOverlay {
+                selected: 0,
+                confirm_discard: false,
+            }),
+            ..WorkspaceModel::default()
+        };
+        let overlay = model.preserved.as_ref().expect("open");
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal
+            .draw(|frame| render_preserved(frame, frame.area(), &model, overlay))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let drawn: String = (0..buffer.area.height)
+            .flat_map(|row| (0..buffer.area.width).map(move |column| (column, row)))
+            .map(|position| buffer[position].symbol().to_owned())
+            .collect();
+
+        let keymap = uze_keys::active();
+        let scopes = [uze_keys::Scope::Global, uze_keys::Scope::PreservedWork];
+        for action in [
+            uze_keys::Action::ResumeTask,
+            uze_keys::Action::DeliverTask,
+            uze_keys::Action::FinishTask,
+            uze_keys::Action::DiscardTask,
+            uze_keys::Action::Dismiss,
+        ] {
+            let chord = keymap
+                .chord_for(action, &scopes)
+                .unwrap_or_else(|| panic!("{action} is bound here"));
+            assert!(
+                drawn.contains(&format!("{chord} {}", action.label().to_lowercase())),
+                "{action} is named with the key the keymap binds: {drawn}"
+            );
+        }
+    }
+
     /// The header folds it, and it stays folded: a section that came back
     /// open every run would be one nobody could put away.
     #[test]
@@ -2896,6 +2988,81 @@ mod workspace_tests {
         assert!(model.shape().first_steps.closed);
     }
 
+    /// The keystroke a chord is: the inverse of `keys::chord_of`, so a test
+    /// can press what the keymap says rather than a key typed by hand.
+    fn key_event(chord: uze_keys::Chord) -> crossterm::event::KeyEvent {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use uze_keys::Key;
+        let code = match chord.key {
+            Key::Char(character) => KeyCode::Char(character),
+            Key::F(number) => KeyCode::F(number),
+            Key::Enter => KeyCode::Enter,
+            Key::Esc => KeyCode::Esc,
+            Key::Tab => KeyCode::Tab,
+            Key::Space => KeyCode::Char(' '),
+            Key::Backspace => KeyCode::Backspace,
+            Key::Delete => KeyCode::Delete,
+            Key::Insert => KeyCode::Insert,
+            Key::Up => KeyCode::Up,
+            Key::Down => KeyCode::Down,
+            Key::Left => KeyCode::Left,
+            Key::Right => KeyCode::Right,
+            Key::Home => KeyCode::Home,
+            Key::End => KeyCode::End,
+            Key::PageUp => KeyCode::PageUp,
+            Key::PageDown => KeyCode::PageDown,
+        };
+        let mut modifiers = KeyModifiers::NONE;
+        if chord.mods.ctrl {
+            modifiers |= KeyModifiers::CONTROL;
+        }
+        if chord.mods.alt {
+            modifiers |= KeyModifiers::ALT;
+        }
+        if chord.mods.shift {
+            modifiers |= KeyModifiers::SHIFT;
+        }
+        KeyEvent::new(code, modifiers)
+    }
+
+    /// The property the list needs, in this mode too: a step must be
+    /// takeable from where the list is drawn, and taking it must tick it.
+    ///
+    /// Moving between agents did not. Its evidence was "the selected tab
+    /// changed", and this client asks the server for a tab and is answered
+    /// frames later — so at the moment the question was asked the answer
+    /// was always no, however many times the step was taken.
+    #[test]
+    fn every_first_step_is_ticked_when_it_is_taken() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("first-steps-ticked"));
+        let (model, first, _) = two_agents_with_shells();
+        let mut driven = driven(model, &home);
+        driven
+            .attach
+            .model
+            .session
+            .as_mut()
+            .expect("session")
+            .select_tab(first);
+
+        let keymap = uze_keys::active();
+        for action in render::FIRST_STEPS {
+            let chord = keymap
+                .chord_for(action, render::FIRST_STEP_SCOPES)
+                .unwrap_or_else(|| panic!("{action} is bound in this mode"));
+            driven.press_key(key_event(chord));
+            assert!(
+                driven.attach.model.steps_taken.contains(&action.name()),
+                "{action} was taken with {chord} and never ticked"
+            );
+            // Whatever it opened goes away before the next one is tried.
+            driven.press_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+    }
+
     /// A step is ticked once it has been taken, and the header counts them.
     #[test]
     fn a_step_taken_is_marked_and_counted() {
@@ -2924,6 +3091,35 @@ mod workspace_tests {
             .find(|row| row.contains(&render::FIRST_STEPS[1].label()))
             .expect("and so is the next one");
         assert!(!untaken.contains(&tick), "{untaken:?}");
+    }
+
+    /// Folded, the header carries no band. A filled row across the column
+    /// says "this is a heading over content", and a folded section has
+    /// none — two of them stacked at the foot of the sidebar read as a
+    /// toolbar rather than as two things you can open.
+    #[test]
+    fn a_folded_section_header_carries_no_band() {
+        let mut model = session_with_timeline(&["feat: only"]);
+        model.first_steps_collapsed = true;
+
+        for (collapsed, banded) in [(false, true), (true, false)] {
+            model.timeline_collapsed = collapsed;
+            let buffer = sidebar_buffer(&model, &mut Vec::new());
+            let rows = sidebar_rows(&model, &mut Vec::new());
+            let header = rows
+                .iter()
+                .position(|row| row.contains("timeline"))
+                .expect("the header is drawn");
+            let column = rows[header]
+                .chars()
+                .position(|glyph| glyph == 't')
+                .expect("its title") as u16;
+            assert_eq!(
+                buffer[(column, header as u16)].bg == theme::color(Token::SurfaceRaised),
+                banded,
+                "collapsed={collapsed}: {rows:?}"
+            );
+        }
     }
 
     /// The timeline keeps the foot of the column, under the spaces, with
@@ -4417,6 +4613,21 @@ mod workspace_tests {
             let _ = self.attach.handle(event, &viewport);
         }
 
+        /// One key, through the same dispatch the attach loop uses.
+        fn press_key(&mut self, key: crossterm::event::KeyEvent) {
+            let area = Rect::new(0, 0, 80, 24);
+            let layout = compute_layout(area, self.attach.model.sidebar_width);
+            let viewport = Viewport {
+                size: ratatui::layout::Size::new(area.width, area.height),
+                columns: layout.pane.width,
+                rows: layout.pane.height,
+                layout,
+            };
+            let _ = self
+                .attach
+                .handle(crossterm::event::Event::Key(key), &viewport);
+        }
+
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
         fn pump(&mut self) {
@@ -4508,6 +4719,7 @@ mod workspace_tests {
                 },
                 spinner: indicatif::ProgressBar::hidden(),
                 next_tick: Instant::now(),
+                asked_for_a_tab: false,
             },
             server,
             events: events_rx,

@@ -1902,6 +1902,14 @@ fn delivery_ending(task: &TaskView) -> String {
 
 /// The preserved-work list: every task holding work that no live tab is in
 /// front of, with the keys that move it on. Discard asks twice.
+/// The reading width this client's centred dialogs keep. A dialog as wide
+/// as the terminal is one nobody reads across — the eye loses the line on
+/// the way back — and both of these are short lists of short rows. One
+/// pair of numbers so the two are the same shape rather than each what its
+/// own content happened to come to.
+const MIN_POPUP_WIDTH: u16 = 30;
+const MAX_POPUP_WIDTH: u16 = 72;
+
 /// Everything that can be done here, each with the key that reaches it.
 ///
 /// The workspace had no such surface at all: two of its most useful
@@ -1921,7 +1929,10 @@ pub(super) fn render_action_index(
         .max()
         .unwrap_or(0)
         .max(4);
-    let width = area.width.saturating_sub(8).clamp(30, 72);
+    let width = area
+        .width
+        .saturating_sub(8)
+        .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH);
     let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
     let rect = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
@@ -2011,6 +2022,7 @@ pub(super) fn render_preserved(
     overlay: &PreservedOverlay,
 ) {
     let preserved = model.preserved_tasks();
+    let mut selected_line = None;
     let mut lines = vec![Line::from(Span::styled(
         "PRESERVED WORK",
         theme::fg(Token::TextMuted),
@@ -2053,7 +2065,7 @@ pub(super) fn render_preserved(
             TaskStateView::Integrated => "delivered".to_owned(),
             TaskStateView::Closed => "nothing to deliver".to_owned(),
         };
-        let mut spans = vec![
+        let spans = vec![
             Span::styled(
                 if selected {
                     format!("{} ", theme::glyph(Symbol::ChevronCollapsed))
@@ -2074,25 +2086,58 @@ pub(super) fn render_preserved(
             Span::styled(format!("  {what}"), theme::fg(Token::TextSecondary)),
         ];
         if selected {
-            fill_row_bg(&mut spans, area.width, theme::color(Token::SurfaceSelected));
+            // Filled after the popup is measured, not here: a selection
+            // that reaches the frame's edge before anything has decided
+            // how wide the dialog is *becomes* how wide the dialog is.
+            selected_line = Some(lines.len());
         }
         lines.push(Line::from(spans));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        if overlay.confirm_discard {
-            "discard this task and its branch?  [y] yes   [any other key] no"
-        } else {
-            "[r] resume   [i] deliver   [f] mark done   [d] discard   [esc] close"
-        },
-        Style::default().fg(if overlay.confirm_discard {
-            theme::color(Token::StateWarning)
-        } else {
-            theme::color(Token::TextMuted)
-        }),
-    )));
+    // Read off the keymap like every other hint. These five keys were
+    // written into the string by hand — the last place in the client that
+    // still claimed a key nothing had resolved, so a rebinding left it
+    // quietly wrong.
+    const SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::PreservedWork];
+    lines.push(if overlay.confirm_discard {
+        let mut line = Line::from(Span::styled(
+            "discard this task and its branch?  ",
+            theme::fg(Token::StateWarning),
+        ));
+        line.spans
+            .extend(crate::ui::hint_for(SCOPES, &[Action::ConfirmDiscard, Action::Dismiss]).spans);
+        line
+    } else {
+        crate::ui::hint_for(
+            SCOPES,
+            &[
+                Action::ResumeTask,
+                Action::DeliverTask,
+                Action::FinishTask,
+                Action::DiscardTask,
+                Action::Dismiss,
+            ],
+        )
+    });
+    // Measured from the words, then held to the same reading width the
+    // index beside it keeps: a dialog as wide as the terminal is a dialog
+    // nobody can read across, and this one is a short list of short rows.
     let content = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
-    let width = (content + 2 + 2 * POPUP_H_PAD).min(area.width).max(1);
+    let width = (content + 2 + 2 * POPUP_H_PAD)
+        .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH)
+        .min(area.width)
+        .max(1);
+    let text_width = width.saturating_sub(2 + 2 * POPUP_H_PAD);
+    for line in &mut lines {
+        crate::ui::management::clip_line(line, text_width as usize);
+    }
+    if let Some(index) = selected_line {
+        fill_row_bg(
+            &mut lines[index].spans,
+            text_width,
+            theme::color(Token::SurfaceSelected),
+        );
+    }
     let height = (lines.len() as u16 + 2).min(area.height).max(1);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,

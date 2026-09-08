@@ -81,6 +81,16 @@ pub(super) struct Attach<'a> {
     /// [`AGENT_ACTIVITY_FRAMES`].
     pub(super) spinner: ProgressBar,
     pub(super) next_tick: Instant,
+    /// Whether the action being performed right now asked the server to
+    /// select a tab.
+    ///
+    /// Everything else a first step can do lands in the model before the
+    /// handler returns, so the evidence is there to read. Moving between
+    /// agents does not: the client asks and the server answers frames
+    /// later, so the selection is unchanged at the moment the question
+    /// "did that land?" is asked, and the step was never ticked off
+    /// however many times it was taken.
+    pub(super) asked_for_a_tab: bool,
 }
 
 impl Attach<'_> {
@@ -225,19 +235,19 @@ impl Attach<'_> {
     /// tell it. It asks *after*, and asks for evidence: a gesture that did
     /// nothing would otherwise tick itself off.
     fn act(&mut self, action: Action, viewport: &Viewport) -> Flow {
-        let before = self.model.selected_tab();
+        self.asked_for_a_tab = false;
         let flow = self.perform(action, viewport);
-        if self.step_landed(action, before) && self.model.note_step(action) {
+        if self.step_landed(action) && self.model.note_step(action) {
             self.model.remember_sidebar();
         }
         flow
     }
 
     /// What a first step looks like once it has actually happened.
-    fn step_landed(&self, action: Action, before: Option<TabId>) -> bool {
+    fn step_landed(&self, action: Action) -> bool {
         match action {
             Action::NewAgent => self.model.agent_picker.is_some(),
-            Action::NextAgent => self.model.selected_tab() != before,
+            Action::NextAgent => self.asked_for_a_tab,
             Action::ToggleGitChanges => self.model.git_view.is_some(),
             Action::TogglePreservedWork => self.model.preserved.is_some(),
             Action::OpenActionIndex => self.model.action_index.is_some(),
@@ -383,6 +393,7 @@ impl Attach<'_> {
     /// sequence every "land somewhere" gesture shares, whether it came
     /// from a click, a position, or walking the sidebar.
     fn land_on_tab(&mut self, tab: TabId, columns: u16, rows: u16) {
+        self.asked_for_a_tab = true;
         self.model.acknowledge_completed_agent_tab(tab);
         let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
         if let Some(pane) = self.model.pane_for_tab(tab) {

@@ -892,6 +892,7 @@ pub(crate) fn attach_workspace(
         },
         spinner: activity_spinner,
         next_tick: next_activity_tick,
+        asked_for_a_tab: false,
     };
     let inbox = AttachInbox {
         events: &receiver,

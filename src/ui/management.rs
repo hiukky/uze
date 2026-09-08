@@ -382,15 +382,20 @@ fn route_subtitle(route: Route) -> &'static str {
     }
 }
 
-/// What is worth trying once on this side of the product: asking a row
-/// what can be done to it, narrowing a list, making it look the way you
-/// want, and the surface that lists the rest. Each is a gesture nobody
-/// discovers by staring at a screen, and none of them destroys anything,
-/// so a list that invites them costs the reader nothing.
-pub(crate) const FIRST_STEPS: [uze_keys::Action; 4] = [
-    uze_keys::Action::OpenRowActions,
-    uze_keys::Action::StartFilter,
+/// What is worth trying once on this side of the product.
+///
+/// Every one of them works on every screen. That is the rule, not a
+/// coincidence: this list is drawn in the same place whatever screen is
+/// open, so a step that needs a particular one is a step most readers meet
+/// as a row that does nothing when they click it. Asking a row what can be
+/// done to it and searching a list were here for exactly that reason and
+/// are not any more — both are offered where they apply, by the row's own
+/// `⋯` and by the search field.
+pub(crate) const FIRST_STEPS: [uze_keys::Action; 5] = [
+    uze_keys::Action::SwitchMode,
+    uze_keys::Action::NextScreen,
     uze_keys::Action::OpenThemePicker,
+    uze_keys::Action::Refresh,
     uze_keys::Action::OpenActionIndex,
 ];
 

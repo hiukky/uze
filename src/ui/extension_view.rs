@@ -535,11 +535,17 @@ pub(crate) fn render_section(
         section.caption.text.clone(),
         color(section.caption.role),
     );
-    crate::ui::fill_row_bg(
-        &mut spans,
-        header_rect.width,
-        theme::color(Token::SurfaceRaised),
-    );
+    // Filled only while there is something under it. A band across the
+    // column says "this is a heading over content"; on a folded section
+    // there is no content, and the band reads as a control of its own —
+    // two of them stacked at the foot of the sidebar read as a toolbar.
+    if !section.collapsed {
+        crate::ui::fill_row_bg(
+            &mut spans,
+            header_rect.width,
+            theme::color(Token::SurfaceRaised),
+        );
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
     hits.push((header_rect, ViewHit::ToggleSection));
     if section.collapsed {

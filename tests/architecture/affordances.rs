@@ -80,11 +80,14 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     );
 
     // --- Management -----------------------------------------------------
-    put(Action::NextScreen, Control("clicking a sidebar row"));
+    put(
+        Action::NextScreen,
+        Control("the first-steps section, or clicking a sidebar row"),
+    );
     put(Action::PreviousScreen, Control("clicking a sidebar row"));
     put(Action::FocusSidebar, Control("clicking the sidebar"));
     put(Action::FocusContent, Control("clicking the screen"));
-    put(Action::Refresh, Index);
+    put(Action::Refresh, Control("the first-steps section"));
     put(Action::StartFilter, Control("clicking the search field"));
     put(
         Action::OpenThemePicker,

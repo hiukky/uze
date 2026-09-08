@@ -112,7 +112,7 @@ impl TuiModel {
     /// have not is worse than no list.
     pub(crate) fn act(&mut self, action: Action) -> Intent {
         let intent = self.perform(action);
-        if self.step_landed(action) {
+        if self.step_landed(action, &intent) {
             self.note_step(action);
         }
         intent
@@ -120,11 +120,17 @@ impl TuiModel {
 
     /// What a first step looks like once it has actually happened. Only
     /// the steps need an answer; everything else is never noted.
-    fn step_landed(&self, action: Action) -> bool {
+    ///
+    /// Some of them leave their evidence on the model and some of them
+    /// leave it in the intent they answer with — an action that hands the
+    /// screen over to the other mode changes nothing here to look at.
+    fn step_landed(&self, action: Action, intent: &Intent) -> bool {
         match action {
-            Action::OpenRowActions => self.row_menu.is_some(),
-            Action::StartFilter => self.filtering,
-            Action::OpenThemePicker => matches!(self.overlay, Overlay::ThemePicker { .. }),
+            Action::SwitchMode => *intent == Intent::SwitchToWorkspace,
+            // Wraps, so it always moves.
+            Action::NextScreen | Action::PreviousScreen => true,
+            Action::OpenThemePicker => *intent == Intent::OpenThemePicker,
+            Action::Refresh => *intent == Intent::Refresh,
             Action::OpenActionIndex => matches!(self.overlay, Overlay::ActionIndex { .. }),
             _ => false,
         }

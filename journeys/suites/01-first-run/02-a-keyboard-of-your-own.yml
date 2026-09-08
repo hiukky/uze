@@ -19,6 +19,7 @@ scenes:
   - scene: the operator's keyboard is on the machine before uze is started
     when:
       - shell: |
+          mkdir -p {uze_home}
           printf '%s' '{"bindings":{"workspace":{"new-shell-tab":["f4"]}}}' > {uze_home}/keys.json
         say: write a keyboard that moves "new shell" off its default
       - open: "{uze}"
