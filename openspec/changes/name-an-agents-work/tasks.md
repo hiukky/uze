@@ -113,6 +113,19 @@ rather than in a commit nobody reads:
   remember it, because the name can change under it.
 - [x] 7.3 Depends on `project-agent-environment` §12: a policy that does not
   reach the projected region is a policy agents never read.
+- [x] 7.4 The clause states the **moment**, not only the command: the
+  agent's first action, before it reads a file, plans or edits. Projected
+  as the region's *first* bullet — the bullets are read in order, and a
+  request placed after three rules about commits and rebases reads as
+  something to do later.
+- [x] 7.5 The same moment in the two other places the rule is written: the
+  `worktree` skill in `plugins/uze` (which never mentioned naming at all)
+  and the `worktrees.branch` comment in this repository's own
+  `agents.yaml`. One rule stated three times is three chances to state it
+  differently, so they are worded from the same sentence.
+- [x] 7.6 An empty vocabulary still projects byte-identical text: the
+  clause is placed before the first bullet, so a project that names nothing
+  renders exactly what it rendered before.
 
 ## 8. Tests
 
@@ -120,6 +133,11 @@ The same invariant at more than one level is deliberate here (`tests/README.md`)
 the naming rule is a pure function at L0, a lifecycle at L1, and a user's
 flow at L3.5 — and each catches a different way of being wrong.
 
+- [x] 8.0 **L0 — the moment** (`uze-core`, `#[cfg(test)]`): the first bullet
+  of the projected region is the naming clause and it states the first
+  action; the old moment's wording appears nowhere in the region. A rule
+  whose whole weight is *when* it is read is one a test has to read
+  positionally.
 - [x] 8.1 **L0 — validation and derivation** (`uze-core`, `#[cfg(test)]`):
   every preset accepts its own types and refuses the others; a project list
   behaves identically to a preset of the same members; a malformed subject
@@ -192,4 +210,12 @@ flow at L3.5 — and each catches a different way of being wrong.
   `manifest::ensure_exists` writes, spelled out and commented like
   `completion` already is — the knobs are discoverable by opening the file.
 - [x] 9.3 The page the journeys name in `proves:` describes naming, or
-  `journey validate` fails on a `proves:` that does not resolve.
+  `journey validate` fails on a `proves:` that does not resolve. It
+  resolved and said nothing about naming: `web/content/docs/workspace.mdx`
+  now carries the command, the moment, the two automatic halves and the
+  vocabulary, and `project-files.mdx` carries the `branch` key it never
+  documented. `journey validate` proves the link, never the prose — the
+  gap it cannot see is the one that was there.
+- [x] 9.4 `docs/architecture/invariants.md` carries the moment as its own
+  property, tied to the test that reads the region positionally. A rule
+  with no mechanism behind it is one only a test and a line here keep.

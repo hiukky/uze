@@ -13,7 +13,9 @@ Naming cannot be solved by deriving harder. The only party that knows what
 the work is, is the agent doing it — but nothing lets it say so portably,
 and a name a harness volunteers is not a name every harness volunteers.
 What is missing is a surface an agent can call and a moment it must call
-it.
+it — and the moment has to be the first one available, because an
+instruction an agent reaches while already working is one it weighs against
+the work.
 
 A second defect falls out of the same gap: nothing re-reads a task's branch
 after it is recorded, so an operator renaming a branch by hand is invisible
@@ -40,15 +42,16 @@ task `Running` forever and never offering delivery.
   the task's checkout is actually on, so a manual rename reaches the
   sidebar, delivery and sync (**BREAKING** for nothing: `task.branch`
   becomes a cache of a Git fact)
-- **A portable hook enforces it** where the harness can — `PreToolUse`
-  `deny` on a commit from an unnamed task, shipped as its own official
-  plugin (`uze-naming`) rather than in `plugins/uze`: a hook is an
-  executable capability, and the default plugin is installed on every
-  machine by UZE's own bootstrap, so putting one there would mean every
-  machine silently authorizing one.
-  Claude, Codex and Antigravity honor the denial; OpenCode claims only
-  `observe`/`allow`, so it degrades to the projected instruction and the
-  downgrade is recorded rather than hidden (ADR-033)
+- **The moment is the agent's first action** — the projected instruction
+  asks for the name before the agent reads a file, plans or edits, and is
+  the region's first bullet. A name states an intention, and the intention
+  is what an agent holds at its first turn; every later moment competes
+  with work already under way, and a moment reached while busy is a moment
+  skipped
+- **The automatic half is a Git fact** — work that reaches a commit still
+  unnamed is named from that commit's subject, on the evaluation pass that
+  already runs. This replaces the `PreToolUse` `deny` the design carried:
+  it was built, and removed for three reasons kept in design §6
 - **A safety net at publish** — a project that declares no vocabulary names
   nothing, so its branch is still published under a name derived from the
   first commit rather than under the generated identifier

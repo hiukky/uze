@@ -5,7 +5,9 @@ about: |
   A branch a reviewer meets on a pull request has to say what the change
   is. Nothing UZE knows at launch can say that — the work has not been
   decided yet — so the agent names it, through a command resolved from the
-  checkout it is standing in.
+  checkout it is standing in, as the first thing it does: the name states
+  an intention, which is what an agent holds before it has read anything,
+  and the branch is renamed here with no commit on it yet.
 
   Every check reads the machine: the branch Git reports inside the slot,
   the branches the repository carries, and the name recorded in the task

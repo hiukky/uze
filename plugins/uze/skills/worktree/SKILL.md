@@ -32,6 +32,28 @@ branches. If you find yourself in the primary checkout, you were started by
 hand rather than by UZE; the operator's uncommitted work there is theirs —
 never stash, reset, clean, or move it.
 
+## Name the work before you do it
+
+Your first action in the checkout, before you read a file or plan anything:
+
+```bash
+uze agent task name <type>/<subject>
+```
+
+The branch UZE placed you on is a generated identifier, and a reviewer
+meeting it learns nothing. The subject is one or two words naming the
+intention — `fix/branch-naming`, not a description of the task — and the
+types the project accepts are spelled out in the "Concurrent work
+isolation" section of `AGENTS.md`. A project that declares none refuses the
+command, which is that project saying it does not name work; carry on.
+
+Do it now rather than later: the request you were given is where the
+intention comes from, so nothing you read afterwards makes the name easier
+to choose, and work that reaches a commit unnamed is named by UZE from that
+commit's subject instead. Naming renames your branch, so ask Git for its
+name rather than remembering it. A name you or the operator already chose
+is never replaced — including by a second call of your own.
+
 ## Commit on your branch, and stop there
 
 Commit your work on your own branch as you go, in focused commits that each

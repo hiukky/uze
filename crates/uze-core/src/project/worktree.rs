@@ -421,7 +421,15 @@ impl WorktreePolicy {
             .is_some_and(|rest| rest.starts_with('/'))
     }
 
-    /// What the projected text tells an agent about naming its work.
+    /// What the projected text tells an agent about naming its work, and
+    /// when.
+    ///
+    /// The moment is the agent's first action, and the clause is projected
+    /// first for the same reason: a name states the intention, which is the
+    /// one thing an agent knows before it has read anything. Every later
+    /// moment asks it to interrupt work already under way, and an
+    /// instruction that competes with work in progress is the one that gets
+    /// skipped.
     ///
     /// Empty for a project that names nothing, so a project that declared
     /// no vocabulary projects exactly the bytes it projected before. The
@@ -433,12 +441,14 @@ impl WorktreePolicy {
             return String::new();
         }
         format!(
-            "- Name the work before your first commit: `uze agent task name <type>/<subject>`. \
-             Types this project accepts: `{types}`. The subject is one or two words naming the \
-             intention, not a description of the task — `fix/branch-naming`, not \
-             `fix/correct-the-problem-with-agent-branch-names`. If you do not, UZE names it from \
-             your first commit's subject, which is a worse name than the one you would have \
-             chosen. Either way your branch is renamed, so ask Git for its name rather than \
+            "- Name the work as your first action, before reading a file, planning or editing: \
+             `uze agent task name <type>/<subject>`. Types this project accepts: `{types}`. The \
+             subject is one or two words naming the intention, not a description of the task — \
+             `fix/branch-naming`, not `fix/correct-the-problem-with-agent-branch-names`. The \
+             request you were given is where the intention comes from, so nothing you read later \
+             makes the name easier to choose. Work that reaches a commit still unnamed is named \
+             by UZE from that commit's subject, which is a worse name than the one you would \
+             have chosen. Either way your branch is renamed, so ask Git for its name rather than \
              remembering it; a name you or the operator already chose is never replaced.\n",
             types = self.branch.spelled()
         )
@@ -452,10 +462,15 @@ impl WorktreePolicy {
     /// so an agent UZE isolated does not isolate itself again. It never asks
     /// anyone to create a top-level worktree: UZE already did that, at
     /// launch, for every agent it started.
+    ///
+    /// The order is the order the reader acts in, which is why naming comes
+    /// before everything else: it is the only bullet asking for something
+    /// now, and the rest are rules that apply when their moment arrives.
     pub fn instructions(&self) -> String {
         format!(
             "## Concurrent work isolation\n\
              \n\
+             {naming}\
              - Every agent UZE launches works in a checkout of its own under \
              `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is inside \
              `{directory}/`, you are already isolated: do not create another worktree, and do \
@@ -466,7 +481,6 @@ impl WorktreePolicy {
              - If UZE tells you a rebase is paused in your checkout, resolve the conflicts \
              preserving the intent of your change, run `git rebase --continue`, run the \
              project's checks, and end your turn.\n\
-             {naming}\
              - Before spawning parallel subagents that write files, give each its own checkout \
              so they cannot collide:\n\
              \n\
@@ -823,6 +837,35 @@ mod naming_tests {
         let text = policy.instructions();
         assert!(text.contains("uze agent task name"), "{text}");
         assert!(text.contains("ui|fix"), "{text}");
+    }
+
+    /// The moment is half the rule. A name is asked for while the agent
+    /// still has nothing to interrupt, so the clause has to be the first
+    /// thing the region asks for — an instruction read after the work
+    /// started is one weighed against the work.
+    #[test]
+    fn naming_is_the_first_thing_the_projected_text_asks_for() {
+        let policy = WorktreePolicy {
+            branch: BranchVocabulary::Preset(BranchPreset::Conventional),
+            ..WorktreePolicy::default()
+        };
+        let text = policy.instructions();
+        let first_bullet = text
+            .lines()
+            .find(|line| line.starts_with("- "))
+            .expect("the region is a list");
+        assert!(
+            first_bullet.contains("uze agent task name"),
+            "naming must be the first bullet: {first_bullet}"
+        );
+        assert!(
+            first_bullet.contains("first action"),
+            "the clause must state the moment, not only the command: {first_bullet}"
+        );
+        assert!(
+            !text.contains("before your first commit"),
+            "the old moment must not survive anywhere in the region: {text}"
+        );
     }
 
     /// The region's identity is a digest of its bytes, so a vocabulary
