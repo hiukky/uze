@@ -245,7 +245,10 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Management, "h", Action::FocusSidebar),
         bind(Scope::Management, "right", Action::FocusContent),
         bind(Scope::Management, "l", Action::FocusContent),
-        bind(Scope::Management, "g", Action::Refresh),
+        // A modifier rather than a letter: refreshing is not a thing you
+        // do to the row you are on, and a bare `g` beside a screen full of
+        // bare letters that all act on a selection read as one of them.
+        bind(Scope::Management, "ctrl+r", Action::Refresh),
         bind(Scope::Management, "f5", Action::Refresh),
         bind(Scope::Management, "/", Action::StartFilter),
         bind(Scope::Management, "t", Action::OpenThemePicker),

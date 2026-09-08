@@ -933,13 +933,21 @@ pub(super) fn render_sidebar(
             false,
             &mut section_hits,
         );
-        let mut close = None;
+        // The closing mark rides on the header, and an ordinary click
+        // resolves against the *first* rect that contains it
+        // (`WorkspaceModel::hit_rect_at`) — so the mark goes in ahead of
+        // the header it sits on, or the header swallows it and the section
+        // folds instead of leaving.
+        if let Some(rect) = section_hits.iter().find_map(|(rect, hit)| {
+            matches!(hit, ViewHit::ToggleSection)
+                .then(|| steps.close_rect(*rect))
+                .flatten()
+        }) {
+            hits.push((rect, WorkspaceHit::CloseFirstSteps));
+        }
         for (rect, hit) in section_hits {
             match hit {
-                ViewHit::ToggleSection => {
-                    close = steps.close_rect(rect);
-                    hits.push((rect, WorkspaceHit::ToggleFirstSteps));
-                }
+                ViewHit::ToggleSection => hits.push((rect, WorkspaceHit::ToggleFirstSteps)),
                 ViewHit::SelectItem(index) => {
                     if let Some(action) = FIRST_STEPS.get(index) {
                         hits.push((rect, WorkspaceHit::QuickAction(*action)));
@@ -947,11 +955,6 @@ pub(super) fn render_sidebar(
                 }
                 _ => {}
             }
-        }
-        // After the header it sits on: this client answers a click with
-        // the *last* rect that contains it.
-        if let Some(rect) = close {
-            hits.push((rect, WorkspaceHit::CloseFirstSteps));
         }
     }
 

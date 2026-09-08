@@ -1254,8 +1254,9 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
         ..TuiModel::default()
     };
     assert_eq!(
-        model.apply_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)),
-        Intent::Refresh
+        model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+        Intent::Refresh,
+        "refreshing carries a modifier: it is not something done to a row"
     );
     assert_eq!(
         model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
@@ -1269,7 +1270,7 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
     assert_eq!(intent, Intent::None);
     assert_eq!(
         model_with_plugins(&["one"])
-            .apply_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)),
+            .apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
         Intent::Refresh,
         "and refreshing means the same thing on every screen"
     );

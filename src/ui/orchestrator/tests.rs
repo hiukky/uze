@@ -2866,9 +2866,13 @@ mod workspace_tests {
             .position(|row| row.contains("first steps"))
             .expect("the header is drawn");
         assert_eq!(usize::from(close.y), header, "on the header itself");
+        // Resolved the way an ordinary click is — `hit_rect_at`, first
+        // rect wins — and not by the reversed search the modal guards use.
+        // Asking the wrong one is why this shipped folding instead of
+        // closing.
         model.hits = hits.clone();
         assert_eq!(
-            super::hit_at(&model, close.x, close.y),
+            model.hit_rect_at(close.x, close.y).map(|(_, hit)| hit),
             Some(WorkspaceHit::CloseFirstSteps),
             "and the header underneath does not swallow it"
         );
