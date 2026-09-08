@@ -4660,8 +4660,11 @@ mod prompt_buffer_tests {
     use super::PromptBuffer;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
+    /// A keystroke as the buffer receives one: a chord, since
+    /// reconstructing what someone typed is the same vocabulary question
+    /// as binding it.
+    fn key(code: KeyCode) -> uze_keys::Chord {
+        crate::ui::keys::chord_of(KeyEvent::new(code, KeyModifiers::NONE)).expect("a chord")
     }
 
     fn typed(buffer: &mut PromptBuffer, text: &str) {
@@ -4748,7 +4751,10 @@ mod prompt_buffer_tests {
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
             let mut buffer = PromptBuffer::default();
             typed(&mut buffer, "typed");
-            buffer.apply(KeyEvent::new(KeyCode::Char('u'), modifiers));
+            buffer.apply(
+                crate::ui::keys::chord_of(KeyEvent::new(KeyCode::Char('u'), modifiers))
+                    .expect("a chord"),
+            );
             typed(&mut buffer, " more");
             assert_eq!(buffer.submit(), None, "{modifiers:?} must not be recorded");
         }

@@ -23,5 +23,6 @@
 //! of their own, which is a decision about what the `uze` binary *is*,
 //! not a tidy-up. Until someone takes it, this file is the enforcement.
 
+mod affordances;
 mod instrumentation;
 mod layering;

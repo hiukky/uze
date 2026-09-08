@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use uze_application::{Autonomy, ManagementLayout, ModelPreference, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
+use uze_application::application::offers::ActionOffer;
 use uze_application::application::{
     ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
     MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
@@ -34,14 +35,18 @@ pub(crate) enum Route {
     Extensions,
     Harnesses,
     Profiles,
+    /// The keyboard itself: every action, the key that reaches it, and
+    /// whether this terminal can deliver that key at all.
+    Keys,
 }
 
-pub(crate) const ROUTES: [Route; 5] = [
+pub(crate) const ROUTES: [Route; 6] = [
     Route::Overview,
     Route::Plugins,
     Route::Extensions,
     Route::Harnesses,
     Route::Profiles,
+    Route::Keys,
 ];
 
 impl Route {
@@ -52,6 +57,7 @@ impl Route {
             Route::Extensions => "Extensions",
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
+            Route::Keys => "Keys",
         }
     }
 
@@ -82,6 +88,7 @@ impl Route {
             Route::Extensions => "extensions",
             Route::Harnesses => "integrations",
             Route::Profiles => "profiles",
+            Route::Keys => "keys",
         }
     }
 
@@ -111,6 +118,7 @@ pub(crate) enum ResizablePanel {
     ExtensionDrawer,
     HarnessDrawer,
     ProfileColumns,
+    KeysDrawer,
 }
 
 impl ProfilePanel {
@@ -185,14 +193,60 @@ pub(crate) enum Focus {
     Overlay,
 }
 
+/// One rebindable line of the Keys screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyRow {
+    pub(crate) scope: uze_keys::Scope,
+    pub(crate) action: uze_keys::Action,
+    pub(crate) chord: Option<uze_keys::Chord>,
+    pub(crate) default_chord: Option<uze_keys::Chord>,
+}
+
+impl KeyRow {
+    /// Whether this line is the operator's own choice rather than what
+    /// uze shipped with.
+    pub(crate) fn custom(&self) -> bool {
+        self.chord != self.default_chord
+    }
+}
+
+/// An open row menu: the offers for one row, and which of them the
+/// keyboard is on.
+///
+/// Only the available offers are here. A menu is a list of what can be
+/// done now; the reason an action *cannot* be done belongs in the detail
+/// view, where there is room to say it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RowMenu {
+    pub(crate) offers: Vec<ActionOffer>,
+    /// `None` when nothing is highlighted, which is how a menu whose only
+    /// entry destroys something opens: reaching a destructive action is
+    /// always a deliberate move, never the state the menu arrived in.
+    pub(crate) selected: Option<usize>,
+    /// The row's own rect — the popup anchors just under it, the same
+    /// placement rule the workspace client's context menu uses.
+    pub(crate) anchor: Rect,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Overlay {
     None,
-    Help,
+    /// Everything that can be done here, each with the key that reaches
+    /// it. Help and command palette are one surface because they answer
+    /// the same question — building two would guarantee they disagree.
+    ///
+    /// Carries the scopes it was opened over: what is reachable is a
+    /// question about the screen underneath, not about the index itself.
+    ActionIndex {
+        scopes: Vec<uze_keys::Scope>,
+        filter: String,
+        selected: usize,
+    },
     /// The Harnesses screen's own glossary — what each status/delivery/
-    /// compatibility label actually means. Opened by `?` while on that
-    /// route instead of the generic `Help` overlay, since the plain
-    /// keybinding list has nothing to say about what "Adapted" means.
+    /// compatibility label actually means. Reference material about what
+    /// the data *means*, which is a different question from what can be
+    /// done here, so it is a surface of its own rather than a section of
+    /// the index.
     HarnessHelp,
     ConfirmRemove {
         id: String,
@@ -313,6 +367,26 @@ pub(crate) struct TuiModel {
     /// see `marketplace_visible_indices` — not directly into
     /// `marketplace_plugins`. Resolve through `selected_marketplace_plugin`.
     pub(crate) marketplace_selected: usize,
+    /// The Keys screen's selected row, filter, and what it is waiting
+    /// for. Capture is its own state because it is the one moment the
+    /// keyboard means nothing at all: every keystroke is the answer.
+    pub(crate) keys_drawer_width: Option<u16>,
+    pub(crate) keys_selected: usize,
+    pub(crate) keys_filter: String,
+    pub(crate) keys_capture: bool,
+    /// Why the last rebinding was refused, in words — a conflict, a chord
+    /// that is another key, or one this terminal cannot send.
+    pub(crate) keys_problem: Option<String>,
+    /// What the probe last saw. No table can enumerate every emulator,
+    /// multiplexer and connection; pressing a key and being told what
+    /// arrived is the answer for the machine in front of you.
+    pub(crate) keys_probe: Option<String>,
+    /// What this terminal turned out to be able to deliver.
+    pub(crate) keyboard: super::keys::KeyboardSupport,
+    /// The action menu the selected row raised, if any — what can be done
+    /// to that row, from the row itself. Built fresh each time it opens
+    /// from the entity's own offers, never persisted.
+    pub(crate) row_menu: Option<RowMenu>,
     pub(crate) marketplace_detail: Option<MarketplacePluginDetail>,
     /// Whether the plugin-detail drawer is currently slid into view. Opens
     /// on selection, closes on `Esc` — the list panel reclaims the full
@@ -429,6 +503,14 @@ impl Default for TuiModel {
             route: Route::Overview,
             focus: Focus::Sidebar,
             overlay: Overlay::None,
+            keys_drawer_width: None,
+            keys_selected: 0,
+            keys_filter: String::new(),
+            keys_capture: false,
+            keys_problem: None,
+            keys_probe: None,
+            keyboard: super::keys::KeyboardSupport::default(),
+            row_menu: None,
             status: Status::Idle,
             status_expires_at: None,
             maintenance_in_flight: false,
@@ -863,65 +945,274 @@ impl TuiModel {
             .collect()
     }
 
-    /// Consumes one key while `filtering` is true — every printable
-    /// character is appended to the active route's filter rather than
-    /// interpreted as a shortcut. `Enter` keeps the filter and returns to
-    /// normal navigation; `Esc` clears it too.
-    pub(crate) fn filter_key(&mut self, key: crossterm::event::KeyEvent) -> super::worker::Intent {
-        use crossterm::event::KeyCode;
-        match key.code {
-            KeyCode::Enter => self.filtering = false,
-            KeyCode::Esc => {
-                self.filtering = false;
-                match self.route {
-                    Route::Plugins => {
-                        self.marketplace_filter.clear();
-                        self.clamp_marketplace_selection();
-                    }
-                    Route::Extensions => {
-                        self.extension_filter.clear();
-                        self.clamp_extension_selection();
-                    }
-                    Route::Harnesses => {
-                        self.harnesses_filter.clear();
-                        self.clamp_harness_selection();
-                    }
-                    _ => {}
-                }
+    /// Types one character into whatever is taking text — a text prompt
+    /// first, then the active route's live filter. Which surface that is
+    /// was already decided by the keymap (`Scope::consumes_text`); this
+    /// only says where the character lands.
+    pub(crate) fn type_character(&mut self, character: char) -> super::worker::Intent {
+        match &mut self.overlay {
+            Overlay::ActionIndex {
+                filter, selected, ..
+            } => {
+                filter.push(character);
+                *selected = 0;
             }
-            KeyCode::Backspace => match self.route {
-                Route::Plugins => {
-                    self.marketplace_filter.pop();
-                    self.clamp_marketplace_selection();
+            Overlay::AddMarketplace(input) | Overlay::NewProfile(input) => input.push(character),
+            _ => {
+                match self.route {
+                    Route::Plugins => self.marketplace_filter.push(character),
+                    Route::Extensions => self.extension_filter.push(character),
+                    Route::Harnesses => self.harnesses_filter.push(character),
+                    Route::Keys => {
+                        self.keys_filter.push(character);
+                        self.keys_selected = 0;
+                    }
+                    _ => return super::worker::Intent::None,
                 }
-                Route::Extensions => {
-                    self.extension_filter.pop();
-                    self.clamp_extension_selection();
-                }
-                Route::Harnesses => {
-                    self.harnesses_filter.pop();
-                    self.clamp_harness_selection();
-                }
-                _ => {}
-            },
-            KeyCode::Char(c) => match self.route {
-                Route::Plugins => {
-                    self.marketplace_filter.push(c);
-                    self.clamp_marketplace_selection();
-                }
-                Route::Extensions => {
-                    self.extension_filter.push(c);
-                    self.clamp_extension_selection();
-                }
-                Route::Harnesses => {
-                    self.harnesses_filter.push(c);
-                    self.clamp_harness_selection();
-                }
-                _ => {}
-            },
-            _ => {}
+                self.clamp_filtered_selection();
+            }
         }
         super::worker::Intent::None
+    }
+
+    /// Erases the character before the cursor of whatever is taking text.
+    pub(crate) fn erase_character(&mut self) -> super::worker::Intent {
+        match &mut self.overlay {
+            Overlay::ActionIndex {
+                filter, selected, ..
+            } => {
+                filter.pop();
+                *selected = 0;
+            }
+            Overlay::AddMarketplace(input) | Overlay::NewProfile(input) => {
+                input.pop();
+            }
+            _ => {
+                match self.route {
+                    Route::Plugins => self.marketplace_filter.pop(),
+                    Route::Extensions => self.extension_filter.pop(),
+                    Route::Harnesses => self.harnesses_filter.pop(),
+                    Route::Keys => {
+                        self.keys_filter.pop();
+                        self.keys_selected = 0;
+                        return super::worker::Intent::None;
+                    }
+                    _ => return super::worker::Intent::None,
+                };
+                self.clamp_filtered_selection();
+            }
+        }
+        super::worker::Intent::None
+    }
+
+    /// Forgets the active route's filter. Leaving a search puts the list
+    /// back the way it was found.
+    pub(crate) fn clear_filter(&mut self) {
+        match self.route {
+            Route::Plugins => self.marketplace_filter.clear(),
+            Route::Extensions => self.extension_filter.clear(),
+            Route::Harnesses => self.harnesses_filter.clear(),
+            Route::Keys => {
+                self.keys_filter.clear();
+                self.keys_selected = 0;
+                return;
+            }
+            _ => return,
+        }
+        self.clamp_filtered_selection();
+    }
+
+    /// A narrowed list can be shorter than wherever the selection was.
+    fn clamp_filtered_selection(&mut self) {
+        match self.route {
+            Route::Plugins => self.clamp_marketplace_selection(),
+            Route::Extensions => self.clamp_extension_selection(),
+            Route::Harnesses => self.clamp_harness_selection(),
+            _ => {}
+        }
+    }
+
+    /// Takes a keystroke as the new binding for the selected line.
+    ///
+    /// Everything that could be wrong with it is said before anything is
+    /// written: a chord that is another key on a terminal, one this
+    /// terminal cannot send, and one that already means something else in
+    /// the same keyboard. A screen that let you lock yourself out would be
+    /// worse than one that had no rebinding at all.
+    pub(crate) fn capture_chord(&mut self, chord: uze_keys::Chord) -> super::worker::Intent {
+        let Some(row) = self.selected_key_row() else {
+            self.keys_capture = false;
+            return super::worker::Intent::None;
+        };
+        // The probe, and it costs nothing: capturing a key is already
+        // asking the terminal what it sends, so saying what arrived is
+        // the honest answer no compatibility table can give.
+        self.keys_probe = Some(format!("`{chord}` arrived here — {}", chord.tier().label()));
+        // The grammar's own refusals, run against what arrived: under an
+        // enhanced protocol a terminal really can report `ctrl+i`, and
+        // binding it would take Tab away everywhere.
+        if let Err(problem) = uze_keys::Chord::parse(&chord.to_string()) {
+            self.keys_problem = Some(problem.to_string());
+            return super::worker::Intent::None;
+        }
+        if !self.keyboard.can_deliver(chord.tier()) {
+            self.keys_problem = Some(format!(
+                "`{chord}` {} — this terminal cannot send it",
+                chord.tier().label()
+            ));
+            return super::worker::Intent::None;
+        }
+        match uze_keys::active().rebind(row.action, row.scope, Some(chord)) {
+            Ok(keymap) => {
+                uze_keys::set_active(keymap);
+                self.keys_capture = false;
+                self.keys_problem = None;
+                super::worker::Intent::PersistKeymap
+            }
+            Err(conflicts) => {
+                self.keys_problem = conflicts.first().map(ToString::to_string);
+                super::worker::Intent::None
+            }
+        }
+    }
+
+    /// Puts back what uze ships with, for the selected line.
+    pub(crate) fn reset_selected_key(&mut self) -> super::worker::Intent {
+        let Some(row) = self.selected_key_row().filter(KeyRow::custom) else {
+            return super::worker::Intent::None;
+        };
+        match uze_keys::active().rebind(row.action, row.scope, row.default_chord) {
+            Ok(keymap) => {
+                uze_keys::set_active(keymap);
+                self.keys_capture = false;
+                self.keys_problem = None;
+                super::worker::Intent::PersistKeymap
+            }
+            Err(conflicts) => {
+                // Reaching this means the operator moved uze's own default
+                // onto something else. Say so rather than silently
+                // refusing: the way out is to free that key first.
+                self.keys_problem = conflicts.first().map(ToString::to_string);
+                super::worker::Intent::None
+            }
+        }
+    }
+
+    /// One line of the Keys screen: an action, where it is live, and the
+    /// key that reaches it there.
+    ///
+    /// Built from the keymap in force rather than from the default, so an
+    /// unbinding leaves the row rather than the row disappearing with the
+    /// key — you have to be able to see what you turned off.
+    pub(crate) fn key_rows(&self) -> Vec<KeyRow> {
+        let active = uze_keys::active();
+        let default = uze_keys::default_keymap();
+        let mut pairs: Vec<(uze_keys::Scope, uze_keys::Action)> = default
+            .bindings()
+            .iter()
+            .chain(active.bindings())
+            .map(|binding| (binding.scope, binding.action))
+            .collect();
+        pairs.sort_by_key(|(scope, action)| {
+            (
+                uze_keys::ALL_SCOPES
+                    .iter()
+                    .position(|candidate| candidate == scope)
+                    .unwrap_or(usize::MAX),
+                uze_keys::ALL_ACTIONS
+                    .iter()
+                    .position(|candidate| candidate == action)
+                    .unwrap_or(usize::MAX),
+            )
+        });
+        pairs.dedup();
+        let chord_in = |keymap: &uze_keys::Keymap, scope, action| {
+            keymap
+                .bindings()
+                .iter()
+                .find(|binding| binding.scope == scope && binding.action == action)
+                .map(|binding| binding.chord)
+        };
+        let needle = self.keys_filter.trim().to_lowercase();
+        pairs
+            .into_iter()
+            .map(|(scope, action)| KeyRow {
+                scope,
+                action,
+                chord: chord_in(&active, scope, action),
+                default_chord: chord_in(default, scope, action),
+            })
+            .filter(|row| {
+                needle.is_empty()
+                    || row.action.label().to_lowercase().contains(&needle)
+                    || row.action.description().to_lowercase().contains(&needle)
+                    || row.scope.heading().to_lowercase().contains(&needle)
+                    || row
+                        .chord
+                        .is_some_and(|chord| chord.to_string().contains(&needle))
+            })
+            .collect()
+    }
+
+    pub(crate) fn selected_key_row(&self) -> Option<KeyRow> {
+        self.key_rows().get(self.keys_selected).copied()
+    }
+
+    /// Everything reachable from here, each with the key that reaches it.
+    ///
+    /// Two sources, because "reachable" has two halves: what the keymap
+    /// binds in the scopes underneath the index, and what the selected row
+    /// offers — which includes actions that deliberately hold no chord at
+    /// all. An action with no key is a finished design, and the index is
+    /// where someone finds it.
+    pub(crate) fn action_index_rows(
+        &self,
+        scopes: &[uze_keys::Scope],
+        filter: &str,
+    ) -> Vec<(uze_keys::Action, Option<uze_keys::Chord>)> {
+        let keymap = uze_keys::active();
+        let mut rows = keymap.available(scopes);
+        for offer in self.selected_offers() {
+            if offer.is_available() && !rows.iter().any(|(action, _)| *action == offer.action) {
+                rows.push((offer.action, keymap.chord_for(offer.action, scopes)));
+            }
+        }
+        let needle = filter.trim().to_lowercase();
+        if needle.is_empty() {
+            return rows;
+        }
+        rows.retain(|(action, _)| {
+            action.label().to_lowercase().contains(&needle)
+                || action.description().to_lowercase().contains(&needle)
+        });
+        rows
+    }
+
+    /// What can be done to whatever is selected on this screen.
+    ///
+    /// Read from the entity itself, never decided here: the row menu, the
+    /// detail view and the index all ask this, which is what keeps them
+    /// from disagreeing about whether a plugin can be updated.
+    pub(crate) fn selected_offers(&self) -> Vec<ActionOffer> {
+        match self.route {
+            Route::Plugins => self
+                .selected_marketplace_plugin()
+                .map(|plugin| plugin.offers())
+                .unwrap_or_default(),
+            Route::Extensions => self
+                .selected_extension()
+                .map(|_| uze_application::application::offers::extension_offers())
+                .unwrap_or_default(),
+            Route::Harnesses => self
+                .selected_harness()
+                .map(HarnessHealth::offers)
+                .unwrap_or_default(),
+            Route::Profiles => self
+                .selected_profile()
+                .map(ProfileSummary::offers)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
     }
 
     pub(crate) fn selected_harness(&self) -> Option<&HarnessHealth> {

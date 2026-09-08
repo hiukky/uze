@@ -57,11 +57,13 @@ mod extension_host;
 mod extension_view;
 mod hit;
 mod input;
+mod keys;
 mod management;
 mod model;
 mod orchestrator;
 mod overlay;
 mod root_picker;
+mod scrim;
 pub(crate) mod theme;
 
 use theme::{Symbol, Token};
@@ -188,12 +190,19 @@ fn remember_layout(home: &UzeHome, layout: &uze_application::ClientLayout) {
 /// different `draw` call into the same already-open screen.
 pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    /// What this terminal turned out to be able to deliver — read by the
+    /// Keys screen, which shows a chord the host cannot send as such
+    /// rather than letting it look bound.
+    keyboard: keys::KeyboardSupport,
 }
 
 impl TerminalSession {
     fn start() -> Result<Self> {
         enable_raw_mode().map_err(io_error)?;
         let mut stdout = io::stdout();
+        // Asked for before the screen is entered, so the very first
+        // keystroke is read the same way as every later one.
+        let keyboard = keys::begin_enhanced_input();
         if let Err(error) = execute!(
             stdout,
             EnterAlternateScreen,
@@ -206,7 +215,11 @@ impl TerminalSession {
         }
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).map_err(io_error)?;
-        Ok(Self { terminal })
+        Ok(Self { terminal, keyboard })
+    }
+
+    pub(crate) fn keyboard(&self) -> keys::KeyboardSupport {
+        self.keyboard
     }
 
     pub(crate) fn size(&self) -> Result<ratatui::layout::Size> {
@@ -220,6 +233,7 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
+        keys::end_enhanced_input(self.keyboard);
         let _ = disable_raw_mode();
         let _ = execute!(
             self.terminal.backend_mut(),
@@ -447,71 +461,6 @@ fn render_mode_toggle(
     )
 }
 
-/// Styled spans for one footer hint: `key action · key action …` chunks are
-/// split so the command/key part carries the accent (and bold) and the
-/// description stays muted — the shortcut bar reads as "keys + what they
-/// do" instead of one uniform wall of gray text. Chunks without a verb
-/// (e.g. `y/n`) render as a command alone.
-/// What a hint string is *written* with to mark where one clause ends and
-/// the next begins. It is notation, not output: [`hint_spans`] replaces it
-/// with whatever the active theme draws a separator as, so a hint stays
-/// readable in the source without pinning the glyph.
-const HINT_SEPARATOR: &str = " · ";
-
-/// The key glyphs a hint line is *written* with, and the symbols they stand
-/// for. Same idea as [`HINT_SEPARATOR`]: "↑↓ select" reads as itself in the
-/// source, and comes out of [`hint_spans`] in whatever the active theme
-/// draws those keys as — `^v select` under the ASCII theme.
-const HINT_NOTATION: &[(char, Symbol)] = &[
-    ('\u{2191}', Symbol::ArrowUp),
-    ('\u{2193}', Symbol::ArrowDown),
-    ('\u{21e7}', Symbol::ArrowShift),
-];
-
-fn hint_notation(chunk: &str) -> String {
-    if !chunk
-        .chars()
-        .any(|c| HINT_NOTATION.iter().any(|(k, _)| *k == c))
-    {
-        return chunk.to_owned();
-    }
-    chunk
-        .chars()
-        .map(|c| match HINT_NOTATION.iter().find(|(key, _)| *key == c) {
-            Some((_, symbol)) => theme::glyph(*symbol),
-            None => c.to_string(),
-        })
-        .collect()
-}
-
-/// Two clauses of one help line, joined by whatever the active theme draws
-/// a separator as — the same join [`hint_spans`] makes, for the lines that
-/// are plain text rather than key/action pairs.
-pub(crate) fn hint_aside(first: &str, second: &str) -> String {
-    format!("{first}{}{second}", theme::glyph(Symbol::HintSeparator))
-}
-
-fn hint_spans(hint: &str) -> Vec<Span<'static>> {
-    let command = theme::fg_bold(Token::Accent);
-    let muted = theme::fg(Token::TextMuted);
-    let mut spans = Vec::new();
-    let separator = theme::glyph(Symbol::HintSeparator);
-    for (i, chunk) in hint.split(HINT_SEPARATOR).enumerate() {
-        let chunk = &hint_notation(chunk);
-        if i > 0 {
-            spans.push(Span::raw(separator.clone()));
-        }
-        match chunk.split_once(' ') {
-            Some((key, action)) => {
-                spans.push(Span::styled(key.to_owned(), command));
-                spans.push(Span::styled(format!(" {action}"), muted));
-            }
-            None => spans.push(Span::styled(chunk.to_owned(), command)),
-        }
-    }
-    spans
-}
-
 /// The inset [`content_area`] keeps on each side of a screen's content.
 const CONTENT_INSET_LEFT: u16 = 2;
 const CONTENT_INSET_RIGHT: u16 = 2;
@@ -520,6 +469,38 @@ const CONTENT_INSET_TOP: u16 = 1;
 /// Every content screen's outer inset — the design's `padding: 36px 44px`
 /// on each route's root div, translated to terminal cells. No border, no
 /// background: content just sits indented on the shared backdrop.
+/// A hint line for `actions`, each printed with the key that reaches it
+/// in `scopes`.
+///
+/// The one way a surface may name a key. An action with no chord in these
+/// scopes is skipped rather than printed keyless: a hint is a list of
+/// shortcuts, and what has none is offered somewhere a pointer can reach.
+pub(crate) fn hint_for(scopes: &[uze_keys::Scope], actions: &[uze_keys::Action]) -> Line<'static> {
+    let keymap = uze_keys::active();
+    let separator = theme::glyph(Symbol::HintSeparator);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for action in actions {
+        let Some(chord) = keymap.chord_for(*action, scopes) else {
+            continue;
+        };
+        if !spans.is_empty() {
+            spans.push(Span::styled(
+                format!(" {separator} "),
+                theme::fg(Token::TextDim),
+            ));
+        }
+        spans.push(Span::styled(
+            chord.to_string(),
+            theme::fg_bold(Token::Accent),
+        ));
+        spans.push(Span::styled(
+            format!(" {}", action.label().to_lowercase()),
+            theme::fg(Token::TextMuted),
+        ));
+    }
+    Line::from(spans)
+}
+
 pub(crate) fn content_area(area: Rect) -> Rect {
     Rect::new(
         area.x + CONTENT_INSET_LEFT,

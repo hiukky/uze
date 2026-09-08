@@ -32,12 +32,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
 use crate::view::{
-    Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection, Section,
-    SectionRow, Size, Span, View, ViewHit,
+    Command, Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection,
+    Section, SectionRow, Size, Span, View, ViewHit,
 };
 
 use crate::Host;
@@ -60,7 +59,7 @@ pub const CATALOG: crate::registry::BuiltinExtension = crate::registry::BuiltinE
     name: "Git",
     description: "Diff review and commit timeline for the active checkout.",
     surface: "Workspace TUI",
-    usage: "The timeline sits in the sidebar; open the changes with the git button in the tab strip, or Ctrl+G while attached.",
+    usage: "The timeline sits in the sidebar; the changes open from the git button in the tab strip, or from whatever key is bound to it.",
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
@@ -1163,37 +1162,35 @@ fn highlight_one_line(
         .collect()
 }
 
-pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
-    if key.code == KeyCode::Esc
-        || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g'))
-    {
-        return GitViewOutcome::Close;
-    }
-    match key.code {
-        KeyCode::Tab => {
+/// Answers one command from the host. The overlay says whether it wants to
+/// stay open; which key asked is something it deliberately cannot know.
+pub fn handle_command(view: &mut GitView, command: Command) -> GitViewOutcome {
+    match command {
+        Command::Close => return GitViewOutcome::Close,
+        Command::FocusNext => {
             view.focus = match view.focus {
                 GitViewFocus::Files => GitViewFocus::Diff,
                 GitViewFocus::Diff => GitViewFocus::Files,
             };
         }
-        KeyCode::Up => match view.focus {
+        Command::SelectPrevious => match view.focus {
             GitViewFocus::Files => view.step(ScrollDirection::Up),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_sub(1),
         },
-        KeyCode::Down => match view.focus {
+        Command::SelectNext => match view.focus {
             GitViewFocus::Files => view.step(ScrollDirection::Down),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
-        KeyCode::Left if view.focus == GitViewFocus::Files => view.fold_selection(),
-        KeyCode::Right if view.focus == GitViewFocus::Files => view.unfold_selection(),
-        KeyCode::Enter if view.focus == GitViewFocus::Files => {
+        Command::Collapse if view.focus == GitViewFocus::Files => view.fold_selection(),
+        Command::Expand if view.focus == GitViewFocus::Files => view.unfold_selection(),
+        Command::Activate if view.focus == GitViewFocus::Files => {
             if !view.files.is_empty() {
                 view.focus = GitViewFocus::Diff;
             }
         }
-        KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
-        KeyCode::PageDown => view.scroll = view.scroll.saturating_add(10),
-        _ => {}
+        Command::ScrollPageUp => view.scroll = view.scroll.saturating_sub(10),
+        Command::ScrollPageDown => view.scroll = view.scroll.saturating_add(10),
+        Command::Collapse | Command::Expand | Command::Activate => {}
     }
     GitViewOutcome::Stay
 }
@@ -1255,7 +1252,13 @@ pub fn view(git: &GitView, space: Size) -> View {
             format!(" · {}", git.branch)
         }
     );
-    let footer_hint = "↑↓ navigate · ←→ fold · ↵ diff · tab focus · esc close".to_owned();
+    let footer = vec![
+        Command::SelectNext,
+        Command::Expand,
+        Command::Activate,
+        Command::FocusNext,
+        Command::Close,
+    ];
 
     if let Some(message) = &git.error {
         return View {
@@ -1265,7 +1268,7 @@ pub fn view(git: &GitView, space: Size) -> View {
                 text: message.clone(),
                 role: Role::Danger,
             },
-            footer_hint,
+            footer,
         };
     }
 
@@ -1315,7 +1318,7 @@ pub fn view(git: &GitView, space: Size) -> View {
         title,
         navigator: Some(navigator(git)),
         content,
-        footer_hint,
+        footer,
     }
 }
 
@@ -2307,7 +2310,7 @@ mod view_tests {
         let mut open = fixture();
         assert!(!open.diff_pending(), "a fresh view shows what it read");
 
-        let outcome = handle_key(&mut open, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let outcome = handle_command(&mut open, Command::SelectPrevious);
 
         assert!(matches!(outcome, GitViewOutcome::Stay));
         assert_eq!(open.selected, 0, "the selection moved");
@@ -2427,25 +2430,25 @@ mod view_tests {
     #[test]
     fn the_arrows_walk_the_tree_as_drawn_and_step_over_a_fold() {
         let mut view = tree_fixture();
-        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let down = Command::SelectNext;
+        let up = Command::SelectPrevious;
 
-        handle_key(&mut view, down);
+        handle_command(&mut view, down);
         assert_eq!(view.selected, 1, "src/ui.rs follows src/ui/git_diff.rs");
-        handle_key(&mut view, down);
+        handle_command(&mut view, down);
         assert_eq!(view.selected, 2, "README.md is last, under every directory");
-        handle_key(&mut view, down);
+        handle_command(&mut view, down);
         assert_eq!(view.selected, 2, "the last row holds");
 
         view.folded.insert("src".to_owned());
-        handle_key(&mut view, up);
+        handle_command(&mut view, up);
         assert_eq!(view.selected, 2, "nothing above README.md is showing");
 
         view.folded.clear();
         view.folded.insert("src/ui".to_owned());
-        handle_key(&mut view, up);
+        handle_command(&mut view, up);
         assert_eq!(view.selected, 1, "the folded file is stepped over");
-        handle_key(&mut view, up);
+        handle_command(&mut view, up);
         assert_eq!(view.selected, 1, "and the fold is the top of what shows");
     }
 
@@ -2454,23 +2457,23 @@ mod view_tests {
     #[test]
     fn left_folds_outward_and_right_unfolds_inward() {
         let mut view = tree_fixture();
-        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
-        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let left = Command::Collapse;
+        let right = Command::Expand;
 
-        handle_key(&mut view, left);
+        handle_command(&mut view, left);
         assert_eq!(view.folded, BTreeSet::from(["src/ui".to_owned()]));
-        handle_key(&mut view, left);
+        handle_command(&mut view, left);
         assert_eq!(
             view.folded,
             BTreeSet::from(["src".to_owned(), "src/ui".to_owned()])
         );
         assert_eq!(item_names(&view), vec!["README.md"]);
-        handle_key(&mut view, left);
+        handle_command(&mut view, left);
         assert_eq!(view.folded.len(), 2, "nothing above the root to fold");
 
-        handle_key(&mut view, right);
+        handle_command(&mut view, right);
         assert_eq!(view.folded, BTreeSet::from(["src/ui".to_owned()]));
-        handle_key(&mut view, right);
+        handle_command(&mut view, right);
         assert!(view.folded.is_empty());
         assert_eq!(view.selected, 0, "folding never moved the selection");
     }

@@ -80,6 +80,71 @@ pub(crate) fn width(symbol: Symbol) -> u16 {
     uze_theme::active().symbol(symbol).width()
 }
 
+/// A colour pushed most of the way toward the backdrop.
+///
+/// What a modal's scrim is made of. The frame underneath has to keep
+/// reading as a place — the shape of the list, the row that was selected,
+/// the panel the question came from — while nothing in it competes with
+/// the question drawn on top. A colour blended toward
+/// [`Token::SurfaceBackground`] keeps every one of those and drops the
+/// contrast, which is exactly that.
+///
+/// Blended here rather than left to ratatui's `DIM`: that modifier is one
+/// bit handed to the terminal, and terminals disagree about it — several
+/// ignore it outright and the rest each choose their own intensity, so the
+/// same frame would recede by a different amount per host. Doing the
+/// arithmetic means how far back a backdrop sits is the theme's answer,
+/// like every other colour here.
+///
+/// `absent` is the token to read a cell that names no colour of its own
+/// as: a foreground asks for the body text, a background for the backdrop.
+pub(crate) fn scrimmed(color: Color, absent: Token) -> Color {
+    /// How far a scrimmed colour travels toward the backdrop, in percent.
+    /// Enough that no word behind a modal competes with one in it; short of
+    /// the flat wash that would make the screen underneath unreadable as a
+    /// place, which is the thing a backdrop is for.
+    const TOWARD_BACKDROP: u16 = 62;
+
+    let ground = uze_theme::active().color(Token::SurfaceBackground);
+    let (red, green, blue) = channels(color, absent);
+    let toward = |from: u8, to: u8| {
+        ((u16::from(from) * (100 - TOWARD_BACKDROP) + u16::from(to) * TOWARD_BACKDROP) / 100) as u8
+    };
+    Color::Rgb(
+        toward(red, ground.0),
+        toward(green, ground.1),
+        toward(blue, ground.2),
+    )
+}
+
+/// The channels behind a drawn colour — for the one operation that has to
+/// do arithmetic on one rather than pass it through.
+fn channels(color: Color, absent: Token) -> (u8, u8, u8) {
+    let rgb = match color {
+        Color::Rgb(red, green, blue) => return (red, green, blue),
+        // A pane's own output is the only thing that reaches a buffer as an
+        // index: the themed 16 the active theme answers for, and above them
+        // the 240 entries no theme defines, which every terminal builds by
+        // the same arithmetic (a 6×6×6 cube, then a 24-step grey ramp).
+        Color::Indexed(index) => match uze_theme::active().ansi(index) {
+            Some(rgb) => rgb,
+            None if index >= 232 => {
+                let level = 8 + (index - 232) * 10;
+                uze_theme::Rgb(level, level, level)
+            }
+            None => {
+                let step = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
+                let cube = index - 16;
+                uze_theme::Rgb(step(cube / 36), step((cube % 36) / 6), step(cube % 6))
+            }
+        },
+        // Nothing was asked for, so the cell shows whatever the surface it
+        // sits on shows — which is what `absent` names.
+        _ => uze_theme::active().color(absent),
+    };
+    (rgb.0, rgb.1, rgb.2)
+}
+
 /// The token a colour came from, or `None` if nothing in the active theme
 /// resolves to it.
 ///
@@ -117,6 +182,55 @@ mod tests {
         );
         assert_eq!(token_of(Color::Rgb(1, 2, 3)), None);
         assert_eq!(token_of(Color::Reset), None);
+    }
+
+    #[test]
+    fn a_scrimmed_colour_sits_between_what_it_was_and_the_backdrop() {
+        let ground = uze_theme::active().color(Token::SurfaceBackground);
+        let Color::Rgb(red, ..) = scrimmed(color(Token::TextBright), Token::TextPrimary) else {
+            panic!("a scrimmed colour is a resolved one");
+        };
+        let Color::Rgb(was, ..) = color(Token::TextBright) else {
+            unreachable!("a token always resolves")
+        };
+        assert!(
+            red.abs_diff(ground.0) < was.abs_diff(ground.0),
+            "it moved toward the backdrop"
+        );
+        assert_ne!(red, ground.0, "and stopped short of it");
+    }
+
+    #[test]
+    fn scrimming_the_backdrop_leaves_it_where_it_is() {
+        // The cell nothing was drawn into is the one the eye reads the
+        // scrim against, so a backdrop that shifted would be the screen
+        // itself changing colour rather than its content receding.
+        assert_eq!(
+            scrimmed(color(Token::SurfaceBackground), Token::SurfaceBackground),
+            color(Token::SurfaceBackground)
+        );
+        assert_eq!(
+            scrimmed(Color::Reset, Token::SurfaceBackground),
+            color(Token::SurfaceBackground),
+            "and a cell that named no colour is read as the surface it sits on"
+        );
+    }
+
+    #[test]
+    fn a_scrimmed_pane_colour_is_resolved_before_it_is_blended() {
+        // A pane's own output is the one thing that reaches the buffer as
+        // an index. Blending needs channels, so the extended entries no
+        // theme defines are built here by the arithmetic every terminal
+        // uses — an index left unresolved would be the one thing on screen
+        // that did not recede.
+        assert!(matches!(
+            scrimmed(Color::Indexed(208), Token::TextPrimary),
+            Color::Rgb(..)
+        ));
+        assert!(matches!(
+            scrimmed(Color::Indexed(240), Token::TextPrimary),
+            Color::Rgb(..)
+        ));
     }
 
     #[test]

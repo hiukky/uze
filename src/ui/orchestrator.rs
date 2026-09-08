@@ -11,7 +11,7 @@ use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, Event, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
@@ -38,6 +38,7 @@ use uze_extensions::{
     ExtensionHit, git,
     view::{ScrollDirection, ViewHit},
 };
+use uze_keys::{Action, Chord, Key};
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
     PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
@@ -268,6 +269,37 @@ struct DeliveryResolution {
 
 /// Open state of the preserved-work list: tasks holding work that no live
 /// tab is in front of.
+/// Everything reachable with `scopes` open, each with the key that
+/// reaches it. The workspace's counterpart to the management model's own
+/// `action_index_rows` — the same question, read from the same keymap, so
+/// the two modes cannot describe themselves differently.
+fn action_index_rows(
+    scopes: &[uze_keys::Scope],
+    filter: &str,
+) -> Vec<(uze_keys::Action, Option<uze_keys::Chord>)> {
+    let rows = uze_keys::active().available(scopes);
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|(action, _)| {
+            action.label().to_lowercase().contains(&needle)
+                || action.description().to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+/// The open index of everything, in the workspace client.
+///
+/// Carries the scopes it was opened over: what is reachable is a question
+/// about what was open underneath, not about the index itself.
+struct ActionIndexOverlay {
+    scopes: Vec<uze_keys::Scope>,
+    filter: String,
+    selected: usize,
+}
+
 struct PreservedOverlay {
     selected: usize,
     /// A discard was asked for and waits for its confirmation.
@@ -1002,6 +1034,11 @@ pub(super) enum WorkspaceHit {
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
     SwitchToManagement,
+    /// The tab strip's help button — the index of everything, which is
+    /// also the only place the workspace's own keys are written down.
+    OpenActionIndex,
+    /// One row of the open index, by position in it.
+    ActionIndexEntry(usize),
     ResizeSidebar,
 }
 
@@ -1146,7 +1183,7 @@ struct AgentSupportDropdown {
 }
 
 /// What a right-click-opened [`ContextMenu`] targets — the space or tab its
-/// [`MenuAction`]s act on.
+/// the menu's actions act on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MenuTarget {
     Space(SpaceId),
@@ -1157,21 +1194,6 @@ enum MenuTarget {
 /// rendering) is generic over this enum, so adding a third action is adding
 /// a variant plus a match arm here and in [`dispatch_menu_action`], not
 /// restructuring the popup.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MenuAction {
-    Rename,
-    Close,
-}
-
-impl MenuAction {
-    fn label(self) -> &'static str {
-        match self {
-            MenuAction::Rename => "rename",
-            MenuAction::Close => "close",
-        }
-    }
-}
-
 /// Open state of the right-click action menu a space header or agent tab
 /// raises. Closing a space/tab is never one click any more — right-click,
 /// then confirm the menu's own "close" row — deliberately two steps, so an
@@ -1182,7 +1204,7 @@ impl MenuAction {
 /// Built fresh on each right-click, never persisted.
 struct ContextMenu {
     target: MenuTarget,
-    items: Vec<MenuAction>,
+    items: Vec<Action>,
     /// Index into `items` the keyboard's Up/Down currently highlights —
     /// same role [`AgentPicker::selected`] plays.
     selected: usize,
@@ -1796,6 +1818,12 @@ struct WorkspaceModel {
     notice: Option<Notice>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
+    /// Everything that can be done here, each with the key that reaches
+    /// it. The workspace had no help surface at all — `alt+shift+i`
+    /// delivers every task in a space, and there was no way to find that
+    /// out — so this is the one place that answers "what can I do", in the
+    /// mode where the keyboard mostly belongs to something else.
+    action_index: Option<ActionIndexOverlay>,
     /// The checkout each open pane was first seen in — a pane's slot does
     /// not change when it `cd`s.
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
@@ -1915,34 +1943,46 @@ impl Default for PromptBuffer {
 }
 
 impl PromptBuffer {
-    fn apply(&mut self, key: KeyEvent) {
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
+    /// Mirrors one keystroke into the buffer. Takes a chord rather than a
+    /// key event because reconstructing what someone typed is the same
+    /// vocabulary question as binding it — and a buffer that read keys
+    /// directly would be a second place the keyboard is understood.
+    fn apply(&mut self, chord: Chord) {
+        if chord.mods.ctrl || chord.mods.alt {
             self.trusted = false;
             return;
         }
-        match key.code {
-            KeyCode::Char(character) => {
+        match chord.key {
+            Key::Char(character) => {
+                // The chord vocabulary folds case, so the buffer takes the
+                // character as it was typed rather than as it was bound.
+                let character = if chord.mods.shift {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                };
                 self.characters.insert(self.cursor, character);
                 self.cursor += 1;
             }
-            KeyCode::Backspace => {
+            Key::Space => {
+                self.characters.insert(self.cursor, ' ');
+                self.cursor += 1;
+            }
+            Key::Backspace => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     self.characters.remove(self.cursor);
                 }
             }
-            KeyCode::Delete => {
+            Key::Delete => {
                 if self.cursor < self.characters.len() {
                     self.characters.remove(self.cursor);
                 }
             }
-            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.characters.len()),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.characters.len(),
+            Key::Left => self.cursor = self.cursor.saturating_sub(1),
+            Key::Right => self.cursor = (self.cursor + 1).min(self.characters.len()),
+            Key::Home => self.cursor = 0,
+            Key::End => self.cursor = self.characters.len(),
             _ => self.trusted = false,
         }
     }
@@ -2135,6 +2175,7 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
+            && self.action_index.is_none()
             && !self.commit_detail_open()
     }
 
@@ -3246,17 +3287,17 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
 
 /// Confirms one [`ContextMenu`] row against its `target` — sent from both
 /// the popup's own click zone and its keyboard Enter shortcut, so each
-/// [`MenuAction`] only needs writing once here as the menu grows.
+/// action only needs writing once here as the menu grows.
 fn dispatch_menu_action<W: io::Write>(
     stream: &mut W,
     model: &mut WorkspaceModel,
     identities: &[AgentIdentity],
     target: MenuTarget,
-    action: MenuAction,
+    action: Action,
 ) {
     match action {
-        MenuAction::Rename => begin_rename(model, target),
-        MenuAction::Close => match target {
+        Action::RenameSelection => begin_rename(model, target),
+        Action::CloseTab => match target {
             MenuTarget::Space(space) => {
                 let _ = send_request(stream, &ClientRequest::CloseSpace { space });
             }
@@ -3284,6 +3325,10 @@ fn dispatch_menu_action<W: io::Write>(
                 let _ = send_request(stream, &ClientRequest::CloseTab { tab });
             }
         },
+        // Every other action is one no menu offers here — the target
+        // vocabulary is the product's whole one now, and this menu uses
+        // two of it.
+        _ => {}
     }
 }
 

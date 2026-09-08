@@ -191,8 +191,20 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
+    // The two modal surfaces this client has: centred, and the only thing
+    // that answers while they are open. Everything below them is a
+    // dropdown hanging off the control that opened it, which stays beside
+    // a screen that is still live — so the scrim covers these two and
+    // nothing else. Same placement as the management TUI's: between what
+    // was drawn and what is drawn over it.
+    if model.preserved.is_some() || model.action_index.is_some() {
+        crate::ui::scrim::render(frame, frame.area());
+    }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
+    }
+    if let Some(index) = &model.action_index {
+        render_action_index(frame, frame.area(), index, hits);
     }
     if let Some(picker) = &model.agent_picker {
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
@@ -1823,6 +1835,108 @@ fn delivery_ending(task: &TaskView) -> String {
 
 /// The preserved-work list: every task holding work that no live tab is in
 /// front of, with the keys that move it on. Discard asks twice.
+/// Everything that can be done here, each with the key that reaches it.
+///
+/// The workspace had no such surface at all: two of its most useful
+/// gestures were reachable only by someone who had read the source. Every
+/// word here comes from the action and every key from the keymap, so it is
+/// right by construction and stays right after a rebind.
+pub(super) fn render_action_index(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    index: &ActionIndexOverlay,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let rows = action_index_rows(&index.scopes, &index.filter);
+    let key_width = rows
+        .iter()
+        .filter_map(|(_, chord)| chord.map(|chord| chord.to_string().chars().count()))
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let width = area.width.saturating_sub(8).clamp(30, 72);
+    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::fg(Token::Accent))
+            .title(Line::from(Span::styled(
+                " Everything you can do ",
+                theme::fg_bold(Token::Accent),
+            )))
+            .style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
+        rect,
+    );
+    let inner = Rect::new(
+        rect.x + 2,
+        rect.y + 1,
+        rect.width.saturating_sub(4),
+        rect.height.saturating_sub(2),
+    );
+    frame.render_widget(
+        Paragraph::new(if index.filter.is_empty() {
+            Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
+        } else {
+            Line::from(vec![
+                Span::styled(index.filter.clone(), theme::fg(Token::TextPrimary)),
+                Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
+            ])
+        }),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    let list = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let mut entries: Vec<(Rect, WorkspaceHit)> = Vec::new();
+    for (position, (action, chord)) in rows.iter().enumerate() {
+        let y = list.y + position as u16;
+        if y >= list.bottom() {
+            break;
+        }
+        let row = Rect::new(list.x, y, list.width, 1);
+        let chosen = position == index.selected;
+        let key = chord.map(|chord| chord.to_string()).unwrap_or_default();
+        let mut label = Style::default().fg(theme::color(if chosen {
+            Token::TextBright
+        } else if action.destructive() {
+            Token::StateDanger
+        } else {
+            Token::TextPrimary
+        }));
+        if chosen {
+            label = label.add_modifier(Modifier::BOLD);
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{key:<key_width$}  "), theme::fg(Token::Accent)),
+                Span::styled(action.label(), label),
+                Span::styled(
+                    format!(
+                        "  {} {}",
+                        theme::glyph(Symbol::EmDash),
+                        action.description()
+                    ),
+                    theme::fg(Token::TextMuted),
+                ),
+            ])),
+            row,
+        );
+        entries.push((row, WorkspaceHit::ActionIndexEntry(position)));
+    }
+    // Prepended: what is underneath must not answer a click meant here.
+    hits.splice(0..0, entries);
+}
+
 pub(super) fn render_preserved(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -2228,6 +2342,22 @@ pub(super) fn render_tab_strip(
     // beside them uses, and the whole point of that zone is that a message
     // is not a control — so the controls cannot look like one too.
     let mut trailing_right = inner.right();
+    // Rightmost, and always there: the one surface that says what this
+    // mode can do. In the workspace the keyboard mostly belongs to the
+    // program in the pane, so the way in has to be something you can see.
+    {
+        let text = format!("{} help", theme::glyph(Symbol::Menu));
+        let rect = chip_rect(&text, trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
+            &text,
+            theme::color(Token::Accent),
+            chip_state(model, Some(WorkspaceHit::OpenActionIndex)),
+        );
+        hits.push((rect, WorkspaceHit::OpenActionIndex));
+        trailing_right = rect.x.saturating_sub(1);
+    }
     if selected_agent_context(model, identities).is_some() {
         // Its own rect is what the dropdown hangs off, so the chip is
         // measured before it is drawn and the hit carries the same

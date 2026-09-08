@@ -21,12 +21,12 @@ use ratatui::{
 use uze_application::{ClientLayout, Result, UzeHome};
 
 use super::hit::Hit;
-use super::model::{self, Focus, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
+use super::model::{self, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
 use super::worker::{
     Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
     spawn_startup,
 };
-use super::{TerminalSession, overlay, small_caps, small_digits, view};
+use super::{TerminalSession, overlay, scrim, small_caps, small_digits, view};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// How long a resolution of the machine stands for before opening this
@@ -105,9 +105,13 @@ pub(crate) fn run_management(
     let sender = memory.sender.clone();
     let mut model = TuiModel {
         // Carries over whatever the user last dragged the sidebar to — in
-        // this mode or the workspace's — so switching modes with Ctrl+O
-        // never resets it back to the responsive default.
+        // this mode or the workspace's — so switching modes never resets
+        // it back to the responsive default.
         sidebar_width: layout.sidebar.width,
+        // Asked of the terminal once, at startup: whether a chord can
+        // reach uze at all is a property of the host, and the Keys screen
+        // says so rather than letting a binding look alive and do nothing.
+        keyboard: terminal.keyboard(),
         ..TuiModel::recall(memory.remembered.take(), &layout.management)
     };
     if opening_re_resolves(model.resolved_at) && !memory.in_flight {
@@ -150,13 +154,10 @@ pub(crate) fn run_management(
         if event::poll(super::POLL_INTERVAL).map_err(super::io_error)? {
             match event::read().map_err(super::io_error)? {
                 Event::Key(key) => {
-                    if key
-                        .modifiers
-                        .contains(crossterm::event::KeyModifiers::CONTROL)
-                        && key.code == crossterm::event::KeyCode::Char('o')
-                    {
-                        break ManagementExit::Workspace;
-                    }
+                    // Switching modes is an action like any other now: the
+                    // keymap resolves it, `leaving_management` recognises
+                    // the intent, and this loop no longer holds a key of
+                    // its own that the help could not know about.
                     let intent = model.apply_key(key);
                     if intent == Intent::Quit {
                         break ManagementExit::Quit;
@@ -299,24 +300,53 @@ pub(crate) fn render(
         }
         Route::Harnesses => view::harnesses::render_harnesses(frame, layout.content, model, hits),
         Route::Profiles => view::profiles::render_profiles(frame, layout.content, model, hits),
+        Route::Keys => view::keys::render_keys(frame, layout.content, model, hits),
     }
 
-    render_footer(frame, layout.footer, model);
+    if let Some(menu) = &model.row_menu {
+        overlay::render_row_menu(frame, frame.area(), menu, hits);
+    }
+
+    render_footer(frame, layout.footer, model, hits);
+
+    // Every arm below is a modal: drawn in the middle of the frame, and
+    // the only thing on screen that answers until it is dealt with. The
+    // scrim is what says so — it goes here rather than inside each arm
+    // because what recedes is the screen underneath, which no dialog
+    // knows anything about. The row menu above is deliberately not one:
+    // it hangs off the row it is about, and the row has to stay readable.
+    if !matches!(model.overlay, Overlay::None) {
+        scrim::render(frame, frame.area());
+    }
 
     match &model.overlay {
         Overlay::None => {}
-        Overlay::Help => overlay::render_help(frame, frame.area()),
+        Overlay::ActionIndex {
+            scopes,
+            filter,
+            selected,
+        } => overlay::render_action_index(
+            frame,
+            frame.area(),
+            model,
+            scopes,
+            filter,
+            *selected,
+            hits,
+        ),
         Overlay::HarnessHelp => overlay::render_harness_help(frame, frame.area()),
         Overlay::ConfirmRemove { id, focus } => {
-            overlay::render_confirm_remove(frame, frame.area(), id, *focus)
+            overlay::render_confirm_remove(frame, frame.area(), id, *focus, hits)
         }
-        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, frame.area(), id),
+        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, frame.area(), id, hits),
         Overlay::ConfirmInstall { name, marketplace } => {
-            overlay::render_confirm_install(frame, frame.area(), name, marketplace)
+            overlay::render_confirm_install(frame, frame.area(), name, marketplace, hits)
         }
-        Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, frame.area()),
+        Overlay::ConfirmContextApply => {
+            overlay::render_confirm_context_apply(frame, frame.area(), hits)
+        }
         Overlay::ConfirmClearPromptHistory => {
-            overlay::render_confirm_clear_prompt_history(frame, frame.area())
+            overlay::render_confirm_clear_prompt_history(frame, frame.area(), hits)
         }
         Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
         Overlay::AddMarketplace(input) => {
@@ -327,10 +357,10 @@ pub(crate) fn render(
         }
         Overlay::NewProfile(input) => overlay::render_new_profile(frame, frame.area(), input),
         Overlay::ConfirmDeleteProfile { id, focus } => {
-            overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus)
+            overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus, hits)
         }
         Overlay::TrustRequired { plugin, detail, .. } => {
-            overlay::render_trust_required(frame, frame.area(), plugin, detail)
+            overlay::render_trust_required(frame, frame.area(), plugin, detail, hits)
         }
     }
 }
@@ -342,6 +372,7 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Extensions => "official tool extensions",
         Route::Harnesses => "detected agents",
         Route::Profiles => "preferences",
+        Route::Keys => "what each key does",
     }
 }
 
@@ -352,6 +383,7 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
         Route::Extensions => Some(model.extensions.len()),
         Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
         Route::Profiles => Some(model.profiles.len()),
+        Route::Keys => Some(model.key_rows().len()),
     }
 }
 
@@ -626,7 +658,12 @@ fn render_sidebar(
     }
 }
 
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+fn render_footer(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(theme::fg(Token::BorderFaint))
@@ -635,13 +672,27 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     frame.render_widget(block, area);
 
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    // A button for the one surface that lists everything, so the keyboard
+    // is an accelerator rather than the way in. It sits where the eye
+    // already goes for chrome, and it is the same surface `F1` opens.
+    let help = format!("{} help", theme::glyph(theme::Symbol::Menu));
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(10),
+            Constraint::Length(help.chars().count() as u16 + 2),
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
+    frame.render_widget(
+        Paragraph::new(Span::styled(help, theme::fg(Token::Accent)))
+            .alignment(ratatui::layout::Alignment::Right),
+        columns[1],
+    );
+    hits.push((
+        columns[1],
+        Hit::OfferedAction(uze_keys::Action::OpenActionIndex),
+    ));
     let mut text = footer(model);
     // Operation messages (install roots, marketplace paths) can exceed the
     // hint column; clip the status line to the column instead of letting it
@@ -657,7 +708,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     frame.render_widget(
         Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
             .alignment(ratatui::layout::Alignment::Right),
-        columns[1],
+        columns[2],
     );
 }
 
@@ -689,26 +740,35 @@ pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
     line.spans.truncate(i + 1);
 }
 
+/// The hint line: what can be done here, with the keys that do it.
+///
+/// Every word of it comes from the keymap — the action's own label, and
+/// `chord_for` for the key. The five hand-written strings this replaced
+/// were the other half of the drift the help overlay had: nothing made
+/// them agree with the dispatcher, and nothing could.
+fn hint_line(model: &TuiModel) -> Line<'static> {
+    let scopes = model.scopes();
+    let mut actions: Vec<uze_keys::Action> = model
+        .action_index_rows(&scopes, "")
+        .into_iter()
+        .filter(|(action, chord)| chord.is_some() && *action != uze_keys::Action::OpenActionIndex)
+        .map(|(action, _)| action)
+        .take(FOOTER_HINTS)
+        .collect();
+    // Last, and always: the one surface that lists the rest.
+    actions.push(uze_keys::Action::OpenActionIndex);
+    crate::ui::hint_for(&scopes, &actions)
+}
+
+/// How many of a screen's own actions the footer names before deferring to
+/// the index. Enough to be useful on one row, few enough that the row is
+/// still read rather than scanned past.
+const FOOTER_HINTS: usize = 4;
+
 fn footer(model: &TuiModel) -> Text<'static> {
-    let hint = if model.filtering {
-        "type to filter · enter apply · esc clear"
-    } else {
-        match model.overlay {
-            Overlay::None => match model.focus {
-                Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
-                _ => route_hint(model),
-            },
-            Overlay::ConfirmRemove { .. } | Overlay::ConfirmDeleteProfile { .. } => {
-                "tab switch · enter confirm · esc cancel · y/n"
-            }
-            Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
-            Overlay::AddMarketplace(_) => "type path/URL · enter add · esc cancel",
-            Overlay::NewProfile(_) => "type name · enter create · esc cancel",
-            _ => "enter/y confirm · esc/n cancel",
-        }
-    };
+    let hint = hint_line(model);
     match &model.status {
-        model::Status::Idle => Text::from(Line::from(super::hint_spans(hint))),
+        model::Status::Idle => Text::from(hint),
         model::Status::Working(value) => {
             let frame = theme::frame(theme::Symbol::StatusWorking, model.tick);
             Text::from(vec![
@@ -726,7 +786,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
-                Line::from(super::hint_spans(hint)),
+                hint,
             ])
         }
         model::Status::Success(value) => Text::from(vec![
@@ -736,7 +796,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
                     .fg(theme::color(Token::StateSuccess))
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(super::hint_spans(hint)),
+            hint,
         ]),
         model::Status::Error(value) => Text::from(vec![
             Line::from(Span::styled(
@@ -745,31 +805,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
                     .fg(theme::color(Token::StateDanger))
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(super::hint_spans(hint)),
+            hint,
         ]),
-    }
-}
-
-fn route_hint(model: &TuiModel) -> &'static str {
-    match model.route {
-        Route::Overview => {
-            match (
-                !model.prompt_history.is_empty(),
-                model.overview_install_path().is_some(),
-            ) {
-                (true, true) => "↑↓ prompt · enter jump · x clear · i install · r refresh · ? help",
-                (true, false) => "↑↓ prompt · enter jump · x clear · r refresh · ? help",
-                (false, true) => "i install · r refresh · ? help",
-                (false, false) => "r refresh · ? help",
-            }
-        }
-        Route::Plugins => {
-            "↑↓ select · enter inspect · i install · u update · r remove · a marketplace · / search"
-        }
-        Route::Extensions => "↑↓ select · enter details · / search",
-        Route::Harnesses => {
-            "↑↓ select · s setup · a analyze · p apply · / search · ? status · esc close"
-        }
-        Route::Profiles => "↑↓ navigate · enter expand/edit · space toggle",
     }
 }

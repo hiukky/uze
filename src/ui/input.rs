@@ -1,213 +1,206 @@
 //! TUI — keyboard and mouse input dispatch: translating a terminal event
 //! into a state transition and, where relevant, an [`Intent`] for a worker
 //! to act on.
+//!
+//! The keyboard half is two steps and no more: say what is open
+//! ([`TuiModel::scopes`]), then act on what the keymap says the keystroke
+//! means ([`TuiModel::act`]). Which key that was is `uze-keys`'s business
+//! and `super::keys`'s; nothing here names one.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 
 use uze_application::application::ContextPlan;
+use uze_keys::{Action, Resolution, Scope};
 
 use super::hit::Hit;
-use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
+use super::keys;
+use super::model::{
+    Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, RowMenu, TuiModel,
+};
 use super::worker::Intent;
 
 impl TuiModel {
-    pub(crate) fn apply_key(&mut self, key: KeyEvent) -> Intent {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return Intent::Quit;
+    /// What is open, outermost first — the value that replaced an ordering
+    /// of `match` arms. Everything about modality is here, and it is the
+    /// only thing a test needs to construct to ask what a key does.
+    pub(crate) fn scopes(&self) -> Vec<Scope> {
+        let mut scopes = vec![Scope::Global, Scope::Management];
+        scopes.push(match self.route {
+            Route::Overview => Scope::Overview,
+            Route::Plugins => Scope::Plugins,
+            Route::Extensions => Scope::Extensions,
+            Route::Harnesses => Scope::Harnesses,
+            Route::Profiles => Scope::Profiles,
+            Route::Keys => Scope::Keys,
+        });
+        if self.keys_capture {
+            // Every keystroke is the answer here, including ones bound
+            // elsewhere — that is the point of a capture.
+            scopes.push(Scope::KeyCapture);
         }
-        if self.overlay != Overlay::None {
-            return self.overlay_key(key);
+        if self.route == Route::Profiles && self.profile_panel == ProfilePanel::Editor {
+            scopes.push(Scope::ProfileEditor);
+        }
+        if self.focus == Focus::Sidebar {
+            scopes.push(Scope::ManagementSidebar);
         }
         if self.filtering {
-            return self.filter_key(key);
+            scopes.push(Scope::Filter);
         }
-        match key.code {
-            KeyCode::Char('?') => {
-                self.overlay = if self.route == Route::Harnesses {
-                    Overlay::HarnessHelp
-                } else {
-                    Overlay::Help
-                };
-                Intent::None
-            }
-            KeyCode::Char('q') => Intent::Quit,
-            // Appearance is machine-wide, so it is not a route's own key:
-            // every screen answers `t` the same way.
-            KeyCode::Char('t') => Intent::OpenThemePicker,
-            // Profiles cycles its three sub-panels on Tab while Content is
-            // focused, instead of the generic Sidebar/Content toggle below —
-            // scoped tightly to this route so every other screen's Tab
-            // behavior is unchanged.
-            KeyCode::Tab if self.route == Route::Profiles && self.focus == Focus::Content => {
-                self.profile_panel = self.profile_panel.next();
-                Intent::None
-            }
-            KeyCode::BackTab if self.route == Route::Profiles && self.focus == Focus::Content => {
-                self.profile_panel = self.profile_panel.prev();
-                Intent::None
-            }
-            KeyCode::Tab => {
-                self.focus = match self.focus {
-                    Focus::Sidebar => Focus::Content,
-                    _ => Focus::Sidebar,
-                };
-                Intent::None
-            }
-            KeyCode::BackTab => {
-                self.focus = match self.focus {
-                    Focus::Content => Focus::Sidebar,
-                    _ => Focus::Content,
-                };
-                Intent::None
-            }
-            KeyCode::Char('g') | KeyCode::F(5) => Intent::Refresh,
-            _ if self.focus == Focus::Sidebar => self.sidebar_key(key),
-            _ => self.content_key(key),
+        if self.row_menu.is_some() {
+            scopes.push(Scope::RowMenu);
+        }
+        match self.overlay {
+            Overlay::None | Overlay::HarnessHelp => {}
+            Overlay::ActionIndex { .. } => scopes.push(Scope::ActionIndex),
+            Overlay::AddMarketplace(_) | Overlay::NewProfile(_) => scopes.push(Scope::TextPrompt),
+            Overlay::ThemePicker { .. } => scopes.push(Scope::ThemePicker),
+            _ => scopes.push(Scope::Confirm),
+        }
+        scopes
+    }
+
+    pub(crate) fn apply_key(&mut self, key: KeyEvent) -> Intent {
+        // Reference material closes on anything, which is a property of a
+        // surface that has nothing to do but be read — not a binding, and
+        // so not the keymap's to hold.
+        // A glossary has nothing to answer — it is read, and then gone —
+        // so any keystroke closes it. That is a property of the surface,
+        // not a binding, and so not the keymap's to hold.
+        if self.overlay == Overlay::HarnessHelp {
+            self.overlay = Overlay::None;
+            return Intent::None;
+        }
+        let Some(chord) = keys::chord_of(key) else {
+            return Intent::None;
+        };
+        if self.keys_capture {
+            // Every keystroke is the answer here, so it is resolved
+            // against the capture alone — otherwise a chord bound
+            // globally could never be rebound, since it would fire
+            // instead of arriving.
+            return match uze_keys::active().resolve(chord, &[Scope::KeyCapture]) {
+                Resolution::Act(Action::Dismiss) => {
+                    self.keys_capture = false;
+                    self.keys_problem = None;
+                    Intent::None
+                }
+                _ => self.capture_chord(chord),
+            };
+        }
+        let scopes = self.scopes();
+        match uze_keys::active().resolve(chord, &scopes) {
+            Resolution::Act(action) => self.act(action),
+            Resolution::Text => match keys::text_of(key) {
+                Some(character) => self.type_character(character),
+                None => Intent::None,
+            },
+            Resolution::Fallthrough => Intent::None,
         }
     }
 
-    fn sidebar_key(&mut self, key: KeyEvent) -> Intent {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.set_route(ROUTES[(self.route.index() + 1) % ROUTES.len()]);
-                Intent::None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.set_route(ROUTES[(self.route.index() + ROUTES.len() - 1) % ROUTES.len()]);
-                Intent::None
-            }
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
-                self.focus = Focus::Content;
-                Intent::None
-            }
-            // Everything the sidebar has no meaning for is still the
-            // current route's own action key. The footer advertises
-            // `i`/`u`/`r`/`/` without qualification, and the sidebar is
-            // where a route lands you — swallowing them here is what made
-            // pressing `u` on a plugin with a pending update look broken.
-            _ => self.content_key(key),
+    /// Performs one action. Every arm is a meaning, so this reads as what
+    /// the product does rather than as what a keyboard is wired to.
+    pub(crate) fn act(&mut self, action: Action) -> Intent {
+        if self.overlay != Overlay::None {
+            return self.overlay_action(action);
         }
-    }
-
-    fn content_key(&mut self, key: KeyEvent) -> Intent {
-        match key.code {
-            // Left/Right only cycle a preference value in the Profiles
-            // Editor panel — everywhere else (including the other two
-            // Profiles panels) Left/`h` keeps its usual "back to sidebar"
-            // meaning, matched below.
-            KeyCode::Left
-                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::Editor =>
-            {
-                self.cycle_selected_preference(false)
+        if self.row_menu.is_some() {
+            return self.row_menu_action(action);
+        }
+        match action {
+            Action::OpenActionIndex => {
+                self.overlay = Overlay::ActionIndex {
+                    scopes: self.scopes(),
+                    filter: String::new(),
+                    selected: 0,
+                };
+                self.focus = Focus::Overlay;
+                Intent::None
             }
-            KeyCode::Right
-                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::Editor =>
-            {
-                self.cycle_selected_preference(true)
+            Action::OpenGlossary => {
+                self.overlay = Overlay::HarnessHelp;
+                self.focus = Focus::Overlay;
+                Intent::None
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            Action::SwitchMode => Intent::SwitchToWorkspace,
+            Action::Quit => Intent::Quit,
+            Action::Refresh => Intent::Refresh,
+            // Appearance is machine-wide, so it is not a route's own
+            // action: every screen answers it the same way.
+            Action::OpenThemePicker => Intent::OpenThemePicker,
+            Action::SelectNext => self.move_by(1),
+            Action::SelectPrevious => self.move_by(-1),
+            Action::FocusNext => self.cycle_focus(true),
+            Action::FocusPrevious => self.cycle_focus(false),
+            Action::FocusSidebar => {
                 self.focus = Focus::Sidebar;
                 Intent::None
             }
-            KeyCode::Char(' ') if self.route == Route::Profiles => {
+            Action::FocusContent => {
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Action::Activate => {
+                if self.focus == Focus::Sidebar {
+                    self.focus = Focus::Content;
+                    return Intent::None;
+                }
+                if self.route == Route::Overview && !self.prompt_history.is_empty() {
+                    return self.activate_selected_prompt();
+                }
+                if self.route == Route::Keys {
+                    // The one screen where Enter asks for a key rather
+                    // than opening something.
+                    self.keys_capture = true;
+                    self.keys_problem = None;
+                    return Intent::None;
+                }
+                self.open_or_act()
+            }
+            Action::Dismiss => self.dismiss(),
+            Action::StartFilter => {
+                if matches!(
+                    self.route,
+                    Route::Plugins | Route::Extensions | Route::Harnesses
+                ) {
+                    self.filtering = true;
+                }
+                Intent::None
+            }
+            Action::OpenRowActions => self.open_row_actions(),
+            Action::EraseBack => self.erase_character(),
+            Action::NextValue => self.cycle_selected_preference(true),
+            Action::PreviousValue => self.cycle_selected_preference(false),
+            Action::ToggleProfileHarness => {
                 if self.profile_panel == ProfilePanel::Harnesses {
                     self.toggle_profile_harness_at(self.profile_harness_selected);
                 }
                 Intent::None
             }
-            KeyCode::Char('j') | KeyCode::Down if self.route == Route::Profiles => {
-                self.move_profile_selection(1);
-                Intent::None
-            }
-            KeyCode::Char('k') | KeyCode::Up if self.route == Route::Profiles => {
-                self.move_profile_selection(-1);
-                Intent::None
-            }
-            // The Overview's only navigable list is its prompt history, so
-            // j/k drive that instead of the generic row selection.
-            KeyCode::Char('j') | KeyCode::Down
-                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
-            {
-                self.move_prompt_selection(1);
-                Intent::None
-            }
-            KeyCode::Char('k') | KeyCode::Up
-                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
-            {
-                self.move_prompt_selection(-1);
-                Intent::None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_selection(1);
-                if self.route == Route::Plugins {
-                    self.marketplace_inspect_intent()
-                } else {
-                    Intent::None
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_selection(-1);
-                if self.route == Route::Plugins {
-                    self.marketplace_inspect_intent()
-                } else {
-                    Intent::None
-                }
-            }
-            KeyCode::Esc if self.route == Route::Profiles => {
-                // Collapses back to the List panel first, mirroring every
-                // other route's "Esc closes the drawer, doesn't touch
-                // Sidebar/Content focus" convention.
-                self.profile_panel = ProfilePanel::List;
-                Intent::None
-            }
-            KeyCode::Esc => {
-                // Slides the open drawer away — the fetched detail stays
-                // cached, so reopening the same selection is instant.
-                match self.route {
-                    Route::Plugins => self.marketplace_drawer_open = false,
-                    Route::Extensions => self.extension_drawer_open = false,
-                    Route::Harnesses => self.harnesses_drawer_open = false,
-                    _ => {}
-                }
-                Intent::None
-            }
-            KeyCode::Char('n') if self.route == Route::Profiles => {
-                self.overlay = Overlay::NewProfile(String::new());
-                self.focus = Focus::Overlay;
-                Intent::None
-            }
-            KeyCode::Char('d')
-                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::List =>
-            {
-                if let Some(profile) = self.selected_profile() {
-                    self.overlay = Overlay::ConfirmDeleteProfile {
-                        id: profile.id.clone(),
-                        focus: 1,
-                    };
+            Action::InstallPlugin => {
+                if let Some((name, marketplace)) = self
+                    .selected_marketplace_plugin()
+                    .filter(|plugin| !plugin.installed)
+                    .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
+                {
+                    self.overlay = Overlay::ConfirmInstall { name, marketplace };
                     self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
-            KeyCode::Char('s')
-                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::List =>
-            {
-                self.selected_profile()
-                    .map(|profile| Intent::SetActiveProfile(profile.id.clone()))
-                    .unwrap_or(Intent::None)
-            }
-            KeyCode::Char('a' | 'A') if self.route == Route::Profiles => Intent::None,
-            KeyCode::Enter if self.route == Route::Overview && !self.prompt_history.is_empty() => {
-                self.activate_selected_prompt()
-            }
-            KeyCode::Char('x' | 'X')
-                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
-            {
-                self.overlay = Overlay::ConfirmClearPromptHistory;
-                self.focus = Focus::Overlay;
+            Action::UpdatePlugin => {
+                if let Some(id) = self
+                    .selected_marketplace_plugin()
+                    .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
+                    .map(|plugin| self.marketplace_plugin_id(&plugin))
+                {
+                    self.overlay = Overlay::ConfirmUpdate(id);
+                    self.focus = Focus::Overlay;
+                }
                 Intent::None
             }
-            KeyCode::Enter => self.open_or_act(),
-            KeyCode::Char('r') if self.route == Route::Plugins => {
+            Action::RemovePlugin => {
                 if let Some(plugin) = self.selected_marketplace_plugin().filter(|p| p.installed) {
                     let id = self.marketplace_plugin_id(&plugin);
                     self.overlay = if plugin.marketplace == "uze-official" {
@@ -223,65 +216,32 @@ impl TuiModel {
                 }
                 Intent::None
             }
-            // Global refresh alias outside Plugins, where `r` already means
-            // remove — `g`/F5 keep working everywhere too.
-            KeyCode::Char('r') => Intent::Refresh,
-            KeyCode::Char('/')
-                if matches!(
-                    self.route,
-                    Route::Plugins | Route::Extensions | Route::Harnesses
-                ) =>
-            {
-                self.filtering = true;
-                Intent::None
-            }
-            KeyCode::Char('u') if self.route == Route::Plugins => {
-                if let Some(id) = self
-                    .selected_marketplace_plugin()
-                    .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
-                    .map(|plugin| self.marketplace_plugin_id(&plugin))
-                {
-                    self.overlay = Overlay::ConfirmUpdate(id);
-                    self.focus = Focus::Overlay;
-                }
-                Intent::None
-            }
-            KeyCode::Char('i') if self.route == Route::Overview => {
-                // `i install` on Overview is only offered when the consumer
-                // lock declares plugins that aren't installed yet — the
-                // intent carries the detected workspace root, and the
-                // worker reproduces it through `install_project_environment`.
-                self.overview_install_path()
-                    .map(Intent::InstallProjectEnvironment)
-                    .unwrap_or(Intent::None)
-            }
-            KeyCode::Char('i') if self.route == Route::Plugins => {
-                if let Some((name, marketplace)) = self
-                    .selected_marketplace_plugin()
-                    .filter(|plugin| !plugin.installed)
-                    .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
-                {
-                    self.overlay = Overlay::ConfirmInstall { name, marketplace };
-                    self.focus = Focus::Overlay;
-                }
-                Intent::None
-            }
-            KeyCode::Char('s') if self.route == Route::Harnesses => {
-                self.selected_harness().map_or(Intent::None, |harness| {
-                    Intent::Setup(harness.integration.clone())
-                })
-            }
-            KeyCode::Char('a') if self.route == Route::Harnesses => {
-                Intent::ContextAnalyze(self.workspace_root())
-            }
-            // Global "add marketplace" everywhere else — Harnesses keeps `a`
-            // for analyze above, since that arm is matched first.
-            KeyCode::Char('a') => {
+            Action::AddMarketplace => {
                 self.overlay = Overlay::AddMarketplace(String::new());
                 self.focus = Focus::Overlay;
                 Intent::None
             }
-            KeyCode::Char('p') if self.route == Route::Harnesses => {
+            Action::InstallProjectEnvironment => {
+                // Only offered when the consumer lock declares plugins that
+                // aren't installed yet — the intent carries the detected
+                // workspace root, and the worker reproduces it through
+                // `install_project_environment`.
+                self.overview_install_path()
+                    .map(Intent::InstallProjectEnvironment)
+                    .unwrap_or(Intent::None)
+            }
+            Action::ClearPromptHistory => {
+                if !self.prompt_history.is_empty() {
+                    self.overlay = Overlay::ConfirmClearPromptHistory;
+                    self.focus = Focus::Overlay;
+                }
+                Intent::None
+            }
+            Action::SetupHarness => self.selected_harness().map_or(Intent::None, |harness| {
+                Intent::Setup(harness.integration.clone())
+            }),
+            Action::AnalyzeContext => Intent::ContextAnalyze(self.workspace_root()),
+            Action::ApplyContextPlan => {
                 if self
                     .context_plan
                     .as_ref()
@@ -292,8 +252,213 @@ impl TuiModel {
                 }
                 Intent::None
             }
+            Action::NewProfile => {
+                self.overlay = Overlay::NewProfile(String::new());
+                self.focus = Focus::Overlay;
+                Intent::None
+            }
+            Action::DeleteProfile => {
+                if self.profile_panel == ProfilePanel::List
+                    && let Some(profile) = self.selected_profile()
+                {
+                    self.overlay = Overlay::ConfirmDeleteProfile {
+                        id: profile.id.clone(),
+                        focus: 1,
+                    };
+                    self.focus = Focus::Overlay;
+                }
+                Intent::None
+            }
+            Action::ActivateProfile => self
+                .selected_profile()
+                .map(|profile| Intent::SetActiveProfile(profile.id.clone()))
+                .unwrap_or(Intent::None),
+            // Answered by the surfaces that own them; anywhere else they
+            // are simply not offered.
             _ => Intent::None,
         }
+    }
+
+    /// Raises the selected row's own actions. Only the available ones: a
+    /// menu is what can be done now, and why something cannot be done
+    /// belongs in the detail view, which has room for the reason.
+    pub(crate) fn open_row_actions(&mut self) -> Intent {
+        let all = self.selected_offers();
+        if all.is_empty() {
+            return Intent::None;
+        }
+        let available: Vec<_> = all
+            .iter()
+            .filter(|offer| offer.is_available())
+            .cloned()
+            .collect();
+        // A menu is what can be done now — so normally it holds only the
+        // available offers. When there is nothing at all, it holds the
+        // unavailable ones instead, each with its reason: a gesture that
+        // opened nothing would read exactly like the silent no-op this
+        // mechanism replaced.
+        let offers = if available.is_empty() { all } else { available };
+        // A destructive entry is never the one the menu opens on — the
+        // same rule the workspace client's own menu follows. When every
+        // available action destroys something, nothing is highlighted at
+        // all and reaching one costs a deliberate step.
+        let selected = offers
+            .iter()
+            .position(|offer| offer.is_available() && !offer.action.destructive());
+        self.row_menu = Some(RowMenu {
+            offers,
+            selected,
+            anchor: self.selected_row_rect().unwrap_or_default(),
+        });
+        self.focus = Focus::Content;
+        Intent::None
+    }
+
+    fn row_menu_action(&mut self, action: Action) -> Intent {
+        match action {
+            Action::SelectNext => {
+                self.step_row_menu(1);
+                Intent::None
+            }
+            Action::SelectPrevious => {
+                self.step_row_menu(-1);
+                Intent::None
+            }
+            Action::Activate => {
+                let chosen = self.row_menu.take().and_then(|menu| {
+                    menu.selected
+                        .and_then(|index| menu.offers.get(index))
+                        .filter(|offer| offer.is_available())
+                        .map(|offer| offer.action)
+                });
+                match chosen {
+                    Some(action) => self.act(action),
+                    None => Intent::None,
+                }
+            }
+            // Anything else, dismissal included, closes without acting.
+            _ => {
+                self.row_menu = None;
+                Intent::None
+            }
+        }
+    }
+
+    /// Moves through a menu's *available* entries. An entry that only
+    /// explains why it cannot run is read, never landed on.
+    fn step_row_menu(&mut self, delta: isize) {
+        let Some(menu) = self.row_menu.as_mut() else {
+            return;
+        };
+        let reachable: Vec<usize> = menu
+            .offers
+            .iter()
+            .enumerate()
+            .filter(|(_, offer)| offer.is_available())
+            .map(|(index, _)| index)
+            .collect();
+        if reachable.is_empty() {
+            return;
+        }
+        let position = menu
+            .selected
+            .and_then(|selected| reachable.iter().position(|index| *index == selected));
+        menu.selected = Some(match position {
+            Some(position) => {
+                reachable[position
+                    .saturating_add_signed(delta)
+                    .min(reachable.len() - 1)]
+            }
+            None if delta > 0 => reachable[0],
+            None => reachable[reachable.len() - 1],
+        });
+    }
+
+    /// Where the selection goes, which depends on what the screen is a
+    /// list *of* — routes in the sidebar, prompts on the Overview, a
+    /// profile's three panels, or the ordinary content rows.
+    fn move_by(&mut self, delta: isize) -> Intent {
+        if self.focus == Focus::Sidebar {
+            let count = ROUTES.len();
+            let step = if delta > 0 { 1 } else { count - 1 };
+            self.set_route(ROUTES[(self.route.index() + step) % count]);
+            return Intent::None;
+        }
+        match self.route {
+            Route::Profiles => {
+                self.move_profile_selection(delta);
+                Intent::None
+            }
+            Route::Keys => {
+                let last = self.key_rows().len().saturating_sub(1);
+                self.keys_selected = self.keys_selected.saturating_add_signed(delta).min(last);
+                self.keys_capture = false;
+                self.keys_problem = None;
+                Intent::None
+            }
+            // The Overview's only navigable list is its prompt history.
+            Route::Overview if !self.prompt_history.is_empty() => {
+                self.move_prompt_selection(delta);
+                Intent::None
+            }
+            _ => {
+                self.move_selection(delta);
+                if self.route == Route::Plugins {
+                    self.marketplace_inspect_intent()
+                } else {
+                    Intent::None
+                }
+            }
+        }
+    }
+
+    /// Profiles cycles its three sub-panels while the content has focus,
+    /// instead of the generic sidebar/content toggle — scoped to that
+    /// route so every other screen's focus behaviour is unchanged.
+    fn cycle_focus(&mut self, forward: bool) -> Intent {
+        if self.route == Route::Profiles && self.focus == Focus::Content {
+            self.profile_panel = if forward {
+                self.profile_panel.next()
+            } else {
+                self.profile_panel.prev()
+            };
+            return Intent::None;
+        }
+        self.focus = match (self.focus, forward) {
+            (Focus::Sidebar, true) => Focus::Content,
+            (Focus::Content, false) => Focus::Sidebar,
+            (Focus::Content, true) => Focus::Sidebar,
+            (_, _) => Focus::Content,
+        };
+        Intent::None
+    }
+
+    fn dismiss(&mut self) -> Intent {
+        if self.keys_capture {
+            self.keys_capture = false;
+            self.keys_problem = None;
+            return Intent::None;
+        }
+        if self.filtering {
+            self.filtering = false;
+            self.clear_filter();
+            return Intent::None;
+        }
+        if self.route == Route::Profiles {
+            // Collapses back to the List panel first, mirroring every other
+            // route's "Esc closes the drawer, doesn't touch focus" rule.
+            self.profile_panel = ProfilePanel::List;
+            return Intent::None;
+        }
+        // Slides the open drawer away — the fetched detail stays cached, so
+        // reopening the same selection is instant.
+        match self.route {
+            Route::Plugins => self.marketplace_drawer_open = false,
+            Route::Extensions => self.extension_drawer_open = false,
+            Route::Harnesses => self.harnesses_drawer_open = false,
+            _ => {}
+        }
+        Intent::None
     }
 
     /// Enter's meaning depends on the route: open a plugin row's delivery
@@ -317,8 +482,8 @@ impl TuiModel {
                 Intent::None
             }
             // List: jump straight into editing, the same way Enter opens a
-            // drawer elsewhere. Editor: change the highlighted value (same
-            // step as Right). Harnesses: no-op — toggling is Space's job,
+            // drawer elsewhere. Editor: change the highlighted value.
+            // Harnesses: no-op — toggling is the toggle action's job,
             // deliberately not doubled onto Enter.
             Route::Profiles => match self.profile_panel {
                 ProfilePanel::List => {
@@ -339,6 +504,10 @@ impl TuiModel {
     pub(crate) fn apply_mouse(&mut self, event: MouseEvent, total_width: u16) -> Intent {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(event.column, event.row),
+            // Right-click is the other way to ask a row what can be done
+            // to it — the gesture the workspace client already answers on
+            // its tabs and spaces.
+            MouseEventKind::Down(MouseButton::Right) => self.right_click(event.column, event.row),
             // The sidebar always starts at column 0 — the frame this TUI
             // draws into is always the full terminal — the same fact
             // `orchestrator::compute_layout`'s drag arm relies on via its
@@ -380,6 +549,13 @@ impl TuiModel {
                     }
                     Some(ResizablePanel::HarnessDrawer) => {
                         self.harness_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
+                    Some(ResizablePanel::KeysDrawer) => {
+                        self.keys_drawer_width = Some(
                             total_width
                                 .saturating_sub(event.column)
                                 .clamp(min_panel_width, max_panel_width),
@@ -454,9 +630,10 @@ impl TuiModel {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-    use super::super::model::{ResizablePanel, TuiModel};
+    use super::super::keys::press;
+    use super::super::model::{Overlay, ResizablePanel, Route, TuiModel};
 
     #[test]
     fn dragging_a_content_divider_records_its_route_local_width() {
@@ -475,5 +652,30 @@ mod tests {
         );
 
         assert_eq!(model.harness_drawer_width, Some(40));
+    }
+
+    #[test]
+    fn typing_a_search_never_performs_a_screen_action() {
+        let mut model = TuiModel {
+            route: Route::Plugins,
+            filtering: true,
+            ..TuiModel::default()
+        };
+        // `r` removes a plugin on this screen when nobody is typing.
+        model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(model.marketplace_filter, "r");
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn a_question_on_screen_answers_before_the_screen_does() {
+        let mut model = TuiModel {
+            route: Route::Plugins,
+            overlay: Overlay::ConfirmClearPromptHistory,
+            ..TuiModel::default()
+        };
+        // `r` reaches the confirmation, not the plugin list behind it.
+        model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
     }
 }

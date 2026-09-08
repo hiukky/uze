@@ -108,6 +108,73 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
+        name: "one module names a physical key",
+        scope: "src",
+        forbidden: "KeyCode",
+        reason: "a keystroke reaches an action through the keymap, and the keymap \
+                 is also what every surface asks for the key it prints. A second \
+                 place that reads a key directly is a second place the printed \
+                 help can be wrong about, and an action nobody can rebind — the \
+                 exact pair of defects this vocabulary exists to end.",
+        remedy: "resolve the keystroke into a `uze_keys::Action` and match on that. \
+                 The adapter is `src/ui/keys.rs`; add to the vocabulary if the \
+                 meaning is genuinely new.",
+        sanctioned: &[
+            (
+                "src/ui/keys.rs",
+                "the adapter itself: the one place crossterm's dialect meets \
+                 the chord vocabulary, the way src/ui/theme.rs is the one \
+                 place ratatui's meets the palette",
+            ),
+            (
+                "src/ui/orchestrator/input.rs",
+                "translating a keystroke into the bytes a pane's program \
+                 expects. It binds nothing — the key has already been \
+                 resolved, or found unclaimed, by the time it gets here",
+            ),
+        ],
+        budget: &[],
+    },
+    Rule {
+        name: "no surface writes a key down",
+        scope: "src/ui",
+        forbidden: "ctrl+",
+        reason: "a printed key is only true if it came from the keymap. The list \
+                 this replaced was typed by hand and had already fallen out of \
+                 step with the dispatcher for nine of its bindings — and a \
+                 rebound key would have made every one of them wrong.",
+        remedy: "ask `uze_keys::active().chord_for(action, scopes)` and print what \
+                 it answers. An action with no chord prints none.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "no surface draws its own arrow keys",
+        scope: "src/ui",
+        forbidden: "↑↓",
+        reason: "same as writing a key down: the hint that says `↑↓ select` is a \
+                 claim about the keymap, made by something that never asked it.",
+        remedy: "the hint line is generated from the actions available in the \
+                 current scopes; add the action rather than the arrow.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "an extension knows no more about the keyboard than about the palette",
+        scope: "crates/uze-extensions/src",
+        forbidden: "crossterm",
+        reason: "an extension answers a meaning, never a key — the same \
+                 relationship it has with drawing, where it answers a View and \
+                 never a colour. An extension that read keys would also have to \
+                 know the keymap, and the host would have two keyboards to keep \
+                 in agreement.",
+        remedy: "take a `uze_extensions::view::Command`. The host translates from \
+                 the keymap; widen that vocabulary if the surface can genuinely be \
+                 asked something new.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
         name: "an extension never touches UZE's own state",
         scope: "crates/uze-extensions/src",
         forbidden: "uze_application",

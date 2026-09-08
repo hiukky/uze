@@ -1,0 +1,52 @@
+journey: a keyboard the operator wrote is the one in force
+tags: [gate, tui, keys]
+proves: web/content/docs/getting-started.mdx
+about: |
+  Keys are configurable, and the configuration is a file the machine keeps
+  — so the claim is not that a screen accepted a rebinding, it is that the
+  file was in force before the first frame was drawn, and that the key uze
+  ships with stopped working.
+
+  The check is the process table, because a shell tab is a real process in
+  a real directory: pressing the rebound key opens one, and pressing the
+  default no longer does. UZE's own report of what it did is never what
+  proves it.
+
+world:
+  project: demo-app
+
+scenes:
+  - scene: the operator's keyboard is on the machine before uze is started
+    when:
+      - shell: |
+          printf '%s' '{"bindings":{"workspace":{"new-shell-tab":["f4"]}}}' > {uze_home}/keys.json
+        say: write a keyboard that moves "new shell" off its default
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+    then:
+      - file: "{uze_home}/keys.json"
+        exists: true
+        about: the keyboard is a file the machine keeps, not a screen's memory
+      - process: { matching: bash, cwd: "{project}", alive: true, count: 1 }
+        about: one shell — the one the workspace opened with
+
+  - scene: the key uze ships with no longer opens a shell
+    when:
+      - key: "C-t"
+        say: press the default, which this keyboard gave away
+        pause: 1.5
+    then:
+      - process: { matching: bash, cwd: "{project}", alive: true, count: 1 }
+        about: nothing opened — declaring an action replaces its keys rather than adding to them
+
+  - scene: the key the operator chose does
+    when:
+      - key: "F4"
+        say: press the rebound key
+        pause: 2.0
+    then:
+      - process: { matching: bash, cwd: "{project}", alive: true, count: 2 }
+        about: a second shell exists, opened by a key nothing in the binary names

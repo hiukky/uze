@@ -1,0 +1,13 @@
+[package]
+name = "uze-keys"
+version.workspace = true
+edition = "2024"
+rust-version = "1.97"
+description = "UZE's input vocabulary: named actions, the scopes they are live in, the chord grammar, and the keymap they resolve against"
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

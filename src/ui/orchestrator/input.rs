@@ -7,6 +7,11 @@
 
 use super::*;
 
+// The one import of a physical key outside the adapter, sanctioned by
+// name in the architecture suite: encoding a keystroke for a pane's
+// program is not binding it.
+use crossterm::event::KeyCode;
+
 /// Encodes and forwards a click/drag/scroll that missed every uze chrome
 /// hit into the focused pane's PTY — the counterpart to `encode_key` for
 /// mouse input. A no-op unless the pane's own program has actually turned
@@ -199,5 +204,61 @@ pub(super) fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
         KeyCode::End => Some(b"\x1b[F".to_vec()),
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEventKind, KeyEventState};
+
+    /// The enhancement protocol changes how a terminal *reports* a
+    /// keystroke, and uze forwards keystrokes into panes. A pane's program
+    /// must receive the same bytes either way, or turning the protocol on
+    /// would change what every agent in every pane reads.
+    #[test]
+    fn a_pane_receives_the_same_bytes_however_the_terminal_reports_a_key() {
+        let plain = |code, modifiers| KeyEvent::new(code, modifiers);
+        let enhanced = |code, modifiers| {
+            KeyEvent::new_with_kind_and_state(
+                code,
+                modifiers,
+                KeyEventKind::Press,
+                KeyEventState::NONE,
+            )
+        };
+        for (code, modifiers) in [
+            (KeyCode::Char('a'), KeyModifiers::NONE),
+            (KeyCode::Char('A'), KeyModifiers::SHIFT),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL),
+            (KeyCode::Enter, KeyModifiers::NONE),
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Backspace, KeyModifiers::NONE),
+        ] {
+            assert_eq!(
+                encode_key(plain(code, modifiers)),
+                encode_key(enhanced(code, modifiers)),
+                "{code:?} with {modifiers:?}"
+            );
+        }
+    }
+
+    /// With the protocol on, a terminal also reports releases and repeats.
+    /// Nothing reaches a pane from one: the client drops them before any
+    /// dispatch, so a held key types once per press and a release types
+    /// nothing at all.
+    #[test]
+    fn a_release_is_not_a_keystroke() {
+        for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+            let event = KeyEvent::new_with_kind_and_state(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+                kind,
+                KeyEventState::NONE,
+            );
+            assert_eq!(crate::ui::keys::chord_of(event), None, "{kind:?}");
+        }
     }
 }

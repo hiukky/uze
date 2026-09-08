@@ -1,6 +1,5 @@
 //! TUI — overlay state transitions and their rendering.
 
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,223 +7,254 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 
-use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
+use uze_keys::Action;
+
+use super::hit::Hit;
+use super::model::{Focus, Overlay, RowMenu, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
-use crate::ui::hint_aside;
 use crate::ui::theme::{self, Symbol, Token};
 
 impl TuiModel {
-    pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
+    /// One action, answered by whichever overlay is open.
+    ///
+    /// Only the actions an overlay's own surface offers reach it — a
+    /// question on screen is answered, dismissed, or left alone, and a
+    /// keystroke that means nothing here no longer closes it by accident.
+    pub(crate) fn overlay_action(&mut self, action: Action) -> Intent {
         let overlay = self.overlay.clone();
-        match (&overlay, key.code) {
-            (Overlay::Help | Overlay::HarnessHelp, _) => {
-                self.close_overlay();
-                Intent::None
+        match overlay {
+            Overlay::None | Overlay::HarnessHelp => Intent::None,
+            Overlay::ActionIndex {
+                scopes,
+                filter,
+                selected,
+            } => {
+                let rows = self.action_index_rows(&scopes, &filter);
+                match action {
+                    Action::SelectNext => {
+                        if let Overlay::ActionIndex { selected, .. } = &mut self.overlay {
+                            *selected = (*selected + 1).min(rows.len().saturating_sub(1));
+                        }
+                        Intent::None
+                    }
+                    Action::SelectPrevious => {
+                        if let Overlay::ActionIndex { selected, .. } = &mut self.overlay {
+                            *selected = selected.saturating_sub(1);
+                        }
+                        Intent::None
+                    }
+                    Action::Activate => {
+                        let chosen = rows.get(selected).map(|(action, _)| *action);
+                        self.close_overlay();
+                        match chosen {
+                            // Performing from the index is performing: the
+                            // row that did it is also the row that showed
+                            // the key, which is how anyone learns one.
+                            Some(action) => self.act(action),
+                            None => Intent::None,
+                        }
+                    }
+                    Action::Dismiss => {
+                        self.close_overlay();
+                        Intent::None
+                    }
+                    Action::EraseBack => self.erase_character(),
+                    _ => Intent::None,
+                }
             }
-            (
-                Overlay::ConfirmRemove { id, focus },
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
-            ) => {
-                let new_focus = 1 - *focus;
-                self.overlay = Overlay::ConfirmRemove {
-                    id: id.clone(),
-                    focus: new_focus,
-                };
-                Intent::None
-            }
-            (Overlay::ConfirmRemove { id, focus }, KeyCode::Enter) => {
-                if *focus == 1 {
-                    let id = id.clone();
+            Overlay::ConfirmRemove { id, focus } => match action {
+                Action::FocusNext | Action::FocusPrevious => {
+                    self.overlay = Overlay::ConfirmRemove {
+                        id,
+                        focus: 1 - focus,
+                    };
+                    Intent::None
+                }
+                Action::Activate if focus == 1 => {
                     self.close_overlay();
                     Intent::Remove(id)
-                } else {
+                }
+                Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::Remove(id)
+                }
+                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
                     self.close_overlay();
                     Intent::None
                 }
-            }
-            (Overlay::ConfirmRemove { id, .. }, KeyCode::Char('y' | 'Y')) => {
-                let id = id.clone();
-                self.close_overlay();
-                Intent::Remove(id)
-            }
-            (Overlay::ConfirmRemove { .. }, KeyCode::Char('n' | 'N') | KeyCode::Esc) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ConfirmRemove { .. }, _) => Intent::None,
-            (
-                Overlay::ConfirmDeleteProfile { id, focus },
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
-            ) => {
-                let new_focus = 1 - *focus;
-                self.overlay = Overlay::ConfirmDeleteProfile {
-                    id: id.clone(),
-                    focus: new_focus,
-                };
-                Intent::None
-            }
-            (Overlay::ConfirmDeleteProfile { id, focus }, KeyCode::Enter) => {
-                if *focus == 1 {
-                    let id = id.clone();
+                _ => Intent::None,
+            },
+            Overlay::ConfirmDeleteProfile { id, focus } => match action {
+                Action::FocusNext | Action::FocusPrevious => {
+                    self.overlay = Overlay::ConfirmDeleteProfile {
+                        id,
+                        focus: 1 - focus,
+                    };
+                    Intent::None
+                }
+                Action::Activate if focus == 1 => {
                     self.close_overlay();
                     Intent::DeleteProfile(id)
-                } else {
+                }
+                Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::DeleteProfile(id)
+                }
+                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
                     self.close_overlay();
                     Intent::None
                 }
-            }
-            (Overlay::ConfirmDeleteProfile { id, .. }, KeyCode::Char('y' | 'Y')) => {
-                let id = id.clone();
-                self.close_overlay();
-                Intent::DeleteProfile(id)
-            }
-            (Overlay::ConfirmDeleteProfile { .. }, KeyCode::Char('n' | 'N') | KeyCode::Esc) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ConfirmDeleteProfile { .. }, _) => Intent::None,
-            (Overlay::ThemePicker { themes, selected }, KeyCode::Down | KeyCode::Char('j')) => {
-                let last = themes.len().saturating_sub(1);
-                self.overlay = Overlay::ThemePicker {
-                    themes: themes.clone(),
-                    selected: (*selected + 1).min(last),
-                };
-                Intent::None
-            }
-            (Overlay::ThemePicker { themes, selected }, KeyCode::Up | KeyCode::Char('k')) => {
-                self.overlay = Overlay::ThemePicker {
-                    themes: themes.clone(),
-                    selected: selected.saturating_sub(1),
-                };
-                Intent::None
-            }
-            (Overlay::ThemePicker { themes, selected }, KeyCode::Enter) => {
-                let Some((id, _)) = themes.get(*selected).cloned() else {
+                _ => Intent::None,
+            },
+            Overlay::ThemePicker { themes, selected } => match action {
+                Action::SelectNext => {
+                    let last = themes.len().saturating_sub(1);
+                    self.overlay = Overlay::ThemePicker {
+                        themes,
+                        selected: (selected + 1).min(last),
+                    };
+                    Intent::None
+                }
+                Action::SelectPrevious => {
+                    self.overlay = Overlay::ThemePicker {
+                        themes,
+                        selected: selected.saturating_sub(1),
+                    };
+                    Intent::None
+                }
+                Action::Activate => {
+                    let chosen = themes.get(selected).cloned();
                     self.close_overlay();
-                    return Intent::None;
-                };
-                self.close_overlay();
-                Intent::SelectTheme(id)
-            }
-            (Overlay::ThemePicker { .. }, KeyCode::Esc | KeyCode::Char('q')) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ThemePicker { .. }, _) => Intent::None,
-            (Overlay::ConfirmClearPromptHistory, KeyCode::Char('y' | 'Y') | KeyCode::Enter) => {
-                self.close_overlay();
-                Intent::ClearPromptHistory
-            }
-            (Overlay::ConfirmClearPromptHistory, _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ConfirmUpdate(id), KeyCode::Char('y') | KeyCode::Enter) => {
-                let id = id.clone();
-                self.close_overlay();
-                Intent::Update(id, TrustGrant::Ask)
-            }
-            (Overlay::ConfirmUpdate(_), _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (
-                Overlay::ConfirmInstall { name, marketplace },
-                KeyCode::Char('y') | KeyCode::Enter,
-            ) => {
-                let (name, marketplace) = (name.clone(), marketplace.clone());
-                self.close_overlay();
-                Intent::Install {
-                    name,
-                    marketplace,
-                    grant: TrustGrant::Ask,
+                    match chosen {
+                        Some((id, _)) => Intent::SelectTheme(id),
+                        None => Intent::None,
+                    }
                 }
-            }
-            (Overlay::ConfirmInstall { .. }, _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ConfirmContextApply, KeyCode::Char('y') | KeyCode::Enter) => {
-                self.close_overlay();
-                Intent::ContextApply(self.workspace_root())
-            }
-            (Overlay::ConfirmContextApply, _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::ProtectedPlugin(_), _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::AddMarketplace(input), KeyCode::Enter) => {
-                let source = input.trim().to_owned();
-                self.close_overlay();
-                if source.is_empty() {
+                Action::Dismiss => {
+                    self.close_overlay();
                     Intent::None
-                } else {
-                    Intent::AddMarketplace(source)
                 }
-            }
-            (Overlay::AddMarketplace(_), KeyCode::Esc) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::AddMarketplace(input), KeyCode::Backspace) => {
-                let mut input = input.clone();
-                input.pop();
-                self.overlay = Overlay::AddMarketplace(input);
-                Intent::None
-            }
-            (Overlay::AddMarketplace(input), KeyCode::Char(c)) => {
-                let mut input = input.clone();
-                input.push(c);
-                self.overlay = Overlay::AddMarketplace(input);
-                Intent::None
-            }
-            (Overlay::AddMarketplace(_), _) => Intent::None,
-            (Overlay::NewProfile(input), KeyCode::Enter) => {
-                let id = slugify(input);
-                self.close_overlay();
-                if id.is_empty() {
+                _ => Intent::None,
+            },
+            Overlay::ConfirmClearPromptHistory => match action {
+                Action::Activate | Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::ClearPromptHistory
+                }
+                Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
                     Intent::None
-                } else {
-                    Intent::CreateProfile(id)
                 }
-            }
-            (Overlay::NewProfile(_), KeyCode::Esc) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::NewProfile(input), KeyCode::Backspace) => {
-                let mut input = input.clone();
-                input.pop();
-                self.overlay = Overlay::NewProfile(input);
-                Intent::None
-            }
-            (Overlay::NewProfile(input), KeyCode::Char(c)) => {
-                let mut input = input.clone();
-                input.push(c);
-                self.overlay = Overlay::NewProfile(input);
-                Intent::None
-            }
-            (Overlay::NewProfile(_), _) => Intent::None,
-            (Overlay::TrustRequired { retry, .. }, KeyCode::Char('y') | KeyCode::Enter) => {
-                let intent = match retry {
-                    TrustedRetry::Install { name, marketplace } => Intent::Install {
-                        name: name.clone(),
-                        marketplace: marketplace.clone(),
-                        grant: TrustGrant::Granted,
-                    },
-                    TrustedRetry::Update(id) => Intent::Update(id.clone(), TrustGrant::Granted),
-                };
-                self.close_overlay();
-                intent
-            }
-            (Overlay::TrustRequired { .. }, _) => {
-                self.close_overlay();
-                Intent::None
-            }
-            (Overlay::None, _) => Intent::None,
+                _ => Intent::None,
+            },
+            Overlay::ConfirmUpdate(id) => match action {
+                Action::Activate | Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::Update(id, TrustGrant::Ask)
+                }
+                Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            Overlay::ConfirmInstall { name, marketplace } => match action {
+                Action::Activate | Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::Install {
+                        name,
+                        marketplace,
+                        grant: TrustGrant::Ask,
+                    }
+                }
+                Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            Overlay::ConfirmContextApply => match action {
+                Action::Activate | Action::ConfirmYes => {
+                    self.close_overlay();
+                    Intent::ContextApply(self.workspace_root())
+                }
+                Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            // Nothing to decide: it explains why an action was refused.
+            Overlay::ProtectedPlugin(_) => match action {
+                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            Overlay::AddMarketplace(input) => match action {
+                Action::Activate => {
+                    let source = input.trim().to_owned();
+                    self.close_overlay();
+                    if source.is_empty() {
+                        Intent::None
+                    } else {
+                        Intent::AddMarketplace(source)
+                    }
+                }
+                Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                Action::EraseBack => {
+                    let mut input = input;
+                    input.pop();
+                    self.overlay = Overlay::AddMarketplace(input);
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            Overlay::NewProfile(input) => match action {
+                Action::Activate => {
+                    let id = slugify(&input);
+                    self.close_overlay();
+                    if id.is_empty() {
+                        Intent::None
+                    } else {
+                        Intent::CreateProfile(id)
+                    }
+                }
+                Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                Action::EraseBack => {
+                    let mut input = input;
+                    input.pop();
+                    self.overlay = Overlay::NewProfile(input);
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
+            Overlay::TrustRequired { retry, .. } => match action {
+                Action::Activate | Action::ConfirmYes => {
+                    let intent = match retry {
+                        TrustedRetry::Install { name, marketplace } => Intent::Install {
+                            name,
+                            marketplace,
+                            grant: TrustGrant::Granted,
+                        },
+                        TrustedRetry::Update(id) => Intent::Update(id, TrustGrant::Granted),
+                    };
+                    self.close_overlay();
+                    intent
+                }
+                Action::ConfirmNo | Action::Dismiss => {
+                    self.close_overlay();
+                    Intent::None
+                }
+                _ => Intent::None,
+            },
         }
     }
 
@@ -234,47 +264,119 @@ impl TuiModel {
     }
 }
 
-pub(crate) fn render_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
-    render_modal(
-        frame,
-        area,
-        "Help",
-        vec![
-            Line::from(format!(
-                "{}{} / j k     Navigate",
-                theme::glyph(Symbol::ArrowUp),
-                theme::glyph(Symbol::ArrowDown)
-            )),
-            Line::from(format!(
-                "Tab          Switch focus (sidebar {} content)",
-                theme::glyph(Symbol::ArrowSwap)
-            )),
-            Line::from("Enter        Open / Inspect"),
-            Line::from("Mouse click  Select sidebar route or list row"),
-            Line::from("Scroll       Move selection"),
-            Line::from(hint_aside(
-                "r            Remove plugin (Plugins)",
-                "Refresh elsewhere",
-            )),
-            Line::from("u            Update plugin (Plugins, when available)"),
-            Line::from("i            Install plugin (Plugins)"),
-            Line::from("/            Filter plugin list"),
-            Line::from(hint_aside(
-                "a            Add marketplace",
-                "Analyze context (Harnesses)",
-            )),
-            Line::from("p            Apply context plan (Harnesses)"),
-            Line::from("s            Setup harness (Harnesses)"),
-            Line::from("g            Refresh"),
-            Line::from("q            Quit"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "any key to close",
-                theme::fg(Token::TextMuted),
-            )),
-        ],
-        theme::color(Token::Accent),
+/// Everything that can be done here, each with the key that reaches it.
+///
+/// This is the help and the command palette at once, because they answer
+/// the same question and two lists would eventually disagree. Nothing here
+/// is written down: every row's words come from the action and every key
+/// from the keymap, so a rebound key is right here without anyone editing
+/// this function — which is exactly what the hand-typed list it replaced
+/// could not promise, and had already broken for nine of its bindings.
+pub(crate) fn render_action_index(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    scopes: &[uze_keys::Scope],
+    filter: &str,
+    selected: usize,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    let rows = model.action_index_rows(scopes, filter);
+    let key_width = rows
+        .iter()
+        .filter_map(|(_, chord)| chord.map(|chord| chord.to_string().chars().count()))
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let width = area.width.saturating_sub(8).clamp(30, 72);
+    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
     );
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        modal_block(" Everything you can do ", theme::color(Token::Accent)),
+        rect,
+    );
+    let inner = Rect::new(
+        rect.x + 2,
+        rect.y + 1,
+        rect.width.saturating_sub(4),
+        rect.height.saturating_sub(2),
+    );
+
+    let typed = if filter.is_empty() {
+        Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
+    } else {
+        Line::from(vec![
+            Span::styled(filter.to_owned(), theme::fg(Token::TextPrimary)),
+            Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
+        ])
+    };
+    frame.render_widget(
+        Paragraph::new(typed),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    let list = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let mut entries: Vec<(Rect, Hit)> = Vec::new();
+    for (index, (action, chord)) in rows.iter().enumerate() {
+        let y = list.y + index as u16;
+        if y >= list.bottom() {
+            break;
+        }
+        let row = Rect::new(list.x, y, list.width, 1);
+        let chosen = index == selected;
+        let key = match chord {
+            Some(chord) => chord.to_string(),
+            // An action with no key is a finished design, not a gap — it
+            // is reached by pointer and from here.
+            None => String::new(),
+        };
+        let mut label = Style::default().fg(theme::color(if chosen {
+            Token::TextBright
+        } else if action.destructive() {
+            Token::StateDanger
+        } else {
+            Token::TextPrimary
+        }));
+        if chosen {
+            label = label.add_modifier(Modifier::BOLD);
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!("{key:<key_width$}  "),
+                    theme::fg(if chord.is_some() {
+                        Token::Accent
+                    } else {
+                        Token::TextDim
+                    }),
+                ),
+                Span::styled(action.label(), label),
+                Span::styled(
+                    format!(
+                        "  {} {}",
+                        theme::glyph(Symbol::EmDash),
+                        action.description()
+                    ),
+                    theme::fg(Token::TextMuted),
+                ),
+            ])),
+            row,
+        );
+        entries.push((row, Hit::ActionIndexEntry(index)));
+    }
+    // Prepended, so the list underneath cannot answer a click meant here.
+    hits.splice(0..0, entries);
 }
 
 /// The Harnesses screen's glossary — everything that screen's compact
@@ -406,6 +508,7 @@ pub(crate) fn render_confirm_remove(
     area: Rect,
     id: &str,
     focus: usize,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     // Compact, centered confirmation ~52 wide instead of stretching full width.
     let width = 52.min(area.width.saturating_sub(4));
@@ -419,23 +522,6 @@ pub(crate) fn render_confirm_remove(
 
     frame.render_widget(Clear, popup);
 
-    let cancel_style = if focus == 0 {
-        Style::default()
-            .fg(Color::Black)
-            .bg(theme::color(Token::TextBright))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        theme::fg(Token::TextMuted)
-    };
-    let remove_style = if focus == 1 {
-        Style::default()
-            .fg(theme::color(Token::TextBright))
-            .bg(theme::color(Token::StateDanger))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        theme::fg_bold(Token::StateDanger)
-    };
-
     let message = Line::from(vec![
         Span::raw("Remove "),
         Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
@@ -447,15 +533,14 @@ pub(crate) fn render_confirm_remove(
     ));
     // Centered button row with clear visual hierarchy; destructive action is
     // red, safe action is muted, focused button gets solid background.
-    let buttons = Line::from(vec![
-        Span::styled("  Cancel  ", cancel_style),
-        Span::raw("  "),
-        Span::styled("  Remove  ", remove_style),
-    ]);
-    let footer = Line::from(Span::styled(
-        "tab switch · enter confirm · esc cancel · y/n",
-        theme::fg(Token::TextMuted),
-    ));
+    let footer = crate::ui::hint_for(
+        &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
+        &[
+            uze_keys::Action::FocusNext,
+            uze_keys::Action::ConfirmYes,
+            uze_keys::Action::ConfirmNo,
+        ],
+    );
 
     let block = modal_block(" Remove plugin? ", theme::color(Token::StateDanger));
     let inner = block.inner(popup);
@@ -479,9 +564,13 @@ pub(crate) fn render_confirm_remove(
         Paragraph::new(hint).alignment(Alignment::Center),
         inner_layout[1],
     );
-    frame.render_widget(
-        Paragraph::new(buttons).alignment(Alignment::Center),
+    render_modal_buttons(
+        frame,
         inner_layout[3],
+        Some("Remove"),
+        theme::color(Token::StateDanger),
+        Some(focus),
+        hits,
     );
     frame.render_widget(
         Paragraph::new(footer).alignment(Alignment::Center),
@@ -529,41 +618,42 @@ pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect
     );
 }
 
-pub(crate) fn render_confirm_update(frame: &mut ratatui::Frame<'_>, area: Rect, id: &str) {
+pub(crate) fn render_confirm_update(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    id: &str,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     render_modal(
         frame,
         area,
         "Update plugin?",
-        vec![
-            Line::from(vec![
-                Span::raw("Update "),
-                Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
-                Span::raw(" to the latest marketplace revision?"),
-            ]),
-            Line::from(Span::styled(
-                "enter/y update · esc/n cancel",
-                theme::fg(Token::TextMuted),
-            )),
-        ],
+        vec![Line::from(vec![
+            Span::raw("Update "),
+            Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
+            Span::raw(" to the latest marketplace revision?"),
+        ])],
         theme::color(Token::StateWarning),
+        Some("Update"),
+        hits,
     );
 }
 
-pub(crate) fn render_confirm_clear_prompt_history(frame: &mut ratatui::Frame<'_>, area: Rect) {
+pub(crate) fn render_confirm_clear_prompt_history(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     render_modal(
         frame,
         area,
         "Clear prompt history?",
-        vec![
-            Line::from(Span::raw(
-                "Delete every recorded prompt for this workspace. This cannot be undone.",
-            )),
-            Line::from(Span::styled(
-                "enter/y clear · esc/n cancel",
-                theme::fg(Token::TextMuted),
-            )),
-        ],
+        vec![Line::from(Span::raw(
+            "Delete every recorded prompt for this workspace. This cannot be undone.",
+        ))],
         theme::color(Token::StateDanger),
+        Some("Clear"),
+        hits,
     );
 }
 
@@ -572,25 +662,22 @@ pub(crate) fn render_confirm_install(
     area: Rect,
     name: &str,
     marketplace: &str,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     render_modal(
         frame,
         area,
         "Install plugin?",
-        vec![
-            Line::from(vec![
-                Span::raw("Install "),
-                Span::styled(name.to_owned(), theme::fg_bold(Token::Accent)),
-                Span::raw(" from "),
-                Span::styled(marketplace.to_owned(), theme::fg(Token::TextMuted)),
-                Span::raw("?"),
-            ]),
-            Line::from(Span::styled(
-                "enter/y install · esc/n cancel",
-                theme::fg(Token::TextMuted),
-            )),
-        ],
+        vec![Line::from(vec![
+            Span::raw("Install "),
+            Span::styled(name.to_owned(), theme::fg_bold(Token::Accent)),
+            Span::raw(" from "),
+            Span::styled(marketplace.to_owned(), theme::fg(Token::TextMuted)),
+            Span::raw("?"),
+        ])],
         theme::color(Token::Accent),
+        Some("Install"),
+        hits,
     );
 }
 
@@ -717,9 +804,14 @@ pub(crate) fn render_theme_picker(
         })
         .collect();
     lines.push(Line::from(""));
-    lines.push(Line::from(crate::ui::hint_spans(
-        "↑↓ select · enter apply · esc close",
-    )));
+    lines.push(crate::ui::hint_for(
+        &[uze_keys::Scope::Global, uze_keys::Scope::ThemePicker],
+        &[
+            uze_keys::Action::SelectNext,
+            uze_keys::Action::Activate,
+            uze_keys::Action::Dismiss,
+        ],
+    ));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -769,6 +861,7 @@ pub(crate) fn render_confirm_delete_profile(
     area: Rect,
     id: &str,
     focus: usize,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let width = 52.min(area.width.saturating_sub(4));
     let height = 8.min(area.height.saturating_sub(2));
@@ -780,23 +873,6 @@ pub(crate) fn render_confirm_delete_profile(
     );
     frame.render_widget(Clear, popup);
 
-    let cancel_style = if focus == 0 {
-        Style::default()
-            .fg(Color::Black)
-            .bg(theme::color(Token::TextBright))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        theme::fg(Token::TextMuted)
-    };
-    let delete_style = if focus == 1 {
-        Style::default()
-            .fg(theme::color(Token::TextBright))
-            .bg(theme::color(Token::StateDanger))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        theme::fg_bold(Token::StateDanger)
-    };
-
     let message = Line::from(vec![
         Span::raw("Delete profile "),
         Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
@@ -806,15 +882,14 @@ pub(crate) fn render_confirm_delete_profile(
         "This only removes UZE's own record — no harness config is touched.",
         theme::fg(Token::TextMuted),
     ));
-    let buttons = Line::from(vec![
-        Span::styled("  Cancel  ", cancel_style),
-        Span::raw("  "),
-        Span::styled("  Delete  ", delete_style),
-    ]);
-    let footer = Line::from(Span::styled(
-        "tab switch · enter confirm · esc cancel · y/n",
-        theme::fg(Token::TextMuted),
-    ));
+    let footer = crate::ui::hint_for(
+        &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
+        &[
+            uze_keys::Action::FocusNext,
+            uze_keys::Action::ConfirmYes,
+            uze_keys::Action::ConfirmNo,
+        ],
+    );
 
     let block = modal_block(" Delete profile? ", theme::color(Token::StateDanger));
     let inner = block.inner(popup);
@@ -837,9 +912,13 @@ pub(crate) fn render_confirm_delete_profile(
         Paragraph::new(hint).alignment(Alignment::Center),
         inner_layout[1],
     );
-    frame.render_widget(
-        Paragraph::new(buttons).alignment(Alignment::Center),
+    render_modal_buttons(
+        frame,
         inner_layout[3],
+        Some("Delete"),
+        theme::color(Token::StateDanger),
+        Some(focus),
+        hits,
     );
     frame.render_widget(
         Paragraph::new(footer).alignment(Alignment::Center),
@@ -847,19 +926,21 @@ pub(crate) fn render_confirm_delete_profile(
     );
 }
 
-pub(crate) fn render_confirm_context_apply(frame: &mut ratatui::Frame<'_>, area: Rect) {
+pub(crate) fn render_confirm_context_apply(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     render_modal(
         frame,
         area,
         "Apply context changes?",
-        vec![
-            Line::from("This reconciles AGENTS.md and its harness bridges."),
-            Line::from(Span::styled(
-                "enter/y apply · esc/n cancel",
-                theme::fg(Token::TextMuted),
-            )),
-        ],
+        vec![Line::from(
+            "This reconciles AGENTS.md and its harness bridges.",
+        )],
         theme::color(Token::StateWarning),
+        Some("Apply"),
+        hits,
     );
 }
 
@@ -868,6 +949,7 @@ pub(crate) fn render_trust_required(
     area: Rect,
     plugin: &str,
     detail: &str,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     render_modal(
         frame,
@@ -879,25 +961,31 @@ pub(crate) fn render_trust_required(
                 Span::raw(" declares an executable capability that was not previously trusted:"),
             ]),
             Line::from(Span::styled(detail.to_owned(), theme::fg(Token::TextMuted))),
-            Line::from(""),
-            Line::from(Span::styled(
-                "enter/y trust and continue · esc/n cancel",
-                theme::fg(Token::TextMuted),
-            )),
         ],
         theme::color(Token::StateWarning),
+        Some("Trust and continue"),
+        hits,
     );
 }
 
+/// A modal with its own buttons.
+///
+/// The buttons are the point: a dialog that could only be answered with a
+/// key would be the one place in the product where the keyboard is the way
+/// in rather than the accelerator. `yes` is the affirmative's own word —
+/// "Install", "Remove" — because "OK" tells a reader nothing about what
+/// they are about to agree to. `None` makes it a notice with one way out.
 fn render_modal(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     title: &str,
     lines: Vec<Line<'static>>,
     color: Color,
+    yes: Option<&str>,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let width = area.width.min(76);
-    let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let height = (lines.len() as u16 + 6).min(area.height.saturating_sub(2));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -905,12 +993,101 @@ fn render_modal(
         height,
     );
     frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(modal_block(format!(" {title} "), color))
-            .wrap(ratatui::widgets::Wrap { trim: true }),
-        popup,
+    let block = modal_block(format!(" {title} "), color);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let body = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(2),
     );
+    frame.render_widget(
+        Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }),
+        body,
+    );
+    render_modal_buttons(
+        frame,
+        Rect::new(inner.x, inner.y + body.height, inner.width, 1),
+        yes,
+        color,
+        None,
+        hits,
+    );
+    frame.render_widget(
+        Paragraph::new(crate::ui::hint_for(
+            &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
+            &[uze_keys::Action::ConfirmYes, uze_keys::Action::ConfirmNo],
+        ))
+        .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + body.height + 1, inner.width, 1),
+    );
+}
+
+/// The affirmative and the way out, as targets.
+///
+/// `focus` is which one the keyboard is on, for the dialogs that carry a
+/// focus; `None` draws the affirmative as the filled one, which is what a
+/// yes/no question looks like when nothing has moved yet.
+fn render_modal_buttons(
+    frame: &mut ratatui::Frame<'_>,
+    row: Rect,
+    yes: Option<&str>,
+    color: Color,
+    focus: Option<usize>,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    let cancel = match yes {
+        Some(_) => "  Cancel  ",
+        None => "  Close  ",
+    };
+    let yes_label = yes.map(|label| format!("  {label}  "));
+    let gap: u16 = if yes_label.is_some() { 2 } else { 0 };
+    let total = cancel.chars().count() as u16
+        + yes_label.as_ref().map_or(0, |l| l.chars().count() as u16)
+        + gap;
+    if row.width < total {
+        return;
+    }
+    let filled = |hue: Color| {
+        Style::default()
+            .fg(theme::color(Token::TextBright))
+            .bg(hue)
+            .add_modifier(Modifier::BOLD)
+    };
+    let mut x = row.x + (row.width - total) / 2;
+    let cancel_rect = Rect::new(x, row.y, cancel.chars().count() as u16, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            cancel,
+            if focus == Some(0) {
+                filled(theme::color(Token::TextMuted))
+            } else {
+                theme::fg(Token::TextMuted)
+            },
+        )),
+        cancel_rect,
+    );
+    // Prepended, because the dialog is drawn over whatever was behind it
+    // and that is still in the hit list underneath.
+    let mut buttons = vec![(cancel_rect, Hit::OfferedAction(uze_keys::Action::ConfirmNo))];
+    x += cancel_rect.width + gap;
+    if let Some(label) = yes_label {
+        let rect = Rect::new(x, row.y, label.chars().count() as u16, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                label,
+                if focus == Some(0) {
+                    theme::fg_bold(Token::StateDanger)
+                } else {
+                    filled(color)
+                },
+            )),
+            rect,
+        );
+        buttons.push((rect, Hit::OfferedAction(uze_keys::Action::ConfirmYes)));
+    }
+    hits.splice(0..0, buttons);
 }
 
 /// The modal dialog surface: `theme::color(Token::SurfaceBackground)`-colored (so it reads as "still part of
@@ -927,4 +1104,93 @@ fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> 
         .border_style(theme::fg(Token::BorderDefault))
         .style(theme::bg(Token::SurfaceBackground))
         .padding(Padding::new(1, 1, 1, 0))
+}
+
+/// The action menu a row raised: what can be done to that row, listed
+/// where the row is.
+///
+/// Anchored under the row, and pushed to the right so it never covers the
+/// name of the thing it is about. Only available offers are here — the
+/// menu is what can be done now — and a destructive one is drawn as such
+/// so the reader sees the weight of an entry before choosing it.
+pub(crate) fn render_row_menu(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    menu: &RowMenu,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    let width = menu
+        .offers
+        .iter()
+        .map(|offer| {
+            offer.action.label().chars().count()
+                + offer
+                    .reason()
+                    .map_or(0, |reason| reason.chars().count() + 3)
+        })
+        .max()
+        .unwrap_or(0)
+        .max(8) as u16
+        + 4;
+    let height = menu.offers.len() as u16 + 2;
+    if area.width < width || area.height < height {
+        return;
+    }
+    let anchor = menu.anchor;
+    let x = anchor
+        .right()
+        .saturating_sub(width)
+        .min(area.width.saturating_sub(width));
+    // Under the row it belongs to, or above it when there is no room —
+    // the popup is about that row, so it must never be far from it.
+    let below = anchor.y + 1;
+    let y = if below + height <= area.bottom() {
+        below
+    } else {
+        anchor.y.saturating_sub(height)
+    };
+    let rect = Rect::new(x, y, width, height);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::fg(Token::BorderDefault))
+            .style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
+        rect,
+    );
+    // The menu's own targets are prepended: `hit_at` answers with the
+    // first rect that contains the point, and the row it was raised from
+    // is still in the list underneath it.
+    let mut menu_hits: Vec<(Rect, Hit)> = Vec::new();
+    for (index, offer) in menu.offers.iter().enumerate() {
+        let row = Rect::new(rect.x + 1, rect.y + 1 + index as u16, rect.width - 2, 1);
+        let chosen = menu.selected == Some(index);
+        let colour = if !offer.is_available() {
+            Token::TextDim
+        } else if offer.action.destructive() {
+            Token::StateDanger
+        } else if chosen {
+            Token::TextPrimary
+        } else {
+            Token::TextMuted
+        };
+        let mut style = theme::fg(colour);
+        if chosen {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let mut spans = vec![Span::styled(offer.action.label(), style)];
+        // An entry that is here only to explain itself says so on the
+        // line, rather than looking like one that did nothing.
+        if let Some(reason) = offer.reason() {
+            spans.push(Span::styled(
+                format!("  {} {reason}", theme::glyph(Symbol::EmDash)),
+                theme::fg(Token::TextDim),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+        if offer.is_available() {
+            menu_hits.push((row, Hit::RowMenuEntry(index)));
+        }
+    }
+    hits.splice(0..0, menu_hits);
 }

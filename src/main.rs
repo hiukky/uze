@@ -639,6 +639,11 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
     for problem in uze::theme::install(&home) {
         eprintln!("uze: {problem}");
     }
+    // Same moment, same reason: the first keystroke the TUI reads should
+    // already mean what the operator said it means.
+    for problem in uze::keymap::install(&home) {
+        eprintln!("uze: {problem}");
+    }
     let verbose = cli.verbose;
     let Some(command) = cli.command else {
         // Started inside one of the running client's own panes: a client

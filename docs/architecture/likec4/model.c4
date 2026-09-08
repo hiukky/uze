@@ -70,6 +70,10 @@ model {
         description 'Rust crate: uze-theme. The one vocabulary of colour tokens and named symbols, the theme file schema, and the resolver that completes a partial theme from the built-in default. It resolves no path, reads no environment, and knows no rendering library: every surface adapts the vocabulary to what it draws with.'
       }
 
+      inputSystem = component 'Input System' {
+        description 'Rust crate: uze-keys. The one vocabulary of named actions, the scopes they are live in, the chord grammar and its portability rules, and the keymap that resolves a keystroke into an action - and an action back into the key that reaches it. It resolves no path, reads no environment, and knows no terminal library: every surface adapts the vocabulary to what it reads keys with.'
+      }
+
       terminalUi = component 'Terminal UI' {
         description 'Root uze crate: keyboard-first Ratatui presentation. It owns only view state and terminal cleanup; short workers create the Application facade for product actions.'
       }
@@ -87,6 +91,8 @@ model {
       application -> integrationState 'receipt ledger and reconciliation'
       terminalUi -> application 'list, inspect, doctor, add, setup, and remove'
       terminalUi -> designSystem 'resolves colour tokens and symbols against the active theme'
+      terminalUi -> inputSystem 'resolves keystrokes into actions, and actions back into the keys it prints'
+      application -> inputSystem 'states what can be done to an entity, in the one action vocabulary'
     }
 
     claudeIntegration = container 'Claude Integration' {

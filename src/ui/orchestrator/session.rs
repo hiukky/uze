@@ -27,6 +27,9 @@
 
 use super::*;
 
+use uze_extensions::view::Command;
+use uze_keys::{Action, Resolution, Scope};
+
 /// Where an event leaves the loop.
 pub(super) enum Flow {
     /// Keep going — almost everything.
@@ -100,80 +103,171 @@ impl Attach<'_> {
         }
     }
 
-    /// Keyboard input, guards in modal-precedence order: the innermost
-    /// open overlay answers first, and the pane itself answers last.
-    /// Keyboard input, guards in modal-precedence order: the innermost
-    /// open overlay answers first, and the pane itself answers last.
+    /// What is open, outermost first.
     ///
-    /// Each overlay's own keys live in a method named after it, so this
-    /// list is the precedence and nothing else — the one thing about it
-    /// that is easy to get wrong by inserting an arm in the wrong place.
+    /// This is the list that used to be the order of the guards in one
+    /// `match` — and being an order rather than a value is what made it
+    /// wrong: three chords sat above the Git overlay's arm and fired while
+    /// it was open, five sat below it and did not. As a stack, a sealed
+    /// surface answers for everything, and a test can ask.
+    fn scopes(&self) -> Vec<Scope> {
+        let mut scopes = vec![Scope::Global, Scope::Workspace];
+        if self.model.action_index.is_some() {
+            // Innermost of all: it is what the operator opened last, and
+            // it takes typing, so nothing behind it may answer a letter.
+            scopes.push(Scope::ActionIndex);
+            return scopes;
+        }
+        scopes.push(if self.model.root_picker.is_some() {
+            Scope::RootPicker
+        } else if self.model.renaming.is_some() {
+            Scope::Rename
+        } else if self.model.agent_picker.is_some() {
+            Scope::AgentPicker
+        } else if self.model.preserved.is_some() {
+            Scope::PreservedWork
+        } else if self.model.context_menu.is_some() {
+            Scope::ContextMenu
+        } else if self.model.git_view.is_some() {
+            Scope::GitChanges
+        } else {
+            // Last, and total: anything uze does not claim is the
+            // program's in the pane.
+            Scope::Pane
+        });
+        scopes
+    }
+
+    /// Keyboard input: say what is open, then act on what the keystroke
+    /// means. Which key that was is `crate::ui::keys`'s business.
     fn key(&mut self, key: KeyEvent, viewport: &Viewport) -> Flow {
-        let Viewport { columns, rows, .. } = *viewport;
-        match key {
-            _ if self.model.root_picker.is_some() => {
-                self.root_picker_key(key, viewport);
-            }
-            _ if self.model.renaming.is_some() => {
-                self.rename_key(key);
-            }
-            _ if self.model.agent_picker.is_some() => {
-                self.agent_picker_key(key, viewport);
-            }
-            _ if self.model.preserved.is_some() => {
-                self.preserved_key(key);
-            }
-            _ if self.model.support_dropdown.is_some() => {
-                self.model.support_dropdown = None;
-                self.model.dirty = true;
-            }
-            _ if self.model.commit_detail_open() => {
-                self.model.dismiss_commit_detail();
-            }
-            _ if self.model.status_catalog.is_some() => {
-                self.model.status_catalog = None;
-                self.model.dirty = true;
-            }
-            _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('i') => {
-                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
-            }
-            _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('I') => {
-                if let Some(cwd) = selected_pane_cwd(&self.model) {
-                    spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
-                    self.model.set_busy_notice("delivering all".to_owned());
+        // Three surfaces are notices rather than questions — read, then
+        // gone — so any keystroke dismisses one. That is a property of a
+        // surface with nothing to answer, not a binding, and so not the
+        // keymap's to hold.
+        if self.model.support_dropdown.is_some() {
+            self.model.support_dropdown = None;
+            self.model.dirty = true;
+            return Flow::Continue;
+        }
+        if self.model.commit_detail_open() {
+            self.model.dismiss_commit_detail();
+            return Flow::Continue;
+        }
+        if self.model.status_catalog.is_some() {
+            self.model.status_catalog = None;
+            self.model.dirty = true;
+            return Flow::Continue;
+        }
+
+        let Some(chord) = crate::ui::keys::chord_of(key) else {
+            return Flow::Continue;
+        };
+        let scopes = self.scopes();
+        match uze_keys::active().resolve(chord, &scopes) {
+            Resolution::Act(action) => self.act(action, viewport),
+            Resolution::Text => {
+                if let Some(character) = crate::ui::keys::text_of(key) {
+                    self.type_character(character);
                 }
+                Flow::Continue
             }
-            _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('p') => {
-                self.model.preserved = match self.model.preserved {
-                    Some(_) => None,
-                    None => Some(PreservedOverlay {
-                        selected: 0,
-                        confirm_discard: false,
-                    }),
-                };
-                self.model.dirty = true;
+            Resolution::Fallthrough => {
+                self.unclaimed(key, chord);
+                Flow::Continue
             }
-            _ if self.model.context_menu.is_some() => {
-                self.context_menu_key(key);
-            }
-            _ if self.model.git_view.is_some() => {
-                self.git_view_key(key);
-            }
-            _ if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('o') =>
-            {
+        }
+    }
+
+    /// A keystroke nothing claimed. With nothing of uze's open it is the
+    /// pane's; with a picker or a menu open it dismisses, which is that
+    /// surface's own "anything else means no".
+    fn unclaimed(&mut self, key: KeyEvent, chord: Chord) {
+        if self.model.action_index.is_some() {
+            self.model.action_index = None;
+            self.model.dirty = true;
+        } else if self.model.agent_picker.is_some() {
+            self.model.agent_picker = None;
+            self.model.dirty = true;
+        } else if self.model.context_menu.is_some() {
+            self.model.context_menu = None;
+            self.model.dirty = true;
+        } else if let Some(overlay) = self.model.preserved.as_mut() {
+            // A key that is not the confirmation withdraws the question.
+            overlay.confirm_discard = false;
+            self.model.dirty = true;
+        } else if self.model.no_modal_open() {
+            self.pane_key(key, chord);
+        }
+    }
+
+    /// Types one character into whichever surface is taking text.
+    fn type_character(&mut self, character: char) {
+        if let Some(index) = self.model.action_index.as_mut() {
+            index.filter.push(character);
+            index.selected = 0;
+        } else if let Some(picker) = self.model.root_picker.as_mut() {
+            picker.typed(character);
+        } else if let Some((_, buffer)) = self.model.renaming.as_mut() {
+            buffer.push(character);
+        }
+        self.model.dirty = true;
+    }
+
+    /// Performs one action. The two that leave the client answer first,
+    /// wherever they were asked from — which is what makes sealing a
+    /// surface safe.
+    fn act(&mut self, action: Action, viewport: &Viewport) -> Flow {
+        let Viewport { columns, rows, .. } = *viewport;
+        match action {
+            Action::SwitchMode => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
                 return Flow::Exit(WorkspaceExit::Management);
             }
-            _ if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('q') =>
-            {
+            Action::Quit => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
                 return Flow::Exit(WorkspaceExit::Quit);
             }
-            _ if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('t') =>
-            {
+            Action::OpenActionIndex if self.model.action_index.is_none() => {
+                self.model.action_index = Some(ActionIndexOverlay {
+                    scopes: self.scopes(),
+                    filter: String::new(),
+                    selected: 0,
+                });
+                self.model.dirty = true;
+                return Flow::Continue;
+            }
+            _ => {}
+        }
+        if self.model.action_index.is_some() {
+            return self.action_index_action(action, viewport);
+        }
+        if self.model.root_picker.is_some() {
+            self.root_picker_action(action, viewport);
+            return Flow::Continue;
+        }
+        if self.model.renaming.is_some() {
+            self.rename_action(action);
+            return Flow::Continue;
+        }
+        if self.model.agent_picker.is_some() {
+            self.agent_picker_action(action, viewport);
+            return Flow::Continue;
+        }
+        if self.model.preserved.is_some() {
+            self.preserved_action(action);
+            return Flow::Continue;
+        }
+        if self.model.context_menu.is_some() {
+            self.context_menu_action(action);
+            return Flow::Continue;
+        }
+        if self.model.git_view.is_some() {
+            self.git_view_action(action);
+            return Flow::Continue;
+        }
+        match action {
+            Action::NewShellTab => {
                 let _ = send_request(
                     &mut self.stream,
                     &ClientRequest::CreateTab {
@@ -186,25 +280,36 @@ impl Attach<'_> {
                     },
                 );
             }
-            _ if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('w') =>
-            {
+            Action::CloseTab => {
                 if let Some(tab) = self.model.selected_tab() {
                     let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
                 }
             }
-            _ if key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('g') =>
-            {
-                open_git_view(&mut self.model);
+            Action::NewAgent => {
+                self.model.agent_picker = Some(AgentPicker {
+                    options: agent_options(self.home),
+                    selected: 0,
+                    // Asked for with the keyboard, so there is no button to
+                    // anchor under; the popup places itself.
+                    anchor: Rect::default(),
+                    cwd: None,
+                    resume: None,
+                });
+                self.model.dirty = true;
             }
-            _ if key.modifiers.contains(KeyModifiers::ALT)
-                && matches!(key.code, KeyCode::Char('1'..='9')) =>
-            {
-                let index = match key.code {
-                    KeyCode::Char(value) => value as usize - '1' as usize,
-                    _ => 0,
-                };
+            Action::RenameSelection => {
+                if let Some(tab) = self.model.selected_tab() {
+                    begin_rename(&mut self.model, MenuTarget::Tab(tab));
+                    self.model.dirty = true;
+                }
+            }
+            Action::ToggleGitChanges => open_git_view(&mut self.model),
+            Action::NextSpace => self.step_space(1, columns, rows),
+            Action::PreviousSpace => self.step_space(-1, columns, rows),
+            Action::NextAgent => self.step_agent(1, columns, rows),
+            Action::PreviousAgent => self.step_agent(-1, columns, rows),
+            Action::SelectTab(position) => {
+                let index = usize::from(position).saturating_sub(1);
                 if let Some(tab) = self
                     .model
                     .session
@@ -212,58 +317,194 @@ impl Attach<'_> {
                     .and_then(|session| session.selected_space().tabs.get(index))
                     .map(|tab| tab.id)
                 {
-                    self.model.acknowledge_completed_agent_tab(tab);
-                    let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
-                    if let Some(pane) = self.model.pane_for_tab(tab) {
-                        resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
-                    }
+                    self.land_on_tab(tab, columns, rows);
                 }
             }
-            _ => {
-                self.pane_key(key);
+            Action::DeliverTask => {
+                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
             }
+            Action::DeliverAllTasks => {
+                if let Some(cwd) = selected_pane_cwd(&self.model) {
+                    spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
+                    self.model.set_busy_notice("delivering all".to_owned());
+                }
+            }
+            Action::TogglePreservedWork => {
+                self.model.preserved = match self.model.preserved {
+                    Some(_) => None,
+                    None => Some(PreservedOverlay {
+                        selected: 0,
+                        confirm_discard: false,
+                    }),
+                };
+                self.model.dirty = true;
+            }
+            _ => {}
         }
         Flow::Continue
     }
 
-    /// The "+ new space" prompt: type to narrow, Tab to walk into the
-    /// highlighted directory, Enter to open a space at it.
-    fn root_picker_key(&mut self, key: KeyEvent, viewport: &Viewport) {
+    /// Selects a tab and gives its pane the frame's size — the one
+    /// sequence every "land somewhere" gesture shares, whether it came
+    /// from a click, a position, or walking the sidebar.
+    fn land_on_tab(&mut self, tab: TabId, columns: u16, rows: u16) {
+        self.model.acknowledge_completed_agent_tab(tab);
+        let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
+        if let Some(pane) = self.model.pane_for_tab(tab) {
+            resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
+        }
+    }
+
+    /// Lands on a space the way clicking its header does: on the shell
+    /// that belongs to no agent when it has one, since that is the way
+    /// back to a space's own shells, and on the space itself otherwise.
+    fn land_on_space(&mut self, space: SpaceId, columns: u16, rows: u16) {
+        let landing = self.model.session.as_ref().and_then(|session| {
+            let space = session
+                .workspace
+                .spaces
+                .iter()
+                .find(|candidate| candidate.id == space)?;
+            Some((space.selected_tab, space_own_tab(space, &self.identities)))
+        });
+        if let Some((selected, own)) = landing {
+            self.model
+                .acknowledge_completed_agent_tab(own.unwrap_or(selected));
+        }
+        let _ = match landing.and_then(|(_, own)| own) {
+            Some(tab) => send_request(&mut self.stream, &ClientRequest::SelectTab { tab }),
+            None => send_request(&mut self.stream, &ClientRequest::SelectSpace { space }),
+        };
+        if let Some(pane) = landing
+            .map(|(selected, own)| own.unwrap_or(selected))
+            .and_then(|tab| self.model.pane_for_tab(tab))
+        {
+            resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
+        }
+    }
+
+    /// Walks the sidebar's spaces. The sidebar is vertical and holds
+    /// spaces; the strip is horizontal and holds tabs — which is the whole
+    /// mnemonic for why one is Ctrl and the other Alt.
+    fn step_space(&mut self, delta: isize, columns: u16, rows: u16) {
+        let Some(target) = self.model.session.as_ref().and_then(|session| {
+            let spaces = &session.workspace.spaces;
+            let current = session.selected_space().id;
+            let index = spaces.iter().position(|space| space.id == current)?;
+            let count = spaces.len() as isize;
+            let next = (index as isize + delta).rem_euclid(count) as usize;
+            spaces.get(next).map(|space| space.id)
+        }) else {
+            return;
+        };
+        self.land_on_space(target, columns, rows);
+    }
+
+    /// Walks the agents of the selected space, in the order the sidebar
+    /// draws them. From a shell — where no agent row is selected — the
+    /// first step lands on the nearest end rather than nowhere.
+    fn step_agent(&mut self, delta: isize, columns: u16, rows: u16) {
+        let identities = &self.identities;
+        let Some(target) = self.model.session.as_ref().and_then(|session| {
+            let space = session.selected_space();
+            let agents: Vec<TabId> = space
+                .tabs
+                .iter()
+                .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+                .map(|tab| tab.id)
+                .collect();
+            if agents.is_empty() {
+                return None;
+            }
+            let next = match agents.iter().position(|id| *id == space.selected_tab) {
+                Some(index) => (index as isize + delta).rem_euclid(agents.len() as isize) as usize,
+                None if delta > 0 => 0,
+                None => agents.len() - 1,
+            };
+            agents.get(next).copied()
+        }) else {
+            return;
+        };
+        self.land_on_tab(target, columns, rows);
+    }
+
+    /// The index of everything: type to narrow, choose to perform.
+    fn action_index_action(&mut self, action: Action, viewport: &Viewport) -> Flow {
+        let rows = self
+            .model
+            .action_index
+            .as_ref()
+            .map(|index| action_index_rows(&index.scopes, &index.filter))
+            .unwrap_or_default();
+        match action {
+            Action::SelectNext => {
+                if let Some(index) = self.model.action_index.as_mut() {
+                    index.selected = (index.selected + 1).min(rows.len().saturating_sub(1));
+                }
+            }
+            Action::SelectPrevious => {
+                if let Some(index) = self.model.action_index.as_mut() {
+                    index.selected = index.selected.saturating_sub(1);
+                }
+            }
+            Action::EraseBack => {
+                if let Some(index) = self.model.action_index.as_mut() {
+                    index.filter.pop();
+                    index.selected = 0;
+                }
+            }
+            Action::Activate => {
+                let chosen = self
+                    .model
+                    .action_index
+                    .take()
+                    .and_then(|index| rows.get(index.selected).map(|(action, _)| *action));
+                self.model.dirty = true;
+                if let Some(action) = chosen {
+                    // Performing from the index is performing: the row
+                    // that did it also showed the key that would have.
+                    return self.act(action, viewport);
+                }
+            }
+            _ => self.model.action_index = None,
+        }
+        self.model.dirty = true;
+        Flow::Continue
+    }
+
+    /// The "+ new space" prompt: type to narrow, walk into the highlighted
+    /// directory, open a space at it.
+    fn root_picker_action(&mut self, action: Action, viewport: &Viewport) {
         let Viewport { columns, rows, .. } = *viewport;
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            Action::SelectPrevious => {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.move_selection(-1);
                 }
             }
-            KeyCode::Down => {
+            Action::SelectNext => {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.move_selection(1);
                 }
             }
-            // Tab walks into the highlighted directory, so a
-            // root several levels down is reached by narrowing
-            // one level at a time instead of typing the path.
-            KeyCode::Tab => {
+            // Walking into the highlighted directory is how a root several
+            // levels down is reached — one level at a time, instead of
+            // typing the path.
+            Action::Expand => {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.descend();
                 }
             }
-            KeyCode::Enter => {
+            Action::Activate => {
                 if let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
                     self.model.root_picker = None;
                     self.open_space_at(root, columns, rows);
                 }
             }
-            KeyCode::Esc => self.model.root_picker = None,
-            KeyCode::Backspace => {
+            Action::Dismiss => self.model.root_picker = None,
+            Action::EraseBack => {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.backspace();
-                }
-            }
-            KeyCode::Char(character) => {
-                if let Some(picker) = self.model.root_picker.as_mut() {
-                    picker.typed(character);
                 }
             }
             _ => {}
@@ -272,9 +513,9 @@ impl Attach<'_> {
     }
 
     /// The inline rename buffer over a tab or a space label.
-    fn rename_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
+    fn rename_action(&mut self, action: Action) {
+        match action {
+            Action::Activate => {
                 if let Some((target, buffer)) = self.model.renaming.take() {
                     let trimmed = buffer.trim().to_owned();
                     if !trimmed.is_empty() {
@@ -294,15 +535,10 @@ impl Attach<'_> {
                     }
                 }
             }
-            KeyCode::Esc => self.model.renaming = None,
-            KeyCode::Backspace => {
+            Action::Dismiss => self.model.renaming = None,
+            Action::EraseBack => {
                 if let Some((_, buffer)) = self.model.renaming.as_mut() {
                     buffer.pop();
-                }
-            }
-            KeyCode::Char(c) => {
-                if let Some((_, buffer)) = self.model.renaming.as_mut() {
-                    buffer.push(c);
                 }
             }
             _ => {}
@@ -310,22 +546,22 @@ impl Attach<'_> {
         self.model.dirty = true;
     }
 
-    /// The "+ new agent" popup — pick a harness, or Esc.
-    fn agent_picker_key(&mut self, key: KeyEvent, viewport: &Viewport) {
+    /// The "+ new agent" popup — pick a harness, or leave.
+    fn agent_picker_action(&mut self, action: Action, viewport: &Viewport) {
         let Viewport { columns, rows, .. } = *viewport;
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            Action::SelectPrevious => {
                 if let Some(picker) = self.model.agent_picker.as_mut() {
                     picker.selected = picker.selected.saturating_sub(1);
                 }
             }
-            KeyCode::Down => {
+            Action::SelectNext => {
                 if let Some(picker) = self.model.agent_picker.as_mut() {
                     picker.selected =
                         (picker.selected + 1).min(picker.options.len().saturating_sub(1));
                 }
             }
-            KeyCode::Enter => {
+            Action::Activate => {
                 if let Some(picker) = self.model.agent_picker.take()
                     && let Some(option) = picker.options.get(picker.selected)
                 {
@@ -346,9 +582,6 @@ impl Attach<'_> {
                     );
                 }
             }
-            // Esc, or anything else — the picker only reacts to
-            // Up/Down/Enter, so any other key just dismisses it
-            // rather than leaking through to the pane.
             _ => self.model.agent_picker = None,
         }
         self.model.dirty = true;
@@ -356,20 +589,20 @@ impl Attach<'_> {
 
     /// The preserved-work list: tasks holding work no live tab is in
     /// front of, with resume and a confirmed discard.
-    fn preserved_key(&mut self, key: KeyEvent) {
+    fn preserved_action(&mut self, action: Action) {
         let preserved = self.model.preserved_tasks();
         let overlay = self.model.preserved.as_mut().expect("guarded");
-        match key.code {
-            KeyCode::Esc => self.model.preserved = None,
-            KeyCode::Up => {
+        match action {
+            Action::Dismiss => self.model.preserved = None,
+            Action::SelectPrevious => {
                 overlay.selected = overlay.selected.saturating_sub(1);
                 overlay.confirm_discard = false;
             }
-            KeyCode::Down => {
+            Action::SelectNext => {
                 overlay.selected = (overlay.selected + 1).min(preserved.len().saturating_sub(1));
                 overlay.confirm_discard = false;
             }
-            KeyCode::Char('i') => {
+            Action::DeliverTask => {
                 if let Some((cwd, task)) = preserved.get(overlay.selected) {
                     self.model.delivery_pending.insert(task.id.clone());
                     spawn_delivery(
@@ -380,7 +613,7 @@ impl Attach<'_> {
                     );
                 }
             }
-            KeyCode::Char('f') => {
+            Action::FinishTask => {
                 if let Some((cwd, task)) = preserved.get(overlay.selected)
                     && let Ok(app) = tui_application(self.home.clone())
                 {
@@ -392,7 +625,7 @@ impl Attach<'_> {
             // Into the task's own slot when it still has one; otherwise
             // placement gives it a slot again on its own branch — a
             // checkout removed by hand took only the uncommitted work.
-            KeyCode::Char('r') => {
+            Action::ResumeTask => {
                 if let Some((primary, task)) = preserved.get(overlay.selected) {
                     let (cwd, resume) = match task.checkout.clone() {
                         Some(checkout) => (Some(checkout), None),
@@ -419,8 +652,8 @@ impl Attach<'_> {
             }
             // Discard is the one action that deletes work, so
             // it is the one that asks twice.
-            KeyCode::Char('d') => overlay.confirm_discard = true,
-            KeyCode::Char('y') if overlay.confirm_discard => {
+            Action::DiscardTask => overlay.confirm_discard = true,
+            Action::ConfirmDiscard if overlay.confirm_discard => {
                 overlay.confirm_discard = false;
                 if let Some((cwd, task)) = preserved.get(overlay.selected)
                     && let Ok(app) = tui_application(self.home.clone())
@@ -441,23 +674,19 @@ impl Attach<'_> {
     }
 
     /// The tab/space context menu.
-    fn context_menu_key(&mut self, key: KeyEvent) {
-        // Up/Down move the selection; Enter confirms whichever
-        // row is selected; anything else (Esc included)
-        // dismisses without acting — same "only reacts to its
-        // own actions" rule the agent picker above uses.
-        match key.code {
-            KeyCode::Up => {
+    fn context_menu_action(&mut self, action: Action) {
+        match action {
+            Action::SelectPrevious => {
                 if let Some(menu) = self.model.context_menu.as_mut() {
                     menu.selected = menu.selected.saturating_sub(1);
                 }
             }
-            KeyCode::Down => {
+            Action::SelectNext => {
                 if let Some(menu) = self.model.context_menu.as_mut() {
                     menu.selected = (menu.selected + 1).min(menu.items.len().saturating_sub(1));
                 }
             }
-            KeyCode::Enter => {
+            Action::Activate => {
                 if let Some(menu) = self.model.context_menu.take()
                     && let Some(action) = menu.items.get(menu.selected).copied()
                 {
@@ -470,16 +699,34 @@ impl Attach<'_> {
                     );
                 }
             }
+            // Anything else, dismissal included, closes without acting —
+            // the same rule the agent picker follows.
             _ => self.model.context_menu = None,
         }
         self.model.dirty = true;
     }
 
-    /// The Git changes overlay, which answers for itself — this only
-    /// learns whether it wants to stay open.
-    fn git_view_key(&mut self, key: KeyEvent) {
+    /// The Git changes overlay, which answers for itself. It is handed a
+    /// meaning rather than a key: an extension knows no more about the
+    /// keyboard than it does about the palette.
+    fn git_view_action(&mut self, action: Action) {
+        let command = match action {
+            Action::Dismiss | Action::ToggleGitChanges => Command::Close,
+            Action::FocusNext | Action::FocusPrevious => Command::FocusNext,
+            Action::SelectNext => Command::SelectNext,
+            Action::SelectPrevious => Command::SelectPrevious,
+            Action::Collapse => Command::Collapse,
+            Action::Expand => Command::Expand,
+            Action::Activate => Command::Activate,
+            Action::ScrollPageUp => Command::ScrollPageUp,
+            Action::ScrollPageDown => Command::ScrollPageDown,
+            _ => return,
+        };
         if let Some(view) = self.model.git_view.as_mut()
-            && matches!(git::handle_key(view, key), git::GitViewOutcome::Close)
+            && matches!(
+                git::handle_command(view, command),
+                git::GitViewOutcome::Close
+            )
         {
             self.model.git_view = None;
         }
@@ -488,7 +735,7 @@ impl Attach<'_> {
 
     /// Nothing of uze's is open, so the key belongs to the pane: encode
     /// it for the PTY and record what it does to the prompt buffer.
-    fn pane_key(&mut self, key: KeyEvent) {
+    fn pane_key(&mut self, key: KeyEvent, chord: Chord) {
         if let Some(bytes) = encode_key(key) {
             let pane = self.model.focused_pane();
             // `encode_key` emits a bare CR for Enter and 0x03
@@ -507,7 +754,7 @@ impl Attach<'_> {
                         .prompt_buffers
                         .entry(pane)
                         .or_default()
-                        .apply(key);
+                        .apply(chord);
                 }
                 None
             };
@@ -607,6 +854,25 @@ impl Attach<'_> {
             ..
         } = *viewport;
         match mouse {
+            _ if self.model.action_index.is_some() => {
+                // A click on a row performs it, the way choosing it with
+                // the keyboard does; anywhere else closes without acting.
+                let chosen = match hit_at(&self.model, mouse.column, mouse.row) {
+                    Some(WorkspaceHit::ActionIndexEntry(position)) => {
+                        self.model.action_index.as_ref().and_then(|index| {
+                            action_index_rows(&index.scopes, &index.filter)
+                                .get(position)
+                                .map(|(action, _)| *action)
+                        })
+                    }
+                    _ => None,
+                };
+                self.model.action_index = None;
+                self.model.dirty = true;
+                if let Some(action) = chosen {
+                    return self.act(action, viewport);
+                }
+            }
             _ if self.model.renaming.is_some() => {
                 // Same rule the management TUI's overlays use: a click
                 // outside the thing being edited discards it rather
@@ -969,14 +1235,14 @@ impl Attach<'_> {
                 // the action replaces it with a plain shell. Renaming a
                 // lone space or shell remains the only available action.
                 if let Some(WorkspaceHit::SelectSpace(space)) = hit {
-                    let mut items = vec![MenuAction::Rename];
+                    let mut items = vec![Action::RenameSelection];
                     if self
                         .model
                         .session
                         .as_ref()
                         .is_some_and(|session| session.workspace.spaces.len() > 1)
                     {
-                        items.push(MenuAction::Close);
+                        items.push(Action::CloseTab);
                     }
                     self.model.context_menu = Some(ContextMenu {
                         target: MenuTarget::Space(space),
@@ -986,9 +1252,9 @@ impl Attach<'_> {
                     });
                     self.model.dirty = true;
                 } else if let Some(WorkspaceHit::SelectTab(tab)) = hit {
-                    let mut items = vec![MenuAction::Rename];
+                    let mut items = vec![Action::RenameSelection];
                     if can_close_tab_from_menu(&self.model, &self.identities, tab) {
-                        items.push(MenuAction::Close);
+                        items.push(Action::CloseTab);
                     }
                     self.model.context_menu = Some(ContextMenu {
                         target: MenuTarget::Tab(tab),
@@ -1215,6 +1481,17 @@ impl Attach<'_> {
             ..
         } = *viewport;
         match hit {
+            WorkspaceHit::OpenActionIndex => {
+                self.model.action_index = Some(ActionIndexOverlay {
+                    scopes: self.scopes(),
+                    filter: String::new(),
+                    selected: 0,
+                });
+                self.model.dirty = true;
+            }
+            // Only reachable while the index is open, which the guarded
+            // arm in `press` answers first.
+            WorkspaceHit::ActionIndexEntry(_) => {}
             WorkspaceHit::SelectTab(tab) => {
                 // Whether this click landed on the tab already
                 // holding its space's selection — read before
