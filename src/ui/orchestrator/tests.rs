@@ -890,10 +890,14 @@ mod workspace_tests {
     /// pointer, where a button is raised and does.
     #[test]
     fn a_report_in_the_actions_row_is_not_dressed_as_a_button() {
-        let model = agent_with_task(TaskStateView::Integrating, 3);
+        let mut model = agent_with_task(TaskStateView::Integrating, 3);
+        model.tick = 3;
         let (rows, hits) = tab_strip(&model);
         let row = rows.join("\n");
-        assert!(row.contains("… delivering"), "{row}");
+        assert!(
+            row.contains(&format!("{} delivering", agent_activity_frame(3))),
+            "{row}"
+        );
         assert!(
             !hits
                 .iter()
@@ -901,10 +905,10 @@ mod workspace_tests {
             "a delivery in flight is not pressed again"
         );
 
+        let spinner = agent_activity_frame(3);
         let column = rows[0]
-            .char_indices()
-            .find(|(_, character)| *character == '…')
-            .map(|(index, _)| rows[0][..index].chars().count() as u16)
+            .find(&spinner)
+            .map(|index| rows[0][..index].chars().count() as u16)
             .expect("the report is on the strip");
         let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
         terminal
@@ -1080,6 +1084,39 @@ mod workspace_tests {
                 .iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
             "and it cannot be pressed again while it runs"
+        );
+    }
+
+    /// The press is answered where the state lives, and nowhere else. The
+    /// button and the mark read `delivery_pending`, so a notice announcing
+    /// the same delivery put the word on the header twice — once beside
+    /// the button, once *as* the button — which is the two-sources shape
+    /// this state was folded into `drawn_state` to remove.
+    #[test]
+    fn pressing_deliver_says_it_once_and_leaves_no_message_behind() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-deliver-once"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let deliver =
+            WorkspaceHit::Deliver(driven.attach.model.selected_tab().expect("a selected tab"));
+        let rect = hit_rect(&driven.attach.model, deliver);
+        driven.frame();
+        driven.press(rect.x, rect.y);
+
+        assert!(
+            driven.attach.model.notice.is_none(),
+            "the button already says it: {:?}",
+            driven
+                .attach
+                .model
+                .notice
+                .as_ref()
+                .map(|notice| &notice.text)
+        );
+        let (rows, _) = tab_strip(&driven.attach.model);
+        assert_eq!(
+            rows.join("\n").matches("delivering").count(),
+            1,
+            "one delivery, one word for it: {rows:?}"
         );
     }
 
@@ -1872,10 +1909,10 @@ mod workspace_tests {
         });
         let (_, quiet) = tab_strip(&model);
 
-        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        model.set_busy_notice("delivering all".to_owned());
         let (rows, speaking) = tab_strip(&model);
 
-        assert!(rows[0].contains("delivering │"), "{rows:?}");
+        assert!(rows[0].contains("delivering all │"), "{rows:?}");
         assert_eq!(
             quiet.len(),
             speaking.len(),
@@ -1910,11 +1947,11 @@ mod workspace_tests {
     #[test]
     fn running_work_carries_a_spinner() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        model.set_busy_notice("delivering all".to_owned());
         model.tick = 3;
         let (rows, _) = tab_strip(&model);
         assert!(
-            rows[0].contains(&format!("{} delivering", agent_activity_frame(3))),
+            rows[0].contains(&format!("{} delivering all", agent_activity_frame(3))),
             "{rows:?}"
         );
         model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());

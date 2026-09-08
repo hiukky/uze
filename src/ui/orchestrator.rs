@@ -2650,11 +2650,6 @@ impl WorkspaceModel {
         self.note(text, Some((task, label)), false);
     }
 
-    /// [`Self::set_task_notice`] for work still in flight.
-    fn set_busy_task_notice(&mut self, task: &str, label: &str, text: String) {
-        self.note(text, Some((task, label)), true);
-    }
-
     fn note(&mut self, text: String, owner: Option<(&str, &str)>, busy: bool) {
         self.notice = Some(Notice {
             text,
@@ -3395,7 +3390,11 @@ fn deliver_selected_tab(
     let Some(cwd) = tab_cwd(model, tab) else {
         return;
     };
-    model.set_busy_task_notice(&task.id, &task.label, "delivering".to_owned());
+    // No message: the press is already answered where the state lives.
+    // `delivery_pending` is what `drawn_state` reads, so the button under
+    // the pointer becomes "delivering" and the task's sidebar mark with
+    // it — and a notice saying the same word beside a button already
+    // saying it is the header reporting one fact twice.
     spawn_delivery(home, cwd, Some(task.id), sender.clone());
 }
 
