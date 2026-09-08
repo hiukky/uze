@@ -1661,7 +1661,7 @@ enum ChipState {
     Pressed,
     /// Not a control at all: drawn in a control's shape because it stands
     /// where one stands, and recessed rather than raised so the shape
-    /// alone never promises a press ("… delivering" is a report; "⇧6 #20"
+    /// alone never promises a press ("⣾ delivering" is a report; "⇧6 #20"
     /// is a button).
     Static,
 }
@@ -1725,7 +1725,11 @@ fn draw_chip(frame: &mut ratatui::Frame<'_>, rect: Rect, text: &str, hue: Color,
 /// to fast-forward the target under you, open a pull request, or do
 /// nothing to anything but the branch — the one question an operator has
 /// before pressing it (see [`delivery_ending`]).
-fn deliver_button(task: &TaskView, state: &TaskStateView) -> Option<(String, Color, bool)> {
+fn deliver_button(
+    task: &TaskView,
+    state: &TaskStateView,
+    tick: usize,
+) -> Option<(String, Color, bool)> {
     match state {
         // Level with what was published: pressing sends nothing new, so
         // the button reports the sync instead of counting commits the
@@ -1776,8 +1780,13 @@ fn deliver_button(task: &TaskView, state: &TaskStateView) -> Option<(String, Col
             theme::color(Token::StateWarning),
             false,
         )),
+        // The one report in this row that is also work in progress, so it
+        // is the one that moves: a rebase, a gate and a push take as long
+        // as the project's checks do, and a still word for that many
+        // seconds reads as a screen that has stopped. The sidebar's mark
+        // keeps `Symbol::Ellipsis` — a single cell has no room to turn.
         TaskStateView::Integrating => Some((
-            format!("{} delivering", theme::glyph(Symbol::Ellipsis)),
+            format!("{} delivering", agent_activity_frame(tick)),
             theme::color(Token::StateInFlight),
             false,
         )),
@@ -2244,7 +2253,8 @@ pub(super) fn render_tab_strip(
     // to find again.
     if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
-        && let Some((text, hue, clickable)) = deliver_button(task, &model.drawn_state(task))
+        && let Some((text, hue, clickable)) =
+            deliver_button(task, &model.drawn_state(task), model.tick)
     {
         let rect = chip_rect(&text, trailing_right, inner.y);
         let hit = clickable.then_some(WorkspaceHit::Deliver(tab));

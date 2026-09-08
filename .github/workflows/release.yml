@@ -202,20 +202,21 @@ jobs:
           git push origin "$tag"
 
   package:
-    name: Package ${{ matrix.target }}
+    name: Package ${{ matrix.platform }}
     needs: tag
     if: needs.tag.outputs.release == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        # `target` is what cargo builds; `platform` is what the asset is
-        # called. The two differ by the triple's vendor field — `unknown`,
-        # which is a triple saying there is no vendor, and which a person
-        # reading a download list has to decode before it tells them
-        # anything. `<arch>-linux-<libc>` is the Debian multiarch triplet and
-        # answers the only two questions the choice turns on. install.sh
-        # derives the same name from `uname`; the two must not drift.
+        # `target` is what cargo builds; `platform` is what a person reads —
+        # the asset's name and this job's. The two differ by the triple's
+        # vendor field — `unknown`, which is a triple saying there is no
+        # vendor, and which a person reading a download list or a check list
+        # has to decode before it tells them anything. `<arch>-linux-<libc>`
+        # is the Debian multiarch triplet and answers the only two questions
+        # the choice turns on. install.sh derives the same name from
+        # `uname`; the two must not drift.
         include:
           - target: x86_64-unknown-linux-gnu
             platform: x86_64-linux-gnu

@@ -1840,10 +1840,12 @@ impl Attach<'_> {
         if self.model.expire_press(Instant::now()) {
             self.model.dirty = true;
         }
-        // The same clock drives the notice chip's spinner, so it has to
-        // turn for a busy notice even with every agent idle.
+        // The same clock drives the notice chip's spinner and the
+        // delivering button's, so it has to turn for either even with
+        // every agent idle.
         if workspace_has_active_agent_operation(&self.model, &self.identities)
             || self.model.notice_is_busy()
+            || !self.model.delivery_pending.is_empty()
         {
             let now = Instant::now();
             if now >= self.next_tick {
