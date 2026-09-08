@@ -366,14 +366,25 @@ impl Workspace<'_> {
 
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
     fn repository(&self, cwd: &Path) -> Option<Repository> {
-        let primary = worktree::primary_checkout(cwd)?;
-        let policy = self.policy(&primary).ok()?;
-        let store = task::load(&self.0.home, &primary).ok()?;
-        Some(Repository {
+        self.open(cwd).ok().flatten()
+    }
+
+    /// The same, telling "there is no repository here" apart from "there
+    /// is one and its recorded tasks could not be read" — the second is
+    /// the condition every caller used to render as the first.
+    fn open(&self, cwd: &Path) -> std::result::Result<Option<Repository>, String> {
+        let Some(primary) = worktree::primary_checkout(cwd) else {
+            return Ok(None);
+        };
+        let Ok(policy) = self.policy(&primary) else {
+            return Ok(None);
+        };
+        let store = task::load(&self.0.home, &primary).map_err(|error| error.to_string())?;
+        Ok(Some(Repository {
             primary,
             policy,
             store,
-        })
+        }))
     }
 
     /// The primary checkout `cwd` belongs to — the key every task view
@@ -485,8 +496,15 @@ impl Workspace<'_> {
     /// returns to the owning agent as a notice for its pane.
     #[tracing::instrument(name = "workspace.evaluate_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
-        let Some(mut repository) = self.repository(cwd) else {
-            return Evaluation::default();
+        let mut repository = match self.open(cwd) {
+            Ok(Some(repository)) => repository,
+            Ok(None) => return Evaluation::default(),
+            Err(reason) => {
+                return Evaluation {
+                    unreadable: Some(reason),
+                    ..Evaluation::default()
+                };
+            }
         };
         let target = repository.target();
         checkout::reconcile(&repository.primary, &mut repository.store, &target);
@@ -604,6 +622,7 @@ impl Workspace<'_> {
         Evaluation {
             tasks: repository.views(),
             notices,
+            unreadable: None,
         }
     }
 
@@ -1143,6 +1162,17 @@ pub struct AgentNotice {
 pub struct Evaluation {
     pub tasks: Vec<TaskView>,
     pub notices: Vec<AgentNotice>,
+    /// Why the repository's recorded tasks could not be read, when they
+    /// could not be.
+    ///
+    /// An empty `tasks` says "this repository has no tasks", and a store
+    /// that failed to open says something entirely different — every agent
+    /// loses its branch, its mark and its delivery button, and the surface
+    /// that swallowed the error has no way to say why. `place_new_agent`
+    /// already reported this and was the only thing that did, so the
+    /// condition surfaced as a single truncated line the one time somebody
+    /// happened to add an agent.
+    pub unreadable: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2046,6 +2076,39 @@ mod task_service_tests {
         assert_eq!(view.unsynced, None, "the merge has not happened");
         assert_eq!(view.state, TaskStateView::Ready, "so it is still to do");
         assert_eq!(view.ahead, 1, "and that is what it would land");
+    }
+
+    /// "This repository has no tasks" and "this repository's tasks could
+    /// not be read" are opposite facts, and the evaluation used to answer
+    /// both with an empty list. Every agent then lost its branch, its mark
+    /// and its delivery button at once, with nothing said — the condition
+    /// surfaced only as a truncated line the next time somebody happened
+    /// to add an agent.
+    #[test]
+    fn an_unreadable_task_store_is_an_answer_not_an_empty_one() {
+        let repository = repository("svc-unreadable");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unreadable-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(evaluation.unreadable, None);
+        assert!(evaluation.tasks.iter().any(|task| task.id == id));
+
+        std::fs::write(
+            task::store_path(&app.home, &root.canonicalize().unwrap()),
+            "{ this is not the document",
+        )
+        .unwrap();
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert!(
+            evaluation.unreadable.is_some(),
+            "the reason is carried, not swallowed"
+        );
+        assert!(
+            evaluation.tasks.is_empty(),
+            "and nothing is invented to stand in for what could not be read"
+        );
     }
 
     #[test]
