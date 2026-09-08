@@ -1489,6 +1489,11 @@ impl Attach<'_> {
         } = *viewport;
         match hit {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
+            WorkspaceHit::CloseQuickActions => {
+                self.model.quick_actions_closed = true;
+                self.model.remember_sidebar();
+                self.model.dirty = true;
+            }
             // Only reachable while the index is open, which the guarded
             // arm in `press` answers first.
             WorkspaceHit::ActionIndexEntry(_) => {}

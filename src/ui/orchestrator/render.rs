@@ -475,19 +475,6 @@ pub(super) fn render_sidebar(
 
     let mut rows = Rows::over(inner);
 
-    // The quick strip is the foot of the column and takes its rows before
-    // anything else is laid out — the timeline reserves what is left, so a
-    // timeline dragged open grows over the tree above it rather than over
-    // the one place the chrome always is.
-    if let Some(rect) = crate::ui::quick_actions_rect(inner, QUICK_ACTIONS.len()) {
-        rows.take_from_the_foot(rect.height);
-        for (rect, action) in
-            crate::ui::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS)
-        {
-            hits.push((rect, WorkspaceHit::QuickAction(action)));
-        }
-    }
-
     // Mode toggle, one line: this used to be a global titlebar (brand +
     // status + Ctrl+O hint + path) spanning the whole frame; with only menu
     // + main container left, the menu opens with just enough chrome to
@@ -583,7 +570,30 @@ pub(super) fn render_sidebar(
         )
     });
     let column_bottom = rows.bottom;
-    rows.bottom -= reserved;
+
+    // The quick strip's home is the rows directly above a folded timeline
+    // — a fixed place in the column, not a position relative to whatever
+    // the timeline currently is. So dragging the timeline open raises its
+    // top over the strip and the strip is simply not drawn, rather than
+    // being pushed up the column ahead of it: the chrome is the layer
+    // underneath, and the history is what expands over it.
+    let folded = timeline.map_or(0, |_| 1);
+    let strip = (!model.quick_actions_closed)
+        .then(|| {
+            crate::ui::quick_actions_rect(
+                Rect::new(
+                    inner.x,
+                    inner.y,
+                    inner.width,
+                    inner.height.saturating_sub(folded),
+                ),
+                QUICK_ACTIONS.len(),
+            )
+        })
+        .flatten()
+        .filter(|rect| rect.bottom() <= column_bottom - reserved);
+
+    rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
 
     // What the column cannot show is scrolled to, not lost: the tree grows
     // with the work, and a space that fell off the foot of it — under a
@@ -921,6 +931,18 @@ pub(super) fn render_sidebar(
         // space is its own block, and needs the breathing room a flat
         // tab list didn't.
         rows.gap();
+    }
+
+    if let Some(rect) = strip {
+        let drawn = crate::ui::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS);
+        for (rect, action) in drawn.entries {
+            hits.push((rect, WorkspaceHit::QuickAction(action)));
+        }
+        // Last, because this client answers a click with the *last* rect
+        // that contains it, and the mark shares a row with the first entry.
+        if let Some(rect) = drawn.close {
+            hits.push((rect, WorkspaceHit::CloseQuickActions));
+        }
     }
 
     if let Some(timeline) = timeline

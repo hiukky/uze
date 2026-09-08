@@ -496,6 +496,11 @@ pub(crate) struct TuiModel {
     /// the mousedown that armed it so every following drag maps against
     /// the geometry the gesture started on.
     pub(crate) dragging_keys_track: Option<Rect>,
+    /// Whether the sidebar's quick strip was dismissed. A preference, kept
+    /// in the shared `ClientLayout` rather than here alone: it is one strip
+    /// drawn in both modes, so closing it in one and meeting it again in
+    /// the other would be the product forgetting.
+    pub(crate) quick_actions_closed: bool,
 }
 
 impl Default for TuiModel {
@@ -567,6 +572,7 @@ impl Default for TuiModel {
             profile_columns_width: layout.profile_columns_width,
             dragging_panel: None,
             dragging_keys_track: None,
+            quick_actions_closed: false,
         }
     }
 }

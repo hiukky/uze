@@ -45,6 +45,11 @@ pub struct SidebarLayout {
     /// The columns the sidebar was dragged to; `None` leaves the width to
     /// the client's responsive default.
     pub width: Option<u16>,
+    /// Whether the strip of quick actions at the foot of the column is
+    /// closed. Shared like the width, and for the same reason: it is one
+    /// strip drawn in both modes, so dismissing it in one and meeting it
+    /// again in the other would be the product forgetting.
+    pub quick_actions_closed: bool,
 }
 
 /// What the workspace client — the terminal side, with its spaces and
@@ -155,7 +160,10 @@ mod tests {
     fn what_was_saved_is_what_the_next_run_reads() {
         let home = temp_home("round-trip");
         let layout = ClientLayout {
-            sidebar: SidebarLayout { width: Some(34) },
+            sidebar: SidebarLayout {
+                width: Some(34),
+                quick_actions_closed: true,
+            },
             workspace: WorkspaceLayout {
                 timeline_collapsed: false,
                 timeline_rows: Some(6),

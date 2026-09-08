@@ -1538,6 +1538,19 @@ fn the_sidebars_foot_carries_the_chrome_that_belongs_to_no_screen() {
         );
     }
 
+    // The mark that puts it away rides on the first row rather than
+    // taking one of its own, and a click on it must reach the mark rather
+    // than the entry it sits on.
+    let (close, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::CloseQuickActions)
+        .expect("the strip carries its own way out");
+    let (first, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex))
+        .expect("and its first entry");
+    assert_eq!(close.y, first.y, "the mark costs no row of its own");
+
     let footer = drawn
         .iter()
         .rfind(|row| !row.trim().is_empty())
@@ -1556,6 +1569,21 @@ fn the_sidebars_foot_carries_the_chrome_that_belongs_to_no_screen() {
     model.hits = hits.clone();
     model.click(rect.x, rect.y);
     assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
+
+    // And it puts itself away: clicking the mark closes the strip, and the
+    // next frame draws none of it.
+    model.close_overlay();
+    model.click(close.x, close.y);
+    assert!(model.quick_actions_closed);
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert!(
+        !hits.iter().any(|(_, hit)| *hit == Hit::CloseQuickActions
+            || *hit == Hit::OfferedAction(uze_keys::Action::Quit)),
+        "the strip is gone once it is closed"
+    );
 }
 
 /// A hint names a key and what it does, and it asks the keymap for both.

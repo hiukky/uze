@@ -108,6 +108,7 @@ pub(crate) fn run_management(
         // this mode or the workspace's — so switching modes never resets
         // it back to the responsive default.
         sidebar_width: layout.sidebar.width,
+        quick_actions_closed: layout.sidebar.quick_actions_closed,
         // Asked of the terminal once, at startup: whether a chord can
         // reach uze at all is a property of the host, and the Keys screen
         // says so rather than letting a binding look alive and do nothing.
@@ -189,6 +190,7 @@ pub(crate) fn run_management(
     // Ctrl+O switch to the workspace picks up a drag made here at once,
     // and the next run opens on the screen this visit left.
     layout.sidebar.width = model.sidebar_width;
+    layout.sidebar.quick_actions_closed = model.quick_actions_closed;
     layout.management = model.management_layout();
     memory.in_flight = model.maintenance_in_flight;
     memory.remembered = Some(model.remember());
@@ -460,10 +462,18 @@ fn render_sidebar(
     // The quick strip takes its rows out of the column before anything
     // else is laid out — pinned to the foot means the routes above cannot
     // grow over it.
-    let strip = super::quick_actions_rect(inner, QUICK_ACTIONS.len());
+    let strip = (!model.quick_actions_closed)
+        .then(|| super::quick_actions_rect(inner, QUICK_ACTIONS.len()))
+        .flatten();
     if let Some(rect) = strip {
-        for (rect, action) in super::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS)
-        {
+        let drawn = super::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS);
+        // The close mark shares a row with the first entry, and this
+        // client answers a click with the *first* rect that contains it —
+        // so the mark goes in ahead of the rows it sits on.
+        if let Some(rect) = drawn.close {
+            hits.push((rect, Hit::CloseQuickActions));
+        }
+        for (rect, action) in drawn.entries {
             hits.push((rect, Hit::OfferedAction(action)));
         }
     }

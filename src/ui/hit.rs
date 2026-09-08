@@ -72,6 +72,8 @@ pub(crate) enum Hit {
     CaptureKey,
     /// Put back what uze ships with, for the selected line.
     ResetKey,
+    /// The mark that dismisses the sidebar's quick strip.
+    CloseQuickActions,
     /// A list's search field. It is drawn on three screens and, until
     /// this, clicking it did nothing at all.
     FocusFilter,
@@ -281,6 +283,13 @@ impl TuiModel {
                 self.profile_panel = super::model::ProfilePanel::Harnesses;
                 self.focus = Focus::Content;
                 self.toggle_profile_harness_at(index);
+                Intent::None
+            }
+            // Kept for the next run the way every other shape this
+            // client remembers is: written once on the way out (see
+            // `run_management`), never on the input path.
+            Hit::CloseQuickActions => {
+                self.quick_actions_closed = true;
                 Intent::None
             }
             Hit::ResizeSidebar => {

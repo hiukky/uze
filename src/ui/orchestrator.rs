@@ -784,6 +784,7 @@ pub(crate) fn attach_workspace(
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: layout.sidebar.width,
+        quick_actions_closed: layout.sidebar.quick_actions_closed,
         timeline_collapsed: layout.workspace.timeline_collapsed,
         timeline_rows: layout.workspace.timeline_rows,
         prompt_recorder: Some(prompt_recorder),
@@ -1034,6 +1035,8 @@ pub(super) enum WorkspaceHit {
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
     SwitchToManagement,
+    /// The mark that dismisses the sidebar's quick strip.
+    CloseQuickActions,
     /// One entry of the sidebar's quick strip — performed exactly as the
     /// keyboard performs it, which is why it carries the action rather
     /// than naming a surface: a control that took its own path to the
@@ -1706,6 +1709,10 @@ struct WorkspaceModel {
     /// User-dragged sidebar width; `None` falls back to `sidebar_width_for`.
     /// Client-local presentation state — never sent to the server.
     sidebar_width: Option<u16>,
+    /// Whether the sidebar's quick strip was dismissed. Shared with the
+    /// management client through `ClientLayout`, like the width above it:
+    /// one strip drawn in both modes, closed once.
+    quick_actions_closed: bool,
     dragging_sidebar: bool,
     /// What's being renamed (a tab or a space) and its live edit buffer.
     /// While set, all keyboard input edits this instead of reaching the
@@ -2365,6 +2372,7 @@ impl WorkspaceModel {
         WorkspaceShape {
             sidebar: uze_application::SidebarLayout {
                 width: self.sidebar_width,
+                quick_actions_closed: self.quick_actions_closed,
             },
             workspace: uze_application::WorkspaceLayout {
                 timeline_collapsed: self.timeline_collapsed,

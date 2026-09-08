@@ -647,17 +647,6 @@ impl Rows {
         }
     }
 
-    /// Keeps `rows` at the foot of the column for something else, so
-    /// everything laid out after this stops short of them.
-    ///
-    /// What pins a strip to the bottom: the rows are gone before the list
-    /// above is measured, rather than being what is left once it has had
-    /// its fill — which is the difference between a footer and a row that
-    /// happens to be last.
-    pub(crate) fn take_from_the_foot(&mut self, rows: u16) {
-        self.bottom = self.bottom.saturating_sub(rows).max(self.y);
-    }
-
     /// Scrolls the next `rows` out above the window. Whole rows only: a
     /// column scrolls by its own items, never by half of one.
     pub(crate) fn scroll_past(&mut self, rows: u16) {
@@ -695,41 +684,34 @@ impl Rows {
     }
 }
 
-/// The muted strip of chrome at the foot of a sidebar.
+/// The quiet strip of chrome at the foot of a sidebar.
 ///
 /// Two or three low-emphasis entries: the way in to everything, whatever
-/// belongs to uze rather than to any one screen, and the way out. Muted on
+/// belongs to uze rather than to any one screen, and the way out. Quiet on
 /// purpose — it is where a reader looks when they do not know where to
-/// look, so it must never compete with the list above it, and it is pinned
-/// to the foot so it is in the same place on every screen and in both
-/// modes.
+/// look, so it must never compete with the list above it. No rule over it
+/// and no weight in it: the blank row the list already ends on is enough
+/// to part them, and a bar across the column made a panel out of three
+/// lines of chrome.
 ///
 /// Every word of it comes from the keymap, like every other hint: the
 /// label is the action's own and the key beside it is whatever is bound
 /// now, so a rebinding cannot leave a stale key printed here.
 ///
-/// Returns where each entry landed. Turning those into a hit is the one
-/// part the two clients cannot share, since each has its own hit type.
+/// Returns where everything landed. Turning a rectangle into a hit is the
+/// one part the two clients cannot share, since each has its own hit type
+/// — and each resolves overlapping hits from its own end, which is why the
+/// close mark is handed back rather than pushed here.
 pub(crate) fn render_quick_actions(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     scopes: &[uze_keys::Scope],
     actions: &[uze_keys::Action],
-) -> Vec<(Rect, uze_keys::Action)> {
-    let mut landed = Vec::new();
+) -> QuickActions {
+    let mut landed = QuickActions::default();
     let mut rows = Rows::over(area);
-    if let Some(rule) = rows.next(1) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                theme::glyph(Symbol::TreeDivider)
-                    .repeat(rule.width.saturating_sub(TRAILING_PAD) as usize),
-                theme::fg(Token::BorderFaint),
-            )),
-            rule,
-        );
-    }
     let keymap = uze_keys::active();
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let Some(rect) = rows.next(1) else { break };
         let text = Rect::new(
             rect.x,
@@ -737,13 +719,23 @@ pub(crate) fn render_quick_actions(
             rect.width.saturating_sub(TRAILING_PAD),
             rect.height,
         );
-        let mut line = Line::from(Span::styled(action.label(), theme::fg(Token::TextMuted)));
+        // The way to dismiss the strip rides on its first row rather than
+        // taking a row of its own: a control for hiding three lines should
+        // not cost a fourth.
+        let close = index == 0;
+        let mark = theme::glyph(Symbol::MarkClose);
+        let reserved = if close {
+            usize::from(theme::width(Symbol::MarkClose)) + 1
+        } else {
+            0
+        };
+        let mut line = Line::from(Span::styled(action.label(), theme::fg(Token::TextDim)));
         // The key only when it fits beside the label rather than instead
         // of it: a strip this quiet is a place to click, and the key is
         // the thing it also happens to teach.
         if let Some(chord) = keymap.chord_for(*action, scopes) {
             let key = chord.to_string();
-            let room = usize::from(text.width);
+            let room = usize::from(text.width).saturating_sub(reserved);
             let used = action.label().chars().count() + key.chars().count() + 2;
             if used <= room {
                 line.spans.push(Span::raw(" ".repeat(room - used + 2)));
@@ -751,20 +743,43 @@ pub(crate) fn render_quick_actions(
                     .push(Span::styled(key, theme::fg(Token::TextFaint)));
             }
         }
-        management::clip_line(&mut line, text.width as usize);
-        frame.render_widget(Paragraph::new(line), text);
-        landed.push((rect, *action));
+        management::clip_line(&mut line, text.width as usize - reserved);
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(text.x, text.y, text.width - reserved as u16, text.height),
+        );
+        if close {
+            let rect = Rect::new(
+                text.right() - theme::width(Symbol::MarkClose),
+                text.y,
+                theme::width(Symbol::MarkClose),
+                1,
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(mark, theme::fg(Token::TextFaint))),
+                rect,
+            );
+            landed.close = Some(rect);
+        }
+        landed.entries.push((rect, *action));
     }
     landed
 }
 
-/// How tall [`render_quick_actions`] comes out for `count` entries: a rule
-/// and a row each. Measured rather than drawn, because both sidebars have
-/// to take these rows out of the column before laying anything else out —
-/// a strip pinned to the foot that the list above could scroll over would
-/// be pinned to nothing.
+/// Where [`render_quick_actions`] put everything.
+#[derive(Default)]
+pub(crate) struct QuickActions {
+    pub(crate) entries: Vec<(Rect, uze_keys::Action)>,
+    /// The mark that closes the strip, if it fitted.
+    pub(crate) close: Option<Rect>,
+}
+
+/// How tall [`render_quick_actions`] comes out for `count` entries: one row
+/// each and nothing else. Measured rather than drawn, because a sidebar
+/// has to know where the strip starts before it lays out what sits above
+/// it.
 pub(crate) const fn quick_actions_height(count: usize) -> u16 {
-    count as u16 + 1
+    count as u16
 }
 
 /// Where the strip goes at the foot of `column`, or nothing when the
