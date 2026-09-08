@@ -3683,6 +3683,13 @@ fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
 /// up. Local state, same as `toggle_space_root`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
+    // One section open at a time. They stack at the foot of the same
+    // column and each takes its rows from the tree above them, so two open
+    // at once is the sidebar spending most of itself on what sits under
+    // the spaces — and the spaces are what it is for.
+    if !model.timeline_collapsed {
+        model.first_steps_collapsed = true;
+    }
     model.remember_sidebar();
     model.dirty = true;
 }

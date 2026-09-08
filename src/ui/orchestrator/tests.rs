@@ -2721,54 +2721,76 @@ mod workspace_tests {
         assert_ne!(commit.bg, theme::color(Token::SurfaceRaised));
     }
 
-    /// The same strip, in the same place, in this mode too — sitting on
-    /// the timeline, which is the layer over it. Preserved work is the
-    /// reason it matters here: nothing on screen opened it before, and the
-    /// affordance table named that gap by hand.
+    /// Both sections stack at the foot of the column, the steps on the
+    /// history, and each takes its rows before the tree is laid out — so
+    /// opening one pushes the other rather than being drawn over it.
     #[test]
-    fn the_sidebars_foot_carries_the_same_strip_in_this_mode() {
+    fn the_two_sections_stack_at_the_foot_and_push_each_other() {
         let mut model = session_with_timeline(&["feat: one", "fix: two", "chore: three"]);
         model.timeline_collapsed = true;
+        model.first_steps_collapsed = true;
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
 
-        let header = rows
+        let steps = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("the steps are at the foot");
+        let timeline = rows
             .iter()
             .position(|row| row.contains("timeline"))
-            .expect("the folded header is at the foot");
-        for (offset, action) in render::FIRST_STEPS.iter().enumerate() {
-            let (rect, _) = hits
-                .iter()
-                .find(|(_, hit)| *hit == WorkspaceHit::QuickAction(*action))
-                .unwrap_or_else(|| panic!("{action} is a target above the timeline"));
-            assert_eq!(
-                usize::from(rect.y),
-                header - render::FIRST_STEPS.len() + offset,
-                "the strip sits directly on the timeline, in order: {rows:?}"
-            );
-            assert!(
-                rows[usize::from(rect.y)].contains(&action.label()),
-                "named by its own label: {:?}",
-                rows[usize::from(rect.y)]
-            );
-        }
+            .expect("and the history under them");
+        assert_eq!(timeline, steps + 1, "in that order, adjacent: {rows:?}");
+        assert_eq!(timeline, rows.len() - 1, "and nothing below: {rows:?}");
 
-        // Opening the timeline expands it *over* the strip rather than
-        // pushing it up the column: the chrome is the layer underneath.
-        model.timeline_collapsed = false;
-        model.timeline_rows = Some(3);
-        let mut hits = Vec::new();
+        // Opening the steps pushes the history down the column, never over
+        // it: both headers are still on screen, still in that order.
+        model.first_steps_collapsed = false;
         let rows = sidebar_rows(&model, &mut hits);
-        assert!(
-            rows.iter().any(|row| row.contains("chore: three")),
-            "the history is open: {rows:?}"
+        let steps = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("still there");
+        let timeline = rows
+            .iter()
+            .position(|row| row.contains("timeline"))
+            .expect("and so is the history");
+        assert_eq!(
+            timeline,
+            steps + 1 + render::FIRST_STEPS.len(),
+            "the steps came between them: {rows:?}"
         );
-        assert!(
-            !hits
-                .iter()
-                .any(|(_, hit)| matches!(hit, WorkspaceHit::QuickAction(_))),
-            "and the strip is under it: {rows:?}"
-        );
+        assert_eq!(timeline, rows.len() - 1, "{rows:?}");
+    }
+
+    /// One open at a time. They stack in the same column and each takes
+    /// its rows from the tree, so two open at once spends the sidebar on
+    /// what sits under the spaces rather than on the spaces.
+    #[test]
+    fn opening_one_section_folds_the_other() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.first_steps_collapsed = true;
+
+        toggle_timeline(&mut model);
+        assert!(!model.timeline_collapsed);
+        assert!(model.first_steps_collapsed, "the steps gave way");
+
+        // And back: the section that opens is the one that was asked for.
+        model.first_steps_collapsed = false;
+        model.timeline_collapsed = true;
+        toggle_timeline(&mut model);
+        assert!(!model.timeline_collapsed);
+        assert!(model.first_steps_collapsed);
+
+        // Folding one leaves the other alone — an accordion closes nothing
+        // on the way to closing itself.
+        model.first_steps_collapsed = false;
+        model.timeline_collapsed = true;
+        toggle_timeline(&mut model);
+        toggle_timeline(&mut model);
+        assert!(model.timeline_collapsed);
+        assert!(model.first_steps_collapsed);
     }
 
     /// The header folds it, and it stays folded: a section that came back

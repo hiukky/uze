@@ -92,6 +92,8 @@ modes and by a persistent on-screen control in both modes.
   as taken, and the count says how many remain
 - **AND** the list folds to its header, and stays folded until it is opened
   again
+- **AND** it shares the foot of the column with the history beside it —
+  each pushing the other rather than covering it, and one open at a time
 
 #### Scenario: Acting from the index teaches the chord
 - **WHEN** an operator performs an action from the index

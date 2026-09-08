@@ -561,32 +561,28 @@ pub(super) fn render_sidebar(
         .git_badge
         .as_ref()
         .and_then(|badge| badge.timeline.as_ref());
+    // Two sections stacked at the foot: the steps above the history, each
+    // taking its rows before the tree is laid out, so neither is ever
+    // drawn over the other. Only one of them is open at a time (see
+    // `toggle_timeline`), which is what keeps the pair from eating the
+    // column the spaces are for.
+    let column_bottom = rows.bottom;
+    let steps = model.first_steps();
+    let steps_height = steps.height();
     let reserved = timeline.map_or(0, |timeline| {
         timeline_height(
             timeline,
             model.timeline_collapsed,
             model.timeline_rows,
-            rows.remaining(),
+            rows.remaining().saturating_sub(steps_height),
         )
     });
-    let column_bottom = rows.bottom;
-
-    // The quick strip's home is the rows directly above a folded timeline
-    // — a fixed place in the column, not a position relative to whatever
-    // the timeline currently is. So dragging the timeline open raises its
-    // top over the strip and the strip is simply not drawn, rather than
-    // being pushed up the column ahead of it: the chrome is the layer
-    // underneath, and the history is what expands over it.
-    let folded = timeline.map_or(0, |_| 1);
-    let steps = model.first_steps();
-    let strip = steps
-        .rect(Rect::new(
-            inner.x,
-            inner.y,
-            inner.width,
-            inner.height.saturating_sub(folded),
-        ))
-        .filter(|rect| rect.bottom() <= column_bottom - reserved);
+    let strip = steps.rect(Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(reserved),
+    ));
 
     rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
 

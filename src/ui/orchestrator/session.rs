@@ -1498,6 +1498,10 @@ impl Attach<'_> {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
             WorkspaceHit::ToggleFirstSteps => {
                 self.model.first_steps_collapsed = !self.model.first_steps_collapsed;
+                // The other half of the accordion — see `toggle_timeline`.
+                if !self.model.first_steps_collapsed {
+                    self.model.timeline_collapsed = true;
+                }
                 self.model.remember_sidebar();
                 self.model.dirty = true;
             }
