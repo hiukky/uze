@@ -624,6 +624,41 @@ how far behind the agent starts.
 > `crates/uze-core/src/project/landing.rs::a_target_carrying_its_own_commits_is_left_alone_and_reported`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_new_agent_starts_from_the_target_as_the_remote_has_it`
 
+### Publication is read from the remote, never from UZE's own records
+
+Whether a task's branch is on the remote, under which name, and how much of
+it the remote already carries are read from the repository's remote-tracking
+refs; the request number is asked of the remote itself. So a branch its own
+agent pushed, and a request its own agent opened, count exactly as much as
+ones a delivery made — the operator is a party to this, and the button has to
+report the remote's state rather than UZE's history. Read from UZE's record
+of its own pushes, the delivery button went on offering to send commits the
+request already carried, and a delivery after an agent's own push was refused
+as a non-fast-forward. The one network question — is a request open — is
+asked only where the completion publishes, only for a branch that is on the
+remote, at most once a minute, and never again once answered.
+
+> `crates/uze-core/src/project/landing.rs::a_branch_its_own_agent_pushed_is_published_and_in_sync`
+> `crates/uze-core/src/project/landing.rs::a_request_the_agent_opened_is_discovered_on_the_evaluation_pass`
+> `crates/uze-core/src/project/landing.rs::the_remote_is_asked_about_a_missing_request_at_most_once_a_minute`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_agents_own_push_and_request_are_what_the_delivery_view_reports`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_merge_project_never_measures_its_work_against_the_remote`
+
+### Every surface reads one state, and a delivery in flight is the client's
+
+What the branch holds and what the remote holds are folded into a single
+`TaskStateView` before any surface sees it, so the sidebar mark, the header
+button and the preserved list cannot disagree: a published branch level with
+its request reads as `Published` everywhere, not as `Ready` in one column and
+a sync in another. The exception is the delivery itself — `Integrating` is set
+in memory and overwritten by the outcome before the store is saved, so no
+evaluation can read it back, and the client that started the delivery is the
+only party that knows one is running.
+
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_published_task_is_marked_as_gone_not_as_waiting_to_be_delivered`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_delivery_in_flight_is_drawn_from_the_client_that_started_it`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_branch_level_with_its_request_reports_the_sync_instead_of_a_count`
+
 ### Nothing that can hold work is removed automatically
 
 A dirty orphan is parked with every file preserved. A branch with commits the

@@ -1703,6 +1703,17 @@ impl Attach<'_> {
                 Some(sync) => self.model.upstream_syncs.insert(resolution.key, sync),
                 None => self.model.upstream_syncs.remove(&resolution.key),
             };
+            // A store that could not be read is not a repository without
+            // tasks, and must never be drawn as one: replacing what the
+            // client already knew with an empty list takes every agent's
+            // branch, mark and delivery button away and puts nothing in
+            // their place. The last good answer stands, and the reason is
+            // said instead.
+            if let Some(reason) = evaluation.unreadable {
+                self.model
+                    .set_notice(format!("tasks unreadable — {reason}"));
+                continue;
+            }
             self.model.tasks.insert(primary, evaluation.tasks);
             self.model.bind_pane_tasks();
             // A conflict found while a clean task followed the target is

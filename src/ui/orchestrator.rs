@@ -2518,6 +2518,25 @@ impl WorkspaceModel {
         resumable.then_some((primary, task))
     }
 
+    /// What a task's mark and its button draw, which is not always the
+    /// state the record carries.
+    ///
+    /// A delivery runs in this client's own thread — rebase, then a gate
+    /// that may take half an hour, then a push — and for all of it the
+    /// record on disk still says whatever it said before the press.
+    /// `TaskState::Integrating` is set by `landing::deliver` in memory and
+    /// overwritten by the outcome before the store is ever saved, so no
+    /// evaluation can ever read it back: the client that started the
+    /// delivery is the only party that knows one is running, which is why
+    /// this is the one state drawn from the client rather than from the
+    /// view it was handed.
+    pub(super) fn drawn_state(&self, task: &TaskView) -> TaskStateView {
+        if self.delivery_pending.contains(&task.id) {
+            return TaskStateView::Integrating;
+        }
+        task.state.clone()
+    }
+
     /// Binds every pane whose checkout resolves to a task, and is not
     /// bound yet, to that task. Called when the panes change and again
     /// when tasks arrive — the evaluation that names a task answers off
@@ -3363,7 +3382,10 @@ fn deliver_selected_tab(
         model.set_notice("no task on this tab".to_owned());
         return;
     };
-    if let Some(reason) = task.state.undeliverable_reason() {
+    // The drawn state, not the recorded one: a second press while the
+    // first delivery is still running is answered with what is happening
+    // rather than with nothing at all.
+    if let Some(reason) = model.drawn_state(&task).undeliverable_reason() {
         model.set_task_notice(&task.id, &task.label, reason.to_owned());
         return;
     }

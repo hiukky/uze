@@ -366,14 +366,25 @@ impl Workspace<'_> {
 
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
     fn repository(&self, cwd: &Path) -> Option<Repository> {
-        let primary = worktree::primary_checkout(cwd)?;
-        let policy = self.policy(&primary).ok()?;
-        let store = task::load(&self.0.home, &primary).ok()?;
-        Some(Repository {
+        self.open(cwd).ok().flatten()
+    }
+
+    /// The same, telling "there is no repository here" apart from "there
+    /// is one and its recorded tasks could not be read" — the second is
+    /// the condition every caller used to render as the first.
+    fn open(&self, cwd: &Path) -> std::result::Result<Option<Repository>, String> {
+        let Some(primary) = worktree::primary_checkout(cwd) else {
+            return Ok(None);
+        };
+        let Ok(policy) = self.policy(&primary) else {
+            return Ok(None);
+        };
+        let store = task::load(&self.0.home, &primary).map_err(|error| error.to_string())?;
+        Ok(Some(Repository {
             primary,
             policy,
             store,
-        })
+        }))
     }
 
     /// The primary checkout `cwd` belongs to — the key every task view
@@ -485,8 +496,15 @@ impl Workspace<'_> {
     /// returns to the owning agent as a notice for its pane.
     #[tracing::instrument(name = "workspace.evaluate_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
-        let Some(mut repository) = self.repository(cwd) else {
-            return Evaluation::default();
+        let mut repository = match self.open(cwd) {
+            Ok(Some(repository)) => repository,
+            Ok(None) => return Evaluation::default(),
+            Err(reason) => {
+                return Evaluation {
+                    unreadable: Some(reason),
+                    ..Evaluation::default()
+                };
+            }
         };
         let target = repository.target();
         checkout::reconcile(&repository.primary, &mut repository.store, &target);
@@ -495,6 +513,7 @@ impl Workspace<'_> {
         let vocabulary = repository.policy.branch.clone();
         let names_work = vocabulary.names_work();
         let owners = slot_owners(&repository.store);
+        let completion = repository.policy.completion;
         for task in &mut repository.store.tasks {
             // A task that ended is still looked at while it owns its
             // slot: the agent that delivered usually keeps working in the
@@ -569,6 +588,16 @@ impl Workspace<'_> {
             {
                 task.take_name(derived);
             }
+            // The other half of what a delivery would do, learned the
+            // same way readiness is: an agent told to push and open the
+            // request itself is the one case UZE's own records can never
+            // cover, and until this ran the button went on offering to
+            // publish a branch the forge already had a request open for.
+            // Only where a request is what completion means — a project
+            // that merges or hands off never asks the remote anything.
+            if completion == CompletionBehavior::Pr {
+                landing::observe_request(&primary, task);
+            }
             // Following a moved target costs a clean task nothing and a
             // dirty one its work in progress, which `refresh` refuses.
             // Whatever the completion behaviour: a task that follows the
@@ -593,6 +622,7 @@ impl Workspace<'_> {
         Evaluation {
             tasks: repository.views(),
             notices,
+            unreadable: None,
         }
     }
 
@@ -964,6 +994,10 @@ pub struct TaskView {
     pub completion: CompletionBehavior,
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
+    /// The name the branch is published under on the remote, once it is
+    /// there. Read from the repository's remote-tracking refs, so a
+    /// branch its own agent pushed reads as published exactly like one
+    /// UZE pushed.
     pub published_as: Option<String>,
     /// The request open on the forge for the published branch, once there
     /// is one: what turns the delivery button from an errand into a sync.
@@ -979,6 +1013,21 @@ pub struct TaskView {
 
 impl TaskView {
     fn from_task(primary: &Path, task: &Task, completion: CompletionBehavior) -> Self {
+        // What the remote holds, not what UZE remembers having sent: a
+        // push the agent made is a push, and a view built from UZE's own
+        // record of its own deliveries goes on offering to send commits
+        // the request already carries.
+        //
+        // Only where the completion publishes. A branch on the remote is
+        // no part of what a merge or a handoff would do, and counting a
+        // merge's commits against the remote would report a task as
+        // delivered the moment its agent pushed it.
+        let published = (completion == CompletionBehavior::Pr)
+            .then(|| landing::publication(primary, task))
+            .flatten();
+        let unsynced = published
+            .as_ref()
+            .map(|published| checkout::commits_ahead(primary, &published.tip, &task.branch));
         Self {
             id: task.id.as_str().to_owned(),
             label: task.label.clone(),
@@ -989,18 +1038,31 @@ impl TaskView {
                 .checkout
                 .as_ref()
                 .map(|checkout| checkout.as_str().to_owned()),
-            state: TaskStateView::from(&task.state),
+            state: publication_state(&task.state, unsynced),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
-            published_as: task.published_as.clone(),
+            published_as: published.map(|published| published.branch),
             published_request: task.published_request,
-            unsynced: task
-                .published_tip
-                .as_deref()
-                .map(|tip| checkout::commits_ahead(primary, tip, &task.branch)),
+            unsynced,
             created_at_unix: task.created_at_unix,
         }
     }
+}
+
+/// The state a task reads as once what the remote holds is folded in.
+///
+/// `Ready` alone answers "the branch holds commits its base lacks", which
+/// stops being the interesting question the moment the branch is on the
+/// remote: from then on what every surface needs to say is whether
+/// anything is still waiting to be handed over. Only where the completion
+/// publishes — `published` is `None` everywhere else, and the record's own
+/// state stands.
+fn publication_state(state: &TaskState, unsynced: Option<usize>) -> TaskStateView {
+    let view = TaskStateView::from(state);
+    if view == TaskStateView::Ready && unsynced == Some(0) {
+        return TaskStateView::Published;
+    }
+    view
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1008,6 +1070,17 @@ pub enum TaskStateView {
     Running,
     Uncommitted,
     Ready,
+    /// The branch is on the remote and carries nothing the remote lacks:
+    /// the work is with whoever reviews it, not with the operator.
+    ///
+    /// A view of `Ready`, not a record of its own — `Ready` is still what
+    /// the branch holds, and pressing deliver still syncs it as the target
+    /// moves. It is a state here because "there is work to hand over" and
+    /// "the work is handed over" are the two things every surface has to
+    /// tell apart, and a surface that reads only `Ready` cannot: the
+    /// sidebar went on marking a task deliverable for the whole life of an
+    /// open request.
+    Published,
     Integrating,
     Conflicted {
         files: Vec<PathBuf>,
@@ -1021,8 +1094,11 @@ pub enum TaskStateView {
 
 impl TaskStateView {
     /// Whether delivery may be offered for a task in this state.
+    ///
+    /// `Published` included: the request is level with the branch, but the
+    /// target moves, and a re-sync is how the branch follows it.
     pub fn is_deliverable(&self) -> bool {
-        matches!(self, Self::Ready | Self::GateFailed)
+        matches!(self, Self::Ready | Self::Published | Self::GateFailed)
     }
 
     /// Why delivery is refused, for a state where it is — `None` for the
@@ -1038,7 +1114,7 @@ impl TaskStateView {
     /// tab already carry everything the sentence would repeat.
     pub fn undeliverable_reason(&self) -> Option<&'static str> {
         match self {
-            Self::Ready | Self::GateFailed => None,
+            Self::Ready | Self::Published | Self::GateFailed => None,
             Self::Running => Some("nothing committed"),
             Self::Uncommitted => Some("uncommitted changes"),
             Self::Conflicted { .. } => Some("rebase paused"),
@@ -1086,6 +1162,17 @@ pub struct AgentNotice {
 pub struct Evaluation {
     pub tasks: Vec<TaskView>,
     pub notices: Vec<AgentNotice>,
+    /// Why the repository's recorded tasks could not be read, when they
+    /// could not be.
+    ///
+    /// An empty `tasks` says "this repository has no tasks", and a store
+    /// that failed to open says something entirely different — every agent
+    /// loses its branch, its mark and its delivery button, and the surface
+    /// that swallowed the error has no way to say why. `place_new_agent`
+    /// already reported this and was the only thing that did, so the
+    /// condition surfaced as a single truncated line the one time somebody
+    /// happened to add an agent.
+    pub unreadable: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1612,6 +1699,14 @@ mod task_service_tests {
         repository.git_in(slot, &["commit", "-qm", file]);
     }
 
+    fn view_of(app: &UzeApplication, root: &Path, id: &str) -> TaskView {
+        app.workspace()
+            .tasks(root)
+            .into_iter()
+            .find(|task| task.id == id)
+            .expect("the task is recorded")
+    }
+
     fn state_of(app: &UzeApplication, root: &Path, id: &str) -> TaskStateView {
         app.workspace()
             .tasks(root)
@@ -1881,6 +1976,138 @@ mod task_service_tests {
             app.workspace().target_upstream_sync(&root),
             None,
             "the checked-out branch is not the target"
+        );
+    }
+
+    /// The delivery button reads the remote, not UZE's memory of its own
+    /// pushes. An operator who asks the agent to commit, push and open the
+    /// request itself has done everything a delivery would have done, and
+    /// the button has to say so — it used to go on offering to publish a
+    /// branch that was already on the remote with a request open for it.
+    #[test]
+    fn an_agents_own_push_and_request_are_what_the_delivery_view_reports() {
+        let repository = repository("svc-agent-publish");
+        declare(
+            &repository,
+            "  completion: pr
+",
+        );
+        let root = repository.root().to_path_buf();
+        let remote = uze_testkit::temp::scratch("svc-agent-publish-remote").join("origin.git");
+        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
+        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+
+        let app = application("svc-agent-publish-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        let before = view_of(&app, &root, &id);
+        assert_eq!(before.published_as, None);
+        assert_eq!(before.unsynced, None, "nothing is on the remote yet");
+
+        // The agent does both halves itself.
+        repository.git_in(&slot, &["push", "--quiet", "origin", "HEAD"]);
+        let tip = repository.git_in(&slot, &["rev-parse", "HEAD"]);
+        repository.git(&[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{}:refs/pull/12/head", tip.trim()),
+        ]);
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let synced = view_of(&app, &root, &id);
+        assert_eq!(synced.published_as.as_deref(), Some(synced.branch.as_str()));
+        assert_eq!(synced.unsynced, Some(0), "nothing left to send");
+        assert_eq!(
+            synced.state,
+            TaskStateView::Published,
+            "the work is with its reviewer, not waiting to be handed over"
+        );
+        assert_eq!(
+            synced.state.undeliverable_reason(),
+            None,
+            "and a re-sync still follows a target that moves"
+        );
+        assert_eq!(
+            synced.published_request,
+            Some(12),
+            "the request the agent opened is this branch's request"
+        );
+
+        agent_commits(&repository, &slot, "b.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        let behind = view_of(&app, &root, &id);
+        assert_eq!(
+            behind.unsynced,
+            Some(1),
+            "and a commit made after that push is one commit to sync"
+        );
+        assert_eq!(
+            behind.state,
+            TaskStateView::Ready,
+            "which puts the work back in the operator's hands"
+        );
+    }
+
+    /// A merge lands on the target, and a branch sitting on the remote is
+    /// no part of that. Reading publication for it would have called the
+    /// task synced the moment its agent pushed — before the one thing the
+    /// completion actually does had happened at all.
+    #[test]
+    fn a_merge_project_never_measures_its_work_against_the_remote() {
+        let repository = repository("svc-merge-remote");
+        declare(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let remote = uze_testkit::temp::scratch("svc-merge-remote-origin").join("origin.git");
+        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
+        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+
+        let app = application("svc-merge-remote-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        repository.git_in(&slot, &["push", "--quiet", "origin", "HEAD"]);
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let view = view_of(&app, &root, &id);
+        assert_eq!(view.published_as, None);
+        assert_eq!(view.unsynced, None, "the merge has not happened");
+        assert_eq!(view.state, TaskStateView::Ready, "so it is still to do");
+        assert_eq!(view.ahead, 1, "and that is what it would land");
+    }
+
+    /// "This repository has no tasks" and "this repository's tasks could
+    /// not be read" are opposite facts, and the evaluation used to answer
+    /// both with an empty list. Every agent then lost its branch, its mark
+    /// and its delivery button at once, with nothing said — the condition
+    /// surfaced only as a truncated line the next time somebody happened
+    /// to add an agent.
+    #[test]
+    fn an_unreadable_task_store_is_an_answer_not_an_empty_one() {
+        let repository = repository("svc-unreadable");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unreadable-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(evaluation.unreadable, None);
+        assert!(evaluation.tasks.iter().any(|task| task.id == id));
+
+        std::fs::write(
+            task::store_path(&app.home, &root.canonicalize().unwrap()),
+            "{ this is not the document",
+        )
+        .unwrap();
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert!(
+            evaluation.unreadable.is_some(),
+            "the reason is carried, not swallowed"
+        );
+        assert!(
+            evaluation.tasks.is_empty(),
+            "and nothing is invented to stand in for what could not be read"
         );
     }
 
