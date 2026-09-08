@@ -2363,10 +2363,13 @@ mod workspace_tests {
         assert_eq!(commits, vec![0, 1], "one hit per commit, in order");
 
         // Nothing in the section reaches the host's own hit vocabulary.
+        // The section's own rows, not everything under them: the quick
+        // strip is pinned below the timeline and is the host's.
         let timeline_top = header.y;
+        let timeline_bottom = tree_foot(&sidebar_rows(&model, &mut Vec::new())) as u16;
         assert!(
             hits.iter()
-                .filter(|(rect, _)| rect.y >= timeline_top)
+                .filter(|(rect, _)| rect.y >= timeline_top && rect.y <= timeline_bottom)
                 .all(|(_, hit)| matches!(
                     hit,
                     WorkspaceHit::Extension(ExtensionHit::GitTimeline(_))
@@ -2415,10 +2418,14 @@ mod workspace_tests {
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
         assert_eq!(drawn, 2, "{rows:?}");
 
+        model.timeline_rows = None;
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let default = rows.iter().filter(|row| row.contains("commit ")).count();
+
         model.timeline_rows = Some(u16::MAX);
         let rows = sidebar_rows(&model, &mut Vec::new());
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
-        assert!(drawn > 10, "past the half-column default: {rows:?}");
+        assert!(drawn > default, "past the half-column default: {rows:?}");
         assert!(
             rows.iter().any(|row| row.contains("Agent")),
             "the tree keeps its rows: {rows:?}"
@@ -2469,7 +2476,7 @@ mod workspace_tests {
 
         model.timeline_scroll = 100;
         let rows = sidebar_rows(&model, &mut Vec::new());
-        assert!(rows.last().unwrap().contains("commit 19"), "{rows:?}");
+        assert!(rows[tree_foot(&rows)].contains("commit 19"), "{rows:?}");
 
         model.timeline_scroll = 0;
         model.hits = hits;
@@ -2716,6 +2723,35 @@ mod workspace_tests {
         assert_ne!(commit.bg, theme::color(Token::SurfaceRaised));
     }
 
+    /// The same strip, in the same place, in this mode too — under the
+    /// timeline, which keeps the foot of the *tree* rather than of the
+    /// column. Preserved work is the reason it matters here: nothing on
+    /// screen opened it before, and the affordance table named that gap
+    /// by hand.
+    #[test]
+    fn the_sidebars_foot_carries_the_same_strip_in_this_mode() {
+        let model = session_with_timeline(&["feat: only"]);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+
+        let foot = tree_foot(&rows);
+        for action in render::QUICK_ACTIONS {
+            let (rect, _) = hits
+                .iter()
+                .find(|(_, hit)| *hit == WorkspaceHit::QuickAction(action))
+                .unwrap_or_else(|| panic!("{action} is a target at the foot"));
+            assert!(
+                usize::from(rect.y) > foot,
+                "under the timeline, not inside it: {rect:?}"
+            );
+            assert!(
+                rows[usize::from(rect.y)].contains(&action.label()),
+                "named by its own label: {:?}",
+                rows[usize::from(rect.y)]
+            );
+        }
+    }
+
     /// The timeline keeps the foot of the column, under the spaces, with
     /// its header naming the branch and `HEAD` ringed at the top of the
     /// list — wherever the tree above happens to end.
@@ -2724,7 +2760,7 @@ mod workspace_tests {
         let model = session_with_timeline(&["feat: third", "fix: second", "chore: first"]);
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
-        let last = rows.len() - 1;
+        let last = tree_foot(&rows);
 
         assert!(rows[last].contains("● chore: first"), "{rows:?}");
         assert!(rows[last - 1].contains("● fix: second"), "{rows:?}");
@@ -2761,7 +2797,7 @@ mod workspace_tests {
         model.timeline_collapsed = true;
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
-        let last = rows.len() - 1;
+        let last = tree_foot(&rows);
 
         assert!(rows[last].contains("▸ timeline"), "{rows:?}");
         assert!(
@@ -2930,6 +2966,16 @@ mod workspace_tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// The last row the tree and its timeline can reach. The quick strip
+    /// is pinned under them and belongs to neither, so every "at the foot
+    /// of the column" claim is measured from here rather than from the
+    /// bottom of the frame.
+    fn tree_foot(rows: &[String]) -> usize {
+        let column = Rect::new(0, 0, 40, rows.len() as u16);
+        let strip = crate::ui::quick_actions_rect(column, render::QUICK_ACTIONS.len());
+        usize::from(strip.map_or(column.bottom(), |rect| rect.y)) - 1
     }
 
     fn sidebar_buffer(

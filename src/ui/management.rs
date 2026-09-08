@@ -307,7 +307,7 @@ pub(crate) fn render(
         overlay::render_row_menu(frame, frame.area(), menu, hits);
     }
 
-    render_footer(frame, layout.footer, model, hits);
+    render_footer(frame, layout.footer, model);
 
     // Every arm below is a modal: drawn in the middle of the frame, and
     // the only thing on screen that answers until it is dealt with. The
@@ -375,6 +375,19 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Keys => "what each key does",
     }
 }
+
+/// The chrome at the foot of the sidebar: everything uze can do, how it
+/// looks, and the way out. None of the three belongs to a screen, which is
+/// why none of them is a route and why they are drawn quietly.
+/// Named from the mode rather than from what is open: the key beside an
+/// entry must not change because a dialog is up.
+const QUICK_SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::Management];
+
+const QUICK_ACTIONS: [uze_keys::Action; 3] = [
+    uze_keys::Action::OpenActionIndex,
+    uze_keys::Action::OpenThemePicker,
+    uze_keys::Action::Quit,
+];
 
 /// The badge beside a nav row: how many of the things that screen is
 /// about there are, for the screens that are an inventory of something.
@@ -444,8 +457,19 @@ fn render_sidebar(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // The quick strip takes its rows out of the column before anything
+    // else is laid out — pinned to the foot means the routes above cannot
+    // grow over it.
+    let strip = super::quick_actions_rect(inner, QUICK_ACTIONS.len());
+    if let Some(rect) = strip {
+        for (rect, action) in super::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS)
+        {
+            hits.push((rect, Hit::OfferedAction(action)));
+        }
+    }
+
     let mut y = inner.y;
-    let bottom = inner.y + inner.height;
+    let bottom = strip.map_or(inner.bottom(), |rect| rect.y);
     let mut row = |height: u16| -> Option<Rect> {
         if y + height > bottom {
             return None;
@@ -668,12 +692,7 @@ fn render_sidebar(
     }
 }
 
-fn render_footer(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    model: &TuiModel,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
+fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(theme::fg(Token::BorderFaint))
@@ -682,28 +701,18 @@ fn render_footer(
     frame.render_widget(block, area);
 
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    // A button for the surface that lists everything, so the keyboard is
-    // an accelerator rather than the way in — a mark, because "help" is
-    // the one label nobody needs to read. In this mode the mark is also
-    // the key, which is the whole reason `?` opens it here.
-    let help = theme::glyph(theme::Symbol::MarkHelp);
+    // The way into the index is at the foot of the sidebar now, with the
+    // other chrome that belongs to uze rather than to a screen — one place
+    // in both modes, rather than a button here and a chip on the tab strip
+    // over there. This row is the hint line and the version.
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(10),
-            Constraint::Length(theme::width(theme::Symbol::MarkHelp) + 3),
+            Constraint::Length(2),
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
-    frame.render_widget(
-        Paragraph::new(Span::styled(help, theme::fg(Token::Accent)))
-            .alignment(ratatui::layout::Alignment::Center),
-        columns[1],
-    );
-    hits.push((
-        columns[1],
-        Hit::OfferedAction(uze_keys::Action::OpenActionIndex),
-    ));
     let mut text = footer(model);
     // Operation messages (install roots, marketplace paths) can exceed the
     // hint column; clip the status line to the column instead of letting it

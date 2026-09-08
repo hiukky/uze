@@ -647,6 +647,17 @@ impl Rows {
         }
     }
 
+    /// Keeps `rows` at the foot of the column for something else, so
+    /// everything laid out after this stops short of them.
+    ///
+    /// What pins a strip to the bottom: the rows are gone before the list
+    /// above is measured, rather than being what is left once it has had
+    /// its fill — which is the difference between a footer and a row that
+    /// happens to be last.
+    pub(crate) fn take_from_the_foot(&mut self, rows: u16) {
+        self.bottom = self.bottom.saturating_sub(rows).max(self.y);
+    }
+
     /// Scrolls the next `rows` out above the window. Whole rows only: a
     /// column scrolls by its own items, never by half of one.
     pub(crate) fn scroll_past(&mut self, rows: u16) {
@@ -682,6 +693,92 @@ impl Rows {
     pub(crate) fn remaining(&self) -> u16 {
         self.bottom.saturating_sub(self.y)
     }
+}
+
+/// The muted strip of chrome at the foot of a sidebar.
+///
+/// Two or three low-emphasis entries: the way in to everything, whatever
+/// belongs to uze rather than to any one screen, and the way out. Muted on
+/// purpose — it is where a reader looks when they do not know where to
+/// look, so it must never compete with the list above it, and it is pinned
+/// to the foot so it is in the same place on every screen and in both
+/// modes.
+///
+/// Every word of it comes from the keymap, like every other hint: the
+/// label is the action's own and the key beside it is whatever is bound
+/// now, so a rebinding cannot leave a stale key printed here.
+///
+/// Returns where each entry landed. Turning those into a hit is the one
+/// part the two clients cannot share, since each has its own hit type.
+pub(crate) fn render_quick_actions(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    scopes: &[uze_keys::Scope],
+    actions: &[uze_keys::Action],
+) -> Vec<(Rect, uze_keys::Action)> {
+    let mut landed = Vec::new();
+    let mut rows = Rows::over(area);
+    if let Some(rule) = rows.next(1) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                theme::glyph(Symbol::TreeDivider)
+                    .repeat(rule.width.saturating_sub(TRAILING_PAD) as usize),
+                theme::fg(Token::BorderFaint),
+            )),
+            rule,
+        );
+    }
+    let keymap = uze_keys::active();
+    for action in actions {
+        let Some(rect) = rows.next(1) else { break };
+        let text = Rect::new(
+            rect.x,
+            rect.y,
+            rect.width.saturating_sub(TRAILING_PAD),
+            rect.height,
+        );
+        let mut line = Line::from(Span::styled(action.label(), theme::fg(Token::TextMuted)));
+        // The key only when it fits beside the label rather than instead
+        // of it: a strip this quiet is a place to click, and the key is
+        // the thing it also happens to teach.
+        if let Some(chord) = keymap.chord_for(*action, scopes) {
+            let key = chord.to_string();
+            let room = usize::from(text.width);
+            let used = action.label().chars().count() + key.chars().count() + 2;
+            if used <= room {
+                line.spans.push(Span::raw(" ".repeat(room - used + 2)));
+                line.spans
+                    .push(Span::styled(key, theme::fg(Token::TextFaint)));
+            }
+        }
+        management::clip_line(&mut line, text.width as usize);
+        frame.render_widget(Paragraph::new(line), text);
+        landed.push((rect, *action));
+    }
+    landed
+}
+
+/// How tall [`render_quick_actions`] comes out for `count` entries: a rule
+/// and a row each. Measured rather than drawn, because both sidebars have
+/// to take these rows out of the column before laying anything else out —
+/// a strip pinned to the foot that the list above could scroll over would
+/// be pinned to nothing.
+pub(crate) const fn quick_actions_height(count: usize) -> u16 {
+    count as u16 + 1
+}
+
+/// Where the strip goes at the foot of `column`, or nothing when the
+/// column cannot spare the rows.
+///
+/// The headroom is the point: a sidebar that is mostly its own footer is
+/// worse than one with no footer, so on a column too short for both the
+/// list wins and the strip's entries stay reachable through the index and
+/// their keys.
+pub(crate) fn quick_actions_rect(column: Rect, count: usize) -> Option<Rect> {
+    const HEADROOM: u16 = 6;
+    let height = quick_actions_height(count);
+    (column.height >= height + HEADROOM)
+        .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))
 }
 
 /// The gap a row keeps between its right-most content and the divider (or

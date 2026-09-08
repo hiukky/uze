@@ -1488,14 +1488,7 @@ impl Attach<'_> {
             ..
         } = *viewport;
         match hit {
-            WorkspaceHit::OpenActionIndex => {
-                self.model.action_index = Some(ActionIndexOverlay {
-                    scopes: self.scopes(),
-                    filter: String::new(),
-                    selected: 0,
-                });
-                self.model.dirty = true;
-            }
+            WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
             // Only reachable while the index is open, which the guarded
             // arm in `press` answers first.
             WorkspaceHit::ActionIndexEntry(_) => {}

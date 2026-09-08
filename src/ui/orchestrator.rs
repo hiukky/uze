@@ -1034,9 +1034,11 @@ pub(super) enum WorkspaceHit {
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
     SwitchToManagement,
-    /// The tab strip's help button — the index of everything, which is
-    /// also the only place the workspace's own keys are written down.
-    OpenActionIndex,
+    /// One entry of the sidebar's quick strip — performed exactly as the
+    /// keyboard performs it, which is why it carries the action rather
+    /// than naming a surface: a control that took its own path to the
+    /// same place is a second implementation to keep agreeing.
+    QuickAction(Action),
     /// One row of the open index, by position in it.
     ActionIndexEntry(usize),
     ResizeSidebar,

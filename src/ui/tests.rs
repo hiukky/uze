@@ -1504,36 +1504,54 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     );
 }
 
-/// The way into the index is a mark, and only the mark: it is the one
-/// control on screen whose meaning every reader already has, and the word
-/// beside it spent the width of a label saying it again. The footer's
-/// hints stop naming the same surface for the same reason.
+/// The chrome that belongs to uze rather than to a screen lives at the
+/// foot of the sidebar, quietly: the way into everything, how it looks,
+/// and the way out. One place, in the same place, on every screen — and
+/// the footer stops naming what the strip already offers.
 #[test]
-fn the_way_into_the_index_is_a_mark_and_is_named_once() {
+fn the_sidebars_foot_carries_the_chrome_that_belongs_to_no_screen() {
     let model = model_with_plugins(&["flow"]);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
-    let footer = buffer_rows(&terminal)
-        .into_iter()
+    let drawn = buffer_rows(&terminal);
+
+    for action in [
+        uze_keys::Action::OpenActionIndex,
+        uze_keys::Action::OpenThemePicker,
+        uze_keys::Action::Quit,
+    ] {
+        let (rect, _) = hits
+            .iter()
+            .find(|(_, hit)| *hit == Hit::OfferedAction(action))
+            .unwrap_or_else(|| panic!("{action} is a target at the foot"));
+        assert!(
+            drawn[usize::from(rect.y)].contains(&action.label()),
+            "and named by its own label: {:?}",
+            drawn[usize::from(rect.y)]
+        );
+        assert!(
+            usize::from(rect.y) > drawn.len() - 6,
+            "at the foot of the column, not among the screens: {rect:?}"
+        );
+    }
+
+    let footer = drawn
+        .iter()
         .rfind(|row| !row.trim().is_empty())
         .expect("the footer is the last row with anything on it");
-    let mark = theme::glyph(theme::Symbol::MarkHelp);
-    assert!(
-        footer.contains(&mark),
-        "the mark is on the footer: {footer:?}"
-    );
     assert!(
         !footer.to_lowercase().contains("everything you can do"),
-        "and the hints no longer name what the mark already offers: {footer:?}"
+        "the footer no longer names what the strip offers: {footer:?}"
     );
 
+    // And it performs, rather than merely being drawn.
     let (rect, _) = hits
         .iter()
         .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex))
-        .expect("and it is a target, not decoration");
+        .expect("the way in is a target");
     let mut model = model;
     model.hits = hits.clone();
     model.click(rect.x, rect.y);

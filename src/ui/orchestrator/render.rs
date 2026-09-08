@@ -475,6 +475,19 @@ pub(super) fn render_sidebar(
 
     let mut rows = Rows::over(inner);
 
+    // The quick strip is the foot of the column and takes its rows before
+    // anything else is laid out — the timeline reserves what is left, so a
+    // timeline dragged open grows over the tree above it rather than over
+    // the one place the chrome always is.
+    if let Some(rect) = crate::ui::quick_actions_rect(inner, QUICK_ACTIONS.len()) {
+        rows.take_from_the_foot(rect.height);
+        for (rect, action) in
+            crate::ui::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS)
+        {
+            hits.push((rect, WorkspaceHit::QuickAction(action)));
+        }
+    }
+
     // Mode toggle, one line: this used to be a global titlebar (brand +
     // status + Ctrl+O hint + path) spanning the whole frame; with only menu
     // + main container left, the menu opens with just enough chrome to
@@ -942,6 +955,21 @@ fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
         })
         .sum()
 }
+
+/// The chrome at the foot of the sidebar: everything this mode can do, the
+/// work no live tab is in front of, and the way out. None of the three
+/// belongs to a space or a tab, which is why none of them is in the tree
+/// and why they are drawn quietly. Preserved work had no control at all
+/// before this — it was the one gap the affordance table was naming.
+/// Named from the mode rather than from what is open: the key beside an
+/// entry must not change because an overlay is up.
+const QUICK_SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::Workspace];
+
+pub(super) const QUICK_ACTIONS: [Action; 3] = [
+    Action::OpenActionIndex,
+    Action::TogglePreservedWork,
+    Action::Quit,
+];
 
 /// The rows the tree above the timeline keeps whatever the section is
 /// dragged to — a space header, an agent and its caption, and the blank
@@ -2335,23 +2363,11 @@ pub(super) fn render_tab_strip(
     // pressed. Bare glyphs on the plain backdrop are what the message zone
     // beside them uses, and the whole point of that zone is that a message
     // is not a control — so the controls cannot look like one too.
+    // The way into the index used to sit here. It is at the foot of the
+    // sidebar now, with the other chrome that belongs to uze rather than
+    // to a tab — one place in both modes, and the place a reader who does
+    // not know where to look already looks.
     let mut trailing_right = inner.right();
-    // Rightmost, and always there: the one surface that says what this
-    // mode can do. In the workspace the keyboard mostly belongs to the
-    // program in the pane, so the way in has to be something you can see.
-    {
-        let text = theme::glyph(Symbol::MarkHelp);
-        let rect = chip_rect(&text, trailing_right, inner.y);
-        draw_chip(
-            frame,
-            rect,
-            &text,
-            theme::color(Token::Accent),
-            chip_state(model, Some(WorkspaceHit::OpenActionIndex)),
-        );
-        hits.push((rect, WorkspaceHit::OpenActionIndex));
-        trailing_right = rect.x.saturating_sub(1);
-    }
     if selected_agent_context(model, identities).is_some() {
         // Its own rect is what the dropdown hangs off, so the chip is
         // measured before it is drawn and the hit carries the same

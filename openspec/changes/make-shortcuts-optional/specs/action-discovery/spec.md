@@ -84,6 +84,13 @@ modes and by a persistent on-screen control in both modes.
 - **THEN** one surface answers both, and there is no second list to
   disagree with it
 
+#### Scenario: The chrome that belongs to no screen sits in one place
+- **WHEN** an operator looks for the index, for how the product looks, for
+  the work no live tab is in front of, or for the way out
+- **THEN** each is a control at the foot of the sidebar, in the same place
+  in both modes, drawn quietly enough not to compete with the list above it
+- **AND** no surface names the same offer twice on one screen
+
 #### Scenario: Acting from the index teaches the chord
 - **WHEN** an operator performs an action from the index
 - **THEN** the row that performed it showed the chord that reaches it

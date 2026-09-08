@@ -44,13 +44,16 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     // --- Everywhere -----------------------------------------------------
     put(
         Action::OpenActionIndex,
-        Control("the footer's help button, in both modes"),
+        Control("the sidebar's quick strip, in both modes"),
     );
     put(
         Action::SwitchMode,
         Control("the sidebar's work/manage control, in both modes"),
     );
-    put(Action::Quit, Index);
+    put(
+        Action::Quit,
+        Control("the sidebar's quick strip, in both modes"),
+    );
 
     // --- Navigation -----------------------------------------------------
     // Every list row, tab and menu entry is clickable, and the wheel moves
@@ -83,7 +86,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     put(Action::FocusContent, Control("clicking the screen"));
     put(Action::Refresh, Index);
     put(Action::StartFilter, Control("clicking the search field"));
-    put(Action::OpenThemePicker, Index);
+    put(
+        Action::OpenThemePicker,
+        Control("the sidebar's quick strip"),
+    );
     put(
         Action::OpenRowActions,
         Control("a row's `⋯`, or right-clicking the row"),
@@ -144,7 +150,7 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     );
     put(
         Action::TogglePreservedWork,
-        KeyboardOnly("no control opens it yet — the gap this rule is here to name"),
+        Control("the sidebar's quick strip"),
     );
     put(Action::ResumeTask, Control("its row in the preserved list"));
     put(Action::FinishTask, Control("its row in the preserved list"));
@@ -212,7 +218,7 @@ fn a_bound_action_is_never_reachable_by_keyboard_alone_without_a_reason() {
     assert_eq!(
         unreachable,
         std::collections::BTreeSet::from_iter(
-            ["deliver-all-tasks", "erase-back", "toggle-preserved-work"].map(str::to_owned)
+            ["deliver-all-tasks", "erase-back"].map(str::to_owned)
         ),
         "\n\nAdding one means the product now has a thing you can only do if you \
          knew the key. Say why in `affordances()`, or give it a control.\n"
