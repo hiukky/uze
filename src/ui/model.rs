@@ -498,6 +498,9 @@ pub(crate) struct TuiModel {
     pub(crate) dragging_keys_track: Option<Rect>,
     /// Whether the sidebar's first-steps section is folded to its header.
     pub(crate) first_steps_collapsed: bool,
+    /// Whether it has been put away for good, which is offered only once
+    /// every step has been taken.
+    pub(crate) first_steps_closed: bool,
     /// The steps already taken, by action name — shared with the workspace
     /// client through `ClientLayout`, because it is one list drawn at the
     /// foot of both sidebars and a step taken in one mode is taken.
@@ -574,6 +577,7 @@ impl Default for TuiModel {
             dragging_panel: None,
             dragging_keys_track: None,
             first_steps_collapsed: false,
+            first_steps_closed: false,
             steps_taken: std::collections::BTreeSet::new(),
         }
     }
@@ -710,6 +714,16 @@ impl TuiModel {
             profiles_selected: self.profiles_selected,
             overview_prompt_selected: self.overview_prompt_selected,
         }
+    }
+
+    /// Says something for a few seconds and then goes quiet. For the
+    /// answers that are not a result — "there is nothing here to do that
+    /// to" — which are what a key must give when the screen it was pressed
+    /// on has nothing for it. A key that answers nothing at all is
+    /// indistinguishable from a key that is broken.
+    pub(crate) fn say(&mut self, message: impl Into<String>) {
+        self.status = Status::Success(message.into());
+        self.status_expires_at = Some(Instant::now() + Duration::from_secs(3));
     }
 
     pub(crate) fn expire_status(&mut self) {
@@ -1060,12 +1074,23 @@ impl TuiModel {
     /// than stored, so moving the selection is how the track moves the
     /// page; there is no second notion of "where the page is" that could
     /// disagree with the first.
+    /// Whether this screen has a search field. Plugins, Extensions and
+    /// Integrations filter their lists; Keys filters its own; the Overview
+    /// is a report and Profiles is three panels rather than a list.
+    pub(crate) fn has_filter(&self) -> bool {
+        matches!(
+            self.route,
+            Route::Plugins | Route::Extensions | Route::Harnesses | Route::Keys
+        )
+    }
+
     /// The list at the foot of the sidebar, as it stands.
     pub(crate) fn first_steps(&self) -> super::FirstSteps<'_> {
         super::FirstSteps {
             steps: &super::management::FIRST_STEPS,
             taken: &self.steps_taken,
             collapsed: self.first_steps_collapsed,
+            closed: self.first_steps_closed,
             scopes: super::management::FIRST_STEP_SCOPES,
         }
     }

@@ -109,6 +109,7 @@ pub(crate) fn run_management(
         // it back to the responsive default.
         sidebar_width: layout.sidebar.width,
         first_steps_collapsed: layout.first_steps.collapsed,
+        first_steps_closed: layout.first_steps.closed,
         steps_taken: layout.first_steps.taken.clone(),
         // Asked of the terminal once, at startup: whether a chord can
         // reach uze at all is a property of the host, and the Keys screen
@@ -192,6 +193,7 @@ pub(crate) fn run_management(
     // and the next run opens on the screen this visit left.
     layout.sidebar.width = model.sidebar_width;
     layout.first_steps.collapsed = model.first_steps_collapsed;
+    layout.first_steps.closed = model.first_steps_closed;
     layout.first_steps.taken = model.steps_taken.clone();
     layout.management = model.management_layout();
     memory.in_flight = model.maintenance_in_flight;
@@ -479,6 +481,16 @@ fn render_sidebar(
             false,
             &mut section_hits,
         );
+        // The closing mark rides on the header, and this client answers a
+        // click with the *first* rect that contains it — so the mark goes
+        // in ahead of the header it sits on.
+        if let Some(rect) = section_hits.iter().find_map(|(rect, hit)| {
+            matches!(hit, uze_extensions::view::ViewHit::ToggleSection)
+                .then(|| steps.close_rect(*rect))
+                .flatten()
+        }) {
+            hits.push((rect, Hit::CloseFirstSteps));
+        }
         for (rect, hit) in section_hits {
             match hit {
                 uze_extensions::view::ViewHit::ToggleSection => {

@@ -74,6 +74,8 @@ pub(crate) enum Hit {
     ResetKey,
     /// The first-steps section's header, which folds it.
     ToggleFirstSteps,
+    /// The mark on that header, which puts the section away for good.
+    CloseFirstSteps,
     /// A list's search field. It is drawn on three screens and, until
     /// this, clicking it did nothing at all.
     FocusFilter,
@@ -290,6 +292,10 @@ impl TuiModel {
             // `run_management`), never on the input path.
             Hit::ToggleFirstSteps => {
                 self.first_steps_collapsed = !self.first_steps_collapsed;
+                Intent::None
+            }
+            Hit::CloseFirstSteps => {
+                self.first_steps_closed = true;
                 Intent::None
             }
             Hit::ResizeSidebar => {

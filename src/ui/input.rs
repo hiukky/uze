@@ -101,12 +101,36 @@ impl TuiModel {
 
     /// Performs one action. Every arm is a meaning, so this reads as what
     /// the product does rather than as what a keyboard is wired to.
+    /// One action, performed, and noted if it was a first step that landed.
+    ///
+    /// Every action this client performs passes through here, whichever way
+    /// it was reached — a key, a row's menu, the index, a button — so this
+    /// is the one place the first-steps list can learn what has been done
+    /// without every call site remembering to tell it. It asks *after*, and
+    /// asks for evidence: a screen where the gesture does nothing would
+    /// otherwise tick it off, and a list that says you have done what you
+    /// have not is worse than no list.
     pub(crate) fn act(&mut self, action: Action) -> Intent {
-        // Every action this client performs passes through here, whichever
-        // way it was reached — a key, a row's menu, the index, a button —
-        // so this is the one place the first-steps list can learn what has
-        // been done without every call site remembering to tell it.
-        self.note_step(action);
+        let intent = self.perform(action);
+        if self.step_landed(action) {
+            self.note_step(action);
+        }
+        intent
+    }
+
+    /// What a first step looks like once it has actually happened. Only
+    /// the steps need an answer; everything else is never noted.
+    fn step_landed(&self, action: Action) -> bool {
+        match action {
+            Action::OpenRowActions => self.row_menu.is_some(),
+            Action::StartFilter => self.filtering,
+            Action::OpenThemePicker => matches!(self.overlay, Overlay::ThemePicker { .. }),
+            Action::OpenActionIndex => matches!(self.overlay, Overlay::ActionIndex { .. }),
+            _ => false,
+        }
+    }
+
+    fn perform(&mut self, action: Action) -> Intent {
         if self.overlay != Overlay::None {
             return self.overlay_action(action);
         }
@@ -170,12 +194,15 @@ impl TuiModel {
                 self.open_or_act()
             }
             Action::Dismiss => self.dismiss(),
+            // Searching belongs to a screen with something to search. On
+            // one without, the key says so rather than doing nothing: a
+            // key that answers nothing at all is indistinguishable from a
+            // key that is broken, which is what this one looked like.
             Action::StartFilter => {
-                if matches!(
-                    self.route,
-                    Route::Plugins | Route::Extensions | Route::Harnesses
-                ) {
+                if self.has_filter() {
                     self.filtering = true;
+                } else {
+                    self.say("Nothing to search on this screen");
                 }
                 Intent::None
             }
@@ -296,6 +323,10 @@ impl TuiModel {
     pub(crate) fn open_row_actions(&mut self) -> Intent {
         let all = self.selected_offers();
         if all.is_empty() {
+            // Same reason as `StartFilter` above: the Overview and the Keys
+            // screen have no rows anything can be done *to*, and a gesture
+            // that opened nothing there read exactly like a broken key.
+            self.say("Nothing here to act on — pick a row on Plugins, Extensions, Integrations or Profiles");
             return Intent::None;
         }
         let available: Vec<_> = all

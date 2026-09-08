@@ -2832,6 +2832,61 @@ mod workspace_tests {
         );
     }
 
+    /// The list finishes. Once every step has been taken the header offers
+    /// a mark that puts it away for good — and only then: a list of things
+    /// to try that could be dismissed before trying any of them would be
+    /// onboarding nobody ever sees.
+    #[test]
+    fn a_finished_list_offers_to_leave() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::CloseFirstSteps),
+            "unfinished, so nothing to close: {rows:?}"
+        );
+
+        model.steps_taken = render::FIRST_STEPS
+            .iter()
+            .map(|action| action.name())
+            .collect();
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let close = hits
+            .iter()
+            .find_map(|(rect, hit)| (*hit == WorkspaceHit::CloseFirstSteps).then_some(*rect))
+            .expect("finished, so the header offers the way out");
+        let header = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("the header is drawn");
+        assert_eq!(usize::from(close.y), header, "on the header itself");
+        model.hits = hits.clone();
+        assert_eq!(
+            super::hit_at(&model, close.x, close.y),
+            Some(WorkspaceHit::CloseFirstSteps),
+            "and the header underneath does not swallow it"
+        );
+
+        model.first_steps_closed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            !rows.iter().any(|row| row.contains("first steps")),
+            "closed for good, header and all: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("timeline")),
+            "and the history took the rows back: {rows:?}"
+        );
+        assert!(model.shape().first_steps.closed);
+    }
+
     /// A step is ticked once it has been taken, and the header counts them.
     #[test]
     fn a_step_taken_is_marked_and_counted() {

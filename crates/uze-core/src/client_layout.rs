@@ -54,6 +54,10 @@ pub struct FirstStepsLayout {
     /// Folded to its header. Open on a first run, because a list of what
     /// to try is worth nothing to the person who has not seen it yet.
     pub collapsed: bool,
+    /// Put away for good. Offered only once every step has been taken —
+    /// a list of things to try is finished when they have been tried, and
+    /// until then folding it is the way to set it aside.
+    pub closed: bool,
     /// The steps already taken, by the client's own name for each. A name
     /// the client no longer recognises is simply a step that is no longer
     /// listed, so nothing has to be cleaned up when the list changes.
@@ -193,6 +197,7 @@ mod tests {
             },
             first_steps: FirstStepsLayout {
                 collapsed: true,
+                closed: true,
                 taken: BTreeSet::from(["open-action-index".to_owned()]),
             },
         };

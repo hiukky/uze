@@ -91,9 +91,14 @@ modes and by a persistent on-screen control in both modes.
 - **AND** a step the operator has already taken — by any route — is marked
   as taken, and the count says how many remain
 - **AND** the list folds to its header, and stays folded until it is opened
-  again
+  again; once every step has been taken it also offers to leave for good
 - **AND** it shares the foot of the column with the history beside it —
   each pushing the other rather than covering it, and one open at a time
+
+#### Scenario: A key that has nothing to do here says so
+- **WHEN** an action is offered on a screen where it has nothing to act on
+- **THEN** performing it answers with the reason rather than doing nothing,
+  and it is not recorded as a step that was taken
 
 #### Scenario: Acting from the index teaches the chord
 - **WHEN** an operator performs an action from the index

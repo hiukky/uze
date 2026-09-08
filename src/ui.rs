@@ -701,6 +701,9 @@ pub(crate) struct FirstSteps<'a> {
     /// The steps already taken, by action name.
     pub(crate) taken: &'a std::collections::BTreeSet<String>,
     pub(crate) collapsed: bool,
+    /// Put away for good, which the header offers only once every step has
+    /// been taken.
+    pub(crate) closed: bool,
     /// Which keyboard the keys beside the steps are read from. Named from
     /// the mode rather than from what is open, so a dialog cannot change
     /// the key printed here.
@@ -713,10 +716,9 @@ impl FirstSteps<'_> {
         use uze_extensions::view::{Role, SectionRow, Span as ViewSpan};
 
         let keymap = uze_keys::active();
-        let done = self.done();
         uze_extensions::view::Section {
             title: "first steps".to_owned(),
-            caption: ViewSpan::new(format!("{done} of {}", self.steps.len()), Role::Faint),
+            caption: ViewSpan::new(self.caption(), Role::Faint),
             collapsed: self.collapsed,
             // Nothing to drag: the list is as long as it is, and a handle
             // that can only ever be dropped in one place is a control that
@@ -755,6 +757,40 @@ impl FirstSteps<'_> {
         }
     }
 
+    /// How far along, and — once there is nowhere further — the mark that
+    /// puts the list away. It rides in the caption rather than taking a
+    /// column of its own, so the header is the same shape as the timeline's
+    /// beside it whether the mark is there or not.
+    fn caption(&self) -> String {
+        let progress = format!("{} of {}", self.done(), self.steps.len());
+        if self.complete() {
+            format!("{progress} {}", theme::glyph(Symbol::MarkClose))
+        } else {
+            progress
+        }
+    }
+
+    /// Every step taken. Only then is the list something to be finished
+    /// with rather than folded away.
+    pub(crate) fn complete(&self) -> bool {
+        self.done() == self.steps.len()
+    }
+
+    /// The cells of the header the closing mark occupies, if it is there
+    /// at all. Derived from the header the section renderer drew rather
+    /// than measured twice: the mark is the caption's own last glyph.
+    pub(crate) fn close_rect(&self, header: Rect) -> Option<Rect> {
+        let mark = theme::width(Symbol::MarkClose);
+        self.complete().then(|| {
+            Rect::new(
+                header.right().saturating_sub(mark + TRAILING_PAD),
+                header.y,
+                mark,
+                1,
+            )
+        })
+    }
+
     pub(crate) fn is_taken(&self, action: uze_keys::Action) -> bool {
         self.taken.contains(&action.name())
     }
@@ -786,6 +822,9 @@ impl FirstSteps<'_> {
     /// through the index.
     pub(crate) fn rect(&self, column: Rect) -> Option<Rect> {
         const HEADROOM: u16 = 5;
+        if self.closed {
+            return None;
+        }
         let height = self.height();
         (column.height >= height + HEADROOM)
             .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))

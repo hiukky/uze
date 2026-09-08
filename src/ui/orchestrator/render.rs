@@ -933,9 +933,13 @@ pub(super) fn render_sidebar(
             false,
             &mut section_hits,
         );
+        let mut close = None;
         for (rect, hit) in section_hits {
             match hit {
-                ViewHit::ToggleSection => hits.push((rect, WorkspaceHit::ToggleFirstSteps)),
+                ViewHit::ToggleSection => {
+                    close = steps.close_rect(rect);
+                    hits.push((rect, WorkspaceHit::ToggleFirstSteps));
+                }
                 ViewHit::SelectItem(index) => {
                     if let Some(action) = FIRST_STEPS.get(index) {
                         hits.push((rect, WorkspaceHit::QuickAction(*action)));
@@ -943,6 +947,11 @@ pub(super) fn render_sidebar(
                 }
                 _ => {}
             }
+        }
+        // After the header it sits on: this client answers a click with
+        // the *last* rect that contains it.
+        if let Some(rect) = close {
+            hits.push((rect, WorkspaceHit::CloseFirstSteps));
         }
     }
 

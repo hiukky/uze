@@ -1570,6 +1570,47 @@ fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
     );
 }
 
+/// The same in this mode: the mark appears only once the list is finished,
+/// and it puts the section away for good rather than folding it.
+#[test]
+fn a_finished_list_offers_to_leave() {
+    let mut model = model_with_plugins(&["flow"]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert!(
+        !hits.iter().any(|(_, hit)| *hit == Hit::CloseFirstSteps),
+        "unfinished, so nothing to close"
+    );
+
+    model.steps_taken = crate::ui::management::FIRST_STEPS
+        .iter()
+        .map(|action| action.name())
+        .collect();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let (close, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::CloseFirstSteps)
+        .expect("finished, so the header offers the way out");
+    model.hits = hits.clone();
+    model.click(close.x, close.y);
+    assert!(model.first_steps_closed);
+
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert!(
+        !hits.iter().any(|(_, hit)| *hit == Hit::ToggleFirstSteps),
+        "closed for good, header and all"
+    );
+}
+
 /// A step is recorded wherever it was performed from — the key, a button,
 /// the index — because every action this client performs goes through one
 /// place, and that is where the list learns.
@@ -1588,6 +1629,75 @@ fn taking_a_step_any_way_at_all_marks_it_taken() {
     let before = model.steps_taken.clone();
     model.act(uze_keys::Action::Refresh);
     assert_eq!(model.steps_taken, before);
+}
+
+/// Two of the management steps belong to a screen with a list. On one
+/// without, they used to do nothing at all — which is what a broken key
+/// looks like — and the list ticked them off anyway.
+#[test]
+fn a_step_that_does_nothing_here_says_so_and_is_not_ticked() {
+    let mut model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Content,
+        ..model_with_data()
+    };
+
+    model.act(uze_keys::Action::StartFilter);
+    assert!(!model.filtering, "the Overview has nothing to search");
+    assert!(
+        matches!(&model.status, Status::Success(said) if said.contains("search")),
+        "and the key says so: {:?}",
+        model.status
+    );
+    assert!(model.steps_taken.is_empty(), "and nothing was ticked");
+
+    model.act(uze_keys::Action::OpenRowActions);
+    assert!(model.row_menu.is_none());
+    assert!(
+        matches!(&model.status, Status::Success(said) if said.contains("act on")),
+        "{:?}",
+        model.status
+    );
+    assert!(model.steps_taken.is_empty());
+
+    // On a screen that has them, both land — and both are ticked.
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        ..model_with_data()
+    };
+    model.act(uze_keys::Action::StartFilter);
+    assert!(model.filtering);
+    model.filtering = false;
+    model.act(uze_keys::Action::OpenRowActions);
+    assert!(model.row_menu.is_some());
+    assert_eq!(model.steps_taken.len(), 2, "{:?}", model.steps_taken);
+}
+
+/// The Keys screen draws a search field and answers clicks on it, but `/`
+/// did not reach it: the one screen whose whole subject is keys had a key
+/// that did nothing.
+#[test]
+fn the_keys_screen_is_searchable_by_its_own_key() {
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    model.act(uze_keys::Action::StartFilter);
+    assert!(model.filtering);
+    for character in "quit".chars() {
+        model.type_character(character);
+    }
+    assert_eq!(model.keys_filter, "quit");
+    assert!(
+        !model.key_rows().is_empty(),
+        "and the list narrowed to something"
+    );
+    assert!(
+        model.key_rows().len() < TuiModel::default().key_rows().len(),
+        "narrower than the whole keyboard"
+    );
 }
 
 /// A hint names a key and what it does, and it asks the keymap for both.

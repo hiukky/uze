@@ -217,15 +217,36 @@ impl Attach<'_> {
     /// Performs one action. The two that leave the client answer first,
     /// wherever they were asked from — which is what makes sealing a
     /// surface safe.
+    /// One action, performed, and noted if it was a first step that landed.
+    ///
+    /// Every action this client performs passes through here, whichever way
+    /// it was reached, so this is the one place the first-steps list can
+    /// learn what has been done without every call site remembering to
+    /// tell it. It asks *after*, and asks for evidence: a gesture that did
+    /// nothing would otherwise tick itself off.
     fn act(&mut self, action: Action, viewport: &Viewport) -> Flow {
-        let Viewport { columns, rows, .. } = *viewport;
-        // Every action this client performs passes through here, whichever
-        // way it was reached, so this is the one place the first-steps
-        // list can learn what has been done without every call site
-        // remembering to tell it.
-        if self.model.note_step(action) {
+        let before = self.model.selected_tab();
+        let flow = self.perform(action, viewport);
+        if self.step_landed(action, before) && self.model.note_step(action) {
             self.model.remember_sidebar();
         }
+        flow
+    }
+
+    /// What a first step looks like once it has actually happened.
+    fn step_landed(&self, action: Action, before: Option<TabId>) -> bool {
+        match action {
+            Action::NewAgent => self.model.agent_picker.is_some(),
+            Action::NextAgent => self.model.selected_tab() != before,
+            Action::ToggleGitChanges => self.model.git_view.is_some(),
+            Action::TogglePreservedWork => self.model.preserved.is_some(),
+            Action::OpenActionIndex => self.model.action_index.is_some(),
+            _ => false,
+        }
+    }
+
+    fn perform(&mut self, action: Action, viewport: &Viewport) -> Flow {
+        let Viewport { columns, rows, .. } = *viewport;
         match action {
             Action::SwitchMode => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
@@ -1496,6 +1517,11 @@ impl Attach<'_> {
         } = *viewport;
         match hit {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
+            WorkspaceHit::CloseFirstSteps => {
+                self.model.first_steps_closed = true;
+                self.model.remember_sidebar();
+                self.model.dirty = true;
+            }
             WorkspaceHit::ToggleFirstSteps => {
                 self.model.first_steps_collapsed = !self.model.first_steps_collapsed;
                 // The other half of the accordion — see `toggle_timeline`.

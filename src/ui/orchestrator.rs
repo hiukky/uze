@@ -785,6 +785,7 @@ pub(crate) fn attach_workspace(
         last_size: (columns, rows),
         sidebar_width: layout.sidebar.width,
         first_steps_collapsed: layout.first_steps.collapsed,
+        first_steps_closed: layout.first_steps.closed,
         steps_taken: layout.first_steps.taken.clone(),
         timeline_collapsed: layout.workspace.timeline_collapsed,
         timeline_rows: layout.workspace.timeline_rows,
@@ -1040,6 +1041,8 @@ pub(super) enum WorkspaceHit {
     SwitchToManagement,
     /// The first-steps section's header, which folds it.
     ToggleFirstSteps,
+    /// The mark on that header, which puts the section away for good.
+    CloseFirstSteps,
     /// One entry of the sidebar's quick strip — performed exactly as the
     /// keyboard performs it, which is why it carries the action rather
     /// than naming a surface: a control that took its own path to the
@@ -1714,6 +1717,9 @@ struct WorkspaceModel {
     sidebar_width: Option<u16>,
     /// Whether the sidebar's first-steps section is folded to its header.
     first_steps_collapsed: bool,
+    /// Whether it has been put away for good, which is offered only once
+    /// every step has been taken.
+    first_steps_closed: bool,
     /// The steps already taken, by action name — shared with the
     /// management client through `ClientLayout`, because it is one list
     /// drawn at the foot of both sidebars and a step taken in one mode is
@@ -2379,6 +2385,7 @@ impl WorkspaceModel {
             steps: &render::FIRST_STEPS,
             taken: &self.steps_taken,
             collapsed: self.first_steps_collapsed,
+            closed: self.first_steps_closed,
             scopes: render::FIRST_STEP_SCOPES,
         }
     }
@@ -2400,6 +2407,7 @@ impl WorkspaceModel {
             },
             first_steps: uze_application::FirstStepsLayout {
                 collapsed: self.first_steps_collapsed,
+                closed: self.first_steps_closed,
                 taken: self.steps_taken.clone(),
             },
         }
