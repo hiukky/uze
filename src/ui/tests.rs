@@ -2719,6 +2719,41 @@ fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
     }
 }
 
+/// The nav badge counts an inventory, and Keys is not one.
+///
+/// Its list holds a row per surface an action can be reached from, so the
+/// same Enter, Esc and arrows are written out once per dialog and the
+/// total says something about the shape of the table rather than about
+/// uze. Beside the word "Keys" that number reads as how many shortcuts
+/// there are to learn, which is both wrong and the impression the screen
+/// exists to remove.
+#[test]
+fn the_keys_route_carries_no_count() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..model_with_data()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let nav = buffer_rows(&terminal)
+        .into_iter()
+        .find(|row| row.contains(Route::Keys.label()))
+        .expect("the sidebar drew the route");
+    assert!(
+        !nav.chars().any(|glyph| "₀₁₂₃₄₅₆₇₈₉".contains(glyph)),
+        "no count beside it: {nav:?}"
+    );
+    assert!(
+        !model.key_rows().is_empty(),
+        "and the screen it opens is not empty — the badge is absent by \
+         choice, not for want of anything to count"
+    );
+}
+
 // --- Actions where the thing they act on is -----------------------------
 
 /// The whole point of the row menu: performing an action without knowing

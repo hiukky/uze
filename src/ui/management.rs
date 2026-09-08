@@ -376,6 +376,16 @@ fn route_subtitle(route: Route) -> &'static str {
     }
 }
 
+/// The badge beside a nav row: how many of the things that screen is
+/// about there are, for the screens that are an inventory of something.
+///
+/// Two are not, and carry none. Overview is a report rather than a list.
+/// Keys is a reference — one row per surface an action can be reached
+/// from, so most of them are the same Enter, Esc and arrow keys written
+/// out once per dialog, and their total is a fact about the shape of the
+/// table rather than about uze. Printed beside "Keys" it reads as how much
+/// there is to learn, which is both untrue and the exact impression this
+/// screen exists to remove.
 fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
     match route {
         Route::Overview => None,
@@ -383,7 +393,7 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
         Route::Extensions => Some(model.extensions.len()),
         Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
         Route::Profiles => Some(model.profiles.len()),
-        Route::Keys => Some(model.key_rows().len()),
+        Route::Keys => None,
     }
 }
 
