@@ -88,6 +88,8 @@ naming them, and the absorbed records are listed under
 - [043 — Conformance asserts one outcome contract per capability; vendors bind, never assert](043-conformance-asserts-one-outcome-contract-per-capability.md)
 - [044 — Authorship is the human who adopts a change, not the tool that drafted it](044-authorship-is-the-human-who-adopts-the-change.md)
 - [045 — What uze can do is named once, and the screen only draws it](045-what-uze-can-do-is-named-once-and-the-screen-only-draws-it.md)
+- [046 — The design vocabulary is a leaf crate, resolved at load](046-the-design-vocabulary-is-a-leaf-crate-resolved-at-load.md)
+- [047 — The launch boundary owns session continuity](047-the-launch-boundary-owns-session-continuity.md)
 
 ## Consolidated records
 
