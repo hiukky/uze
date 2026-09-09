@@ -674,6 +674,40 @@
             }
           ]
         },
+        "code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "frames": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "glyph": {
+                  "type": "string"
+                },
+                "width": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
         "cursor.text": {
           "oneOf": [
             {
@@ -1151,6 +1185,40 @@
           ]
         },
         "prompt": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "frames": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "glyph": {
+                  "type": "string"
+                },
+                "width": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "scroll.thumb": {
           "oneOf": [
             {
               "type": "string"

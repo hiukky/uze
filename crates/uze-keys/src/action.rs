@@ -242,8 +242,34 @@ actions! {
         "Next agent", "Move to the next agent in this space";
     PreviousAgent => "previous-agent", Mode::Workspace, false,
         "Previous agent", "Move to the previous agent in this space";
-    ToggleGitChanges => "toggle-git-changes", Mode::Workspace, false,
+    ToggleChanges => "toggle-changes", Mode::Workspace, false,
         "Changes", "Open or close the changes in the selected tab's checkout";
+    ToggleFiles => "toggle-files", Mode::Workspace, false,
+        "Files", "Open or close the files of the selected tab's checkout";
+
+    // --- The code surface, and typing into a file ------------------------
+    EditFile => "edit-file", Mode::Workspace, false,
+        "Edit", "Open the selected file's contents and start typing";
+    TogglePreview => "toggle-preview", Mode::Workspace, false,
+        "Preview", "Show a markdown file as the document it describes, and back";
+    SaveFile => "save-file", Mode::Workspace, false,
+        "Save", "Write what was typed back to the file";
+    DeleteFile => "delete-file", Mode::Workspace, true,
+        "Delete", "Delete the selected file, having been asked once";
+    ConfirmDelete => "confirm-delete", Mode::Workspace, true,
+        "Confirm delete", "Confirm deleting the file, having been asked once";
+    CaretLeft => "caret-left", Mode::Workspace, false,
+        "Left", "Move the caret one character left";
+    CaretRight => "caret-right", Mode::Workspace, false,
+        "Right", "Move the caret one character right";
+    CaretLineStart => "caret-line-start", Mode::Workspace, false,
+        "Line start", "Move the caret to the start of its line";
+    CaretLineEnd => "caret-line-end", Mode::Workspace, false,
+        "Line end", "Move the caret to the end of its line";
+    InsertNewline => "insert-newline", Mode::Workspace, false,
+        "New line", "Split the line at the caret";
+    EraseForward => "erase-forward", Mode::Workspace, false,
+        "Delete", "Delete the character under the caret";
 
     // --- Workspace, the work --------------------------------------------
     DeliverTask => "deliver-task", Mode::Workspace, false,
@@ -330,7 +356,9 @@ mod tests {
                 [
                     "clear-prompt-history",
                     "close-tab",
+                    "confirm-delete",
                     "confirm-discard",
+                    "delete-file",
                     "delete-profile",
                     "discard-task",
                     "remove-plugin",

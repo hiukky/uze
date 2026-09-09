@@ -80,6 +80,7 @@
     "bar.medium": "▎",
     "bar.thin": "▏",
     "cursor.text": "▏",
+    "scroll.thumb": "┃",
 
     "arrow.up": "↑",
     "arrow.down": "↓",
@@ -94,6 +95,7 @@
     "chevron.expanded": "▾",
     "prompt": "❯",
     "menu": "≡",
+    "code": "❐",
 
     "text.ellipsis": "…",
     "text.em-dash": "—",

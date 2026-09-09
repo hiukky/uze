@@ -1105,13 +1105,16 @@ impl TuiModel {
     }
 
     pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
-        let last = self.key_rows().len().saturating_sub(1);
-        let travel = usize::from(track.height.saturating_sub(1));
-        if travel == 0 {
+        let rows = self.key_rows().len();
+        let Some(bar) =
+            super::scrollbar::Scrollbar::measure(track, usize::from(track.height), rows)
+        else {
             return;
-        }
-        let offset = usize::from(row.saturating_sub(track.y)).min(travel);
-        self.keys_selected = offset * last / travel;
+        };
+        // `item_at`, not `first_at`: this list's window is derived from
+        // its selection, so a position on the track is a position in the
+        // whole list — see `super::scrollbar`.
+        self.keys_selected = bar.item_at(row);
         self.keys_capture = false;
         self.keys_problem = None;
     }

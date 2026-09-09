@@ -103,7 +103,7 @@ pub(crate) fn render_keys(
         // A column for the track, but only when there is more list than
         // screen: a scrollbar on a list that fits says the opposite of
         // what it is for.
-        let track_width = theme::width(Symbol::BarThick)
+        let track_width = crate::ui::scrollbar::Scrollbar::width()
             .max(theme::width(Symbol::BarThin))
             .max(1);
         let height = usize::from(list_area.height);
@@ -166,8 +166,11 @@ pub(crate) fn render_keys(
             }
         }
 
-        if let Some(track) = track {
-            render_track(frame, track, first, height, entries.len());
+        if let Some(track) = track
+            && let Some(bar) =
+                crate::ui::scrollbar::Scrollbar::measure(track, height, entries.len())
+        {
+            bar.render(frame, first);
             hits.push((track, Hit::KeysTrack(track)));
         }
     }
@@ -306,55 +309,6 @@ struct Columns {
     label: usize,
     yours: Option<usize>,
     width: u16,
-}
-
-/// Where in the list the window sits, as a bar down the right edge.
-///
-/// It answers the question a long list cannot answer by itself — whether
-/// there is more, and how much — and it takes the answer back: a click
-/// jumps there and a drag keeps jumping, which is the gesture anyone who
-/// has seen a scrollbar tries first. Drawing something that looks like a
-/// control and does nothing is worse than not drawing it.
-///
-/// It moves the selection rather than a scroll offset of its own, because
-/// the window is derived from the selection — so there is no second notion
-/// of where the page is that could disagree with the first.
-fn render_track(
-    frame: &mut ratatui::Frame<'_>,
-    track: Rect,
-    first: usize,
-    shown: usize,
-    total: usize,
-) {
-    let height = usize::from(track.height);
-    if height == 0 || total == 0 {
-        return;
-    }
-    // The thumb is the visible fraction, floored at one row so it never
-    // vanishes on a list long enough to make the fraction round to
-    // nothing — which is exactly the list that most needs it.
-    let thumb = (shown * height / total).clamp(1, height);
-    let travel = height - thumb;
-    let span = total.saturating_sub(shown);
-    let top = (first * travel).checked_div(span).unwrap_or(0);
-    for row in 0..height {
-        let here = row >= top && row < top + thumb;
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                theme::glyph(if here {
-                    Symbol::BarThick
-                } else {
-                    Symbol::BarThin
-                }),
-                theme::fg(if here {
-                    Token::BorderDefault
-                } else {
-                    Token::BorderFaint
-                }),
-            )),
-            Rect::new(track.x, track.y + row as u16, track.width, 1),
-        );
-    }
 }
 
 /// The marker column: the glyph plus the space after it. Reserved on every

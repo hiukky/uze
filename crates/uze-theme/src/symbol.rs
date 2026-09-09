@@ -142,11 +142,23 @@ vocabulary! {
         TreeColumnDivider = "tree.column-divider",
 
         // ── bars: a filled edge marking where you are ──────────────────
+        //
+        // Left-aligned in their cell on purpose: these mark the *edge* of
+        // a row, so they sit against it.
         BarThick = "bar.thick",
         BarMedium = "bar.medium",
         BarThin = "bar.thin",
         /// The caret in a text input.
         CursorText = "cursor.text",
+        /// A scrollbar's handle: where you are in a list, and how much of
+        /// it you can see.
+        ///
+        /// Not one of the bars above, and the difference is where the
+        /// glyph sits in its cell rather than what it means. A handle
+        /// drawn on a panel divider has to line up with it, and a bar is
+        /// flush left where a divider is centred — so the line jogged
+        /// sideways for exactly the rows the handle covered.
+        ScrollThumb = "scroll.thumb",
 
         // ── direction and affordance ───────────────────────────────────
         ArrowUp = "arrow.up",
@@ -174,6 +186,8 @@ vocabulary! {
         Prompt = "prompt",
         /// Opens a menu.
         Menu = "menu",
+        /// The code of a checkout — what the code surface opens onto.
+        Code = "code",
 
         // ── typography ─────────────────────────────────────────────────
         /// Elided text.

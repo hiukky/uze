@@ -31,6 +31,7 @@
     "bar.medium": "|",
     "bar.thin": "|",
     "cursor.text": "_",
+    "scroll.thumb": "#",
 
     "arrow.up": "^",
     "arrow.down": "v",
@@ -45,6 +46,7 @@
     "chevron.expanded": "v",
     "prompt": ">",
     "menu": "=",
+    "code": "<>",
 
     "text.ellipsis": "...",
     "text.em-dash": "--",

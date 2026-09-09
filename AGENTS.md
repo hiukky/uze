@@ -197,9 +197,20 @@ need to).
   with a `view::View` (a full-frame surface) or a `view::Section` (a
   collapsible block of one of the host's own columns) and never draws,
   computes geometry, or names a colour; `src/ui/extension_view.rs` renders
-  both. Presentation, one module per extension, one
+  both. Presentation, one directory per extension (`code/` is the only
+  one today) with the extension's own surface in the file beside it, one
   `ExtensionRegistry::builtin` entry, one `ExtensionHit` variant per
-  surface it draws.
+  surface it draws. What more than one extension needs lives under
+  `shared/`, and only once a second one actually needs it; `view.rs` and
+  `Host` are the two contracts and sit at the crate root. `Host` is where
+  every capability is granted — including the two that write, which the
+  code surface's save and delete are the only callers of.
+  `code` is **one** extension covering the checkout's changes, its files
+  and its history, because the selection has to survive a switch between
+  them and a selection cannot live above two extensions. Its rule: no
+  handler branches on the mode to decide what the state *means* — the
+  mode decides who is *asked*, and each half answers about the same path
+  knowing nothing about the other.
 - `crates/uze-integrations` — one module per harness
   (`claude`, `codex`, `opencode`, `antigravity`)
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`

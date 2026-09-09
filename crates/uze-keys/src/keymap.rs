@@ -269,9 +269,9 @@ mod tests {
             bind(Scope::Global, "f1", Action::OpenActionIndex),
             bind(Scope::Global, "ctrl+o", Action::SwitchMode),
             bind(Scope::Workspace, "ctrl+t", Action::NewShellTab),
-            bind(Scope::Workspace, "ctrl+g", Action::ToggleGitChanges),
-            bind(Scope::GitChanges, "esc", Action::Dismiss),
-            bind(Scope::GitChanges, "down", Action::SelectNext),
+            bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
+            bind(Scope::Code, "esc", Action::Dismiss),
+            bind(Scope::Code, "down", Action::SelectNext),
             bind(Scope::Management, "down", Action::SelectNext),
             bind(Scope::Management, "j", Action::SelectNext),
             bind(Scope::Plugins, "r", Action::RemovePlugin),
@@ -284,7 +284,7 @@ mod tests {
     fn the_innermost_surface_answers_first() {
         let keymap = sample();
         assert_eq!(
-            keymap.resolve(chord("esc"), &[Scope::Workspace, Scope::GitChanges]),
+            keymap.resolve(chord("esc"), &[Scope::Workspace, Scope::Code]),
             Resolution::Act(Action::Dismiss)
         );
     }
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn a_sealed_surface_answers_for_everything_except_global() {
         let keymap = sample();
-        let open = [Scope::Workspace, Scope::GitChanges];
+        let open = [Scope::Workspace, Scope::Code];
         // The bug this replaces: three chords were tested above the Git
         // overlay's arm and fired while it was open; five were tested
         // below it and did not.
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn the_index_lists_what_is_reachable_and_nothing_else() {
         let keymap = sample();
-        let inside_the_overlay = keymap.available(&[Scope::Workspace, Scope::GitChanges]);
+        let inside_the_overlay = keymap.available(&[Scope::Workspace, Scope::Code]);
         let names: Vec<Action> = inside_the_overlay
             .iter()
             .map(|(action, _)| *action)

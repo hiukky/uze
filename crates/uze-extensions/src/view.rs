@@ -71,6 +71,11 @@ pub struct Span {
     pub role: Role,
     pub color: Option<Rgb>,
     pub bold: bool,
+    /// Emphasis, in the typographic sense. Here because rendered
+    /// markdown has two weights of it and a role cannot carry the
+    /// difference: `*this*` and `**this**` mean different things and must
+    /// look different, whatever the palette says.
+    pub italic: bool,
 }
 
 impl Span {
@@ -80,11 +85,22 @@ impl Span {
             role,
             color: None,
             bold: false,
+            italic: false,
         }
     }
 
     pub fn bold(mut self) -> Self {
         self.bold = true;
+        self
+    }
+
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    pub fn coloured(mut self, colour: Rgb) -> Self {
+        self.color = Some(colour);
         self
     }
 }
@@ -93,7 +109,15 @@ impl Span {
 /// its content and a hint row underneath.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct View {
-    pub title: String,
+    /// What this surface is about, in parts.
+    ///
+    /// Spans rather than a string because a title is several things at
+    /// once — what the surface is, which checkout, which branch — and
+    /// one run of text gives them all the same weight, which is how a
+    /// title stops being read. The extension says which part is which;
+    /// the host decides what each looks like, exactly as it does for
+    /// every other [`Role`].
+    pub title: Vec<Span>,
     /// `None` when there is nothing to navigate — an error leaves the
     /// column empty rather than showing an empty list with a zero beside
     /// it, which reads as "no changes" when the truth is "we could not
@@ -104,6 +128,21 @@ pub struct View {
     /// name them. The host prints each with the key that reaches it — an
     /// extension no more writes a key than it writes a colour.
     pub footer: Vec<Command>,
+    /// The ways this surface can show what it is showing, in the order
+    /// they should be offered, with the current one marked. Empty when
+    /// there is only one way, which is most of the time.
+    ///
+    /// A *control*, not a hint: the same choice reachable by a key has to
+    /// be reachable by pointing at it, and a mode nothing on screen
+    /// mentions is a mode only a reader of the keymap knows about.
+    pub modes: Vec<Mode>,
+}
+
+/// One way of showing the content, offered beside it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Mode {
+    pub label: String,
+    pub active: bool,
 }
 
 /// The left-hand list of things to choose between.
@@ -161,8 +200,37 @@ pub enum Content {
         heading: String,
         /// First line to show. The host clamps it to what exists.
         scroll: u16,
+        /// The lines worth drawing right now — a *window*, not the whole
+        /// content: producing a large file's every line on every frame is
+        /// work nobody sees.
         lines: Vec<ContentLine>,
+        /// How many lines exist in total, of which `lines` is the window.
+        ///
+        /// Separate because only the extension knows it and only the host
+        /// needs it: a scrollbar that measured the window would say the
+        /// content is exactly as long as the screen, which is the one
+        /// thing a scrollbar exists to deny.
+        total: usize,
+        /// Where the text caret sits, when the viewer is editing rather
+        /// than reading. `None` for content nobody is typing into, which
+        /// is every view that only shows.
+        caret: Option<Caret>,
     },
+}
+
+/// The caret in editable [`Content::Lines`].
+///
+/// Counted in characters of the line it names, not in columns of the
+/// screen: the extension owns the text and knows nothing about how wide a
+/// glyph is drawn or where a long line wrapped, and the host owns exactly
+/// that. Naming the position in the text is the only form both sides can
+/// agree on.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Caret {
+    /// Index into the `lines` beside it.
+    pub line: usize,
+    /// Characters before the caret on that line.
+    pub column: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -234,8 +302,42 @@ pub enum ViewHit {
     SelectItem(usize),
     /// The `id` of a [`NavigatorRow::Group`], clicked to fold or unfold it.
     ToggleGroup(usize),
-    /// The divider between navigator and content, dragged.
-    ResizeNavigator,
+    /// A click inside [`Content::Lines`], as far as the host can resolve
+    /// it: which line, and how many display cells into that line's text
+    /// the pointer landed.
+    ///
+    /// The split is the same one the rest of this module makes. Only the
+    /// host knows where the line wrapped and where the text column
+    /// starts, so it answers in *cells*. Only the extension knows what
+    /// the text is, so it turns cells into a character position — a
+    /// double-width glyph occupies two cells and one character, and
+    /// nothing on the host's side of the boundary can know which is
+    /// which.
+    PlaceCaret {
+        /// Index into the `lines` the extension supplied.
+        line: usize,
+        /// Display cells from the start of that line's text.
+        cell: usize,
+    },
+    /// One of the [`View::modes`] offered, chosen — by its index into
+    /// that list, which is the extension's own order.
+    SelectMode(usize),
+    /// The edge between navigator and content, taken hold of.
+    ///
+    /// One target for two gestures, because the edge is one line and
+    /// carries both: the split moves sideways and the list scrolls down.
+    /// Which of the two a press turns out to be is not known when it
+    /// lands, so the host does not decide then — it waits for the first
+    /// movement and lets the direction say. A press that never moves is a
+    /// click, and a click on a scrollbar means "show me here".
+    GrabNavigatorEdge,
+    /// The content's scrollbar, taken hold of. Unambiguous — nothing else
+    /// lives on that column — so it is a scroll from the first event.
+    ///
+    /// A handle rather than a position: where the pointer *goes* is the
+    /// answer, and it is not known until it is released or moved, so the
+    /// host resolves it from the track it drew.
+    DragContentScrollbar,
     /// A [`Section`]'s header, which folds it.
     ToggleSection,
     /// A [`Section`]'s divider, dragged to change how much of it shows.
@@ -281,4 +383,36 @@ pub enum Command {
     Activate,
     ScrollPageUp,
     ScrollPageDown,
+
+    // --- Asked of a surface that can be typed into ----------------------
+    //
+    // The vocabulary grew here because a second surface needed it, which
+    // is the bar this module sets. An editor cannot be expressed in
+    // "select next" and "activate": a caret moves by character, text
+    // arrives one character at a time (see [`Command::Type`]), and both
+    // are meanings rather than keys, exactly like the rest.
+    /// Start typing into what is selected.
+    Edit,
+    /// Show a document as what it describes, rather than as its markup —
+    /// and back.
+    TogglePreview,
+    /// Write what was typed back.
+    Save,
+    /// Remove what is selected. The host asks before this is acted on.
+    Delete,
+    /// Confirm a removal already asked about.
+    ConfirmDelete,
+    /// One character of text, resolved by the host from a key it does not
+    /// interpret any further.
+    Type(char),
+    CaretLeft,
+    CaretRight,
+    CaretLineStart,
+    CaretLineEnd,
+    /// Split the line at the caret.
+    Newline,
+    /// Delete the character before the caret.
+    EraseBack,
+    /// Delete the character under it.
+    EraseForward,
 }

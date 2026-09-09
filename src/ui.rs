@@ -64,6 +64,7 @@ mod orchestrator;
 mod overlay;
 mod root_picker;
 mod scrim;
+mod scrollbar;
 pub(crate) mod theme;
 
 use theme::{Symbol, Token};

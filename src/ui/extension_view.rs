@@ -19,10 +19,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Command, Content, ContentLine, LineTone, Navigator, NavigatorRow, Role, ScrollTarget, Section,
-    Size, Span, View, ViewHit,
+    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role,
+    ScrollTarget, Section, Size, Span, View, ViewHit,
 };
 
+use crate::ui::scrollbar::Scrollbar;
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
@@ -33,6 +34,10 @@ const MAX_NAVIGATOR_WIDTH: u16 = 50;
 const MIN_EXTENSION_CONTENT_WIDTH: u16 = 40;
 
 const GUTTER_WIDTH: u16 = 7;
+
+/// Columns of padding on each side of a mode segment's label. The padding
+/// is part of the button — it is filled, and clicked, like the label is.
+const MODE_PAD: u16 = 1;
 
 /// The extension's palette, resolved. An extension names meaning; the host
 /// names colour, exactly once, here.
@@ -61,6 +66,9 @@ fn styled(span: &Span) -> TextSpan<'static> {
     if span.bold {
         style = style.add_modifier(Modifier::BOLD);
     }
+    if span.italic {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
     TextSpan::styled(span.text.clone(), style)
 }
 
@@ -81,11 +89,14 @@ pub(crate) fn content_columns(
     frame_area: Rect,
     navigator_width_override: Option<u16>,
 ) -> (Rect, Rect, Rect) {
+    // The frame takes a row and a column at each edge; one more column
+    // of breathing room inside it, and one blank row under the title it
+    // carries.
     let inner = Rect::new(
         frame_area.x + 2,
         frame_area.y + 2,
         frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(4),
+        frame_area.height.saturating_sub(3),
     );
     let navigator_width = navigator_width_override
         .map(|width| clamp_navigator_width(width, inner.width))
@@ -183,6 +194,15 @@ impl NavigatorScroll {
     }
 }
 
+/// What one frame of an extension surface left behind for the next event
+/// to read: where its list settled, and the two scrollbars it drew.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Rendered {
+    pub(crate) navigator_scroll: NavigatorScroll,
+    pub(crate) navigator_bar: Option<Scrollbar>,
+    pub(crate) content_bar: Option<Scrollbar>,
+}
+
 pub(crate) fn render(
     frame: &mut ratatui::Frame<'_>,
     view: &View,
@@ -190,15 +210,23 @@ pub(crate) fn render(
     navigator_width_override: Option<u16>,
     navigator_scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
-) -> NavigatorScroll {
+) -> Rendered {
     frame.render_widget(Clear, area);
+    // The frame is back, and quiet. What made it wrong before was not
+    // that it existed but that every line here weighed the same: a box,
+    // a divider and two grooves in one hue, arguing. The weights are a
+    // hierarchy now — the frame is the faintest thing on screen, the
+    // divider is ordinary, and the scroll handle is the only bright rule
+    // — so the box reads as the edge of a surface rather than as another
+    // control.
+    let mut title: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
+    title.extend(view.title.iter().map(styled));
+    title.push(TextSpan::raw(" "));
     frame.render_widget(
         Block::default()
-            .title(view.title.clone())
-            .title_style(theme::fg_bold(Token::Accent))
+            .title(Line::from(title))
             .borders(Borders::ALL)
-            .border_style(theme::fg(Token::BorderDefault))
-            .padding(Padding::new(1, 1, 1, 1))
+            .border_style(theme::fg(Token::BorderFaint))
             .style(theme::bg(Token::SurfaceBackground)),
         area,
     );
@@ -215,9 +243,21 @@ pub(crate) fn render(
     hits.push((close_rect, ViewHit::Close));
 
     let (navigator_area, content_area, footer) = content_columns(area, navigator_width_override);
-    // The navigator's own right border doubles as the resize handle — the
-    // same shape as the sidebar's `ResizeSidebar` push in
-    // `orchestrator::render`, whose drag arm lives there too.
+
+    let mut rendered = Rendered {
+        navigator_scroll,
+        ..Rendered::default()
+    };
+    if let Some(navigator) = view.navigator.as_ref() {
+        let (settled, bar) =
+            render_navigator(frame, navigator_area, navigator, navigator_scroll, hits);
+        rendered.navigator_scroll = settled;
+        rendered.navigator_bar = bar;
+    }
+    // One target for the whole edge, because the edge is one line doing
+    // two jobs: the split moves sideways, the list scrolls down. Which a
+    // press meant is the first movement's to say — see
+    // [`ViewHit::GrabNavigatorEdge`].
     hits.push((
         Rect::new(
             navigator_area.right().saturating_sub(1),
@@ -225,15 +265,8 @@ pub(crate) fn render(
             1,
             navigator_area.height,
         ),
-        ViewHit::ResizeNavigator,
+        ViewHit::GrabNavigatorEdge,
     ));
-
-    let settled = view
-        .navigator
-        .as_ref()
-        .map_or(navigator_scroll, |navigator| {
-            render_navigator(frame, navigator_area, navigator, navigator_scroll, hits)
-        });
     match &view.content {
         Content::Message { text, role } => frame.render_widget(
             Paragraph::new(TextSpan::styled(
@@ -246,10 +279,26 @@ pub(crate) fn render(
             heading,
             scroll,
             lines,
-        } => render_lines(frame, content_area, heading, *scroll, lines),
+            total,
+            caret,
+        } => {
+            rendered.content_bar = render_lines(
+                frame,
+                content_area,
+                Lines {
+                    heading,
+                    scroll: *scroll,
+                    lines,
+                    total: *total,
+                    caret: *caret,
+                    modes: &view.modes,
+                },
+                hits,
+            );
+        }
     }
     render_footer(frame, footer, &view.footer);
-    settled
+    rendered
 }
 
 fn render_navigator(
@@ -258,7 +307,7 @@ fn render_navigator(
     navigator: &Navigator,
     scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
-) -> NavigatorScroll {
+) -> (NavigatorScroll, Option<Scrollbar>) {
     let panel = Block::default()
         .borders(Borders::RIGHT)
         .border_style(theme::fg(Token::BorderDefault))
@@ -284,12 +333,34 @@ fn render_navigator(
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
 
-    let list = Rect::new(
+    let rows = Rect::new(
         inner.x,
         inner.y.saturating_add(1),
         inner.width,
         inner.height.saturating_sub(1),
     );
+    // The groove comes out of the list's own width, so a row is never
+    // drawn under the handle that would sit on top of it.
+    // On the divider itself, not beside it. Beside it was two lines, and
+    // adjacent was still two lines; drawn *on* it, the divider is the
+    // line and the handle is the stretch of it that says where you are —
+    // which is the only thing a scrollbar was ever adding.
+    //
+    // Sharing the column is what makes the two gestures separable rather
+    // than ambiguous: the handle is grabbed to scroll, and the rest of
+    // the line is grabbed to move the divider. What it costs is clicking
+    // the empty groove to jump, which is the lesser of the two.
+    let bar = Scrollbar::measure(
+        Rect::new(
+            area.right().saturating_sub(Scrollbar::width()),
+            rows.y,
+            Scrollbar::width(),
+            rows.height,
+        ),
+        rows.height as usize,
+        navigator.rows.len(),
+    );
+    let list = rows;
     let visible = list.height as usize;
     let settled = scroll.settled(navigator.anchor, navigator.rows.len(), visible);
     for (offset, row) in navigator
@@ -369,49 +440,273 @@ fn render_navigator(
             }
         }
     }
-    settled
+    if let Some(bar) = bar {
+        bar.render(frame, settled.first);
+    }
+    (settled, bar)
+}
+
+/// The content column: a heading, then as many lines as fit.
+///
+/// Also the one place a click inside the content means anything — every
+/// drawn line pushes a [`ViewHit::SelectLine`] for the rows it occupies,
+/// so an extension that puts a caret somewhere can be told where the
+/// pointer wanted it without ever seeing a coordinate.
+/// The [`Content::Lines`] a frame is drawing, borrowed together — they
+/// arrive as one thing from the extension and are laid out as one thing
+/// here, so they travel as one rather than as five arguments in an order
+/// somebody has to keep.
+struct Lines<'a> {
+    heading: &'a str,
+    scroll: u16,
+    lines: &'a [ContentLine],
+    total: usize,
+    caret: Option<Caret>,
+    modes: &'a [Mode],
 }
 
 fn render_lines(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    heading: &str,
-    scroll: u16,
-    lines: &[ContentLine],
-) {
+    content_lines: Lines<'_>,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) -> Option<Scrollbar> {
+    let Lines {
+        heading,
+        scroll,
+        lines,
+        total,
+        caret,
+        modes,
+    } = content_lines;
     frame.render_widget(
         Paragraph::new(TextSpan::styled(
             heading.to_owned(),
             theme::fg(Token::TextSecondary),
         )),
-        Rect::new(area.x, area.y, area.width, 1),
+        Rect::new(
+            area.x,
+            area.y,
+            area.width.saturating_sub(modes_width(modes)),
+            1,
+        ),
     );
-    let content = Rect::new(
+    render_modes(frame, area, modes, hits);
+    let body = Rect::new(
         area.x,
         area.y.saturating_add(1),
         area.width,
         area.height.saturating_sub(1),
     );
+    // The overlay's own right padding, for the same reason the
+    // navigator's groove sits in its panel's: flush against the edge
+    // rather than a column short of it, and the content keeps its full
+    // width because that column was never the content's.
+    let bar = Scrollbar::measure(
+        Rect::new(body.right(), body.y, Scrollbar::width(), body.height),
+        body.height as usize,
+        total,
+    );
+    let content = body;
+    let gutter = gutter_width(lines);
+    let text_width = text_width(content.width, gutter);
     let mut y = content.y;
-    for line in lines.iter().skip(scroll as usize) {
-        let height = line_height(line, content.width);
+    for (offset, line) in lines.iter().enumerate().skip(scroll as usize) {
+        let height = line_height(line, content.width, gutter);
         if y.saturating_add(height) > content.bottom() {
             break;
         }
-        render_line(frame, Rect::new(content.x, y, content.width, height), line);
+        let row = Rect::new(content.x, y, content.width, height);
+        render_line(frame, row, line, gutter);
+        // One hit per *visual* row, not per line: a wrapped line covers
+        // several, and which one the pointer is on is half of where in
+        // the text it landed. The cell offset here is the row's own
+        // start; the caller adds the horizontal distance, which is the
+        // only part of the answer that needs the pointer.
+        for wrapped in 0..height {
+            hits.push((
+                Rect::new(row.x, row.y + wrapped, row.width, 1),
+                ViewHit::PlaceCaret {
+                    line: offset,
+                    cell: wrapped as usize * text_width,
+                },
+            ));
+        }
+        if let Some(caret) = caret.filter(|caret| caret.line == offset) {
+            render_caret(frame, row, line, caret.column, gutter);
+        }
         y = y.saturating_add(height);
+    }
+    render_scrollbar(
+        frame,
+        bar,
+        scroll as usize,
+        hits,
+        ViewHit::DragContentScrollbar,
+    )
+}
+
+/// How much of the heading row the mode control takes, so the heading
+/// itself is drawn shorter rather than under it.
+fn modes_width(modes: &[Mode]) -> u16 {
+    if modes.is_empty() {
+        return 0;
+    }
+    modes
+        .iter()
+        .map(|mode| TextSpan::raw(&mode.label).width() as u16 + 2 * MODE_PAD)
+        .sum()
+}
+
+/// The ways the content can be shown, offered as a segmented control at
+/// the end of its heading row.
+///
+/// A control rather than a hint, and drawn where the thing it changes is:
+/// the same choice a key makes has to be one a pointer can make, or the
+/// mode belongs to whoever read the keymap.
+fn render_modes(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    modes: &[Mode],
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let mut x = area.right().saturating_sub(modes_width(modes));
+    for (index, mode) in modes.iter().enumerate() {
+        let width = TextSpan::raw(&mode.label).width() as u16 + 2 * MODE_PAD;
+        let rect = Rect::new(x, area.y, width, 1);
+        let (fill, ink) = match mode.active {
+            true => (Token::SurfaceSelected, Token::TextBright),
+            false => (Token::SurfaceBackground, Token::TextMuted),
+        };
+        let mut style = Style::default()
+            .fg(theme::color(ink))
+            .bg(theme::color(fill));
+        if mode.active {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(
+                format!(
+                    "{pad}{}{pad}",
+                    mode.label,
+                    pad = " ".repeat(MODE_PAD as usize)
+                ),
+                style,
+            )),
+            rect,
+        );
+        hits.push((rect, ViewHit::SelectMode(index)));
+        x = x.saturating_add(width);
     }
 }
 
-fn line_height(line: &ContentLine, width: u16) -> u16 {
-    let content_width = width.saturating_sub(GUTTER_WIDTH).max(1) as usize;
+/// Finishes a [`ViewHit::PlaceCaret`] the last frame produced, using where
+/// the pointer actually is.
+///
+/// The render knew which line a row belonged to and where that row began;
+/// only the click knows how far along it landed. Splitting it this way is
+/// what keeps the hit table one entry per drawn row instead of one per
+/// cell — and the arithmetic stays here, with the layout that produced
+/// `row`, rather than in the event loop.
+pub(crate) fn caret_cell_at(row: Rect, cell: usize, column: u16) -> usize {
+    cell + usize::from(column.saturating_sub(row.x.saturating_add(GUTTER_WIDTH)))
+}
+
+/// How many cells a line's text has, once the gutter has taken its share.
+fn text_width(width: u16, gutter: u16) -> usize {
+    usize::from(width.saturating_sub(gutter).max(1))
+}
+
+/// How wide the gutter is for these lines: nothing at all when none of
+/// them is numbered.
+///
+/// A rendered document has no line numbers, and reserving the column
+/// anyway indents the whole thing by seven cells of blank — which is
+/// what the gutter looked like in preview, and what it cost was the
+/// left margin of every paragraph.
+fn gutter_width(lines: &[ContentLine]) -> u16 {
+    let numbered = lines
+        .iter()
+        .any(|line| !line.number.is_empty() || !line.gutter.trim().is_empty());
+    if numbered { GUTTER_WIDTH } else { 0 }
+}
+
+/// The caret, drawn by inverting the cell it sits on rather than by
+/// drawing a mark into it.
+///
+/// A glyph rendered at the caret's position *replaces* the character
+/// underneath, so the letter being edited is the one letter the person
+/// cannot see — the caret eats exactly what the caret is pointing at.
+/// Setting the cell's colours leaves the character where it is and makes
+/// it the block cursor, which is what a terminal's own cursor does.
+///
+/// Drawn against the terminal's own cursor rather than with it: the
+/// workspace client hides that for the whole session (a pane's PTY draws
+/// its own), and turning it back on for one overlay would leave it
+/// blinking over a pane the moment the overlay closes.
+fn render_caret(
+    frame: &mut ratatui::Frame<'_>,
+    row: Rect,
+    line: &ContentLine,
+    column: usize,
+    gutter: u16,
+) {
+    let width = text_width(row.width, gutter);
+    let mut before = 0usize;
+    let mut remaining = column;
+    for span in &line.spans {
+        for character in span.text.chars() {
+            if remaining == 0 {
+                break;
+            }
+            before += TextSpan::raw(character.to_string()).width().max(1);
+            remaining -= 1;
+        }
+        if remaining == 0 {
+            break;
+        }
+    }
+    // A caret past the last character sits one cell beyond it, which is
+    // where the next one will be typed.
+    before += remaining;
+    let x = row.x + gutter + (before % width) as u16;
+    let y = row.y + (before / width) as u16;
+    if y >= row.bottom() || x >= row.right() {
+        return;
+    }
+    let cell = &mut frame.buffer_mut()[(x, y)];
+    cell.set_bg(theme::color(Token::Accent));
+    cell.set_fg(theme::color(Token::SurfaceBackground));
+}
+
+/// Draws the groove for a surface, and makes the whole of it the drag
+/// target.
+///
+/// The handle alone would be the obvious target and the wrong one:
+/// clicking above or below it is how a pointer says "go there", and a
+/// drag that wanders off the handle has to keep working.
+fn render_scrollbar(
+    frame: &mut ratatui::Frame<'_>,
+    bar: Option<Scrollbar>,
+    first: usize,
+    hits: &mut Vec<(Rect, ViewHit)>,
+    hit: ViewHit,
+) -> Option<Scrollbar> {
+    let bar = bar?;
+    bar.render(frame, first);
+    hits.push((bar.track, hit));
+    Some(bar)
+}
+
+fn line_height(line: &ContentLine, width: u16, gutter: u16) -> u16 {
+    let content_width = text_width(width, gutter);
     let text_width: usize = line.spans.iter().map(|span| styled(span).width()).sum();
     (text_width.max(1).div_ceil(content_width)) as u16
 }
 
 /// One line: a gutter mark, one stable number column, then content wrapped
 /// to the width that is left.
-fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
+fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine, gutter: u16) {
     let (marker_style, background) = match line.tone {
         LineTone::Neutral => (theme::fg(Token::TextFaint), None),
         LineTone::Added => (
@@ -431,16 +726,20 @@ fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
     }
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(GUTTER_WIDTH), Constraint::Min(1)])
+        .constraints([Constraint::Length(gutter), Constraint::Min(1)])
         .split(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            TextSpan::styled(format!("{} ", line.gutter), marker_style),
-            TextSpan::styled(format!("{:>4} ", line.number), theme::fg(Token::TextDim)),
-        ]))
-        .style(Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground)))),
-        columns[0],
-    );
+    if gutter > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                TextSpan::styled(format!("{} ", line.gutter), marker_style),
+                TextSpan::styled(format!("{:>4} ", line.number), theme::fg(Token::TextDim)),
+            ]))
+            .style(
+                Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground))),
+            ),
+            columns[0],
+        );
+    }
     frame.render_widget(
         Paragraph::new(Line::from(content_spans))
             .wrap(Wrap { trim: false })
@@ -459,7 +758,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command
     let scopes = [
         uze_keys::Scope::Global,
         uze_keys::Scope::Workspace,
-        uze_keys::Scope::GitChanges,
+        uze_keys::Scope::Code,
     ];
     let actions: Vec<uze_keys::Action> = commands.iter().copied().map(action_of).collect();
     frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
@@ -479,6 +778,20 @@ fn action_of(command: Command) -> uze_keys::Action {
         Command::Expand => uze_keys::Action::Expand,
         Command::Activate => uze_keys::Action::Activate,
         Command::ScrollPageUp => uze_keys::Action::ScrollPageUp,
+        Command::Edit => uze_keys::Action::EditFile,
+        Command::TogglePreview => uze_keys::Action::TogglePreview,
+        Command::Save => uze_keys::Action::SaveFile,
+        Command::Delete => uze_keys::Action::DeleteFile,
+        Command::ConfirmDelete => uze_keys::Action::ConfirmDelete,
+        Command::CaretLeft => uze_keys::Action::CaretLeft,
+        Command::CaretRight => uze_keys::Action::CaretRight,
+        Command::CaretLineStart => uze_keys::Action::CaretLineStart,
+        Command::CaretLineEnd => uze_keys::Action::CaretLineEnd,
+        Command::Newline => uze_keys::Action::InsertNewline,
+        Command::EraseBack => uze_keys::Action::EraseBack,
+        Command::EraseForward => uze_keys::Action::EraseForward,
+        // Typing has no single key to name, so a footer never lists it.
+        Command::Type(_) => uze_keys::Action::EraseBack,
         Command::ScrollPageDown => uze_keys::Action::ScrollPageDown,
     }
 }
@@ -617,7 +930,7 @@ mod tests {
 
     fn sample() -> View {
         View {
-            title: " demo ".to_owned(),
+            title: vec![Span::new("demo", Role::Bright)],
             navigator: Some(Navigator {
                 heading: "CHANGES".to_owned(),
                 badge: "2".to_owned(),
@@ -640,6 +953,8 @@ mod tests {
                 ],
             }),
             content: Content::Lines {
+                caret: None,
+                total: 1,
                 heading: "DIFF · src/ui.rs".to_owned(),
                 scroll: 0,
                 lines: vec![ContentLine {
@@ -651,10 +966,12 @@ mod tests {
                         role: Role::Default,
                         color: Some(Rgb(1, 2, 3)),
                         bold: false,
+                        italic: false,
                     }],
                 }],
             },
             footer: vec![Command::Close],
+            modes: Vec::new(),
         }
     }
 
@@ -705,10 +1022,216 @@ mod tests {
             "the hit must sit on the row the host actually drew"
         );
         assert!(
-            hits.iter().any(|(_, hit)| *hit == ViewHit::ResizeNavigator),
-            "the divider is draggable"
+            hits.iter()
+                .any(|(_, hit)| *hit == ViewHit::GrabNavigatorEdge),
+            "the edge is one target for both of its jobs"
         );
         assert!(hits.iter().any(|(_, hit)| *hit == ViewHit::Close));
+    }
+
+    /// A scrollbar is drawn only when there is something to scroll, and
+    /// the column it takes comes out of the content rather than sitting
+    /// on top of it.
+    #[test]
+    fn a_scrollbar_appears_only_when_the_content_outgrows_the_frame() {
+        let mut view = sample();
+        let Content::Lines { lines, total, .. } = &mut view.content else {
+            unreachable!("the sample shows lines");
+        };
+        *total = lines.len();
+
+        let (_rows, hits) = draw(&view);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| *hit == ViewHit::DragContentScrollbar),
+            "one line in a tall frame has nowhere to scroll to"
+        );
+
+        let Content::Lines { total, .. } = &mut view.content else {
+            unreachable!("the sample shows lines");
+        };
+        *total = 500;
+        let (_rows, hits) = draw(&view);
+        let track = hits
+            .iter()
+            .find(|(_, hit)| *hit == ViewHit::DragContentScrollbar)
+            .expect("five hundred lines in a short frame is a scrollbar")
+            .0;
+        assert_eq!(track.width, crate::ui::scrollbar::Scrollbar::width());
+        assert!(
+            track.height > 1,
+            "the whole groove is the target, not just the handle"
+        );
+        // The complaint this answers: a groove a column short of the edge
+        // and a divider beside it read as two controls arguing.
+        let (_navigator, content, _footer) = content_columns(Rect::new(0, 0, 90, 14), Some(24));
+        assert_eq!(
+            track.x,
+            content.right(),
+            "the groove hugs the edge rather than leaving a gap beside it"
+        );
+    }
+
+    /// A mode the keyboard can reach has to be one a pointer can reach,
+    /// drawn where the thing it changes is.
+    #[test]
+    fn the_modes_a_surface_offers_are_a_control_on_its_heading_row() {
+        let mut view = sample();
+        view.modes = vec![
+            Mode {
+                label: "Preview".to_owned(),
+                active: false,
+            },
+            Mode {
+                label: "Source".to_owned(),
+                active: true,
+            },
+        ];
+        let (rows, hits) = draw(&view);
+
+        let segments: Vec<(Rect, usize)> = hits
+            .iter()
+            .filter_map(|(rect, hit)| match hit {
+                ViewHit::SelectMode(index) => Some((*rect, *index)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            segments.len(),
+            2,
+            "both are offered, not just the other one"
+        );
+        assert_eq!(segments[0].1, 0);
+        assert!(
+            segments[0].0.x < segments[1].0.x,
+            "in the order the extension gave them"
+        );
+
+        let heading_row = rows
+            .iter()
+            .position(|row: &String| row.contains("DIFF"))
+            .expect("the heading is drawn") as u16;
+        assert_eq!(
+            segments[0].0.y, heading_row,
+            "beside the heading of what they change, not in the footer"
+        );
+        assert!(
+            rows[heading_row as usize].contains("Preview")
+                && rows[heading_row as usize].contains("Source"),
+            "and both labels are legible: {}",
+            rows[heading_row as usize]
+        );
+    }
+
+    /// A surface with one way of showing itself offers no choice, and the
+    /// heading gets the whole row back.
+    #[test]
+    fn a_surface_with_one_mode_draws_no_control() {
+        let (_rows, hits) = draw(&sample());
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, ViewHit::SelectMode(_)))
+        );
+    }
+
+    /// A rendered document has no line numbers, so it gets its left
+    /// margin back rather than being indented by a column reserved for
+    /// nothing.
+    #[test]
+    fn unnumbered_lines_are_not_indented_by_an_empty_gutter() {
+        let numbered = [ContentLine {
+            gutter: "+".to_owned(),
+            number: "12".to_owned(),
+            tone: LineTone::Added,
+            spans: vec![Span::new("code", Role::Default)],
+        }];
+        let prose = [ContentLine {
+            gutter: " ".to_owned(),
+            number: String::new(),
+            tone: LineTone::Neutral,
+            spans: vec![Span::new("a paragraph", Role::Default)],
+        }];
+
+        assert_eq!(gutter_width(&numbered), GUTTER_WIDTH);
+        assert_eq!(gutter_width(&prose), 0);
+    }
+
+    /// The caret marks the character it is on; it never replaces it.
+    ///
+    /// Drawing a mark into the cell is the obvious implementation and the
+    /// wrong one: the letter being edited becomes the one letter the
+    /// person cannot see. This is the test that says so.
+    #[test]
+    fn the_caret_marks_the_character_it_sits_on_without_hiding_it() {
+        let mut view = sample();
+        let Content::Lines { caret, lines, .. } = &mut view.content else {
+            unreachable!("the sample shows lines");
+        };
+        *caret = Some(Caret { line: 0, column: 4 });
+        let text = lines[0].spans[0].text.clone();
+        let under_caret = text.chars().nth(4).expect("a character to sit on");
+
+        let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    &view,
+                    frame.area(),
+                    Some(24),
+                    NavigatorScroll::default(),
+                    &mut hits,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let hit = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, ViewHit::PlaceCaret { line: 0, .. }))
+            .expect("a drawn content row can be clicked to place the caret");
+        let (x, y) = (hit.0.x + GUTTER_WIDTH + 4, hit.0.y);
+
+        assert_eq!(
+            buffer[(x, y)].symbol(),
+            under_caret.to_string(),
+            "the character under the caret is still on screen"
+        );
+        assert_eq!(
+            buffer[(x, y)].bg,
+            theme::color(Token::Accent),
+            "and it is marked by inverting its cell"
+        );
+    }
+
+    /// A click resolves to a text position through two halves that each
+    /// know only their own side: the host counts cells from the row it
+    /// drew, and the extension turns cells into characters.
+    #[test]
+    fn a_click_resolves_to_the_cell_it_landed_on() {
+        let view = sample();
+        let (_rows, hits) = draw(&view);
+        let (rect, hit) = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, ViewHit::PlaceCaret { line: 0, .. }))
+            .expect("the first content line is clickable");
+        let ViewHit::PlaceCaret { cell, .. } = hit else {
+            unreachable!("matched above");
+        };
+
+        assert_eq!(
+            caret_cell_at(*rect, *cell, rect.x + GUTTER_WIDTH + 6),
+            6,
+            "six cells past the start of the text is six cells into the line"
+        );
+        assert_eq!(
+            caret_cell_at(*rect, *cell, rect.x),
+            0,
+            "a click on the gutter belongs to the start of the line, not past it"
+        );
     }
 
     /// Chrome resolves through the palette; content keeps the colour it
@@ -780,8 +1303,8 @@ mod tests {
             tone: LineTone::Neutral,
             spans: vec![Span::new("abcdefgh", Role::Default)],
         };
-        assert_eq!(line_height(&line, GUTTER_WIDTH + 4), 2);
-        assert_eq!(line_height(&line, GUTTER_WIDTH + 8), 1);
+        assert_eq!(line_height(&line, GUTTER_WIDTH + 4, GUTTER_WIDTH), 2);
+        assert_eq!(line_height(&line, GUTTER_WIDTH + 8, GUTTER_WIDTH), 1);
     }
 
     /// A group folds from its own row, and says so with the same mark the
@@ -835,7 +1358,8 @@ mod tests {
         let mut settled = NavigatorScroll::default();
         terminal
             .draw(|frame| {
-                settled = render(frame, view, frame.area(), Some(24), scroll, &mut Vec::new());
+                settled = render(frame, view, frame.area(), Some(24), scroll, &mut Vec::new())
+                    .navigator_scroll;
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();

@@ -118,9 +118,10 @@ pub(super) struct FrameMetrics {
     /// Rows of the space tree the sidebar could not show — how far the
     /// tree may be scrolled, and zero when it fits.
     pub(super) tree_overflow: u16,
-    /// Where the Git changes list settled, when the overlay was drawn —
-    /// see `extension_view::NavigatorScroll`.
-    pub(super) git_tree_scroll: Option<crate::ui::extension_view::NavigatorScroll>,
+    /// What the code surface's frame left behind: where its navigator
+    /// settled, and the scrollbars it drew — see
+    /// `extension_view::Rendered`.
+    pub(super) code: Option<crate::ui::extension_view::Rendered>,
 }
 
 pub(super) fn render(
@@ -143,7 +144,7 @@ pub(super) fn render(
     // immediately hidden underneath it, so skip it outright rather than
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
-    if let Some(git) = &model.git_view {
+    if let Some(code) = &model.code {
         // The extension answers with content; the host lays it out and
         // therefore is the only side that can say which rectangle a click
         // landed in. The hits come back in the view's own vocabulary and
@@ -151,22 +152,22 @@ pub(super) fn render(
         // shared `hits` vec — the one place that translation happens.
         let mut view_hits = Vec::new();
         let area = frame.area();
-        let view = git::view(
-            git,
-            crate::ui::extension_view::content_space(area, model.git_tree_width),
+        let view = uze_extensions::code::view(
+            code,
+            crate::ui::extension_view::content_space(area, model.code_tree_width),
         );
-        metrics.git_tree_scroll = Some(crate::ui::extension_view::render(
+        metrics.code = Some(crate::ui::extension_view::render(
             frame,
             &view,
             area,
-            model.git_tree_width,
-            model.git_tree_scroll,
+            model.code_tree_width,
+            model.code_tree_scroll,
             &mut view_hits,
         ));
         hits.extend(
             view_hits
                 .into_iter()
-                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Git(hit)))),
+                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Code(hit)))),
         );
         return;
     }
@@ -997,10 +998,11 @@ fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
 /// rest. Each is a gesture nobody discovers by staring at a screen, and
 /// none of them destroys anything, so a list that invites them costs the
 /// reader nothing.
-pub(super) const FIRST_STEPS: [Action; 5] = [
+pub(super) const FIRST_STEPS: [Action; 6] = [
     Action::NewAgent,
     Action::NextAgent,
-    Action::ToggleGitChanges,
+    Action::ToggleChanges,
+    Action::ToggleFiles,
     Action::TogglePreservedWork,
     Action::OpenActionIndex,
 ];
@@ -1023,7 +1025,7 @@ const MIN_TREE_ROWS: u16 = 4;
 /// column can spare past the tree's minimum. Nothing when even the header
 /// would not fit.
 pub(super) fn timeline_height(
-    timeline: &git::Timeline,
+    timeline: &uze_extensions::code::Timeline,
     collapsed: bool,
     rows_wanted: Option<u16>,
     remaining: u16,
@@ -1059,12 +1061,16 @@ pub(super) const TIMELINE_CHROME: u16 = 2;
 /// and tags the hits that come back with the surface they came from.
 fn render_timeline(
     frame: &mut ratatui::Frame<'_>,
-    timeline: &git::Timeline,
+    timeline: &uze_extensions::code::Timeline,
     model: &WorkspaceModel,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    let section = git::timeline_section(timeline, model.timeline_collapsed, model.timeline_scroll);
+    let section = uze_extensions::code::timeline_section(
+        timeline,
+        model.timeline_collapsed,
+        model.timeline_scroll,
+    );
     let mut section_hits = Vec::new();
     crate::ui::extension_view::render_section(
         frame,
@@ -1076,7 +1082,7 @@ fn render_timeline(
     hits.extend(section_hits.into_iter().map(|(rect, hit)| {
         (
             rect,
-            WorkspaceHit::Extension(ExtensionHit::GitTimeline(hit)),
+            WorkspaceHit::Extension(ExtensionHit::CodeTimeline(hit)),
         )
     }));
 }
@@ -2488,11 +2494,17 @@ pub(super) fn render_tab_strip(
         }
         trailing_right = rect.x.saturating_sub(1);
     }
+    // Two doors into one surface. The code chip is always drawn — a
+    // checkout always has files — and the changes chip is a badge that is
+    // also a door: it says how much changed, so with nothing to say it
+    // says nothing rather than saying zero. That costs no reachability,
+    // because the diff is one mode switch away inside the surface the
+    // other chip opens, and the shortcut that lands on it never moves.
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
         // The one chip whose label is two-hued, so it draws its own spans
         // rather than taking a single colour: the additions and the
         // deletions are two numbers, not one label.
-        let state = chip_state(model, Some(WorkspaceHit::OpenGitView));
+        let state = chip_state(model, Some(WorkspaceHit::OpenChanges));
         let (label, background) = chip_skin(state, theme::color(Token::StateSuccess));
         let (additions, deletions) = match state {
             // Pressed, the chip is one solid hue: its numbers go dark with
@@ -2520,7 +2532,20 @@ pub(super) fn render_tab_strip(
         ];
         fill_row_bg(&mut badge, rect.width, background);
         frame.render_widget(Paragraph::new(Line::from(badge)), rect);
-        hits.push((rect, WorkspaceHit::OpenGitView));
+        hits.push((rect, WorkspaceHit::OpenChanges));
+        trailing_right = rect.x.saturating_sub(1);
+    }
+    {
+        let label = theme::glyph(Symbol::Code);
+        let rect = chip_rect(&label, trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
+            &label,
+            theme::color(Token::TextSecondary),
+            chip_state(model, Some(WorkspaceHit::OpenFiles)),
+        );
+        hits.push((rect, WorkspaceHit::OpenFiles));
         trailing_right = rect.x.saturating_sub(1);
     }
     render_notice_chip(frame, model, inner, trailing_right);
