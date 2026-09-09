@@ -187,9 +187,9 @@ this, and the linter refuses it rather than the reviewer. Synchronization is
 | `file` | files matching a glob: `count`, `exists`, `contains` |
 | `git` | `worktrees:` count, `branches:` pattern + `count:`, `dirty:`, `in:` |
 | `tasks` | the task store UZE writes: `count`, `states`, `checkouts`, `newest_state`, `any_state`, `newest_checkout_in: <capture>` |
-| `process` | `matching:` + `alive:`, scoped to this world's processes |
+| `process` | `matching:` + `alive:`, scoped to this world's processes; `count:` where one thing is one process, `same_as:`/`more_than: <capture>` where it is not — a login shell forks a child on some hosts |
 | `cmd` | runs a command: `exit:`, `stdout_contains:` — the *subject*, asserted beside the filesystem checks |
-| `capture` | remembers `dirs:` or `task_checkouts:` under a `name:` for a later scene |
+| `capture` | remembers `dirs:`, `tree:`, `processes:` or `task_checkouts:` under a `name:` for a later scene |
 
 `about:` on a check is what the report prints — write the outcome, not the
 mechanism.

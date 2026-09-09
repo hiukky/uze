@@ -54,6 +54,7 @@ pub(crate) fn render_extensions(
     );
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     render_filter_box(frame, filter_area, model);
+    hits.push((filter_area, Hit::FocusFilter));
     let catalog_area = Rect::new(
         content.x,
         content.y.saturating_add(3),

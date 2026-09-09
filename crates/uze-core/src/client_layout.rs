@@ -37,6 +37,31 @@ pub struct ClientLayout {
     pub sidebar: SidebarLayout,
     pub workspace: WorkspaceLayout,
     pub management: ManagementLayout,
+    pub first_steps: FirstStepsLayout,
+}
+
+/// What the operator has already done once, and whether they still want to
+/// be shown what they have not.
+///
+/// Progress rather than shape, and here anyway: it is the same kind of
+/// thing — machine-scoped, personal, best-effort, and worth nothing to
+/// anyone but the client that wrote it. A section of its own because it is
+/// one list drawn at the foot of both sidebars, so a step taken in one mode
+/// is taken in the other.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct FirstStepsLayout {
+    /// Folded to its header. Open on a first run, because a list of what
+    /// to try is worth nothing to the person who has not seen it yet.
+    pub collapsed: bool,
+    /// Put away for good. Offered only once every step has been taken —
+    /// a list of things to try is finished when they have been tried, and
+    /// until then folding it is the way to set it aside.
+    pub closed: bool,
+    /// The steps already taken, by the client's own name for each. A name
+    /// the client no longer recognises is simply a step that is no longer
+    /// listed, so nothing has to be cleaned up when the list changes.
+    pub taken: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -128,7 +153,10 @@ pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout, load, save};
+    use super::{
+        ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout, load,
+        save,
+    };
     use crate::home::UzeHome;
 
     fn temp_home(label: &str) -> UzeHome {
@@ -166,6 +194,11 @@ mod tests {
                 harness_drawer_width: Some(40),
                 collapsed_marketplaces: BTreeSet::from(["uze-official".to_owned()]),
                 ..ManagementLayout::default()
+            },
+            first_steps: FirstStepsLayout {
+                collapsed: true,
+                closed: true,
+                taken: BTreeSet::from(["open-action-index".to_owned()]),
             },
         };
 

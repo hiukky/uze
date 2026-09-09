@@ -296,6 +296,7 @@ fn render_profile_tree(
                 hits.push((parts[3], Hit::ApplySelectedProfile));
             }
         }
+        super::render_row_actions(frame, profile_rect, index, selected, hits);
         hits.push((profile_rect, Hit::ProfileRow(index)));
         y += 1;
 

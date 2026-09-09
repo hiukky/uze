@@ -163,6 +163,7 @@ pub(crate) fn render_plugins(
     );
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     render_filter_box(frame, filter_area, model);
+    hits.push((filter_area, Hit::FocusFilter));
     let list_area = Rect::new(
         content.x,
         content.y + 3,
@@ -251,6 +252,13 @@ pub(crate) fn render_plugins(
                                 list_area.width,
                             )),
                             rect,
+                        );
+                        super::render_row_actions(
+                            frame,
+                            rect,
+                            *position,
+                            *position == model.marketplace_selected,
+                            hits,
                         );
                         hits.push((rect, Hit::MarketplaceRow(*position)));
                     }
@@ -480,18 +488,52 @@ fn render_plugin_drawer(
     let sections_x = drawer.x + 2;
     let sections_width = drawer.width.saturating_sub(3);
     let status_height = 3;
+    // What can be done to this plugin, stated where the plugin is
+    // described. Unlike the row's own menu this lists the unavailable
+    // ones too, with the reason — a detail view is where someone asks
+    // why, and a keystroke that appears to do nothing is the alternative.
+    let offers = plugin.offers();
+    let actions_height = offers.len() as u16 + 2;
     let body = Rect::new(
         sections_x,
         drawer.y + 1,
         sections_width,
-        drawer.height.saturating_sub(2 + status_height),
+        drawer
+            .height
+            .saturating_sub(2 + status_height + actions_height),
     );
-    let status_area = Rect::new(
+    let actions_area = Rect::new(
         sections_x,
         body.y + body.height,
         sections_width,
+        actions_height,
+    );
+    let status_area = Rect::new(
+        sections_x,
+        actions_area.y + actions_height,
+        sections_width,
         status_height,
     );
+    if actions_area.bottom() <= drawer.bottom() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "ACTIONS",
+                theme::fg_bold(Token::TextMuted),
+            ))),
+            Rect::new(actions_area.x, actions_area.y, actions_area.width, 1),
+        );
+        super::render_offers(
+            frame,
+            Rect::new(
+                actions_area.x,
+                actions_area.y + 1,
+                actions_area.width,
+                actions_area.height - 1,
+            ),
+            &offers,
+            hits,
+        );
+    }
 
     let room = body.width as usize;
     let mut lines = vec![Line::from(Span::styled(

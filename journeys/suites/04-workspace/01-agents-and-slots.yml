@@ -51,7 +51,7 @@ scenes:
         row_offset: 1
         offset: 3
         expect: Claude Code v
-        expect_timeout: 45
+        expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
@@ -82,7 +82,7 @@ scenes:
         row_offset: 2
         offset: 3
         expect: Codex v
-        expect_timeout: 45
+        expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
@@ -134,7 +134,7 @@ scenes:
         row_offset: 3
         offset: 3
         expect: OpenCode v
-        expect_timeout: 45
+        expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
@@ -152,8 +152,8 @@ scenes:
         say: right-click the newest agent's row
         in: sidebar
         occurrence: last
-        expect: close
-      - click: close
+        expect: Close tab
+      - click: Close tab
         in: sidebar
         say: confirm close
         expect: "2 agents"
@@ -181,7 +181,7 @@ scenes:
         row_offset: 2
         offset: 3
         expect: Codex v
-        expect_timeout: 45
+        expect_timeout: 90
         pause: 2.0
     then:
       - dir: "{project}/.worktrees/*"

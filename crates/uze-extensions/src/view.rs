@@ -100,7 +100,10 @@ pub struct View {
     /// look".
     pub navigator: Option<Navigator>,
     pub content: Content,
-    pub footer_hint: String,
+    /// What this surface can be asked, in the order its footer should
+    /// name them. The host prints each with the key that reaches it — an
+    /// extension no more writes a key than it writes a colour.
+    pub footer: Vec<Command>,
 }
 
 /// The left-hand list of things to choose between.
@@ -253,4 +256,29 @@ pub enum ScrollTarget {
 pub enum ScrollDirection {
     Up,
     Down,
+}
+
+/// Something the host asks an extension's own surface to do.
+///
+/// An extension answers a *meaning*, never a key — the same relationship
+/// it has with drawing, where it answers a [`View`] and never a colour.
+/// The host owns the keymap and translates; this vocabulary is what an
+/// extension's surface can be asked, and it is deliberately small enough
+/// that a second extension reuses it rather than growing it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Command {
+    /// Leave the surface.
+    Close,
+    /// Move to the next part of it.
+    FocusNext,
+    SelectNext,
+    SelectPrevious,
+    /// Fold the selection away.
+    Collapse,
+    /// Unfold it.
+    Expand,
+    /// Act on the selection.
+    Activate,
+    ScrollPageUp,
+    ScrollPageDown,
 }

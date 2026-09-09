@@ -1257,3 +1257,81 @@ other projects share both and machine scope is `uze plugin remove`'s.
 > `tests/workspace/consumer.rs::drift::install_converges_the_lock_and_leaves_the_machine_alone`
 > `tests/workspace/consumer.rs::drift::a_policy_change_reads_as_a_stale_projection_until_install_clears_it`
 
+
+## Input (M6)
+
+### A keystroke reaches an action through the keymap, and nothing else reads a key
+
+`uze-keys` names every action, says where each is live, and answers both
+directions: what a keystroke means, and what key reaches a meaning. One
+adapter (`src/ui/keys.rs`) speaks the terminal's dialect — the mirror of
+`src/ui/theme.rs` for colour — and the PTY encoder is sanctioned by name
+because translating a keystroke into bytes for a pane is not binding it.
+
+> `tests/architecture/layering.rs::architecture_rules_hold` (rule: *one module names a physical key*)
+
+### Every key uze prints came from the keymap
+
+No rendering module contains a chord written as a literal. A help line, a
+footer hint and a menu entry all ask `chord_for`, so a rebound key is right
+everywhere at once and an invented one cannot be printed at all. The
+hand-typed list this replaced had already fallen out of step with the
+dispatcher for nine of its bindings.
+
+> `tests/architecture/layering.rs::architecture_rules_hold` (rules: *no surface writes a key down*, *no surface draws its own arrow keys*)
+> `src/ui/tests.rs::a_hint_line_reads_its_keys_off_the_keymap`
+
+### Every chord has something to click; not every control needs a chord
+
+An action bound outside the pane names the control that performs it, or is
+declared keyboard-only with a written reason. The converse is deliberately
+not required: "new space" is a button and an index entry with no key, and
+that is a finished design. This is what keeps the keyboard an accelerator
+rather than the way in.
+
+> `tests/architecture/affordances.rs::every_action_says_where_its_pointer_lands`
+> `tests/architecture/affordances.rs::a_bound_action_is_never_reachable_by_keyboard_alone_without_a_reason`
+
+### Modality is a value, not an order of match arms
+
+What is open is a stack of scopes; the innermost answers first, a sealing
+surface answers for everything but `global`, and the pane is last and
+total. This replaced two hand-ordered `match` guards — one of which was
+wrong, firing three chords through an open overlay while five others were
+correctly swallowed.
+
+> `uze-keys::keymap::tests::a_sealed_surface_answers_for_everything_except_global`
+> `uze-keys::keymap::tests::the_pane_receives_anything_nothing_claims`
+
+### A key means one thing per keyboard
+
+Two actions may not share a mnemonic — a letter, a digit, a function key —
+within management or within the workspace. Structural keys stay
+contextual. A keymap that breaks this is refused rather than resolved by
+order, which is what retired `r` meaning both *remove* and *refresh*.
+
+> `uze-keys::keymap::tests::one_chord_names_one_action_within_a_keyboard`
+> `src/ui/tests.rs::a_letter_names_one_action_and_refreshing_has_its_own`
+
+### A keymap that cannot be used never takes the keyboard away
+
+A chord that is another key on a terminal, or one that conflicts, is an
+error and the keymap already in force stays in force. A chord this
+terminal cannot send is never bound. An entry naming something this build
+does not know is a warning, so a keymap written for a newer uze still
+loads.
+
+> `uze-keys::load::tests::a_file_that_cannot_be_used_leaves_the_keyboard_alone`
+> `uze-keys::load::tests::a_keymap_written_for_a_newer_uze_still_loads`
+> `src/keymap.rs::tests::a_file_that_would_take_the_keyboard_away_says_so_and_changes_nothing`
+> `src/ui/tests.rs::a_key_this_terminal_cannot_send_is_never_bound`
+
+### What can be done to a thing is answered once
+
+An entity's offers come from the application layer, and the row menu, the
+detail view and the index all read that one list. An unavailable action is
+absent from the menu and explained in the detail view — never a keystroke
+that appears to do nothing.
+
+> `uze-application::application::offers::tests::an_action_that_cannot_run_says_why_rather_than_doing_nothing`
+> `src/ui/tests.rs::the_menu_and_the_detail_view_read_one_list_of_offers`

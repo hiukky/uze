@@ -19,11 +19,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Content, ContentLine, LineTone, Navigator, NavigatorRow, Role, ScrollTarget, Section, Size,
-    Span, View, ViewHit,
+    Command, Content, ContentLine, LineTone, Navigator, NavigatorRow, Role, ScrollTarget, Section,
+    Size, Span, View, ViewHit,
 };
 
-use crate::ui::hint_spans;
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
@@ -249,7 +248,7 @@ pub(crate) fn render(
             lines,
         } => render_lines(frame, content_area, heading, *scroll, lines),
     }
-    render_footer(frame, footer, &view.footer_hint);
+    render_footer(frame, footer, &view.footer);
     settled
 }
 
@@ -454,13 +453,34 @@ fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
 
 /// A hairline top border plus the hint text directly under it — the same
 /// shape `management::render_footer` uses.
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, hint: &str) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(theme::fg(Token::BorderFaint));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(Line::from(hint_spans(hint))), inner);
+fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command]) {
+    // The overlay is what is open, so its own scope is what a key would
+    // resolve against — the same stack `Attach::scopes` builds.
+    let scopes = [
+        uze_keys::Scope::Global,
+        uze_keys::Scope::Workspace,
+        uze_keys::Scope::GitChanges,
+    ];
+    let actions: Vec<uze_keys::Action> = commands.iter().copied().map(action_of).collect();
+    frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
+}
+
+/// What an extension's command means in the product's own vocabulary. The
+/// inverse of the mapping the workspace client makes when it hands a key
+/// down — kept here, beside the render that needs it, rather than in the
+/// extension, which knows nothing of either.
+fn action_of(command: Command) -> uze_keys::Action {
+    match command {
+        Command::Close => uze_keys::Action::Dismiss,
+        Command::FocusNext => uze_keys::Action::FocusNext,
+        Command::SelectNext => uze_keys::Action::SelectNext,
+        Command::SelectPrevious => uze_keys::Action::SelectPrevious,
+        Command::Collapse => uze_keys::Action::Collapse,
+        Command::Expand => uze_keys::Action::Expand,
+        Command::Activate => uze_keys::Action::Activate,
+        Command::ScrollPageUp => uze_keys::Action::ScrollPageUp,
+        Command::ScrollPageDown => uze_keys::Action::ScrollPageDown,
+    }
 }
 
 fn push_right_aligned(spans: &mut Vec<TextSpan<'static>>, value: String, width: u16, color: Color) {
@@ -515,11 +535,17 @@ pub(crate) fn render_section(
         section.caption.text.clone(),
         color(section.caption.role),
     );
-    crate::ui::fill_row_bg(
-        &mut spans,
-        header_rect.width,
-        theme::color(Token::SurfaceRaised),
-    );
+    // Filled only while there is something under it. A band across the
+    // column says "this is a heading over content"; on a folded section
+    // there is no content, and the band reads as a control of its own —
+    // two of them stacked at the foot of the sidebar read as a toolbar.
+    if !section.collapsed {
+        crate::ui::fill_row_bg(
+            &mut spans,
+            header_rect.width,
+            theme::color(Token::SurfaceRaised),
+        );
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
     hits.push((header_rect, ViewHit::ToggleSection));
     if section.collapsed {
@@ -628,7 +654,7 @@ mod tests {
                     }],
                 }],
             },
-            footer_hint: "esc close".to_owned(),
+            footer: vec![Command::Close],
         }
     }
 

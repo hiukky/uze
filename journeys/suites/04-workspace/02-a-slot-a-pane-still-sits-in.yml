@@ -69,8 +69,8 @@ scenes:
         say: right-click the agent's row
         in: sidebar
         occurrence: last
-        expect: close
-      - click: close
+        expect: Close tab
+      - click: Close tab
         in: sidebar
         say: confirm close
         expect: "0 agents"

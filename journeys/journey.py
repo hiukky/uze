@@ -1107,17 +1107,19 @@ class Checker:
                 return False, f"{where}: {wanted!r} is missing from {readable}"
         return True, f"{where}: {readable}"
 
-    def _process(self, spec: dict) -> tuple[bool, str]:
-        pattern = spec["process"]["matching"]
-        # `cwd` narrows to where the process is standing, which is the whole
-        # question when what is being asked is "is somebody still in this
-        # checkout". Scoped to this world either way: a bare `pgrep` counts
-        # the developer's own shells and every other world's.
-        where = spec["process"].get("cwd")
+    def processes(self, spec: dict) -> list:
+        """Every matching process this world owns, as `pid in cwd` strings.
+
+        `cwd` narrows to where the process is standing, which is the whole
+        question when what is being asked is "is somebody still in this
+        checkout". Scoped to this world either way: a bare `pgrep` counts
+        the developer's own shells and every other world's.
+        """
+        where = spec.get("cwd")
         require_process_table()
         found = []
         for pid in subprocess.run(
-            ["pgrep", "-f", pattern], capture_output=True, text=True
+            ["pgrep", "-f", spec["matching"]], capture_output=True, text=True
         ).stdout.split():
             environ = process_environ(pid)
             if environ is None or f"HOME={self.world.home}".encode() not in environ:
@@ -1129,18 +1131,46 @@ class Checker:
                 found.append(f"{pid} in {cwd}")
             else:
                 found.append(pid)
+        return sorted(found)
+
+    def _process(self, spec: dict) -> tuple[bool, str]:
+        pattern = spec["process"]["matching"]
+        found = self.processes(spec["process"])
         alive = bool(found)
         if "count" in spec["process"] and len(found) != spec["process"]["count"]:
             return (
                 False,
                 f"{pattern}: expected {spec['process']['count']}, found {found}",
             )
+        # A count is only portable where one thing means one process, and a
+        # shell is not that: a login shell forks a child on some hosts, so
+        # one tab is one process here and two there. `same_as`/`more_than`
+        # ask what such a journey actually means — did this gesture leave
+        # the set alone, or add to it — which is true on any host.
+        for verb in ("same_as", "more_than"):
+            remembered = spec["process"].get(verb)
+            if remembered is None:
+                continue
+            before = self.runner.captures.get(remembered)
+            if before is None:
+                return False, f"no capture named {remembered!r}"
+            grew = set(found) > set(before)
+            if verb == "same_as" and set(found) != set(before):
+                return False, (
+                    f"{pattern}: the set changed\n"
+                    f"        was {sorted(before)}\n        now {found}"
+                )
+            if verb == "more_than" and not grew:
+                return False, (
+                    f"{pattern}: the set did not grow\n"
+                    f"        was {sorted(before)}\n        now {found}"
+                )
         if alive != spec["process"].get("alive", True):
             return (
                 False,
                 f"{pattern}: {'alive' if alive else 'not running'} in this world",
             )
-        return True, f"{pattern}: {'alive' if alive else 'not running'}"
+        return True, f"{pattern}: {found if found else 'not running'}"
 
     def _cmd(self, spec: dict) -> tuple[bool, str]:
         result = subprocess.run(
@@ -1190,6 +1220,8 @@ class Checker:
             value = sorted(
                 Path(path).name for path in globlib.glob(pattern) if Path(path).is_dir()
             )
+        elif processes := spec["capture"].get("processes"):
+            value = self.processes(processes)
         elif spec["capture"].get("task_checkouts"):
             value = sorted(
                 {task["checkout"] for task in self.tasks() if task.get("checkout")}

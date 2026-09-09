@@ -42,6 +42,11 @@ pub(crate) enum Intent {
     SwitchToWorkspaceTab(u64),
     /// Delete the current workspace's recorded prompts.
     ClearPromptHistory,
+    /// Write the operator's keyboard to `keys.json`. The keymap is already
+    /// in force when this is sent — the screen swapped it between frames,
+    /// which is what lets a rebinding be felt immediately. This is only
+    /// the part that has to survive the process.
+    PersistKeymap,
     /// Show what UZE can be drawn in.
     OpenThemePicker,
     /// Draw in this theme from now on, here and in the CLI.
@@ -97,6 +102,7 @@ impl Intent {
             Self::SwitchToWorkspace => "switch_to_workspace",
             Self::SwitchToWorkspaceTab(_) => "switch_to_workspace_tab",
             Self::ClearPromptHistory => "clear_prompt_history",
+            Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
             Self::SelectTheme(_) => "select_theme",
             Self::Refresh => "refresh",
@@ -179,6 +185,26 @@ pub(crate) fn dispatch(
             Ok(()) => model.status = Status::Success(format!("Drawing in {id}")),
             Err(error) => model.status = Status::Error(error),
         },
+        Intent::PersistKeymap => {
+            let file = uze_keys::difference_from_default(&uze_keys::active());
+            let path = home.keymap_path();
+            let written = if file.is_empty() {
+                // An operator who put everything back leaves no file
+                // behind: the default is not a thing to be written down.
+                match std::fs::remove_file(&path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                    _ => Ok(()),
+                }
+            } else {
+                serde_json::to_string_pretty(&file)
+                    .map_err(std::io::Error::other)
+                    .and_then(|contents| std::fs::write(&path, contents + "\n"))
+            };
+            model.status = match written {
+                Ok(()) => Status::Success("Keyboard saved".to_owned()),
+                Err(error) => Status::Error(format!("{}: {error}", path.display())),
+            };
+        }
         Intent::ClearPromptHistory => {
             let root = model.workspace_root();
             match tui_application(home.clone())

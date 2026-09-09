@@ -1,0 +1,112 @@
+journey: a plugin found and installed with nothing but the pointer
+tags: [gate, tui, packages]
+proves: web/content/docs/getting-started.mdx
+about: |
+  uze's thesis is that the keyboard is an accelerator, never the way in.
+  That is a claim about a whole flow rather than about any one control, so
+  it is performed as one: find the plugin by typing into a field that was
+  clicked, ask the row what can be done to it, take one of those, and
+  answer the question that follows — every step with the mouse.
+
+  It is also the regression this tier exists for. The search field was
+  drawn on three screens and registered no click target at all for its
+  whole life; the confirmation dialogs had no buttons; and the actions were
+  behind single letters nothing on screen ever mentioned. Each of those
+  passed every Rust test in the repository.
+
+  Every check reads the Store on disk. The screen only gates that a gesture
+  landed.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "description": "A marketplace this journey stages.",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "version": "1.0.0",
+        "description": "Canonical: one package, no vendor manifests."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: a marketplace is registered, and nothing is installed yet
+    when:
+      - shell: "{uze} market add {world}/market"
+        say: register the staged marketplace
+    then:
+      - dir: "{uze_home}/store/plugins/demo"
+        exists: false
+        about: registering a source installs nothing
+
+  - scene: the plugin is found by clicking the search field and typing
+    when:
+      - open: "{uze}"
+        say: uze opens, on the workspace side
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "Manage"
+        say: cross to the management side by its own control
+        in: sidebar
+        expect: Overview
+        expect_timeout: 20
+        pause: 1.0
+      - click: "Plugins"
+        say: open the Plugins screen from the sidebar
+        in: sidebar
+        expect: "skills"
+      - click: "Filter plugins"
+        say: click the search field, which nothing could click before
+        in: pane
+        expect: "flow"
+      - type: "flo"
+        submit: false
+        say: narrow the list to the staged plugin
+        expect: "flow"
+    then:
+      - dir: "{uze_home}/store/plugins/demo"
+        exists: false
+        about: finding a plugin installs nothing
+
+  - scene: the row says what can be done to it, and installing is one of them
+    when:
+      - rclick: "flow"
+        say: ask the row for its actions
+        in: pane
+        expect: "Install"
+      - click: "Install"
+        say: take the install offer
+        in: pane
+        occurrence: last
+        expect: "Install plugin"
+      - click: "  Install  "
+        say: answer the question with its own button
+        in: pane
+        expect: "Installed"
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - dir: "{uze_home}/store/plugins/demo/flow"
+        exists: true
+        about: the bytes are in the Store, put there by a flow with no keystrokes but a filter
+      - file: "{uze_home}/store/plugins/demo/flow/skills/commit/SKILL.md"
+        exists: true
+        about: the package arrived whole
+      - file: "{world}/market/plugins/flow/plugin.json"
+        exists: true
+        about: the source it came from was not moved or consumed

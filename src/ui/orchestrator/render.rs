@@ -191,8 +191,20 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
+    // The two modal surfaces this client has: centred, and the only thing
+    // that answers while they are open. Everything below them is a
+    // dropdown hanging off the control that opened it, which stays beside
+    // a screen that is still live — so the scrim covers these two and
+    // nothing else. Same placement as the management TUI's: between what
+    // was drawn and what is drawn over it.
+    if model.preserved.is_some() || model.action_index.is_some() {
+        crate::ui::scrim::render(frame, frame.area());
+    }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
+    }
+    if let Some(index) = &model.action_index {
+        render_action_index(frame, frame.area(), index, hits);
     }
     if let Some(picker) = &model.agent_picker {
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
@@ -549,16 +561,30 @@ pub(super) fn render_sidebar(
         .git_badge
         .as_ref()
         .and_then(|badge| badge.timeline.as_ref());
+    // Two sections stacked at the foot: the steps above the history, each
+    // taking its rows before the tree is laid out, so neither is ever
+    // drawn over the other. Only one of them is open at a time (see
+    // `toggle_timeline`), which is what keeps the pair from eating the
+    // column the spaces are for.
+    let column_bottom = rows.bottom;
+    let steps = model.first_steps();
+    let steps_height = steps.height();
     let reserved = timeline.map_or(0, |timeline| {
         timeline_height(
             timeline,
             model.timeline_collapsed,
             model.timeline_rows,
-            rows.remaining(),
+            rows.remaining().saturating_sub(steps_height),
         )
     });
-    let column_bottom = rows.bottom;
-    rows.bottom -= reserved;
+    let strip = steps.rect(Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(reserved),
+    ));
+
+    rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
 
     // What the column cannot show is scrolled to, not lost: the tree grows
     // with the work, and a space that fell off the foot of it — under a
@@ -898,6 +924,40 @@ pub(super) fn render_sidebar(
         rows.gap();
     }
 
+    if let Some(rect) = strip {
+        let mut section_hits = Vec::new();
+        crate::ui::extension_view::render_section(
+            frame,
+            &steps.section(),
+            &mut Rows::over(rect),
+            false,
+            &mut section_hits,
+        );
+        // The closing mark rides on the header, and an ordinary click
+        // resolves against the *first* rect that contains it
+        // (`WorkspaceModel::hit_rect_at`) — so the mark goes in ahead of
+        // the header it sits on, or the header swallows it and the section
+        // folds instead of leaving.
+        if let Some(rect) = section_hits.iter().find_map(|(rect, hit)| {
+            matches!(hit, ViewHit::ToggleSection)
+                .then(|| steps.close_rect(*rect))
+                .flatten()
+        }) {
+            hits.push((rect, WorkspaceHit::CloseFirstSteps));
+        }
+        for (rect, hit) in section_hits {
+            match hit {
+                ViewHit::ToggleSection => hits.push((rect, WorkspaceHit::ToggleFirstSteps)),
+                ViewHit::SelectItem(index) => {
+                    if let Some(action) = FIRST_STEPS.get(index) {
+                        hits.push((rect, WorkspaceHit::QuickAction(*action)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     if let Some(timeline) = timeline
         && reserved > 0
     {
@@ -930,6 +990,25 @@ fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
         })
         .sum()
 }
+
+/// What is worth trying once on this side of the product: putting an agent
+/// to work, moving between them, seeing what a change actually did, finding
+/// the work no live tab is in front of, and the surface that lists the
+/// rest. Each is a gesture nobody discovers by staring at a screen, and
+/// none of them destroys anything, so a list that invites them costs the
+/// reader nothing.
+pub(super) const FIRST_STEPS: [Action; 5] = [
+    Action::NewAgent,
+    Action::NextAgent,
+    Action::ToggleGitChanges,
+    Action::TogglePreservedWork,
+    Action::OpenActionIndex,
+];
+
+/// Named from the mode rather than from what is open: the key beside a
+/// step must not change because an overlay is up.
+pub(super) const FIRST_STEP_SCOPES: &[uze_keys::Scope] =
+    &[uze_keys::Scope::Global, uze_keys::Scope::Workspace];
 
 /// The rows the tree above the timeline keeps whatever the section is
 /// dragged to — a space header, an agent and its caption, and the blank
@@ -1823,6 +1902,119 @@ fn delivery_ending(task: &TaskView) -> String {
 
 /// The preserved-work list: every task holding work that no live tab is in
 /// front of, with the keys that move it on. Discard asks twice.
+/// The reading width this client's centred dialogs keep. A dialog as wide
+/// as the terminal is one nobody reads across — the eye loses the line on
+/// the way back — and both of these are short lists of short rows. One
+/// pair of numbers so the two are the same shape rather than each what its
+/// own content happened to come to.
+const MIN_POPUP_WIDTH: u16 = 30;
+const MAX_POPUP_WIDTH: u16 = 72;
+
+/// Everything that can be done here, each with the key that reaches it.
+///
+/// The workspace had no such surface at all: two of its most useful
+/// gestures were reachable only by someone who had read the source. Every
+/// word here comes from the action and every key from the keymap, so it is
+/// right by construction and stays right after a rebind.
+pub(super) fn render_action_index(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    index: &ActionIndexOverlay,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let rows = action_index_rows(&index.scopes, &index.filter);
+    let key_width = rows
+        .iter()
+        .filter_map(|(_, chord)| chord.map(|chord| chord.to_string().chars().count()))
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let width = area
+        .width
+        .saturating_sub(8)
+        .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH);
+    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::fg(Token::Accent))
+            .title(Line::from(Span::styled(
+                " Everything you can do ",
+                theme::fg_bold(Token::Accent),
+            )))
+            .style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
+        rect,
+    );
+    let inner = Rect::new(
+        rect.x + 2,
+        rect.y + 1,
+        rect.width.saturating_sub(4),
+        rect.height.saturating_sub(2),
+    );
+    frame.render_widget(
+        Paragraph::new(if index.filter.is_empty() {
+            Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
+        } else {
+            Line::from(vec![
+                Span::styled(index.filter.clone(), theme::fg(Token::TextPrimary)),
+                Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
+            ])
+        }),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    let list = Rect::new(
+        inner.x,
+        inner.y + 2,
+        inner.width,
+        inner.height.saturating_sub(2),
+    );
+    let mut entries: Vec<(Rect, WorkspaceHit)> = Vec::new();
+    for (position, (action, chord)) in rows.iter().enumerate() {
+        let y = list.y + position as u16;
+        if y >= list.bottom() {
+            break;
+        }
+        let row = Rect::new(list.x, y, list.width, 1);
+        let chosen = position == index.selected;
+        let key = chord.map(|chord| chord.to_string()).unwrap_or_default();
+        let mut label = Style::default().fg(theme::color(if chosen {
+            Token::TextBright
+        } else if action.destructive() {
+            Token::StateDanger
+        } else {
+            Token::TextPrimary
+        }));
+        if chosen {
+            label = label.add_modifier(Modifier::BOLD);
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{key:<key_width$}  "), theme::fg(Token::Accent)),
+                Span::styled(action.label(), label),
+                Span::styled(
+                    format!(
+                        "  {} {}",
+                        theme::glyph(Symbol::EmDash),
+                        action.description()
+                    ),
+                    theme::fg(Token::TextMuted),
+                ),
+            ])),
+            row,
+        );
+        entries.push((row, WorkspaceHit::ActionIndexEntry(position)));
+    }
+    // Prepended: what is underneath must not answer a click meant here.
+    hits.splice(0..0, entries);
+}
+
 pub(super) fn render_preserved(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -1830,6 +2022,7 @@ pub(super) fn render_preserved(
     overlay: &PreservedOverlay,
 ) {
     let preserved = model.preserved_tasks();
+    let mut selected_line = None;
     let mut lines = vec![Line::from(Span::styled(
         "PRESERVED WORK",
         theme::fg(Token::TextMuted),
@@ -1872,7 +2065,7 @@ pub(super) fn render_preserved(
             TaskStateView::Integrated => "delivered".to_owned(),
             TaskStateView::Closed => "nothing to deliver".to_owned(),
         };
-        let mut spans = vec![
+        let spans = vec![
             Span::styled(
                 if selected {
                     format!("{} ", theme::glyph(Symbol::ChevronCollapsed))
@@ -1893,25 +2086,58 @@ pub(super) fn render_preserved(
             Span::styled(format!("  {what}"), theme::fg(Token::TextSecondary)),
         ];
         if selected {
-            fill_row_bg(&mut spans, area.width, theme::color(Token::SurfaceSelected));
+            // Filled after the popup is measured, not here: a selection
+            // that reaches the frame's edge before anything has decided
+            // how wide the dialog is *becomes* how wide the dialog is.
+            selected_line = Some(lines.len());
         }
         lines.push(Line::from(spans));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        if overlay.confirm_discard {
-            "discard this task and its branch?  [y] yes   [any other key] no"
-        } else {
-            "[r] resume   [i] deliver   [f] mark done   [d] discard   [esc] close"
-        },
-        Style::default().fg(if overlay.confirm_discard {
-            theme::color(Token::StateWarning)
-        } else {
-            theme::color(Token::TextMuted)
-        }),
-    )));
+    // Read off the keymap like every other hint. These five keys were
+    // written into the string by hand — the last place in the client that
+    // still claimed a key nothing had resolved, so a rebinding left it
+    // quietly wrong.
+    const SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::PreservedWork];
+    lines.push(if overlay.confirm_discard {
+        let mut line = Line::from(Span::styled(
+            "discard this task and its branch?  ",
+            theme::fg(Token::StateWarning),
+        ));
+        line.spans
+            .extend(crate::ui::hint_for(SCOPES, &[Action::ConfirmDiscard, Action::Dismiss]).spans);
+        line
+    } else {
+        crate::ui::hint_for(
+            SCOPES,
+            &[
+                Action::ResumeTask,
+                Action::DeliverTask,
+                Action::FinishTask,
+                Action::DiscardTask,
+                Action::Dismiss,
+            ],
+        )
+    });
+    // Measured from the words, then held to the same reading width the
+    // index beside it keeps: a dialog as wide as the terminal is a dialog
+    // nobody can read across, and this one is a short list of short rows.
     let content = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
-    let width = (content + 2 + 2 * POPUP_H_PAD).min(area.width).max(1);
+    let width = (content + 2 + 2 * POPUP_H_PAD)
+        .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH)
+        .min(area.width)
+        .max(1);
+    let text_width = width.saturating_sub(2 + 2 * POPUP_H_PAD);
+    for line in &mut lines {
+        crate::ui::management::clip_line(line, text_width as usize);
+    }
+    if let Some(index) = selected_line {
+        fill_row_bg(
+            &mut lines[index].spans,
+            text_width,
+            theme::color(Token::SurfaceSelected),
+        );
+    }
     let height = (lines.len() as u16 + 2).min(area.height).max(1);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
@@ -1983,13 +2209,7 @@ pub(super) fn render_tab_strip(
     // A `None` context is the space's own — its bootstrap shell and
     // anything opened with no agent selected.
     let context = context_agent(model, identities);
-    let strip: Vec<&Tab> = context
-        .and_then(|agent| space.tabs.iter().find(|tab| tab.id == agent))
-        .into_iter()
-        .chain(space.tabs.iter().filter(|tab| {
-            agent_identity_for_tab(identities, tab).is_none() && tab.agent == context
-        }))
-        .collect();
+    let strip = strip_tabs(space, context, identities);
     // Closability is a per-space rule (the server refuses to remove a
     // space's only tab — see `Session::remove_tab`), so it's judged
     // against every tab in the selected space, not just the ones this
@@ -2227,6 +2447,10 @@ pub(super) fn render_tab_strip(
     // pressed. Bare glyphs on the plain backdrop are what the message zone
     // beside them uses, and the whole point of that zone is that a message
     // is not a control — so the controls cannot look like one too.
+    // The way into the index used to sit here. It is at the foot of the
+    // sidebar now, with the other chrome that belongs to uze rather than
+    // to a tab — one place in both modes, and the place a reader who does
+    // not know where to look already looks.
     let mut trailing_right = inner.right();
     if selected_agent_context(model, identities).is_some() {
         // Its own rect is what the dropdown hangs off, so the chip is

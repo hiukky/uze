@@ -139,6 +139,17 @@ impl UzeHome {
         self.root.join("theme-overrides.json")
     }
 
+    /// The operator's own keyboard, applied over the built-in keymap.
+    ///
+    /// Beside `theme-overrides.json` rather than under `state/` for the
+    /// same reason: it is something someone wrote, never something UZE can
+    /// rebuild. It holds only what differs from the default, so a chord
+    /// nobody had an opinion about still moves when a later release moves
+    /// it.
+    pub fn keymap_path(&self) -> PathBuf {
+        self.root.join("keys.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }

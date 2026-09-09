@@ -1,6 +1,8 @@
 //! TUI — mouse hit-testing: mapping a clicked screen coordinate back to the
 //! on-screen target it landed on.
 
+use ratatui::layout::Rect;
+
 use super::model::{Focus, Overlay, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
@@ -47,6 +49,36 @@ pub(crate) enum Hit {
     /// A row of the Overview's prompt history, by index into
     /// `TuiModel::prompt_history`.
     PromptHistory(usize),
+    /// A row's `⋯` — what can be done to that row, from the row itself.
+    /// The whole point of it is that nobody has to know a letter.
+    RowActions(usize),
+    /// One entry of the open row menu, by index into its offers.
+    RowMenuEntry(usize),
+    /// One row of the open index of everything, by position in it.
+    ActionIndexEntry(usize),
+    /// An action offered by a detail view's own action bar.
+    OfferedAction(uze_keys::Action),
+    /// One line of the Keys screen.
+    KeyRow(usize),
+    /// The Keys list's scroll track, carrying its own rectangle: a click
+    /// anywhere on it jumps there, and a drag keeps jumping while the
+    /// button is held. The rect travels with the hit because the drag has
+    /// to keep mapping rows to positions after the frame that drew it,
+    /// and re-deriving that geometry from the model is how a drag comes to
+    /// fight the mouse instead of tracking it.
+    KeysTrack(Rect),
+    /// The Keys screen's "change this key" target — the next keystroke
+    /// becomes the binding.
+    CaptureKey,
+    /// Put back what uze ships with, for the selected line.
+    ResetKey,
+    /// The first-steps section's header, which folds it.
+    ToggleFirstSteps,
+    /// The mark on that header, which puts the section away for good.
+    CloseFirstSteps,
+    /// A list's search field. It is drawn on three screens and, until
+    /// this, clicking it did nothing at all.
+    FocusFilter,
 }
 
 impl TuiModel {
@@ -64,12 +96,94 @@ impl TuiModel {
             .map(|(_, hit)| hit)
     }
 
-    pub(crate) fn click(&mut self, column: u16, row: u16) -> Intent {
+    /// Asks whatever is under the pointer what can be done to it.
+    pub(crate) fn right_click(&mut self, column: u16, row: u16) -> Intent {
         if self.overlay != Overlay::None {
-            // Any click dismisses/declines an overlay — a click outside a
-            // dialog's actionable area should never silently confirm.
-            self.close_overlay();
             return Intent::None;
+        }
+        self.row_menu = None;
+        let row_index = match self.hit_at(column, row) {
+            Some(Hit::MarketplaceRow(index) | Hit::RowActions(index)) => *index,
+            Some(Hit::HarnessRow(index)) => *index,
+            Some(Hit::ProfileRow(index)) => *index,
+            _ => return Intent::None,
+        };
+        self.select_row(row_index);
+        self.open_row_actions()
+    }
+
+    /// Moves the selection to `index` on whichever screen is open — the
+    /// step a pointer gesture takes before acting on a row.
+    pub(crate) fn select_row(&mut self, index: usize) {
+        match self.route {
+            Route::Plugins => self.marketplace_selected = index,
+            Route::Harnesses => self.harnesses_selected = index,
+            Route::Profiles => self.profiles_selected = index,
+            _ => {}
+        }
+        self.focus = Focus::Content;
+    }
+
+    /// The rect the selected row was last drawn at, so a menu raised from
+    /// the keyboard anchors where the pointer would have raised it.
+    pub(crate) fn selected_row_rect(&self) -> Option<Rect> {
+        let wanted = match self.route {
+            Route::Plugins => Hit::MarketplaceRow(self.marketplace_selected),
+            Route::Harnesses => Hit::HarnessRow(self.harnesses_selected),
+            Route::Profiles => Hit::ProfileRow(self.profiles_selected),
+            _ => return None,
+        };
+        self.hits
+            .iter()
+            .find(|(_, hit)| *hit == wanted)
+            .map(|(rect, _)| *rect)
+    }
+
+    pub(crate) fn click(&mut self, column: u16, row: u16) -> Intent {
+        if let Some(menu) = self.row_menu.clone() {
+            // A click inside the menu chooses; anywhere else declines it,
+            // the same way a click outside a dialog declines.
+            let chosen = match self.hit_at(column, row) {
+                Some(Hit::RowMenuEntry(index)) => menu.offers.get(*index).map(|offer| offer.action),
+                _ => None,
+            };
+            self.row_menu = None;
+            return match chosen {
+                Some(action) => self.act(action),
+                None => Intent::None,
+            };
+        }
+        if let Overlay::ActionIndex { scopes, filter, .. } = self.overlay.clone() {
+            // A click on a row performs it, the way choosing it with the
+            // keyboard does; anywhere else closes without acting.
+            let chosen = match self.hit_at(column, row) {
+                Some(Hit::ActionIndexEntry(index)) => self
+                    .action_index_rows(&scopes, &filter)
+                    .get(*index)
+                    .map(|(action, _)| *action),
+                _ => None,
+            };
+            self.close_overlay();
+            return match chosen {
+                Some(action) => self.act(action),
+                None => Intent::None,
+            };
+        }
+        if self.overlay != Overlay::None {
+            // A dialog's own buttons answer it; a click anywhere else
+            // declines, because a click outside a dialog's actionable
+            // area must never silently confirm.
+            let answer = match self.hit_at(column, row) {
+                Some(Hit::OfferedAction(action)) => Some(*action),
+                _ => None,
+            };
+            return match answer {
+                Some(action) => self.overlay_action(action),
+                None => {
+                    self.close_overlay();
+                    Intent::None
+                }
+            };
         }
         let Some(hit) = self.hit_at(column, row).cloned() else {
             return Intent::None;
@@ -173,12 +287,56 @@ impl TuiModel {
                 self.toggle_profile_harness_at(index);
                 Intent::None
             }
+            // Kept for the next run the way every other shape this
+            // client remembers is: written once on the way out (see
+            // `run_management`), never on the input path.
+            Hit::ToggleFirstSteps => {
+                self.first_steps_collapsed = !self.first_steps_collapsed;
+                Intent::None
+            }
+            Hit::CloseFirstSteps => {
+                self.first_steps_closed = true;
+                Intent::None
+            }
             Hit::ResizeSidebar => {
                 self.dragging_sidebar = true;
                 Intent::None
             }
             Hit::ResizePanel(panel) => {
                 self.dragging_panel = Some(panel);
+                Intent::None
+            }
+            Hit::RowActions(index) => {
+                self.select_row(index);
+                self.open_row_actions()
+            }
+            // Only reachable while the menu or the index is open, which
+            // the guarded arms above already answered.
+            Hit::RowMenuEntry(_) | Hit::ActionIndexEntry(_) => Intent::None,
+            Hit::OfferedAction(action) => self.act(action),
+            Hit::KeysTrack(track) => {
+                self.dragging_keys_track = Some(track);
+                self.focus = Focus::Content;
+                self.scroll_keys_to(track, row);
+                Intent::None
+            }
+            Hit::KeyRow(index) => {
+                self.keys_selected = index;
+                self.keys_capture = false;
+                self.keys_problem = None;
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::CaptureKey => {
+                self.keys_capture = !self.keys_capture;
+                self.keys_problem = None;
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::ResetKey => self.reset_selected_key(),
+            Hit::FocusFilter => {
+                self.filtering = true;
+                self.focus = Focus::Content;
                 Intent::None
             }
             Hit::PromptHistory(index) => {

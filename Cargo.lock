@@ -3062,6 +3062,7 @@ dependencies = [
  "uze-extensions",
  "uze-git",
  "uze-integrations",
+ "uze-keys",
  "uze-terminal",
  "uze-testkit",
  "uze-theme",
@@ -3077,6 +3078,7 @@ dependencies = [
  "tracing-subscriber",
  "uze-core",
  "uze-integrations",
+ "uze-keys",
  "uze-testkit",
 ]
 
@@ -3099,7 +3101,6 @@ dependencies = [
 name = "uze-extensions"
 version = "0.0.0-alpha.4"
 dependencies = [
- "crossterm",
  "syntect",
  "uze-git",
  "uze-testkit",
@@ -3124,6 +3125,14 @@ dependencies = [
  "tracing",
  "uze-core",
  "uze-testkit",
+]
+
+[[package]]
+name = "uze-keys"
+version = "0.0.0-alpha.4"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -48,9 +48,9 @@ mod workspace_tests {
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
             timeline_height,
         },
-        scroll_timeline, scroll_tree, selected_pane_cwd, space_own_tab, sync_slot_occupancy,
-        tab_drag_group, tab_drag_group_members, tab_needs_replacement_shell, toggle_timeline,
-        workspace_has_active_agent_operation,
+        scroll_timeline, scroll_tree, selected_pane_cwd, space_context_agent, space_own_tab,
+        strip_tabs, sync_slot_occupancy, tab_drag_group, tab_drag_group_members,
+        tab_needs_replacement_shell, toggle_timeline, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -324,6 +324,41 @@ mod workspace_tests {
         let strip = rows.join(" ");
         assert!(strip.contains("Agent two shell"), "{strip}");
         assert!(!strip.contains("Agent one"), "{strip}");
+    }
+
+    /// A tab number means "that chip", so it is counted along the strip —
+    /// which is contextual — and never along the space's own tab list.
+    ///
+    /// The list held every agent in the space and both their shells, so a
+    /// number walked past the chips on screen and landed on another
+    /// agent: a gesture that only ever meant "the second one here" changed
+    /// which agent the workspace was about. One list now answers for both
+    /// the chips and the numbers, which is the only way they can agree.
+    #[test]
+    fn a_tab_number_counts_along_the_strip_and_not_past_it() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(second);
+        let identities = identities_fixture();
+        let session = model.session.as_ref().expect("session");
+        let space = session.selected_space();
+        let strip = strip_tabs(space, space_context_agent(space, &identities), &identities);
+
+        assert_eq!(strip.len(), 2, "the agent in front, and its own shell");
+        assert_eq!(strip[0].id, second, "the agent leads its own strip");
+        assert_ne!(
+            strip[1].id, first,
+            "and the other agent is not on it at any position"
+        );
+
+        assert!(
+            space.tabs.len() > strip.len(),
+            "the space holds more than the strip shows — the bootstrap \
+             shell and the other agent's context"
+        );
+        assert_ne!(
+            space.tabs[1].id, strip[1].id,
+            "so counting along the space would land somewhere no chip is"
+        );
     }
 
     /// Selecting one of an agent's shells keeps the strip on that agent —
@@ -2085,7 +2120,19 @@ mod workspace_tests {
             !text.contains("shipped"),
             "delivered work is not preserved work"
         );
-        assert!(text.contains("[d] discard"));
+        let discard = uze_keys::active()
+            .chord_for(
+                uze_keys::Action::DiscardTask,
+                &[uze_keys::Scope::Global, uze_keys::Scope::PreservedWork],
+            )
+            .expect("discard is bound here");
+        assert!(
+            text.contains(&format!(
+                "{discard} {}",
+                uze_keys::Action::DiscardTask.label().to_lowercase()
+            )),
+            "the key it names is the one the keymap binds: {text}"
+        );
     }
 
     /// A one-agent session whose only tab runs in `cwd`.
@@ -2328,6 +2375,7 @@ mod workspace_tests {
         assert_eq!(commits, vec![0, 1], "one hit per commit, in order");
 
         // Nothing in the section reaches the host's own hit vocabulary.
+        // Nothing in the section reaches the host's own hit vocabulary.
         let timeline_top = header.y;
         assert!(
             hits.iter()
@@ -2380,10 +2428,14 @@ mod workspace_tests {
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
         assert_eq!(drawn, 2, "{rows:?}");
 
+        model.timeline_rows = None;
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let default = rows.iter().filter(|row| row.contains("commit ")).count();
+
         model.timeline_rows = Some(u16::MAX);
         let rows = sidebar_rows(&model, &mut Vec::new());
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
-        assert!(drawn > 10, "past the half-column default: {rows:?}");
+        assert!(drawn > default, "past the half-column default: {rows:?}");
         assert!(
             rows.iter().any(|row| row.contains("Agent")),
             "the tree keeps its rows: {rows:?}"
@@ -2679,6 +2731,395 @@ mod workspace_tests {
         assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
         let commit = &buffer[(column, header as u16 + 2)];
         assert_ne!(commit.bg, theme::color(Token::SurfaceRaised));
+    }
+
+    /// Both sections stack at the foot of the column, the steps on the
+    /// history, and each takes its rows before the tree is laid out — so
+    /// opening one pushes the other rather than being drawn over it.
+    #[test]
+    fn the_two_sections_stack_at_the_foot_and_push_each_other() {
+        let mut model = session_with_timeline(&["feat: one", "fix: two", "chore: three"]);
+        model.timeline_collapsed = true;
+        model.first_steps_collapsed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+
+        let steps = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("the steps are at the foot");
+        let timeline = rows
+            .iter()
+            .position(|row| row.contains("timeline"))
+            .expect("and the history under them");
+        assert_eq!(timeline, steps + 1, "in that order, adjacent: {rows:?}");
+        assert_eq!(timeline, rows.len() - 1, "and nothing below: {rows:?}");
+
+        // Opening the steps pushes the history down the column, never over
+        // it: both headers are still on screen, still in that order.
+        model.first_steps_collapsed = false;
+        let rows = sidebar_rows(&model, &mut hits);
+        let steps = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("still there");
+        let timeline = rows
+            .iter()
+            .position(|row| row.contains("timeline"))
+            .expect("and so is the history");
+        assert_eq!(
+            timeline,
+            steps + 1 + render::FIRST_STEPS.len() + 1,
+            "the steps came between them, with a blank row closing them off \
+             so the last one does not sit against the next header: {rows:?}"
+        );
+        assert!(
+            inside(&rows[timeline - 1]).trim().is_empty(),
+            "and that row is blank: {rows:?}"
+        );
+        assert_eq!(timeline, rows.len() - 1, "{rows:?}");
+    }
+
+    /// One open at a time. They stack in the same column and each takes
+    /// its rows from the tree, so two open at once spends the sidebar on
+    /// what sits under the spaces rather than on the spaces.
+    #[test]
+    fn opening_one_section_folds_the_other() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.first_steps_collapsed = true;
+
+        toggle_timeline(&mut model);
+        assert!(!model.timeline_collapsed);
+        assert!(model.first_steps_collapsed, "the steps gave way");
+
+        // And back: the section that opens is the one that was asked for.
+        model.first_steps_collapsed = false;
+        model.timeline_collapsed = true;
+        toggle_timeline(&mut model);
+        assert!(!model.timeline_collapsed);
+        assert!(model.first_steps_collapsed);
+
+        // Folding one leaves the other alone — an accordion closes nothing
+        // on the way to closing itself.
+        model.first_steps_collapsed = false;
+        model.timeline_collapsed = true;
+        toggle_timeline(&mut model);
+        toggle_timeline(&mut model);
+        assert!(model.timeline_collapsed);
+        assert!(model.first_steps_collapsed);
+    }
+
+    /// A dialog is held to a reading width, and its own selection does not
+    /// decide that width. Filling the selected row to the frame's edge
+    /// before anything had measured the popup made the popup the width of
+    /// the terminal.
+    #[test]
+    fn the_preserved_dialog_keeps_a_reading_width() {
+        let model = WorkspaceModel {
+            preserved: Some(PreservedOverlay {
+                selected: 0,
+                confirm_discard: false,
+            }),
+            ..WorkspaceModel::default()
+        };
+        let overlay = model.preserved.as_ref().expect("open");
+        let mut terminal = Terminal::new(TestBackend::new(200, 20)).unwrap();
+        terminal
+            .draw(|frame| render_preserved(frame, frame.area(), &model, overlay))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let drawn: Vec<String> = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        let top = drawn
+            .iter()
+            .find(|row| row.contains('┌'))
+            .expect("the dialog drew a border");
+        let width = top.trim_end().chars().count()
+            - top.find('┌').map_or(0, |byte| top[..byte].chars().count());
+        assert!(
+            (30..=72).contains(&width),
+            "held to a reading width, not the terminal's: {width}"
+        );
+    }
+
+    /// Every key this dialog names comes from the keymap. Five of them
+    /// were written into the string by hand — the last place in the client
+    /// that claimed a key nothing had resolved.
+    #[test]
+    fn the_preserved_dialog_reads_its_keys_off_the_keymap() {
+        let model = WorkspaceModel {
+            preserved: Some(PreservedOverlay {
+                selected: 0,
+                confirm_discard: false,
+            }),
+            ..WorkspaceModel::default()
+        };
+        let overlay = model.preserved.as_ref().expect("open");
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal
+            .draw(|frame| render_preserved(frame, frame.area(), &model, overlay))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let drawn: String = (0..buffer.area.height)
+            .flat_map(|row| (0..buffer.area.width).map(move |column| (column, row)))
+            .map(|position| buffer[position].symbol().to_owned())
+            .collect();
+
+        let keymap = uze_keys::active();
+        let scopes = [uze_keys::Scope::Global, uze_keys::Scope::PreservedWork];
+        for action in [
+            uze_keys::Action::ResumeTask,
+            uze_keys::Action::DeliverTask,
+            uze_keys::Action::FinishTask,
+            uze_keys::Action::DiscardTask,
+            uze_keys::Action::Dismiss,
+        ] {
+            let chord = keymap
+                .chord_for(action, &scopes)
+                .unwrap_or_else(|| panic!("{action} is bound here"));
+            assert!(
+                drawn.contains(&format!("{chord} {}", action.label().to_lowercase())),
+                "{action} is named with the key the keymap binds: {drawn}"
+            );
+        }
+    }
+
+    /// The header folds it, and it stays folded: a section that came back
+    /// open every run would be one nobody could put away.
+    #[test]
+    fn the_first_steps_section_folds_to_its_header() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("first steps")),
+            "{rows:?}"
+        );
+        assert_eq!(
+            hits.iter()
+                .filter(|(_, hit)| matches!(hit, WorkspaceHit::QuickAction(_)))
+                .count(),
+            render::FIRST_STEPS.len(),
+            "every step is a target"
+        );
+
+        model.first_steps_collapsed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("first steps")),
+            "the header stays: {rows:?}"
+        );
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::QuickAction(_))),
+            "and its steps are folded away: {rows:?}"
+        );
+        assert!(
+            model.shape().first_steps.collapsed,
+            "and the shape this client hands back says so"
+        );
+    }
+
+    /// The list finishes. Once every step has been taken the header offers
+    /// a mark that puts it away for good — and only then: a list of things
+    /// to try that could be dismissed before trying any of them would be
+    /// onboarding nobody ever sees.
+    #[test]
+    fn a_finished_list_offers_to_leave() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::CloseFirstSteps),
+            "unfinished, so nothing to close: {rows:?}"
+        );
+
+        model.steps_taken = render::FIRST_STEPS
+            .iter()
+            .map(|action| action.name())
+            .collect();
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let close = hits
+            .iter()
+            .find_map(|(rect, hit)| (*hit == WorkspaceHit::CloseFirstSteps).then_some(*rect))
+            .expect("finished, so the header offers the way out");
+        let header = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("the header is drawn");
+        assert_eq!(usize::from(close.y), header, "on the header itself");
+        // Resolved the way an ordinary click is — `hit_rect_at`, first
+        // rect wins — and not by the reversed search the modal guards use.
+        // Asking the wrong one is why this shipped folding instead of
+        // closing.
+        model.hits = hits.clone();
+        assert_eq!(
+            model.hit_rect_at(close.x, close.y).map(|(_, hit)| hit),
+            Some(WorkspaceHit::CloseFirstSteps),
+            "and the header underneath does not swallow it"
+        );
+
+        model.first_steps_closed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            !rows.iter().any(|row| row.contains("first steps")),
+            "closed for good, header and all: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("timeline")),
+            "and the history took the rows back: {rows:?}"
+        );
+        assert!(model.shape().first_steps.closed);
+    }
+
+    /// The keystroke a chord is: the inverse of `keys::chord_of`, so a test
+    /// can press what the keymap says rather than a key typed by hand.
+    fn key_event(chord: uze_keys::Chord) -> crossterm::event::KeyEvent {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use uze_keys::Key;
+        let code = match chord.key {
+            Key::Char(character) => KeyCode::Char(character),
+            Key::F(number) => KeyCode::F(number),
+            Key::Enter => KeyCode::Enter,
+            Key::Esc => KeyCode::Esc,
+            Key::Tab => KeyCode::Tab,
+            Key::Space => KeyCode::Char(' '),
+            Key::Backspace => KeyCode::Backspace,
+            Key::Delete => KeyCode::Delete,
+            Key::Insert => KeyCode::Insert,
+            Key::Up => KeyCode::Up,
+            Key::Down => KeyCode::Down,
+            Key::Left => KeyCode::Left,
+            Key::Right => KeyCode::Right,
+            Key::Home => KeyCode::Home,
+            Key::End => KeyCode::End,
+            Key::PageUp => KeyCode::PageUp,
+            Key::PageDown => KeyCode::PageDown,
+        };
+        let mut modifiers = KeyModifiers::NONE;
+        if chord.mods.ctrl {
+            modifiers |= KeyModifiers::CONTROL;
+        }
+        if chord.mods.alt {
+            modifiers |= KeyModifiers::ALT;
+        }
+        if chord.mods.shift {
+            modifiers |= KeyModifiers::SHIFT;
+        }
+        KeyEvent::new(code, modifiers)
+    }
+
+    /// The property the list needs, in this mode too: a step must be
+    /// takeable from where the list is drawn, and taking it must tick it.
+    ///
+    /// Moving between agents did not. Its evidence was "the selected tab
+    /// changed", and this client asks the server for a tab and is answered
+    /// frames later — so at the moment the question was asked the answer
+    /// was always no, however many times the step was taken.
+    #[test]
+    fn every_first_step_is_ticked_when_it_is_taken() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("first-steps-ticked"));
+        let (model, first, _) = two_agents_with_shells();
+        let mut driven = driven(model, &home);
+        driven
+            .attach
+            .model
+            .session
+            .as_mut()
+            .expect("session")
+            .select_tab(first);
+
+        let keymap = uze_keys::active();
+        for action in render::FIRST_STEPS {
+            let chord = keymap
+                .chord_for(action, render::FIRST_STEP_SCOPES)
+                .unwrap_or_else(|| panic!("{action} is bound in this mode"));
+            driven.press_key(key_event(chord));
+            assert!(
+                driven.attach.model.steps_taken.contains(&action.name()),
+                "{action} was taken with {chord} and never ticked"
+            );
+            // Whatever it opened goes away before the next one is tried.
+            driven.press_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+    }
+
+    /// A step is ticked once it has been taken, and the header counts them.
+    #[test]
+    fn a_step_taken_is_marked_and_counted() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
+        let rows = sidebar_rows(&model, &mut Vec::new());
+
+        let header = rows
+            .iter()
+            .find(|row| row.contains("first steps"))
+            .expect("the section names itself");
+        assert!(
+            header.contains(&format!("1 of {}", render::FIRST_STEPS.len())),
+            "{header:?}"
+        );
+
+        let tick = theme::glyph(theme::Symbol::MarkDone);
+        let taken = rows
+            .iter()
+            .find(|row| row.contains(&render::FIRST_STEPS[0].label()))
+            .expect("the step is listed");
+        assert!(taken.contains(&tick), "{taken:?}");
+        let untaken = rows
+            .iter()
+            .find(|row| row.contains(&render::FIRST_STEPS[1].label()))
+            .expect("and so is the next one");
+        assert!(!untaken.contains(&tick), "{untaken:?}");
+    }
+
+    /// Folded, the header carries no band. A filled row across the column
+    /// says "this is a heading over content", and a folded section has
+    /// none — two of them stacked at the foot of the sidebar read as a
+    /// toolbar rather than as two things you can open.
+    #[test]
+    fn a_folded_section_header_carries_no_band() {
+        let mut model = session_with_timeline(&["feat: only"]);
+        model.first_steps_collapsed = true;
+
+        for (collapsed, banded) in [(false, true), (true, false)] {
+            model.timeline_collapsed = collapsed;
+            let buffer = sidebar_buffer(&model, &mut Vec::new());
+            let rows = sidebar_rows(&model, &mut Vec::new());
+            let header = rows
+                .iter()
+                .position(|row| row.contains("timeline"))
+                .expect("the header is drawn");
+            let column = rows[header]
+                .chars()
+                .position(|glyph| glyph == 't')
+                .expect("its title") as u16;
+            assert_eq!(
+                buffer[(column, header as u16)].bg == theme::color(Token::SurfaceRaised),
+                banded,
+                "collapsed={collapsed}: {rows:?}"
+            );
+        }
     }
 
     /// The timeline keeps the foot of the column, under the spaces, with
@@ -4172,6 +4613,21 @@ mod workspace_tests {
             let _ = self.attach.handle(event, &viewport);
         }
 
+        /// One key, through the same dispatch the attach loop uses.
+        fn press_key(&mut self, key: crossterm::event::KeyEvent) {
+            let area = Rect::new(0, 0, 80, 24);
+            let layout = compute_layout(area, self.attach.model.sidebar_width);
+            let viewport = Viewport {
+                size: ratatui::layout::Size::new(area.width, area.height),
+                columns: layout.pane.width,
+                rows: layout.pane.height,
+                layout,
+            };
+            let _ = self
+                .attach
+                .handle(crossterm::event::Event::Key(key), &viewport);
+        }
+
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
         fn pump(&mut self) {
@@ -4263,6 +4719,7 @@ mod workspace_tests {
                 },
                 spinner: indicatif::ProgressBar::hidden(),
                 next_tick: Instant::now(),
+                asked_for_a_tab: false,
             },
             server,
             events: events_rx,
@@ -4660,8 +5117,11 @@ mod prompt_buffer_tests {
     use super::PromptBuffer;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
+    /// A keystroke as the buffer receives one: a chord, since
+    /// reconstructing what someone typed is the same vocabulary question
+    /// as binding it.
+    fn key(code: KeyCode) -> uze_keys::Chord {
+        crate::ui::keys::chord_of(KeyEvent::new(code, KeyModifiers::NONE)).expect("a chord")
     }
 
     fn typed(buffer: &mut PromptBuffer, text: &str) {
@@ -4748,7 +5208,10 @@ mod prompt_buffer_tests {
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
             let mut buffer = PromptBuffer::default();
             typed(&mut buffer, "typed");
-            buffer.apply(KeyEvent::new(KeyCode::Char('u'), modifiers));
+            buffer.apply(
+                crate::ui::keys::chord_of(KeyEvent::new(KeyCode::Char('u'), modifiers))
+                    .expect("a chord"),
+            );
             typed(&mut buffer, " more");
             assert_eq!(buffer.submit(), None, "{modifiers:?} must not be recorded");
         }

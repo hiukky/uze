@@ -11,7 +11,7 @@ use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, Event, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
@@ -38,6 +38,7 @@ use uze_extensions::{
     ExtensionHit, git,
     view::{ScrollDirection, ViewHit},
 };
+use uze_keys::{Action, Chord, Key};
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
     PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
@@ -268,6 +269,37 @@ struct DeliveryResolution {
 
 /// Open state of the preserved-work list: tasks holding work that no live
 /// tab is in front of.
+/// Everything reachable with `scopes` open, each with the key that
+/// reaches it. The workspace's counterpart to the management model's own
+/// `action_index_rows` — the same question, read from the same keymap, so
+/// the two modes cannot describe themselves differently.
+fn action_index_rows(
+    scopes: &[uze_keys::Scope],
+    filter: &str,
+) -> Vec<(uze_keys::Action, Option<uze_keys::Chord>)> {
+    let rows = uze_keys::active().available(scopes);
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|(action, _)| {
+            action.label().to_lowercase().contains(&needle)
+                || action.description().to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+/// The open index of everything, in the workspace client.
+///
+/// Carries the scopes it was opened over: what is reachable is a question
+/// about what was open underneath, not about the index itself.
+struct ActionIndexOverlay {
+    scopes: Vec<uze_keys::Scope>,
+    filter: String,
+    selected: usize,
+}
+
 struct PreservedOverlay {
     selected: usize,
     /// A discard was asked for and waits for its confirmation.
@@ -752,6 +784,9 @@ pub(crate) fn attach_workspace(
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: layout.sidebar.width,
+        first_steps_collapsed: layout.first_steps.collapsed,
+        first_steps_closed: layout.first_steps.closed,
+        steps_taken: layout.first_steps.taken.clone(),
         timeline_collapsed: layout.workspace.timeline_collapsed,
         timeline_rows: layout.workspace.timeline_rows,
         prompt_recorder: Some(prompt_recorder),
@@ -857,6 +892,7 @@ pub(crate) fn attach_workspace(
         },
         spinner: activity_spinner,
         next_tick: next_activity_tick,
+        asked_for_a_tab: false,
     };
     let inbox = AttachInbox {
         events: &receiver,
@@ -928,16 +964,18 @@ pub(crate) fn attach_workspace(
 /// What this client owns of the shared layout: the column both modes
 /// draw, and its own section. Sent to the recorder thread on every
 /// change and handed back to `super::run` when the attach ends.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkspaceShape {
     pub(crate) sidebar: uze_application::SidebarLayout,
     pub(crate) workspace: uze_application::WorkspaceLayout,
+    pub(crate) first_steps: uze_application::FirstStepsLayout,
 }
 
 impl WorkspaceShape {
     fn apply_to(self, layout: &mut uze_application::ClientLayout) {
         layout.sidebar = self.sidebar;
         layout.workspace = self.workspace;
+        layout.first_steps = self.first_steps;
     }
 }
 
@@ -1002,6 +1040,17 @@ pub(super) enum WorkspaceHit {
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
     SwitchToManagement,
+    /// The first-steps section's header, which folds it.
+    ToggleFirstSteps,
+    /// The mark on that header, which puts the section away for good.
+    CloseFirstSteps,
+    /// One entry of the sidebar's quick strip — performed exactly as the
+    /// keyboard performs it, which is why it carries the action rather
+    /// than naming a surface: a control that took its own path to the
+    /// same place is a second implementation to keep agreeing.
+    QuickAction(Action),
+    /// One row of the open index, by position in it.
+    ActionIndexEntry(usize),
     ResizeSidebar,
 }
 
@@ -1146,7 +1195,7 @@ struct AgentSupportDropdown {
 }
 
 /// What a right-click-opened [`ContextMenu`] targets — the space or tab its
-/// [`MenuAction`]s act on.
+/// the menu's actions act on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MenuTarget {
     Space(SpaceId),
@@ -1157,21 +1206,6 @@ enum MenuTarget {
 /// rendering) is generic over this enum, so adding a third action is adding
 /// a variant plus a match arm here and in [`dispatch_menu_action`], not
 /// restructuring the popup.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MenuAction {
-    Rename,
-    Close,
-}
-
-impl MenuAction {
-    fn label(self) -> &'static str {
-        match self {
-            MenuAction::Rename => "rename",
-            MenuAction::Close => "close",
-        }
-    }
-}
-
 /// Open state of the right-click action menu a space header or agent tab
 /// raises. Closing a space/tab is never one click any more — right-click,
 /// then confirm the menu's own "close" row — deliberately two steps, so an
@@ -1182,7 +1216,7 @@ impl MenuAction {
 /// Built fresh on each right-click, never persisted.
 struct ContextMenu {
     target: MenuTarget,
-    items: Vec<MenuAction>,
+    items: Vec<Action>,
     /// Index into `items` the keyboard's Up/Down currently highlights —
     /// same role [`AgentPicker::selected`] plays.
     selected: usize,
@@ -1682,6 +1716,16 @@ struct WorkspaceModel {
     /// User-dragged sidebar width; `None` falls back to `sidebar_width_for`.
     /// Client-local presentation state — never sent to the server.
     sidebar_width: Option<u16>,
+    /// Whether the sidebar's first-steps section is folded to its header.
+    first_steps_collapsed: bool,
+    /// Whether it has been put away for good, which is offered only once
+    /// every step has been taken.
+    first_steps_closed: bool,
+    /// The steps already taken, by action name — shared with the
+    /// management client through `ClientLayout`, because it is one list
+    /// drawn at the foot of both sidebars and a step taken in one mode is
+    /// taken.
+    steps_taken: std::collections::BTreeSet<String>,
     dragging_sidebar: bool,
     /// What's being renamed (a tab or a space) and its live edit buffer.
     /// While set, all keyboard input edits this instead of reaching the
@@ -1796,6 +1840,12 @@ struct WorkspaceModel {
     notice: Option<Notice>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
+    /// Everything that can be done here, each with the key that reaches
+    /// it. The workspace had no help surface at all — `alt+shift+i`
+    /// delivers every task in a space, and there was no way to find that
+    /// out — so this is the one place that answers "what can I do", in the
+    /// mode where the keyboard mostly belongs to something else.
+    action_index: Option<ActionIndexOverlay>,
     /// The checkout each open pane was first seen in — a pane's slot does
     /// not change when it `cd`s.
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
@@ -1915,34 +1965,46 @@ impl Default for PromptBuffer {
 }
 
 impl PromptBuffer {
-    fn apply(&mut self, key: KeyEvent) {
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
+    /// Mirrors one keystroke into the buffer. Takes a chord rather than a
+    /// key event because reconstructing what someone typed is the same
+    /// vocabulary question as binding it — and a buffer that read keys
+    /// directly would be a second place the keyboard is understood.
+    fn apply(&mut self, chord: Chord) {
+        if chord.mods.ctrl || chord.mods.alt {
             self.trusted = false;
             return;
         }
-        match key.code {
-            KeyCode::Char(character) => {
+        match chord.key {
+            Key::Char(character) => {
+                // The chord vocabulary folds case, so the buffer takes the
+                // character as it was typed rather than as it was bound.
+                let character = if chord.mods.shift {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                };
                 self.characters.insert(self.cursor, character);
                 self.cursor += 1;
             }
-            KeyCode::Backspace => {
+            Key::Space => {
+                self.characters.insert(self.cursor, ' ');
+                self.cursor += 1;
+            }
+            Key::Backspace => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     self.characters.remove(self.cursor);
                 }
             }
-            KeyCode::Delete => {
+            Key::Delete => {
                 if self.cursor < self.characters.len() {
                     self.characters.remove(self.cursor);
                 }
             }
-            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.characters.len()),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.characters.len(),
+            Key::Left => self.cursor = self.cursor.saturating_sub(1),
+            Key::Right => self.cursor = (self.cursor + 1).min(self.characters.len()),
+            Key::Home => self.cursor = 0,
+            Key::End => self.cursor = self.characters.len(),
             _ => self.trusted = false,
         }
     }
@@ -2135,6 +2197,7 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
+            && self.action_index.is_none()
             && !self.commit_detail_open()
     }
 
@@ -2317,6 +2380,22 @@ impl WorkspaceModel {
         self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
     }
 
+    /// The list at the foot of the sidebar, as it stands.
+    fn first_steps(&self) -> crate::ui::FirstSteps<'_> {
+        crate::ui::FirstSteps {
+            steps: &render::FIRST_STEPS,
+            taken: &self.steps_taken,
+            collapsed: self.first_steps_collapsed,
+            closed: self.first_steps_closed,
+            scopes: render::FIRST_STEP_SCOPES,
+        }
+    }
+
+    /// Records that a step was taken, whichever way it was reached.
+    fn note_step(&mut self, action: Action) -> bool {
+        render::FIRST_STEPS.contains(&action) && self.steps_taken.insert(action.name())
+    }
+
     /// What this client owns of the shared layout, as it stands.
     fn shape(&self) -> WorkspaceShape {
         WorkspaceShape {
@@ -2326,6 +2405,11 @@ impl WorkspaceModel {
             workspace: uze_application::WorkspaceLayout {
                 timeline_collapsed: self.timeline_collapsed,
                 timeline_rows: self.timeline_rows,
+            },
+            first_steps: uze_application::FirstStepsLayout {
+                collapsed: self.first_steps_collapsed,
+                closed: self.first_steps_closed,
+                taken: self.steps_taken.clone(),
             },
         }
     }
@@ -2913,6 +2997,29 @@ fn space_context_agent(space: &Space, identities: &[AgentIdentity]) -> Option<Ta
         .map(|tab| tab.id)
 }
 
+/// The tabs the strip shows, in the order it draws them: the agent the
+/// space is currently about, then the shells opened alongside it.
+///
+/// One function because two lists that must agree are one list. The strip
+/// is what a person counts chips along, so anything that answers "the
+/// third tab" has to count the same things in the same order — indexing
+/// the space's own `tabs` instead counts tabs nobody can see and lands on
+/// another agent's, which changes what the workspace is about from a
+/// gesture that only ever meant "that chip".
+fn strip_tabs<'a>(
+    space: &'a Space,
+    context: Option<TabId>,
+    identities: &[AgentIdentity],
+) -> Vec<&'a Tab> {
+    context
+        .and_then(|agent| space.tabs.iter().find(|tab| tab.id == agent))
+        .into_iter()
+        .chain(space.tabs.iter().filter(|tab| {
+            agent_identity_for_tab(identities, tab).is_none() && tab.agent == context
+        }))
+        .collect()
+}
+
 /// Which drag-reorder group `hit_rect` (a `WorkspaceHit::SelectTab(tab)`
 /// rect) belongs to, if any — `Agents` for a sidebar row, keyed by `tab`'s
 /// own space (found by searching, same as every other tab lookup in this
@@ -3246,17 +3353,17 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
 
 /// Confirms one [`ContextMenu`] row against its `target` — sent from both
 /// the popup's own click zone and its keyboard Enter shortcut, so each
-/// [`MenuAction`] only needs writing once here as the menu grows.
+/// action only needs writing once here as the menu grows.
 fn dispatch_menu_action<W: io::Write>(
     stream: &mut W,
     model: &mut WorkspaceModel,
     identities: &[AgentIdentity],
     target: MenuTarget,
-    action: MenuAction,
+    action: Action,
 ) {
     match action {
-        MenuAction::Rename => begin_rename(model, target),
-        MenuAction::Close => match target {
+        Action::RenameSelection => begin_rename(model, target),
+        Action::CloseTab => match target {
             MenuTarget::Space(space) => {
                 let _ = send_request(stream, &ClientRequest::CloseSpace { space });
             }
@@ -3284,6 +3391,10 @@ fn dispatch_menu_action<W: io::Write>(
                 let _ = send_request(stream, &ClientRequest::CloseTab { tab });
             }
         },
+        // Every other action is one no menu offers here — the target
+        // vocabulary is the product's whole one now, and this menu uses
+        // two of it.
+        _ => {}
     }
 }
 
@@ -3581,6 +3692,13 @@ fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
 /// up. Local state, same as `toggle_space_root`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
+    // One section open at a time. They stack at the foot of the same
+    // column and each takes its rows from the tree above them, so two open
+    // at once is the sidebar spending most of itself on what sits under
+    // the spaces — and the spaces are what it is for.
+    if !model.timeline_collapsed {
+        model.first_steps_collapsed = true;
+    }
     model.remember_sidebar();
     model.dirty = true;
 }

@@ -138,6 +138,7 @@ pub(crate) fn render_harnesses(
 
     if y + 2 <= bottom {
         let filter_area = Rect::new(content.x, y, content.width, 2);
+        hits.push((filter_area, Hit::FocusFilter));
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(
@@ -312,6 +313,7 @@ fn render_harness_card(
         )),
         Rect::new(inner.x, inner.y + 4, inner.width, 1),
     );
+    super::render_row_actions(frame, rect, index, selected, hits);
     hits.push((rect, Hit::HarnessRow(index)));
 }
 
