@@ -178,6 +178,12 @@ vocabulary! {
         /// in a hint line. A theme repainting the keyboard's marks would
         /// have silently repainted a task's standing with them.
         TaskReady = "task.ready",
+        /// A gate that failed, offered again.
+        ///
+        /// The third place `arrow.shift` was standing in for something
+        /// that is not a key. Running a check again is its own meaning, so
+        /// it is its own mark.
+        TaskRetry = "task.retry",
 
         // ── an agent's standing in the sidebar ─────────────────────────
         /// Producing output right now. The one animated symbol.

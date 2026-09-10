@@ -55,43 +55,7 @@ pub(crate) fn render_appearance(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    // What is in force, both halves, on the title's own row: the screen's
-    // whole claim is that these are two choices, and a reader should not
-    // have to find two ticks in two lists to know what they are on.
-    let in_force = |rows: &[String]| -> String {
-        rows.first()
-            .cloned()
-            .unwrap_or_else(|| "default".to_owned())
-    };
-    let theme = in_force(
-        &model
-            .appearance_themes
-            .iter()
-            .filter(|entry| entry.active)
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>(),
-    );
-    let glyphs = in_force(
-        &model
-            .appearance_glyph_sets
-            .iter()
-            .filter(|entry| entry.active)
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>(),
-    );
-    let content = render_screen_header(
-        frame,
-        area,
-        "Appearance",
-        "theme & glyphs",
-        Some(Span::styled(
-            format!(
-                "{theme} {} {glyphs}",
-                theme::glyph(Symbol::HintSeparator).trim()
-            ),
-            theme::fg(Token::TextMuted),
-        )),
-    );
+    let content = render_screen_header(frame, area, "Appearance", "theme & glyphs", None);
 
     let drawer_width = model
         .appearance_drawer_width

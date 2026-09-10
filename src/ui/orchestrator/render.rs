@@ -1832,7 +1832,7 @@ fn deliver_button(
             Some(unsynced) => (
                 format!(
                     "{}{unsynced} {}",
-                    theme::glyph(Symbol::ArrowShift),
+                    theme::glyph(Symbol::TaskReady),
                     delivery_ending(task)
                 ),
                 theme::color(Token::Accent),
@@ -1841,7 +1841,7 @@ fn deliver_button(
             None => (
                 format!(
                     "{}{} {}",
-                    theme::glyph(Symbol::ArrowShift),
+                    theme::glyph(Symbol::TaskReady),
                     task.ahead,
                     delivery_ending(task)
                 ),
@@ -1852,7 +1852,7 @@ fn deliver_button(
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
         TaskStateView::GateFailed => Some((
-            format!("{} retry", theme::glyph(Symbol::ArrowShift)),
+            format!("{} retry", theme::glyph(Symbol::TaskRetry)),
             theme::color(Token::StateDanger),
             true,
         )),

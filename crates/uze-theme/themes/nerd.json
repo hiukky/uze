@@ -55,6 +55,10 @@
       "glyph": "",
       "width": 1
     },
+    "task.retry": {
+      "glyph": "",
+      "width": 1
+    },
     "status.completed": {
       "glyph": "",
       "width": 1

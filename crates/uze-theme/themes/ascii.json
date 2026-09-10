@@ -31,6 +31,7 @@
     "file.legal": "",
 
     "task.ready": "^",
+    "task.retry": "@",
 
     "status.working": ["|", "/", "-", "\\"],
     "status.completed": "*",

@@ -766,6 +766,12 @@ pub fn show(view: &mut CodeView, mode: ContentMode) {
     view.show(mode);
 }
 
+/// Which mode the surface is on, so a door pressed twice can tell that it
+/// is the one already open and close instead of doing nothing.
+pub fn showing(view: &CodeView) -> ContentMode {
+    view.content
+}
+
 /// A command while the buffer is being typed into.
 fn edit_command(view: &mut CodeView, command: Command) -> CodeOutcome {
     if command == Command::Save {
