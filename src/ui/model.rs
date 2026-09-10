@@ -38,15 +38,20 @@ pub(crate) enum Route {
     /// The keyboard itself: every action, the key that reaches it, and
     /// whether this terminal can deliver that key at all.
     Keys,
+    /// What UZE looks like: the palette, and — chosen apart from it — the
+    /// glyph set, each shown drawn in its own marks. The only way to answer
+    /// "can this terminal render that?" is to look at it.
+    Appearance,
 }
 
-pub(crate) const ROUTES: [Route; 6] = [
+pub(crate) const ROUTES: [Route; 7] = [
     Route::Overview,
     Route::Plugins,
     Route::Extensions,
     Route::Harnesses,
     Route::Profiles,
     Route::Keys,
+    Route::Appearance,
 ];
 
 impl Route {
@@ -58,6 +63,7 @@ impl Route {
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
             Route::Keys => "Keys",
+            Route::Appearance => "Appearance",
         }
     }
 
@@ -89,6 +95,7 @@ impl Route {
             Route::Harnesses => "integrations",
             Route::Profiles => "profiles",
             Route::Keys => "keys",
+            Route::Appearance => "appearance",
         }
     }
 
@@ -207,6 +214,31 @@ impl KeyRow {
     /// uze shipped with.
     pub(crate) fn custom(&self) -> bool {
         self.chord != self.default_chord
+    }
+}
+
+/// One line of the Appearance screen. Two groups in one list, because the
+/// two choices are one question — what this machine looks like — even
+/// though neither decides the other.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AppearanceRow {
+    /// A group's title. Never selectable: it is a label, not a choice.
+    Heading(&'static str),
+    Theme {
+        id: String,
+        active: bool,
+        /// `None` for a theme UZE carries rather than one someone wrote.
+        path: Option<std::path::PathBuf>,
+    },
+    GlyphSet {
+        id: String,
+        active: bool,
+    },
+}
+
+impl AppearanceRow {
+    pub(crate) fn selectable(&self) -> bool {
+        !matches!(self, AppearanceRow::Heading(_))
     }
 }
 
@@ -355,6 +387,14 @@ pub(crate) struct TuiModel {
     pub(crate) keys_drawer_width: Option<u16>,
     pub(crate) keys_selected: usize,
     pub(crate) keys_filter: String,
+    /// The Appearance screen's selected row, and the lists it is choosing
+    /// from. Carried rather than read per frame for the reason
+    /// [`Overlay::ThemePicker`] carries its own: the themes are a directory
+    /// listing, and a list that changed between two frames would move the
+    /// selection out from under the operator.
+    pub(crate) appearance_selected: usize,
+    pub(crate) appearance_themes: Vec<uze_application::application::ThemeSummary>,
+    pub(crate) appearance_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
     pub(crate) keys_capture: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
@@ -499,6 +539,9 @@ impl Default for TuiModel {
             keys_drawer_width: None,
             keys_selected: 0,
             keys_filter: String::new(),
+            appearance_selected: 0,
+            appearance_themes: Vec::new(),
+            appearance_glyph_sets: Vec::new(),
             keys_capture: false,
             keys_problem: None,
             keys_probe: None,
@@ -1164,6 +1207,39 @@ impl TuiModel {
     /// Built from the keymap in force rather than from the default, so an
     /// unbinding leaves the row rather than the row disappearing with the
     /// key — you have to be able to see what you turned off.
+    /// The Appearance screen's lines, both groups in reading order.
+    pub(crate) fn appearance_rows(&self) -> Vec<AppearanceRow> {
+        let mut rows = vec![AppearanceRow::Heading("Theme")];
+        rows.extend(
+            self.appearance_themes
+                .iter()
+                .map(|theme| AppearanceRow::Theme {
+                    id: theme.id.clone(),
+                    active: theme.active,
+                    path: theme.path.clone(),
+                }),
+        );
+        rows.push(AppearanceRow::Heading("Glyphs"));
+        rows.extend(
+            self.appearance_glyph_sets
+                .iter()
+                .map(|set| AppearanceRow::GlyphSet {
+                    id: set.id.clone(),
+                    active: set.active,
+                }),
+        );
+        rows
+    }
+
+    /// The row the keyboard is on, skipping headings — a selection that
+    /// landed on a label would have nothing to activate.
+    pub(crate) fn selected_appearance_row(&self) -> Option<AppearanceRow> {
+        let rows = self.appearance_rows();
+        rows.get(self.appearance_selected)
+            .filter(|row| row.selectable())
+            .cloned()
+    }
+
     pub(crate) fn key_rows(&self) -> Vec<KeyRow> {
         let active = uze_keys::active();
         let default = uze_keys::default_keymap();
@@ -1294,6 +1370,58 @@ impl TuiModel {
     /// list, so it bypasses the generic `move_selection`/`list_len`/
     /// `selected_mut` dispatch (designed for exactly one selection per
     /// route) and clamps whichever panel is currently focused.
+    /// Walks the Appearance list, stepping over headings rather than
+    /// landing on them: a selection sitting on a label has nothing to
+    /// activate, and pressing Enter there would do nothing with no reason
+    /// visible on screen.
+    pub(crate) fn move_appearance_selection(&mut self, delta: isize) {
+        let rows = self.appearance_rows();
+        if rows.is_empty() || delta == 0 {
+            return;
+        }
+        let step = delta.signum();
+        let mut index = self.appearance_selected as isize;
+        for _ in 0..delta.abs() {
+            let mut next = index + step;
+            while rows
+                .get(next.clamp(0, rows.len() as isize - 1) as usize)
+                .is_some_and(|row| !row.selectable())
+            {
+                next += step;
+            }
+            if next < 0 || next >= rows.len() as isize {
+                break;
+            }
+            index = next;
+        }
+        self.appearance_selected = index.clamp(0, rows.len() as isize - 1) as usize;
+    }
+
+    /// Puts the selection on the first thing that can be chosen. The list
+    /// opens with a heading, so starting at zero would start on a label.
+    pub(crate) fn settle_appearance_selection(&mut self) {
+        let rows = self.appearance_rows();
+        if rows
+            .get(self.appearance_selected)
+            .is_some_and(|row| row.selectable())
+        {
+            return;
+        }
+        self.appearance_selected = rows.iter().position(AppearanceRow::selectable).unwrap_or(0);
+    }
+
+    /// Chooses whatever the selection is on. Which axis it belongs to is
+    /// the row's own answer, so there is no mode to be in.
+    pub(crate) fn activate_appearance(&mut self) -> crate::ui::worker::Intent {
+        match self.selected_appearance_row() {
+            Some(AppearanceRow::Theme { id, .. }) => crate::ui::worker::Intent::SelectTheme(id),
+            Some(AppearanceRow::GlyphSet { id, .. }) => {
+                crate::ui::worker::Intent::SelectGlyphSet(id)
+            }
+            _ => crate::ui::worker::Intent::None,
+        }
+    }
+
     pub(crate) fn move_profile_selection(&mut self, delta: isize) {
         let clamp = |current: usize, len: usize| -> usize {
             if len == 0 {
@@ -1508,7 +1636,7 @@ impl TuiModel {
         actionable_alerts(self.doctor.as_ref())
     }
 
-    pub(crate) fn set_route(&mut self, route: Route) {
+    pub(crate) fn set_route(&mut self, route: Route) -> crate::ui::worker::Intent {
         self.filtering = false;
         // Harnesses opens straight onto its first entry's detail — the list
         // is short and every row *is* the point of the screen, unlike
@@ -1525,5 +1653,13 @@ impl TuiModel {
             self.overview_prompt_hovered = None;
         }
         self.route = route;
+        // Appearance reads its two lists on arrival rather than per frame:
+        // a list that changed between two frames would move the selection
+        // out from under the operator, which is the same reason the theme
+        // picker carries its own.
+        if route == Route::Appearance {
+            return crate::ui::worker::Intent::LoadAppearance;
+        }
+        crate::ui::worker::Intent::None
     }
 }

@@ -3775,3 +3775,146 @@ fn a_question_is_answered_with_the_pointer_too() {
         Intent::Remove("one".to_owned())
     );
 }
+
+/// The claim the Appearance screen exists to make: each glyph set is drawn
+/// in *its own* glyphs, not in the ones currently in force. Without that,
+/// choosing a set is choosing a name and hoping — which is the guess the
+/// whole change removes, since no terminal can be asked what font it has.
+#[test]
+fn each_glyph_set_is_previewed_in_its_own_glyphs() {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: uze_theme::glyph_sets()
+            .iter()
+            .map(|id| uze_application::application::GlyphSetSummary {
+                id: (*id).to_owned(),
+                active: false,
+            })
+            .collect(),
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+
+    let row_for = |id: &str| -> String {
+        rows.iter()
+            .find(|row| row.contains(id))
+            .unwrap_or_else(|| panic!("no row for the `{id}` set in {rows:#?}"))
+            .clone()
+    };
+
+    // ASCII's own marks, on the ASCII row, while the default theme — the
+    // one actually in force here — draws none of them.
+    let ascii = row_for("ascii");
+    assert!(
+        ascii.contains('*'),
+        "the ascii set is not in ascii: {ascii:?}"
+    );
+    assert!(
+        !ascii.contains('✓'),
+        "the ascii row borrowed the active theme's glyphs: {ascii:?}"
+    );
+
+    // The default set draws its own, on its own row.
+    let default = row_for("default");
+    assert!(
+        default.contains('✓'),
+        "the default set is not in its own glyphs: {default:?}"
+    );
+
+    // And the nerd set draws Codicons, which live in the private-use area.
+    let nerd = row_for("nerd");
+    assert!(
+        nerd.chars().any(|c| ('\u{ea60}'..='\u{ec84}').contains(&c)),
+        "the nerd row carries no Codicon: {nerd:?}"
+    );
+}
+
+#[test]
+fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_themes: vec![uze_application::application::ThemeSummary {
+            id: "dracula".to_owned(),
+            active: false,
+            path: None,
+        }],
+        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+            id: "nerd".to_owned(),
+            active: false,
+        }],
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+
+    // The list opens on the first *choice*, never on the heading above it.
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectTheme("dracula".to_owned())
+    );
+
+    // Walking down crosses the second heading without stopping on it.
+    model.move_appearance_selection(1);
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectGlyphSet("nerd".to_owned()),
+        "the glyph set was reached as if it were a theme"
+    );
+}
+
+#[test]
+fn opening_appearance_asks_for_the_lists_it_chooses_from() {
+    let mut model = TuiModel::default();
+    assert_eq!(
+        model.set_route(Route::Appearance),
+        crate::ui::worker::Intent::LoadAppearance
+    );
+    // Every other route asks for nothing on arrival, so this one is not
+    // paying for a read it does not need.
+    assert_eq!(
+        model.set_route(Route::Keys),
+        crate::ui::worker::Intent::None
+    );
+}
+
+#[test]
+fn clicking_a_glyph_set_chooses_it() {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+            id: "ascii".to_owned(),
+            active: false,
+        }],
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+
+    let rows = model.appearance_rows();
+    let index = rows
+        .iter()
+        .position(|row| matches!(row, crate::ui::model::AppearanceRow::GlyphSet { .. }))
+        .expect("a set row");
+    let (rect, _) = model
+        .hits
+        .iter()
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::AppearanceRow(index))
+        .expect("the set row is clickable")
+        .clone();
+
+    assert_eq!(
+        model.click(rect.x + 3, rect.y),
+        crate::ui::worker::Intent::SelectGlyphSet("ascii".to_owned())
+    );
+}

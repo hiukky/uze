@@ -307,6 +307,9 @@ pub(crate) fn render(
         Route::Harnesses => view::harnesses::render_harnesses(frame, layout.content, model, hits),
         Route::Profiles => view::profiles::render_profiles(frame, layout.content, model, hits),
         Route::Keys => view::keys::render_keys(frame, layout.content, model, hits),
+        Route::Appearance => {
+            view::appearance::render_appearance(frame, layout.content, model, hits)
+        }
     }
 
     render_footer(frame, layout.footer, model);
@@ -374,6 +377,7 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Harnesses => "detected agents",
         Route::Profiles => "preferences",
         Route::Keys => "what each key does",
+        Route::Appearance => "the palette, and the glyphs — chosen apart",
     }
 }
 
@@ -417,6 +421,7 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
         Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
         Route::Profiles => Some(model.profiles.len()),
         Route::Keys => None,
+        Route::Appearance => None,
     }
 }
 

@@ -30,6 +30,7 @@ use crate::{
 /// the format — the same loader reads them and reads yours.
 const BUILTIN_DEFAULT: &str = include_str!("../themes/default.json");
 const BUILTIN_ASCII: &str = include_str!("../themes/ascii.json");
+const BUILTIN_NERD: &str = include_str!("../themes/nerd.json");
 
 /// The syntax themes a theme file may name.
 ///
@@ -148,7 +149,7 @@ pub struct Loaded {
 
 /// The built-in themes, by the id a user selects them with.
 pub fn builtin_names() -> &'static [&'static str] {
-    &["default", "ascii"]
+    &["default"]
 }
 
 /// A theme UZE carries. `default` is the one every other theme is resolved
@@ -156,28 +157,37 @@ pub fn builtin_names() -> &'static [&'static str] {
 pub fn builtin(id: &str) -> Option<&'static Theme> {
     match id {
         "default" => Some(default_theme()),
-        "ascii" => {
-            static ASCII: OnceLock<Theme> = OnceLock::new();
-            Some(ASCII.get_or_init(|| {
-                load_str("ascii", BUILTIN_ASCII)
-                    .expect("the bundled ascii theme resolves")
-                    .theme
-            }))
-        }
         _ => None,
     }
 }
 
-/// A bundled theme *as written*, for a caller assembling a stack that ends
-/// on one. `default` is the bottom of every stack already, so what this is
-/// really for is `ascii`, whose glyphs are the reason to extend it.
-pub fn builtin_file(id: &str) -> &'static ThemeFile {
+/// The glyph sets UZE carries, by the id a user selects them with.
+///
+/// A different axis from the theme, and deliberately so: which glyphs a
+/// terminal can draw is a fact about the font someone installed, while a
+/// palette is a matter of taste this afternoon. Selecting one never touches
+/// the other.
+pub fn glyph_sets() -> &'static [&'static str] {
+    &["default", "ascii", "nerd"]
+}
+
+/// The layer a selected glyph set contributes, or `None` for the default.
+///
+/// The default set is the *absence* of a layer rather than an empty one,
+/// because the built-in default's own glyphs already are it. That keeps
+/// "never chose" and "chose the default" resolving through one path, so
+/// there is nothing that can drift between them.
+pub fn glyph_set_file(id: &str) -> Option<&'static ThemeFile> {
     static ASCII: OnceLock<ThemeFile> = OnceLock::new();
+    static NERD: OnceLock<ThemeFile> = OnceLock::new();
     match id {
-        "ascii" => ASCII.get_or_init(|| {
-            serde_json::from_str(BUILTIN_ASCII).expect("the bundled ascii theme is valid JSON")
-        }),
-        _ => default_file(),
+        "ascii" => Some(ASCII.get_or_init(|| {
+            serde_json::from_str(BUILTIN_ASCII).expect("the bundled ascii set is valid JSON")
+        })),
+        "nerd" => Some(NERD.get_or_init(|| {
+            serde_json::from_str(BUILTIN_NERD).expect("the bundled nerd set is valid JSON")
+        })),
+        _ => None,
     }
 }
 
@@ -1028,21 +1038,27 @@ mod tests {
         assert!(error.to_string().contains("base16-ocean-dark"));
     }
 
+    /// Choosing glyphs is not choosing a palette. A set that declared even
+    /// one colour would make the two axes one again, which is the whole
+    /// thing being taken apart here.
     #[test]
-    fn the_ascii_theme_is_entirely_ascii_and_keeps_the_colours() {
-        let theme = builtin("ascii").expect("bundled");
-        for symbol in Symbol::ALL {
-            for frame in theme.symbol(*symbol).frames() {
+    fn no_glyph_set_changes_a_colour() {
+        for id in glyph_sets() {
+            if let Some(file) = glyph_set_file(id) {
                 assert!(
-                    frame.is_ascii(),
-                    "`{symbol}` is `{frame}`, which is not ASCII"
+                    file.colors.is_empty(),
+                    "the `{id}` set declares colours, which would weld it back to a palette"
+                );
+            }
+            let theme = set_over_the_default(id);
+            for token in Token::ALL {
+                assert_eq!(
+                    theme.color(*token),
+                    default_theme().color(*token),
+                    "the `{id}` set moved `{token}`"
                 );
             }
         }
-        assert_eq!(
-            theme.color(Token::Accent),
-            default_theme().color(Token::Accent)
-        );
     }
 
     #[test]
@@ -1089,8 +1105,16 @@ mod tests {
             0x2754, 0x2755, 0x2757, 0x2763, 0x2764, 0x2795, 0x2796, 0x2797, 0x27B0, 0x27BF,
         ];
 
-        for id in builtin_names() {
-            let theme = builtin(id).expect("bundled");
+        let bundled = builtin_names()
+            .iter()
+            .map(|id| ((*id).to_owned(), builtin(id).expect("bundled").clone()))
+            .chain(
+                glyph_sets()
+                    .iter()
+                    .map(|id| ((*id).to_owned(), set_over_the_default(id))),
+            );
+
+        for (id, theme) in bundled {
             for symbol in Symbol::ALL {
                 for frame in theme.symbol(*symbol).frames() {
                     for character in frame.chars() {
@@ -1100,7 +1124,7 @@ mod tests {
                             .any(|(low, high)| (*low..=*high).contains(&point));
                         assert!(
                             !pictographic && !EMOJI_DINGBATS.contains(&point),
-                            "theme `{id}` draws `{symbol}` as `{character}` \
+                            "`{id}` draws `{symbol}` as `{character}` \
                              (U+{point:04X}), which terminals render from the \
                              emoji font"
                         );
@@ -1116,5 +1140,114 @@ mod tests {
             assert!(builtin(name).is_some(), "`{name}` is listed but absent");
         }
         assert!(builtin("nocturne").is_none());
+    }
+
+    /// A glyph set as it is actually drawn: its layer over the default,
+    /// which is the stack a selection assembles.
+    fn set_over_the_default(id: &str) -> Theme {
+        let mut layers = vec![default_file()];
+        layers.extend(glyph_set_file(id));
+        resolve_stack(&Identity::from_file(id, default_file()), &layers)
+            .unwrap_or_else(|error| panic!("the bundled `{id}` set resolves: {error}"))
+            .theme
+    }
+
+    #[test]
+    fn every_glyph_set_resolves_over_the_default() {
+        for id in glyph_sets() {
+            set_over_the_default(id);
+        }
+        assert!(
+            glyph_set_file("nocturne").is_none(),
+            "an id that is not a set answers with no layer"
+        );
+        assert!(
+            glyph_set_file("default").is_none(),
+            "the default set is the absence of a layer, not an empty one"
+        );
+    }
+
+    /// A symbol name a set misspells resolves to nothing at all — the glyph
+    /// stays the default's, and the author is left staring at an unchanged
+    /// screen. Warnings are the right answer for a *theme in the wild*; for
+    /// a set UZE ships, it is a typo the build should have caught.
+    #[test]
+    fn every_glyph_a_bundled_set_declares_is_a_name_this_build_knows() {
+        for id in glyph_sets() {
+            let Some(file) = glyph_set_file(id) else {
+                continue;
+            };
+            let loaded = resolve_stack(
+                &Identity::from_file(id, default_file()),
+                &[default_file(), file],
+            )
+            .expect("resolves");
+            let unknown: Vec<&Warning> = loaded
+                .warnings
+                .iter()
+                .filter(|warning| matches!(warning, Warning::UnknownName { .. }))
+                .collect();
+            assert!(
+                unknown.is_empty(),
+                "the bundled `{id}` set names entries this build does not know: {unknown:?}"
+            );
+        }
+    }
+
+    /// Completeness is a promise a set may make, not one the format demands
+    /// — `nerd` states a difference and inherits the rest, which is correct.
+    /// `ascii` is the exception: one Unicode glyph left in an otherwise-ASCII
+    /// screen breaks the only reason to select it.
+    #[test]
+    fn the_ascii_set_declares_every_symbol_and_every_one_is_ascii() {
+        let file = glyph_set_file("ascii").expect("bundled");
+        for symbol in Symbol::ALL {
+            assert!(
+                file.symbols.contains_key(&symbol.to_string()),
+                "the ascii set leaves `{symbol}` to the default, which is not ASCII"
+            );
+        }
+        let theme = set_over_the_default("ascii");
+        for symbol in Symbol::ALL {
+            for frame in theme.symbol(*symbol).frames() {
+                assert!(
+                    frame.is_ascii(),
+                    "the ascii set draws `{symbol}` as `{frame}`, which is not ASCII"
+                );
+            }
+        }
+    }
+
+    /// The `nerd` set is generated from Nerd Fonts' own `glyphnames.json` by
+    /// Codicon name, so a wrong codepoint cannot come from a typo — but it
+    /// could come from a regenerated file pointing at another icon source,
+    /// and mixing sources is what makes a row look assembled from spare
+    /// parts. This pins the class, not the individual glyph.
+    #[test]
+    fn every_nerd_glyph_is_a_codicon() {
+        /// Where Nerd Fonts v3 places the Codicons.
+        const CODICONS: std::ops::RangeInclusive<u32> = 0xEA60..=0xEC84;
+
+        let file = glyph_set_file("nerd").expect("bundled");
+        for (name, value) in &file.symbols {
+            let SymbolValue::Detailed {
+                glyph: Some(glyph),
+                width: Some(width),
+                ..
+            } = value
+            else {
+                panic!(
+                    "`{name}` must declare a glyph and its width: a Nerd Font's icons sit in the private-use area, where unicode-width cannot measure them"
+                );
+            };
+            assert_eq!(*width, 1, "`{name}` is declared for the Mono builds");
+            for character in glyph.chars() {
+                assert!(
+                    CODICONS.contains(&(character as u32)),
+                    "`{name}` is U+{:04X}, outside the Codicon range",
+                    character as u32
+                );
+            }
+        }
     }
 }

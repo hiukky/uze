@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "name": "uze nerd",
+  "description": "UZE's marks drawn in Codicons, the icon set VS Code draws its own chrome with. Needs a Nerd Fonts v3 patched font, where Codicons live at U+EA60-EC84; transcribed from the official glyphnames.json (Nerd Fonts 3.5.1) by name, never by codepoint. Widths are declared for the `Nerd Font Mono` builds, whose icons occupy one cell; on a non-Mono build they occupy two, and unicode-width cannot tell the two apart. Declares symbols only, and only the ones an icon says better than a letterform: box drawing, bars and typography are the built-in default's, which any patched font draws.",
+  "symbols": {
+    "mark.native": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.official": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.ok": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.adapted": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.unsupported": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.attention": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.close": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.dot": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.done": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.sparkle": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.toggle-off": {
+      "glyph": "",
+      "width": 1
+    },
+    "mark.toggle-on": {
+      "glyph": "",
+      "width": 1
+    },
+    "status.completed": {
+      "glyph": "",
+      "width": 1
+    },
+    "status.selected": {
+      "glyph": "",
+      "width": 1
+    },
+    "status.idle": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.up": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.down": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.external": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.swap": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.ahead": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.behind": {
+      "glyph": "",
+      "width": 1
+    },
+    "arrow.to": {
+      "glyph": "",
+      "width": 1
+    },
+    "chevron.right": {
+      "glyph": "",
+      "width": 1
+    },
+    "chevron.collapsed": {
+      "glyph": "",
+      "width": 1
+    },
+    "chevron.expanded": {
+      "glyph": "",
+      "width": 1
+    },
+    "prompt": {
+      "glyph": "",
+      "width": 1
+    },
+    "menu": {
+      "glyph": "",
+      "width": 1
+    }
+  }
+}

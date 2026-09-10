@@ -45,7 +45,10 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::{Token, load::builtin};
+    use crate::{
+        Identity, Token,
+        load::{default_file as default_theme_file, glyph_set_file, resolve_stack},
+    };
 
     /// The active theme is process-wide, so tests that read or replace it
     /// take turns — otherwise one test's swap is another's flake.
@@ -69,7 +72,17 @@ mod tests {
         let _turn = SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let ascii = builtin("ascii").expect("bundled").clone();
+        // The ASCII glyphs are a *set* layered over the default, not a theme
+        // of their own — assembling the stack here is what a selection does.
+        let ascii = resolve_stack(
+            &Identity::from_file("default", default_theme_file()),
+            &[
+                default_theme_file(),
+                glyph_set_file("ascii").expect("bundled"),
+            ],
+        )
+        .expect("the bundled ascii set resolves over the default")
+        .theme;
         set_active(ascii);
         assert_eq!(active().glyph(crate::Symbol::StatusIdle), ".");
         // Put the default back: the active theme is process-wide, and a test

@@ -48,6 +48,9 @@ pub enum Scope {
     ProfileEditor,
     /// The Keys screen itself.
     Keys,
+    /// The Appearance screen: the palette and the glyph set, each chosen
+    /// on its own.
+    Appearance,
 
     /// A list's live filter.
     Filter,
@@ -102,6 +105,7 @@ impl Scope {
             | Scope::Profiles
             | Scope::ProfileEditor
             | Scope::Keys
+            | Scope::Appearance
             | Scope::Filter
             | Scope::TextPrompt
             | Scope::Confirm
@@ -162,6 +166,7 @@ impl Scope {
             Scope::Profiles => "profiles",
             Scope::ProfileEditor => "profile-editor",
             Scope::Keys => "keys",
+            Scope::Appearance => "appearance",
             Scope::Filter => "filter",
             Scope::TextPrompt => "text-prompt",
             Scope::Confirm => "confirm",
@@ -193,10 +198,11 @@ impl Scope {
             Scope::Profiles => "Profiles",
             Scope::ProfileEditor => "Editing a preference",
             Scope::Keys => "Keys",
+            Scope::Appearance => "Appearance",
             Scope::Filter => "While searching",
             Scope::TextPrompt => "While typing an answer",
             Scope::Confirm => "While being asked",
-            Scope::ThemePicker => "Appearance",
+            Scope::ThemePicker => "The theme picker",
             Scope::Workspace => "Workspace",
             Scope::Code => "Code",
             Scope::CodeEditing => "Editing a file",
@@ -231,6 +237,7 @@ pub const ALL_SCOPES: &[Scope] = &[
     Scope::Profiles,
     Scope::ProfileEditor,
     Scope::Keys,
+    Scope::Appearance,
     Scope::Filter,
     Scope::TextPrompt,
     Scope::Confirm,

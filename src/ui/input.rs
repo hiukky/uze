@@ -30,6 +30,7 @@ impl TuiModel {
             Route::Harnesses => Scope::Harnesses,
             Route::Profiles => Scope::Profiles,
             Route::Keys => Scope::Keys,
+            Route::Appearance => Scope::Appearance,
         });
         if self.keys_capture {
             // Every keystroke is the answer here, including ones bound
@@ -189,6 +190,9 @@ impl TuiModel {
                     self.keys_problem = None;
                     return Intent::None;
                 }
+                if self.route == Route::Appearance {
+                    return self.activate_appearance();
+                }
                 self.open_or_act()
             }
             Action::ChangeKey => {
@@ -339,8 +343,7 @@ impl TuiModel {
         if self.focus == Focus::Sidebar {
             let count = ROUTES.len();
             let step = if delta > 0 { 1 } else { count - 1 };
-            self.set_route(ROUTES[(self.route.index() + step) % count]);
-            return Intent::None;
+            return self.set_route(ROUTES[(self.route.index() + step) % count]);
         }
         match self.route {
             Route::Profiles => {
@@ -352,6 +355,10 @@ impl TuiModel {
                 self.keys_selected = self.keys_selected.saturating_add_signed(delta).min(last);
                 self.keys_capture = false;
                 self.keys_problem = None;
+                Intent::None
+            }
+            Route::Appearance => {
+                self.move_appearance_selection(delta);
                 Intent::None
             }
             // The Overview's only navigable list is its prompt history.

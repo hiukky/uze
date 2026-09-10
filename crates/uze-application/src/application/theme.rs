@@ -14,11 +14,22 @@ use super::services::Themes;
 /// A theme the operator can select.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ThemeSummary {
-    /// What `uze theme use` takes. A file's own stem, or a built-in's name.
+    /// What `uze theme set` takes. A file's own stem, or a built-in's name.
     pub id: String,
     pub active: bool,
     /// `None` for a theme UZE carries rather than one someone wrote.
     pub path: Option<std::path::PathBuf>,
+}
+
+/// A glyph set the operator can select.
+///
+/// Carries an id and nothing else, for the same reason [`ThemeSummary`]
+/// carries no colours: what the set actually *draws* is the design system's
+/// to answer, and a surface that wants to show it asks there.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GlyphSetSummary {
+    pub id: String,
+    pub active: bool,
 }
 
 impl Themes<'_> {
@@ -73,6 +84,35 @@ impl Themes<'_> {
     pub fn select(&self, id: &str) -> Result<()> {
         theme_state::set_active(&self.0.home, id)
     }
+
+    /// Every glyph set UZE carries, marking the selected one. Takes the
+    /// available ids for the same reason [`Themes::list`] does: which sets
+    /// exist is the design system's list, not the domain's.
+    #[tracing::instrument(name = "themes.glyph_sets", skip_all)]
+    pub fn glyph_sets(&self, available: &[&str]) -> Result<Vec<GlyphSetSummary>> {
+        let selected = self.glyphs()?;
+        Ok(available
+            .iter()
+            .map(|id| GlyphSetSummary {
+                id: (*id).to_owned(),
+                active: selected.as_deref() == Some(*id),
+            })
+            .collect())
+    }
+
+    /// The selected glyph set's id, or `None` while the operator has not
+    /// chosen — which draws the default set, not nothing.
+    #[tracing::instrument(name = "themes.glyphs", skip_all, err)]
+    pub fn glyphs(&self) -> Result<Option<String>> {
+        theme_state::glyphs(&self.0.home)
+    }
+
+    /// Records the glyph set. Independent of [`Themes::select`] in both
+    /// directions: neither call reads or writes the other's half.
+    #[tracing::instrument(name = "themes.select_glyphs", skip_all, fields(id = %id), err)]
+    pub fn select_glyphs(&self, id: &str) -> Result<()> {
+        theme_state::set_glyphs(&self.0.home, id)
+    }
 }
 
 #[cfg(test)]
@@ -81,7 +121,8 @@ mod tests {
 
     use crate::{UzeApplication, UzeHome};
 
-    /// Named by `src/command_performance.rs` for `theme list`/`use`/`show`.
+    /// Named by `src/command_performance.rs` for `theme
+    /// list`/`set`/`show`/`glyphs`.
     ///
     /// Nothing here probes a harness or resolves a theme, so what this
     /// actually guards is that it stays that way: the day selecting a theme
@@ -101,12 +142,17 @@ mod tests {
         app.themes().select("theme-7").expect("selected");
 
         let started = Instant::now();
-        let listed = app.themes().list(&["default", "ascii"]).expect("listed");
+        let listed = app.themes().list(&["default"]).expect("listed");
+        let sets = app
+            .themes()
+            .glyph_sets(&["default", "ascii", "nerd"])
+            .expect("sets");
         let active = app.themes().active().expect("active");
         let path = app.themes().path_of("theme-7").expect("path");
         let elapsed = started.elapsed();
 
-        assert_eq!(listed.len(), 34);
+        assert_eq!(listed.len(), 33);
+        assert_eq!(sets.len(), 3);
         assert_eq!(active.as_deref(), Some("theme-7"));
         assert!(path.is_some());
         assert!(
@@ -120,13 +166,18 @@ mod tests {
         let root = uze_testkit::temp::scratch("theme-shadow");
         let home = UzeHome::at(&root);
         std::fs::create_dir_all(home.themes_dir()).expect("themes dir");
-        std::fs::write(home.themes_dir().join("ascii.json"), "{}").expect("theme file");
+        std::fs::write(home.themes_dir().join("default.json"), "{}").expect("theme file");
         let app = UzeApplication::new(home, Vec::new());
 
-        let listed = app.themes().list(&["default", "ascii"]).expect("listed");
-        let ascii: Vec<&super::ThemeSummary> =
-            listed.iter().filter(|theme| theme.id == "ascii").collect();
-        assert_eq!(ascii.len(), 1, "listed twice: {listed:?}");
-        assert!(ascii[0].path.is_some(), "the built-in won over their file");
+        let listed = app.themes().list(&["default"]).expect("listed");
+        let shadowed: Vec<&super::ThemeSummary> = listed
+            .iter()
+            .filter(|theme| theme.id == "default")
+            .collect();
+        assert_eq!(shadowed.len(), 1, "listed twice: {listed:?}");
+        assert!(
+            shadowed[0].path.is_some(),
+            "the built-in won over their file"
+        );
     }
 }

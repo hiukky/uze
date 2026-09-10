@@ -230,7 +230,15 @@ enum ThemeAction {
         format: OutputFormat,
     },
     /// Draw in this theme, from now on, in both the CLI and the TUI.
-    Use { id: String },
+    Set { id: String },
+    /// The glyph sets UZE carries, or the one to draw with. Chosen apart
+    /// from the palette: which marks your terminal can draw is a fact about
+    /// the font you installed, not about which colours you like today.
+    Glyphs {
+        set: Option<String>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Show a theme's resolved colours and glyphs, and anything its file
     /// got wrong. The active one by default.
     Show {
@@ -1015,7 +1023,7 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
                 OutputFormat::Json => print_json(&themes),
             }
         }
-        ThemeAction::Use { id } => {
+        ThemeAction::Set { id } => {
             // Load it before recording the choice: a theme that will not
             // resolve should be refused here, where the operator is looking,
             // rather than accepted and complained about on every later run.
@@ -1027,6 +1035,35 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
             uze_theme::set_active(resolved.theme);
             progress::success(&format!("Drawing in {id}"));
         }
+        ThemeAction::Glyphs { set, format } => match set {
+            None => {
+                let sets = app.themes().glyph_sets(uze_theme::glyph_sets())?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_glyph_sets(&sets)),
+                    OutputFormat::Json => print_json(&sets),
+                }
+            }
+            Some(set) => {
+                if !uze_theme::glyph_sets().contains(&set.as_str()) {
+                    return Err(uze_application::UzeError::UnusableTheme(format!(
+                        "no glyph set `{set}` — UZE carries {}",
+                        uze_theme::glyph_sets().join(", ")
+                    )));
+                }
+                app.themes().select_glyphs(&set)?;
+                // Re-resolve so this very invocation, and every later one,
+                // draws with it: the set is a layer under whichever theme
+                // is active, including none.
+                let id = app
+                    .themes()
+                    .active()?
+                    .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned());
+                if let Ok(resolved) = uze::theme::resolve(app, home, &id) {
+                    uze_theme::set_active(resolved.theme);
+                }
+                progress::success(&format!("Drawing with the {set} glyphs"));
+            }
+        },
         ThemeAction::Show { id, format } => {
             let id = match id {
                 Some(id) => id,
@@ -1043,6 +1080,61 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
         }
     }
     Ok(())
+}
+
+fn render_glyph_sets(sets: &[uze_application::application::GlyphSetSummary]) -> String {
+    let mut out = String::new();
+    out.push_str(&progress::section("Glyphs\n"));
+    let rows: Vec<Vec<String>> = sets
+        .iter()
+        .map(|set| {
+            let mark = if set.active {
+                progress::success_icon()
+            } else {
+                " ".to_owned()
+            };
+            // Drawn in the set's own glyphs, so the row is the answer to
+            // "can this terminal render it" rather than a claim about it.
+            vec![
+                mark,
+                progress::title(&set.id),
+                progress::label(preview_of(&set.id)),
+            ]
+        })
+        .collect();
+    out.push_str(&progress::aligned_rows(rows));
+    out.push('\n');
+    out
+}
+
+/// A handful of a set's own marks, resolved from the set rather than from
+/// the active theme — the only place in UZE that deliberately draws a glyph
+/// it is not currently drawing with.
+fn preview_of(id: &str) -> String {
+    const SHOWN: &[uze_theme::Symbol] = &[
+        uze_theme::Symbol::MarkOk,
+        uze_theme::Symbol::MarkOfficial,
+        uze_theme::Symbol::MarkNative,
+        uze_theme::Symbol::MarkAttention,
+        uze_theme::Symbol::StatusSelected,
+        uze_theme::Symbol::StatusIdle,
+        uze_theme::Symbol::ChevronCollapsed,
+        uze_theme::Symbol::ArrowTo,
+        uze_theme::Symbol::Prompt,
+    ];
+    let mut layers = vec![uze_theme::default_file()];
+    layers.extend(uze_theme::glyph_set_file(id));
+    let Ok(resolved) = uze_theme::resolve_stack(
+        &uze_theme::Identity::from_file(id, uze_theme::default_file()),
+        &layers,
+    ) else {
+        return String::new();
+    };
+    SHOWN
+        .iter()
+        .map(|symbol| resolved.theme.glyph(*symbol))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn render_theme_list(themes: &[uze_application::application::ThemeSummary]) -> String {

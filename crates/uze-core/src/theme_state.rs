@@ -18,34 +18,68 @@ use crate::{
     home::UzeHome,
 };
 
+/// The two appearance choices, in one record because they are one answer to
+/// one question — what this machine looks like — even though neither
+/// decides the other.
+///
+/// `glyphs` is optional in the sense that never having chosen is the
+/// ordinary case, not an error: a file written before the field existed
+/// reads as "the default set", which is exactly what it drew with.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ThemeSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     active: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    glyphs: Option<String>,
 }
 
 /// The theme the operator chose, or `None` while they have not chosen —
 /// which is not an error state: the built-in default is what a fresh
 /// installation draws with, and choosing is how you leave it.
 pub fn active(home: &UzeHome) -> Result<Option<String>> {
+    Ok(read(home)?.active)
+}
+
+/// The glyph set the operator chose, or `None` while they have not chosen.
+///
+/// Independent of [`active`] in both directions: a machine can be on a
+/// palette with the default glyphs, on the ASCII glyphs with no palette
+/// chosen at all, or on neither.
+pub fn glyphs(home: &UzeHome) -> Result<Option<String>> {
+    Ok(read(home)?.glyphs)
+}
+
+pub fn set_active(home: &UzeHome, id: &str) -> Result<()> {
+    let mut selection = read(home)?;
+    selection.active = Some(id.to_owned());
+    write(home, &selection)
+}
+
+pub fn set_glyphs(home: &UzeHome, id: &str) -> Result<()> {
+    let mut selection = read(home)?;
+    selection.glyphs = Some(id.to_owned());
+    write(home, &selection)
+}
+
+/// Both selections share one file, so each is written by reading the record
+/// and replacing its own half. Writing a fresh record instead is how
+/// choosing a palette would silently forget the operator's glyphs.
+fn read(home: &UzeHome) -> Result<ThemeSelection> {
     let path = home.active_theme_path();
     if !path.exists() {
-        return Ok(None);
+        return Ok(ThemeSelection::default());
     }
     let bytes = fs::read(&path).map_err(|source| UzeError::Read {
         path: path.clone(),
         source,
     })?;
-    let selection: ThemeSelection =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
-    Ok(selection.active)
+    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
 }
 
-pub fn set_active(home: &UzeHome, id: &str) -> Result<()> {
+fn write(home: &UzeHome, selection: &ThemeSelection) -> Result<()> {
     home.ensure_layout()?;
-    let payload = serde_json::to_vec_pretty(&ThemeSelection {
-        active: Some(id.to_owned()),
-    })
-    .expect("theme selection serialization is infallible");
+    let payload =
+        serde_json::to_vec_pretty(selection).expect("theme selection serialization is infallible");
     crate::persistence::write_atomic(&home.active_theme_path(), &payload)
 }
 
@@ -107,6 +141,62 @@ mod tests {
         );
         set_active(&home, "ascii").expect("written");
         assert_eq!(active(&home).expect("readable").as_deref(), Some("ascii"));
+    }
+
+    #[test]
+    fn the_two_choices_do_not_overwrite_each_other() {
+        let home = home("theme-two-axes");
+        set_active(&home, "nocturne").expect("written");
+        set_glyphs(&home, "nerd").expect("written");
+        // Choosing a palette again must not forget the glyphs, which is the
+        // whole point of them being separate.
+        set_active(&home, "dawn").expect("written");
+
+        assert_eq!(active(&home).expect("readable").as_deref(), Some("dawn"));
+        assert_eq!(glyphs(&home).expect("readable").as_deref(), Some("nerd"));
+    }
+
+    #[test]
+    fn a_glyph_set_can_be_chosen_with_no_theme_chosen() {
+        let home = home("theme-glyphs-only");
+        set_glyphs(&home, "ascii").expect("written");
+        assert_eq!(active(&home).expect("readable"), None);
+        assert_eq!(glyphs(&home).expect("readable").as_deref(), Some("ascii"));
+    }
+
+    /// A file written before the glyph set existed still names a theme, and
+    /// says nothing about glyphs — which is the default set, and is what it
+    /// was already drawing with.
+    #[test]
+    fn a_selection_written_before_the_second_axis_existed_still_loads() {
+        let home = home("theme-legacy");
+        home.ensure_layout().expect("layout");
+        fs::write(home.active_theme_path(), r#"{"active":"nocturne"}"#).expect("written");
+
+        assert_eq!(
+            active(&home).expect("readable").as_deref(),
+            Some("nocturne")
+        );
+        assert_eq!(glyphs(&home).expect("readable"), None);
+    }
+
+    /// The other direction, which is the rollback claim: a record this build
+    /// writes still loads on one that has never heard of the field.
+    #[test]
+    fn a_record_carrying_glyphs_still_loads_where_the_field_is_unknown() {
+        #[derive(Deserialize)]
+        struct OlderSelection {
+            active: Option<String>,
+        }
+
+        let home = home("theme-rollback");
+        set_active(&home, "nocturne").expect("written");
+        set_glyphs(&home, "nerd").expect("written");
+
+        let bytes = fs::read(home.active_theme_path()).expect("readable");
+        let older: OlderSelection = serde_json::from_slice(&bytes)
+            .expect("a build without the field ignores it rather than failing");
+        assert_eq!(older.active.as_deref(), Some("nocturne"));
     }
 
     #[test]
