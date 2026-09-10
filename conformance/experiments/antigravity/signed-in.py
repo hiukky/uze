@@ -34,7 +34,7 @@ import time
 
 import pexpect
 
-from harnesses.antigravity.scenarios import agy_setup
+from harnesses.antigravity.scenarios import PERMISSION_PROMPTS, agy_setup
 from shared import common
 
 ARGS = (
@@ -220,7 +220,7 @@ def run_tui(cfg, prov_ip):
             break
         if not child.isalive():
             break
-        if "Do you want to proceed" in seen and not prompted:
+        if any(m in seen for m in PERMISSION_PROMPTS) and not prompted:
             prompted = True
             child.send("\r")
             time.sleep(1.0)

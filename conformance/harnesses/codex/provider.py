@@ -10,6 +10,13 @@ Contract (derived from observed behavior of the REAL codex-cli 0.149.1):
     Responses API), answered with SSE events (response.created /
     output_item.added / content_part.added / output_text.delta / completed).
   * Model catalog: `GET /v1/models` (served for the TUI boot panel).
+  * (0.154.0) While a turn streams, the CLI names the session on a
+    **second connection**, asking for a title under a strict
+    `text.format` JSON schema. Both facts are load-bearing: the server
+    must be threaded, or that connection waits in the backlog and the
+    `renaming...` spinner never stops; and a schema-constrained request
+    must be answered with the JSON it asked for, or the rename never
+    completes and its thread runs the scripted tool call of its own.
 
 This stub records ONLY a structural summary of each request (skill markers,
 catalog presence, user-text presence) — never the verbatim body — into
@@ -23,7 +30,8 @@ import hashlib
 import json
 import os
 import ssl
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import capture
 import variation
@@ -59,6 +67,13 @@ SKILL_MARKERS = [
     "UZE_SKILL_BODY_ANALYZE",
 ]
 COUNTER = {"n": 0}
+# Serving one connection at a time was enough until 0.154.0, which renames
+# the session on a connection of its own while the turn streams on the
+# WebSocket: the second connection sat in the listen backlog, the rename
+# spinner never stopped, and no turn ever went quiet for an absence check.
+# A threaded server makes the evidence file a shared resource — one writer
+# at a time, or a run loses requests it did observe.
+RECORD_LOCK = threading.Lock()
 
 # The hook scenarios script a tool call to the harness's native shell tool
 # (`Bash`); TOOL_ARGS mirrors the tool `input` the hook's normalized ABI
@@ -325,6 +340,37 @@ def function_call_sse():
     return sse_bytes(function_call_events())
 
 
+#: What a schema-constrained side call is answered with. Deliberately not
+#: RESPONSE_TEXT: 0.154.0 asks for a session *title*, and a title carrying
+#: the turn's own marker would sit on screen — and in the window title —
+#: for every wait that looks for that marker.
+SIDE_CALL_ANSWER = "UZE Lab session"
+
+
+def schema_answer(body):
+    """The JSON a request constraining its answer with `text.format` asked
+    for, or None when the request is an ordinary turn.
+
+    0.154.0 renames the session while the turn streams, on a connection of
+    its own, by asking for a title under a strict JSON schema. A scripted
+    tool call is not an answer to that: the rename never completes, its
+    spinner never stops — no turn goes quiet, so no absence check may
+    evaluate — and the title's own thread runs the scripted command through
+    the hook, mixing its tool result into the evidence of the user's turn.
+    """
+    try:
+        schema = json.loads(body)["text"]["format"]["schema"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    properties = schema.get("properties", {})
+    return json.dumps(
+        {
+            name: SIDE_CALL_ANSWER[: properties.get(name, {}).get("maxLength", 64)]
+            for name in schema.get("required", properties)
+        }
+    )
+
+
 def respond(body, path):
     """The request → payload mapping shared by the HTTP and WebSocket paths
     (codex 0.150.1 speaks the Responses API over a real WebSocket)."""
@@ -333,6 +379,9 @@ def respond(body, path):
         # sends a boot/connectivity request without `input`/`inputs`,
         # and answering that with a function call hangs its model load.
         has_turn = '"input"' in body or '"inputs"' in body
+        side_call = schema_answer(body)
+        if side_call is not None:
+            return responses_sse(side_call)
         if MODE == "toolcall" and has_turn and '"function_call_output"' not in body:
             return function_call_sse()
         return responses_sse(RESPONSE_TEXT)
@@ -363,23 +412,19 @@ def record(body, path, method):
     """Structural evidence for one request — shared by the HTTP handler
     and the per-message WebSocket loop (the real turn bodies arrive in WS
     frames after the upgrade, so an HTTP-only read would miss them)."""
-    n = COUNTER["n"]
-    COUNTER["n"] += 1
-    rec = {
-        "method": method,
-        "path": path,
-        "seq": n,
-        "summary": structural_summary(body),
-    }
-    struct = []
-    if os.path.exists(STRUCT_PATH):
-        try:
-            struct = json.load(open(STRUCT_PATH))
-        except Exception:
-            struct = []
-    struct.append(rec)
-    with open(STRUCT_PATH, "w") as f:
-        json.dump(struct, f, indent=1)
+    summary = structural_summary(body)
+    with RECORD_LOCK:
+        n = COUNTER["n"]
+        COUNTER["n"] += 1
+        struct = []
+        if os.path.exists(STRUCT_PATH):
+            try:
+                struct = json.load(open(STRUCT_PATH))
+            except Exception:
+                struct = []
+        struct.append({"method": method, "path": path, "seq": n, "summary": summary})
+        with open(STRUCT_PATH, "w") as f:
+            json.dump(struct, f, indent=1)
     print(f"[codex-provider] {method} {path} req#{n}", flush=True)
 
 
@@ -399,7 +444,10 @@ def ws_loop(conn, path):
                 pass
         record(text, path, "WS")
         has_turn = '"input"' in text or '"inputs"' in text
-        if MODE == "toolcall" and has_turn and '"function_call_output"' not in text:
+        side_call = schema_answer(text)
+        if side_call is not None:
+            events = text_events(side_call)
+        elif MODE == "toolcall" and has_turn and '"function_call_output"' not in text:
             events = function_call_events()
         else:
             events = text_events(RESPONSE_TEXT)
@@ -458,7 +506,7 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    srv = HTTPServer(("0.0.0.0", 443), H)
+    srv = ThreadingHTTPServer(("0.0.0.0", 443), H)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(LEAF_CERT, LEAF_KEY)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
