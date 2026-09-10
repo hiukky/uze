@@ -347,7 +347,7 @@ jobs:
       # runner built it. Without it a tarball claiming to be uze is only as
       # trustworthy as the page it was downloaded from. Verified with
       # `gh attestation verify uze-<target>.tar.gz --repo hiukky/uze`.
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: "assets/uze-*.tar.gz, assets/uze-sbom.cdx.json"
       # What a stranger who followed an install link actually reads: the
