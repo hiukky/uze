@@ -43,6 +43,7 @@ pub fn short_hex(bytes: &[u8]) -> String {
 /// are followed as the files they name, matching what the Store ingested.
 pub fn tree_sha256(root: &std::path::Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
 
     let mut files = Vec::new();
     collect_files(root, root, &mut files)?;
@@ -65,7 +66,14 @@ pub fn tree_sha256(root: &std::path::Path) -> std::io::Result<String> {
         );
         hasher.update(&contents);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    // Spelled byte by byte rather than through the digest's own `LowerHex`:
+    // the crate stopped offering one in 0.11, and the written form is what
+    // every `integrity` already pinned — it cannot move with a dependency.
+    let mut spelled = String::from("sha256:");
+    for byte in hasher.finalize() {
+        let _ = write!(spelled, "{byte:02x}");
+    }
+    Ok(spelled)
 }
 
 fn collect_files(
