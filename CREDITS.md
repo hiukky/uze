@@ -196,7 +196,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `mio` | 1.2.3 | MIT |
 | `miow` | 0.6.1 | MIT OR Apache-2.0 |
 | `nix` | 0.28.0 | MIT |
-| `noyalib` | 0.0.39 | MIT OR Apache-2.0 |
+| `noyalib` | 0.0.41 | MIT OR Apache-2.0 |
 | `nu-ansi-term` | 0.50.3 | MIT |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
