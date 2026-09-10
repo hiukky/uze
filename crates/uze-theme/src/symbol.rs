@@ -87,8 +87,22 @@ vocabulary! {
         // ── marks: what a thing's standing is ──────────────────────────
         /// A capability delivered through the harness's own mechanism.
         MarkNative = "mark.native",
-        /// A package or marketplace UZE vouches for.
+        /// A package or marketplace UZE vouches for. A *badge*, and only
+        /// that: the standing of the thing beside it, awarded by UZE.
+        ///
+        /// Not the generic affirmative — that is [`Symbol::MarkOk`], and
+        /// keeping them apart matters because a set may well draw this one
+        /// as a seal. Every place that meant "yes, this is so" used to
+        /// draw this one, which was invisible while the default happened
+        /// to give both the same check, and became a screen full of seals
+        /// the moment a set gave them different glyphs.
         MarkOfficial = "mark.official",
+        /// Yes, this is so: ready, configured, present, succeeded.
+        ///
+        /// A *state* rather than a badge or a step — what it marks is how
+        /// the thing beside it currently stands, not something anyone did
+        /// to it and not anything UZE vouches for.
+        MarkOk = "mark.ok",
         /// Delivered, but not through the harness's own mechanism.
         MarkAdapted = "mark.adapted",
         /// No route exists at all.

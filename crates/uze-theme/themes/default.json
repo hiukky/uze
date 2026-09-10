@@ -54,6 +54,7 @@
   "symbols": {
     "mark.native": "√",
     "mark.official": "✓",
+    "mark.ok": "✓",
     "mark.adapted": "≈",
     "mark.unsupported": "—",
     "mark.attention": "!",

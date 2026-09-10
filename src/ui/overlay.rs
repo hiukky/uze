@@ -420,7 +420,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             "Detected, but UZE hasn't configured it — press s to run setup.",
         ),
         entry(
-            Symbol::MarkOfficial,
+            Symbol::MarkOk,
             "Configured",
             theme::color(Token::Accent),
             "UZE has set it up — ready to receive plugins.",

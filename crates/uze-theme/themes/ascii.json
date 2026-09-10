@@ -5,6 +5,7 @@
   "symbols": {
     "mark.native": "+",
     "mark.official": "*",
+    "mark.ok": "v",
     "mark.adapted": "~",
     "mark.unsupported": "-",
     "mark.attention": "!",

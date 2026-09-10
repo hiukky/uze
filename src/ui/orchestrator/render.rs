@@ -1821,11 +1821,7 @@ fn deliver_button(
         // request already carries. It stays pressable — the target moves,
         // and a re-sync is how the branch follows it.
         TaskStateView::Published => Some((
-            format!(
-                "{} {}",
-                theme::glyph(Symbol::MarkOfficial),
-                delivery_ending(task)
-            ),
+            format!("{} {}", theme::glyph(Symbol::MarkOk), delivery_ending(task)),
             theme::color(Token::TextMuted),
             true,
         )),
