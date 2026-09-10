@@ -379,7 +379,7 @@ mention of it is inside a `thread::spawn`.
 > `tests/architecture/layering.rs::architecture_rules_hold` ("drawing the workspace reaches nothing")
 > `tests/architecture/layering.rs::the_workspace_client_reaches_for_git_only_from_a_thread`
 > `src/ui/orchestrator.rs::workspace_tests::scheduling_a_git_read_reserves_the_checkout_and_answers_nothing`
-> `crates/uze-extensions/src/git.rs::view_tests::selecting_a_file_asks_for_its_diff_rather_than_reading_it`
+> `crates/uze-extensions/src/code/tests.rs::selecting_a_file_asks_for_its_diff_rather_than_reading_it`
 
 ### An answer that arrives late is dropped, never drawn
 
@@ -404,7 +404,7 @@ hits come back as `ExtensionHit` — one variant per surface, so
 commits.
 
 > `src/ui/orchestrator.rs::workspace_tests::the_timeline_speaks_only_the_extensions_vocabulary`
-> `crates/uze-extensions/src/git.rs::view_tests::the_timeline_section_names_meaning_rather_than_colour`
+> `crates/uze-extensions/src/code/tests.rs::the_timeline_section_names_meaning_rather_than_colour`
 
 ### Slot lifecycle is the application's, not the client's
 
@@ -793,13 +793,13 @@ time, and a hand edit still drifts and is refused.
 
 ### A change view shows one checkout, never the repository
 
-The Git extension is scoped to the checkout the active tab is in, and
+The code surface is scoped to the checkout the active tab is in, and
 resolves every `git` call against it. `git worktree list` answers
 repository-wide from anywhere inside the repository, so listing linked
 worktrees would put the operator's diff and every sibling agent's — including
 slots whose agent is long gone — inside a tab that owns exactly one of them.
 
-> `crates/uze-extensions/src/git.rs::discovers_main_and_configured_linked_worktrees`
+> `crates/uze-extensions/src/code/changes.rs::repository_tests::discovers_main_and_configured_linked_worktrees`
 
 ### A replaced lock field is rejected, never silently dropped
 
@@ -1036,7 +1036,7 @@ rather than from the host's design system.
 
 > `src/ui/extension_view.rs::a_click_target_comes_from_what_the_host_drew`
 > `src/ui/extension_view.rs::chrome_uses_the_hosts_palette_and_content_keeps_its_own`
-> `crates/uze-extensions/src/git.rs::the_view_names_meaning_rather_than_colour`
+> `crates/uze-extensions/src/code/tests.rs::the_view_names_meaning_rather_than_colour`
 
 ### An extension reaches nothing it was not handed
 
@@ -1052,7 +1052,16 @@ one it can withhold, and a sandbox is a property of the loading mechanism
 rather than something added afterwards. A `&mut Frame` could not cross a
 process boundary; neither can a `fork()`.
 
+The grant is no longer read-only — the file explorer saves and deletes —
+and that is exactly why it is worth stating where the writing happens.
+`Host::write_file` refuses a path that is not already a file, so a save
+can only ever mean "save this file" and never "create whatever this string
+names"; `Host::delete_file` refuses a directory, because a recursive
+removal is a different act from the one a single keystroke describes. Both
+live in `src/ui/extension_host.rs` and nowhere else.
+
 > `tests/architecture/layering.rs::architecture_rules_hold`
+> `src/ui/extension_host.rs::the_write_grant_is_narrower_than_the_filesystem`
 
 ### Git's exit code is reported, never classified by the transport
 

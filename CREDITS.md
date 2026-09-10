@@ -71,8 +71,8 @@ accepts, which is why the table sums to more than the number of crates.
 
 | Licence | Crates |
 | --- | --- |
-| Apache License 2.0 (`Apache-2.0`) | 189 |
-| MIT License (`MIT`) | 64 |
+| Apache License 2.0 (`Apache-2.0`) | 190 |
+| MIT License (`MIT`) | 65 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
 
@@ -214,6 +214,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `portable-pty` | 0.9.0 | MIT |
 | `powerfmt` | 0.2.0 | MIT OR Apache-2.0 |
 | `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 |
+| `pulldown-cmark` | 0.13.4 | MIT |
 | `quick-xml` | 0.41.0 | MIT |
 | `quote` | 1.0.47 | MIT OR Apache-2.0 |
 | `r-efi` | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
@@ -287,6 +288,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `tracing-log` | 0.2.0 | MIT |
 | `tracing-subscriber` | 0.3.23 | MIT |
 | `typenum` | 1.20.1 | MIT OR Apache-2.0 |
+| `unicase` | 2.9.0 | MIT OR Apache-2.0 |
 | `unicode-ident` | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `unicode-segmentation` | 1.13.3 | MIT OR Apache-2.0 |
 | `unicode-truncate` | 2.0.1 | MIT OR Apache-2.0 |

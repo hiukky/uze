@@ -34,12 +34,12 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        Attach, AttachAnswers, AttachInbox, CommitDetailPopup, CommitDetailResolution,
-        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
-        GitResolution, GitViewResolution, NOTICE_TTL, OccupancyResolution, PendingDrop,
-        PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection, SupportResolution,
-        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
-        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
+        Attach, AttachAnswers, AttachInbox, ChangesResolution, CommitDetailPopup,
+        CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
+        FileResolution, GitAnswer, GitBadge, GitResolution, NOTICE_TTL, OccupancyResolution,
+        PendingDrop, PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection,
+        SupportResolution, TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync,
+        Viewport, WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
         blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key,
         forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
         pane_relative, pending_tab_drop,
@@ -508,6 +508,129 @@ mod workspace_tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// A click inside the explorer has to resolve to the row the frame
+    /// drew, not to something laid out under it. The overlay covers the
+    /// whole frame and pushes its own hits into the shared table, so
+    /// "does a click reach the extension" is a question only the real
+    /// render can answer.
+    #[test]
+    fn a_click_inside_the_explorer_reaches_the_extension() {
+        use uze_extensions::{DirEntry, ExtensionHit, code, view::ViewHit};
+
+        let root = PathBuf::from("/repo");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        let mut view =
+            code::CodeView::opening(root.clone(), "/repo".to_owned(), code::NavigatorMode::Files);
+        // Answered by hand rather than off a disk: what is under test is
+        // where the click lands, and a temp directory would only add a
+        // way for the test to fail for reasons of its own.
+        view.take_request();
+        view.absorb(code::FileAnswer::Listed {
+            path: root,
+            entries: Ok(vec![
+                DirEntry {
+                    directory: true,
+                    name: "src".to_owned(),
+                },
+                DirEntry {
+                    directory: false,
+                    name: "README.md".to_owned(),
+                },
+            ]),
+        });
+        model.code = Some(view);
+        full_frame(&mut model);
+
+        let row = model
+            .hits
+            .iter()
+            .find(|(_, hit)| {
+                matches!(
+                    hit,
+                    WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::SelectItem(_)))
+                )
+            })
+            .expect("the explorer drew a clickable file row")
+            .0;
+        assert!(
+            matches!(
+                model.hit_at(row.x + 2, row.y),
+                Some(WorkspaceHit::Extension(ExtensionHit::Code(
+                    ViewHit::SelectItem(_)
+                )))
+            ),
+            "a click on the row resolves to that row, not to something under it"
+        );
+
+        let caret = model.hits.iter().find(|(_, hit)| {
+            matches!(
+                hit,
+                WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::PlaceCaret { .. }))
+            )
+        });
+        assert!(
+            caret.is_none(),
+            "with no file open there is nothing to put a caret in"
+        );
+    }
+
+    /// The changes chip is a badge that is also a door: it says how much
+    /// changed, so with nothing to say it says nothing. What that must
+    /// not cost is reachability — the code chip is always there, and the
+    /// diff is one mode switch away inside the surface it opens.
+    #[test]
+    fn the_changes_chip_comes_with_the_work_and_the_code_chip_never_leaves() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        model.git_badge = None;
+        full_frame(&mut model);
+        assert!(
+            model
+                .hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::OpenFiles),
+            "a clean checkout still offers its files"
+        );
+        assert!(
+            !model
+                .hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::OpenChanges),
+            "and says nothing about changes rather than saying zero"
+        );
+
+        model.git_badge = Some(GitBadge {
+            cwd: PathBuf::from("/repo/.worktrees/a"),
+            summary: Some(uze_extensions::code::ChangeSummary {
+                additions: 3,
+                deletions: 1,
+            }),
+            timeline: None,
+            timeline_checked_at: Instant::now(),
+            checked_at: Instant::now(),
+        });
+        full_frame(&mut model);
+        let changes = model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenChanges)
+            .expect("work arriving brings the badge")
+            .0;
+        let files = model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
+            .expect("the code chip is still there")
+            .0;
+        assert!(
+            files.right() <= changes.x,
+            "the badge arrives to the right of the code chip, so it never moves it"
+        );
     }
 
     /// A hit's rect alone says which drag group it belongs to: a sidebar
@@ -1934,7 +2057,7 @@ mod workspace_tests {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
         model.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo/.worktrees/ai"),
-            summary: Some(uze_extensions::git::GitChangeSummary {
+            summary: Some(uze_extensions::code::ChangeSummary {
                 additions: 12,
                 deletions: 3,
             }),
@@ -2197,12 +2320,12 @@ mod workspace_tests {
         model.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo"),
             summary: None,
-            timeline: Some(uze_extensions::git::Timeline {
+            timeline: Some(uze_extensions::code::Timeline {
                 branch: "main".to_owned(),
                 commits: subjects
                     .iter()
                     .enumerate()
-                    .map(|(index, subject)| uze_extensions::git::Commit {
+                    .map(|(index, subject)| uze_extensions::code::Commit {
                         hash: format!("{index:07x}"),
                         subject: (*subject).to_owned(),
                         age: "3h".to_owned(),
@@ -2259,7 +2382,7 @@ mod workspace_tests {
             cwd: PathBuf::from("/elsewhere"),
             answer: GitAnswer::Full {
                 summary: None,
-                timeline: Some(uze_extensions::git::Timeline {
+                timeline: Some(uze_extensions::code::Timeline {
                     branch: "other".to_owned(),
                     commits: Vec::new(),
                 }),
@@ -2291,7 +2414,7 @@ mod workspace_tests {
 
         let changed = model.absorb_git_read(GitResolution {
             cwd: PathBuf::from("/repo"),
-            answer: GitAnswer::Summary(Some(uze_extensions::git::GitChangeSummary {
+            answer: GitAnswer::Summary(Some(uze_extensions::code::ChangeSummary {
                 additions: 2,
                 deletions: 1,
             })),
@@ -2366,7 +2489,7 @@ mod workspace_tests {
         let commits: Vec<usize> = hits
             .iter()
             .filter_map(|(_, hit)| match hit {
-                WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(index))) => {
+                WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::SelectItem(index))) => {
                     Some(*index)
                 }
                 _ => None,
@@ -2382,7 +2505,7 @@ mod workspace_tests {
                 .filter(|(rect, _)| rect.y >= timeline_top)
                 .all(|(_, hit)| matches!(
                     hit,
-                    WorkspaceHit::Extension(ExtensionHit::GitTimeline(_))
+                    WorkspaceHit::Extension(ExtensionHit::CodeTimeline(_))
                 )),
             "a host hit escaped into the extension's section: {hits:?}"
         );
@@ -2401,7 +2524,7 @@ mod workspace_tests {
     fn timeline_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
         hits.iter()
             .find(|(_, hit)| {
-                *hit == WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::ToggleSection))
+                *hit == WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ToggleSection))
             })
             .map(|(rect, _)| *rect)
     }
@@ -2409,7 +2532,7 @@ mod workspace_tests {
     fn resize_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
         hits.iter()
             .find(|(_, hit)| {
-                *hit == WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::ResizeSection))
+                *hit == WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ResizeSection))
             })
             .map(|(rect, _)| *rect)
     }
@@ -2475,7 +2598,7 @@ mod workspace_tests {
         let targets: Vec<usize> = hits
             .iter()
             .filter_map(|(_, hit)| match hit {
-                WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(index))) => {
+                WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::SelectItem(index))) => {
                     Some(*index)
                 }
                 _ => None,
@@ -2503,7 +2626,7 @@ mod workspace_tests {
 
     fn commit_popup(anchor: Rect) -> CommitDetailPopup {
         CommitDetailPopup {
-            detail: uze_extensions::git::CommitDetail {
+            detail: uze_extensions::code::CommitDetail {
                 hash: "0ebf3b8000000000000000000000000000000000".to_owned(),
                 short_hash: "0ebf3b8".to_owned(),
                 author: "Ada".to_owned(),
@@ -4582,7 +4705,8 @@ mod workspace_tests {
         deliveries: std::sync::mpsc::Receiver<DeliveryResolution>,
         git: std::sync::mpsc::Receiver<GitResolution>,
         commit_details: std::sync::mpsc::Receiver<CommitDetailResolution>,
-        git_views: std::sync::mpsc::Receiver<GitViewResolution>,
+        code_changes: std::sync::mpsc::Receiver<ChangesResolution>,
+        code_files: std::sync::mpsc::Receiver<FileResolution>,
         occupancy: std::sync::mpsc::Receiver<OccupancyResolution>,
         placements: std::sync::mpsc::Receiver<PlacementResolution>,
     }
@@ -4638,7 +4762,8 @@ mod workspace_tests {
                 deliveries: &self.deliveries,
                 git: &self.git,
                 commit_details: &self.commit_details,
-                git_views: &self.git_views,
+                code_changes: &self.code_changes,
+                code_files: &self.code_files,
                 occupancy: &self.occupancy,
                 placements: &self.placements,
             };
@@ -4697,7 +4822,8 @@ mod workspace_tests {
         let (deliveries, deliveries_rx) = std::sync::mpsc::channel();
         let (git, git_rx) = std::sync::mpsc::channel();
         let (commit_details, commit_details_rx) = std::sync::mpsc::channel();
-        let (git_views, git_views_rx) = std::sync::mpsc::channel();
+        let (code_changes, code_changes_rx) = std::sync::mpsc::channel();
+        let (code_files, code_files_rx) = std::sync::mpsc::channel();
         let (occupancy, occupancy_rx) = std::sync::mpsc::channel();
         let (placements, placements_rx) = std::sync::mpsc::channel();
         let (_events, events_rx) = std::sync::mpsc::channel();
@@ -4713,7 +4839,8 @@ mod workspace_tests {
                     deliveries,
                     git,
                     commit_details,
-                    git_views,
+                    code_changes,
+                    code_files,
                     occupancy,
                     placements,
                 },
@@ -4728,7 +4855,8 @@ mod workspace_tests {
             deliveries: deliveries_rx,
             git: git_rx,
             commit_details: commit_details_rx,
-            git_views: git_views_rx,
+            code_changes: code_changes_rx,
+            code_files: code_files_rx,
             occupancy: occupancy_rx,
             placements: placements_rx,
         }

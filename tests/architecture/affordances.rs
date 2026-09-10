@@ -137,9 +137,60 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     put(Action::NextAgent, Control("clicking an agent row"));
     put(Action::PreviousAgent, Control("clicking an agent row"));
     put(
-        Action::ToggleGitChanges,
-        Control("the tab strip's git button"),
+        Action::ToggleChanges,
+        Control("the tab strip's changes chip, which is drawn at zero too"),
     );
+    put(
+        Action::ToggleFiles,
+        Control("the tab strip's code chip, beside the changes one"),
+    );
+
+    // --- The code surface, and typing into a file -----------------------
+    put(
+        Action::EditFile,
+        KeyboardOnly(
+            "typing is a mode, and a click that entered it would make every \
+             click into a file's contents ambiguous — the same click has to \
+             keep meaning `put the caret here`, which is what it does",
+        ),
+    );
+    put(
+        Action::SaveFile,
+        KeyboardOnly(
+            "the hands are already on the keyboard: a save reachable only by \
+             leaving the text to find a button is a save nobody presses",
+        ),
+    );
+    put(Action::DeleteFile, Index);
+    put(
+        Action::TogglePreview,
+        Control("the Preview/Source control on a document's heading row"),
+    );
+    put(
+        Action::ConfirmDelete,
+        KeyboardOnly(
+            "it answers a question the footer just asked, and a question \
+             answered by hunting for a control is one the operator answers \
+             wrong",
+        ),
+    );
+    for caret in [
+        Action::CaretLeft,
+        Action::CaretRight,
+        Action::CaretLineStart,
+        Action::CaretLineEnd,
+        Action::InsertNewline,
+        Action::EraseForward,
+    ] {
+        put(
+            caret,
+            KeyboardOnly(
+                "a caret is what a keyboard has; the pointer's own way to \
+                 reach a character is clicking it, which places the caret \
+                 there directly",
+            ),
+        );
+    }
     put(
         Action::DeliverTask,
         Control("the tab strip's deliver button"),
@@ -218,10 +269,28 @@ fn a_bound_action_is_never_reachable_by_keyboard_alone_without_a_reason() {
     // short on purpose: it is the exact set of things the product asks
     // someone to know a key for, and it should stay embarrassing to add
     // to. Every entry's reason is in `affordances()` beside it.
+    //
+    // Typing a file grew it, and that is the one honest exception: a caret
+    // is what a keyboard has. The pointer's way to reach a character is
+    // clicking it, which places the caret there — so none of these is a
+    // thing the pointer cannot *do*, only a thing it does differently.
     assert_eq!(
         unreachable,
         std::collections::BTreeSet::from_iter(
-            ["deliver-all-tasks", "erase-back"].map(str::to_owned)
+            [
+                "caret-left",
+                "caret-line-end",
+                "caret-line-start",
+                "caret-right",
+                "confirm-delete",
+                "deliver-all-tasks",
+                "edit-file",
+                "erase-back",
+                "erase-forward",
+                "insert-newline",
+                "save-file",
+            ]
+            .map(str::to_owned)
         ),
         "\n\nAdding one means the product now has a thing you can only do if you \
          knew the key. Say why in `affordances()`, or give it a control.\n"

@@ -116,7 +116,7 @@ model {
     }
 
     workspaceClient = container 'Workspace Client' {
-      description 'Ratatui workspace presentation that draws UZE chrome and terminal-emulator snapshots, forwarding focused-pane input through the private local transport.'
+      description 'Ratatui workspace presentation that draws UZE chrome and terminal-emulator snapshots, forwarding focused-pane input through the private local transport. It also browses and edits the files of the active tab checkout, through a named grant its extensions cannot widen.'
       technology 'Root Rust crate: uze'
     }
   }

@@ -49,7 +49,8 @@ pub(super) struct AttachAnswers {
     pub(super) deliveries: mpsc::Sender<DeliveryResolution>,
     pub(super) git: mpsc::Sender<GitResolution>,
     pub(super) commit_details: mpsc::Sender<CommitDetailResolution>,
-    pub(super) git_views: mpsc::Sender<GitViewResolution>,
+    pub(super) code_changes: mpsc::Sender<ChangesResolution>,
+    pub(super) code_files: mpsc::Sender<FileResolution>,
     pub(super) occupancy: mpsc::Sender<OccupancyResolution>,
     pub(super) placements: mpsc::Sender<PlacementResolution>,
 }
@@ -138,8 +139,17 @@ impl Attach<'_> {
             Scope::PreservedWork
         } else if self.model.context_menu.is_some() {
             Scope::ContextMenu
-        } else if self.model.git_view.is_some() {
-            Scope::GitChanges
+        } else if self
+            .model
+            .code
+            .as_ref()
+            .is_some_and(code::CodeView::editing)
+        {
+            // A file taking text seals everything behind it, the same way
+            // the action index does: nothing else may answer a letter.
+            Scope::CodeEditing
+        } else if self.model.code.is_some() {
+            Scope::Code
         } else {
             // Last, and total: anything uze does not claim is the
             // program's in the pane.
@@ -220,6 +230,14 @@ impl Attach<'_> {
             picker.typed(character);
         } else if let Some((_, buffer)) = self.model.renaming.as_mut() {
             buffer.push(character);
+        } else if self
+            .model
+            .code
+            .as_ref()
+            .is_some_and(code::CodeView::editing)
+        {
+            self.tell_the_code_surface(Command::Type(character));
+            return;
         }
         self.model.dirty = true;
     }
@@ -248,7 +266,7 @@ impl Attach<'_> {
         match action {
             Action::NewAgent => self.model.agent_picker.is_some(),
             Action::NextAgent => self.asked_for_a_tab,
-            Action::ToggleGitChanges => self.model.git_view.is_some(),
+            Action::ToggleChanges | Action::ToggleFiles => self.model.code.is_some(),
             Action::TogglePreservedWork => self.model.preserved.is_some(),
             Action::OpenActionIndex => self.model.action_index.is_some(),
             _ => false,
@@ -300,8 +318,8 @@ impl Attach<'_> {
             self.context_menu_action(action);
             return Flow::Continue;
         }
-        if self.model.git_view.is_some() {
-            self.git_view_action(action);
+        if self.model.code.is_some() {
+            self.code_action(action);
             return Flow::Continue;
         }
         match action {
@@ -341,7 +359,8 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            Action::ToggleGitChanges => open_git_view(&mut self.model),
+            Action::ToggleChanges => open_code(&mut self.model, code::NavigatorMode::Changes),
+            Action::ToggleFiles => open_code(&mut self.model, code::NavigatorMode::Files),
             Action::NextSpace => self.step_space(1, columns, rows),
             Action::PreviousSpace => self.step_space(-1, columns, rows),
             Action::NextAgent => self.step_agent(1, columns, rows),
@@ -752,12 +771,88 @@ impl Attach<'_> {
         self.model.dirty = true;
     }
 
-    /// The Git changes overlay, which answers for itself. It is handed a
-    /// meaning rather than a key: an extension knows no more about the
-    /// keyboard than it does about the palette.
-    fn git_view_action(&mut self, action: Action) {
+    /// One drag on the navigator's edge, doing whichever of its two jobs
+    /// the movement turned out to be.
+    ///
+    /// Sideways moves the split; along it scrolls the list. Neither is
+    /// chosen when the press lands — see [`EdgeDrag`] — and once chosen
+    /// it holds until release, so a hand that wanders does not switch
+    /// gestures mid-drag.
+    fn drag_code_edge(&mut self, column: u16, row: u16, size: ratatui::layout::Size) {
+        let Some(mut drag) = self.model.code_edge_drag else {
+            return;
+        };
+        let intent = drag.decide(column, row);
+        self.model.code_edge_drag = Some(drag);
+        match intent {
+            Some(EdgeIntent::Resize) => {
+                let frame_area = Rect::new(0, 0, size.width, size.height);
+                let (tree_column, content_column, _footer) =
+                    crate::ui::extension_view::content_columns(
+                        frame_area,
+                        self.model.code_tree_width,
+                    );
+                let width = crate::ui::extension_view::clamp_navigator_width(
+                    column.saturating_sub(tree_column.x),
+                    tree_column.width + content_column.width,
+                );
+                if self.model.code_tree_width != Some(width) {
+                    self.model.code_tree_width = Some(width);
+                    self.model.dirty = true;
+                }
+            }
+            Some(EdgeIntent::Scroll) => self.scroll_code_tree_to(row),
+            None => {}
+        }
+    }
+
+    /// Shows the part of the list a point on its scrollbar names. The
+    /// navigator's scroll is the host's — only it knows how many rows
+    /// fit.
+    fn scroll_code_tree_to(&mut self, row: u16) {
+        if let Some(bar) = self.model.code_scrollbars.navigator_bar {
+            self.model.code_tree_scroll.first = bar.first_at(row);
+            self.model.dirty = true;
+        }
+    }
+
+    /// The same for the content, whose scroll is the extension's own.
+    fn scroll_code_content_to(&mut self, row: u16) {
+        if let Some(bar) = self.model.code_scrollbars.content_bar
+            && let Some(view) = self.model.code.as_mut()
+        {
+            code::scroll_to(view, bar.first_at(row));
+            self.model.dirty = true;
+        }
+    }
+
+    /// The code surface, which answers for itself. It is handed a meaning
+    /// rather than a key: an extension knows no more about the keyboard
+    /// than it does about the palette.
+    ///
+    /// Two actions are the host's rather than the surface's — the doors,
+    /// which once it is open mean "show me the other mode" instead of
+    /// opening anything.
+    fn code_action(&mut self, action: Action) {
+        match action {
+            Action::ToggleChanges => {
+                if let Some(view) = self.model.code.as_mut() {
+                    code::show(view, code::ContentMode::Diff);
+                }
+                self.model.dirty = true;
+                return;
+            }
+            Action::ToggleFiles => {
+                if let Some(view) = self.model.code.as_mut() {
+                    code::show(view, code::ContentMode::Contents);
+                }
+                self.model.dirty = true;
+                return;
+            }
+            _ => {}
+        }
         let command = match action {
-            Action::Dismiss | Action::ToggleGitChanges => Command::Close,
+            Action::Dismiss => Command::Close,
             Action::FocusNext | Action::FocusPrevious => Command::FocusNext,
             Action::SelectNext => Command::SelectNext,
             Action::SelectPrevious => Command::SelectPrevious,
@@ -766,15 +861,36 @@ impl Attach<'_> {
             Action::Activate => Command::Activate,
             Action::ScrollPageUp => Command::ScrollPageUp,
             Action::ScrollPageDown => Command::ScrollPageDown,
+            Action::EditFile => Command::Edit,
+            Action::TogglePreview => Command::TogglePreview,
+            Action::SaveFile => Command::Save,
+            Action::DeleteFile => Command::Delete,
+            Action::ConfirmDelete => Command::ConfirmDelete,
+            Action::CaretLeft => Command::CaretLeft,
+            Action::CaretRight => Command::CaretRight,
+            Action::CaretLineStart => Command::CaretLineStart,
+            Action::CaretLineEnd => Command::CaretLineEnd,
+            Action::InsertNewline => Command::Newline,
+            Action::EraseBack => Command::EraseBack,
+            Action::EraseForward => Command::EraseForward,
             _ => return,
         };
-        if let Some(view) = self.model.git_view.as_mut()
+        self.tell_the_code_surface(command);
+    }
+
+    /// Hands one command down, and closes the surface if it says so.
+    fn tell_the_code_surface(&mut self, command: Command) {
+        let space = crate::ui::extension_view::content_space(
+            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
+            self.model.code_tree_width,
+        );
+        if let Some(view) = self.model.code.as_mut()
             && matches!(
-                git::handle_command(view, command),
-                git::GitViewOutcome::Close
+                code::handle_command(view, command, space),
+                code::CodeOutcome::Close
             )
         {
-            self.model.git_view = None;
+            self.model.code = None;
         }
         self.model.dirty = true;
     }
@@ -1037,7 +1153,7 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
-            _ if self.model.git_view.is_some() => {
+            _ if self.model.code.is_some() => {
                 let hit = self
                     .model
                     .hits
@@ -1048,25 +1164,47 @@ impl Attach<'_> {
                             && rect.y <= mouse.row
                             && mouse.row < rect.y + rect.height
                     })
-                    .map(|(_, hit)| *hit);
+                    .map(|(rect, hit)| (*rect, *hit));
                 // Mirrors `WorkspaceHit::ResizeSidebar` below: arms
-                // dragging instead of reaching `git::handle_mouse`,
-                // which only knows about `ExtensionHit`s that are its
-                // own — the resize handle's drag lifecycle belongs to
-                // this workspace client, not the extension.
+                // dragging instead of reaching the extension, which only
+                // knows about `ExtensionHit`s that are its own — the
+                // resize handle's drag lifecycle belongs to this
+                // workspace client, not the extension.
                 let view_hit = match hit {
-                    Some(WorkspaceHit::Extension(ExtensionHit::Git(view_hit))) => Some(view_hit),
+                    // The render knew which line the row was and where it
+                    // began; only the pointer knows how far along it
+                    // landed, so the hit is finished here rather than
+                    // recorded a cell at a time.
+                    Some((
+                        rect,
+                        WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::PlaceCaret {
+                            line,
+                            cell,
+                        })),
+                    )) => Some(ViewHit::PlaceCaret {
+                        line,
+                        cell: crate::ui::extension_view::caret_cell_at(rect, cell, mouse.column),
+                    }),
+                    Some((_, WorkspaceHit::Extension(ExtensionHit::Code(hit)))) => Some(hit),
                     _ => None,
                 };
-                if view_hit == Some(ViewHit::ResizeNavigator) {
-                    self.model.dragging_git_tree = true;
-                } else if let Some(view) = self.model.git_view.as_mut()
-                    && matches!(
-                        git::handle_mouse(view, view_hit),
-                        git::GitViewOutcome::Close
-                    )
+                // Three of the surface's gestures are the host's rather
+                // than the extension's, because all three are about
+                // geometry it never sees: the edge between the columns,
+                // and the content's scrollbar.
+                if view_hit == Some(ViewHit::GrabNavigatorEdge) {
+                    // Armed, not decided: which of the edge's two jobs
+                    // this is belongs to the first movement.
+                    self.model.code_edge_drag = Some(EdgeDrag::armed_at(mouse.column, mouse.row));
+                } else if view_hit == Some(ViewHit::DragContentScrollbar)
+                    && self.model.code_scrollbars.content_bar.is_some()
                 {
-                    self.model.git_view = None;
+                    self.model.dragging_code_content = true;
+                    self.scroll_code_content_to(mouse.row);
+                } else if let Some(view) = self.model.code.as_mut()
+                    && matches!(code::handle_mouse(view, view_hit), code::CodeOutcome::Close)
+                {
+                    self.model.code = None;
                 }
                 self.model.dirty = true;
             }
@@ -1106,21 +1244,11 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
-            _ if self.model.dragging_git_tree => {
-                let frame_area = Rect::new(0, 0, size.width, size.height);
-                let (tree_column, diff_column, _footer) =
-                    crate::ui::extension_view::content_columns(
-                        frame_area,
-                        self.model.git_tree_width,
-                    );
-                let new_width = crate::ui::extension_view::clamp_navigator_width(
-                    mouse.column.saturating_sub(tree_column.x),
-                    tree_column.width + diff_column.width,
-                );
-                if self.model.git_tree_width != Some(new_width) {
-                    self.model.git_tree_width = Some(new_width);
-                    self.model.dirty = true;
-                }
+            _ if self.model.dragging_code_content => {
+                self.scroll_code_content_to(mouse.row);
+            }
+            _ if self.model.code_edge_drag.is_some() => {
+                self.drag_code_edge(mouse.column, mouse.row, size);
             }
             _ if self.model.dragging_timeline => {
                 // The divider follows the pointer; what is remembered
@@ -1184,7 +1312,7 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
             _ if !self.model.dragging_sidebar
-                && !self.model.dragging_git_tree
+                && self.model.code_edge_drag.is_none()
                 && !self.model.dragging_timeline
                 && self.model.dragging_tab.is_none()
                 && self.model.no_modal_open() =>
@@ -1208,7 +1336,8 @@ impl Attach<'_> {
         // there too, not just silently dropped the way it was
         // before pane forwarding existed.
         if !self.model.dragging_sidebar
-            && !self.model.dragging_git_tree
+            && self.model.code_edge_drag.is_none()
+            && !self.model.dragging_code_content
             && !self.model.dragging_timeline
             && self.model.dragging_tab.is_none()
             && self.model.no_modal_open()
@@ -1234,7 +1363,15 @@ impl Attach<'_> {
             self.model.remember_sidebar();
         }
         self.model.dragging_sidebar = false;
-        self.model.dragging_git_tree = false;
+        // A press that never moved is a click, and a click on the edge
+        // asks the list to show that part of itself — the gesture that
+        // sharing the column with the divider would otherwise have cost.
+        if let Some(drag) = self.model.code_edge_drag.take()
+            && drag.intent.is_none()
+        {
+            self.scroll_code_tree_to(mouse.row);
+        }
+        self.model.dragging_code_content = false;
         self.model.dragging_timeline = false;
         self.model.dirty = true;
         Flow::Continue
@@ -1408,7 +1545,7 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
-            _ if self.model.git_view.is_some() => {
+            _ if self.model.code.is_some() => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
                 } else {
@@ -1416,19 +1553,20 @@ impl Attach<'_> {
                 };
                 match crate::ui::extension_view::scroll_target(
                     Rect::new(0, 0, size.width, size.height),
-                    self.model.git_tree_width,
+                    self.model.code_tree_width,
                     mouse.column,
                     mouse.row,
                 ) {
                     // The list is the host's to scroll (see
-                    // `WorkspaceModel::git_tree_scroll`); the diff is the
+                    // `WorkspaceModel::code_tree_scroll`); the diff is the
                     // extension's own content.
                     Some(uze_extensions::view::ScrollTarget::Navigator) => {
-                        self.model.git_tree_scroll = self.model.git_tree_scroll.scrolled(direction);
+                        self.model.code_tree_scroll =
+                            self.model.code_tree_scroll.scrolled(direction);
                     }
                     Some(uze_extensions::view::ScrollTarget::Content) => {
-                        if let Some(view) = self.model.git_view.as_mut() {
-                            git::handle_scroll(view, direction);
+                        if let Some(view) = self.model.code.as_mut() {
+                            code::handle_scroll(view, direction);
                         }
                     }
                     None => {}
@@ -1501,7 +1639,7 @@ impl Attach<'_> {
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
             }
-            WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::ToggleSection)) => {
+            WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ToggleSection)) => {
                 toggle_timeline(&mut self.model);
             }
             _ => {}
@@ -1701,8 +1839,11 @@ impl Attach<'_> {
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
             }
-            WorkspaceHit::OpenGitView => {
-                open_git_view(&mut self.model);
+            WorkspaceHit::OpenChanges => {
+                open_code(&mut self.model, code::NavigatorMode::Changes);
+            }
+            WorkspaceHit::OpenFiles => {
+                open_code(&mut self.model, code::NavigatorMode::Files);
             }
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
@@ -1769,8 +1910,8 @@ impl Attach<'_> {
             // other two overlays; the sidebar section's are answered
             // here, since it is drawn as part of the sidebar rather than
             // over it.
-            WorkspaceHit::Extension(ExtensionHit::Git(_)) => {}
-            WorkspaceHit::Extension(ExtensionHit::GitTimeline(hit)) => match hit {
+            WorkspaceHit::Extension(ExtensionHit::Code(_)) => {}
+            WorkspaceHit::Extension(ExtensionHit::CodeTimeline(hit)) => match hit {
                 ViewHit::ToggleSection => toggle_timeline(&mut self.model),
                 ViewHit::ResizeSection => self.model.dragging_timeline = true,
                 ViewHit::SelectItem(index) => open_commit_detail(
@@ -1779,7 +1920,12 @@ impl Attach<'_> {
                     hit_rect,
                     &self.answers.commit_details,
                 ),
-                ViewHit::ResizeNavigator | ViewHit::ToggleGroup(_) | ViewHit::Close => {}
+                ViewHit::GrabNavigatorEdge
+                | ViewHit::ToggleGroup(_)
+                | ViewHit::PlaceCaret { .. }
+                | ViewHit::SelectMode(_)
+                | ViewHit::DragContentScrollbar
+                | ViewHit::Close => {}
             },
             WorkspaceHit::SwitchToManagement => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
@@ -1806,7 +1952,8 @@ pub(super) struct AttachInbox<'a> {
     pub(super) deliveries: &'a mpsc::Receiver<DeliveryResolution>,
     pub(super) git: &'a mpsc::Receiver<GitResolution>,
     pub(super) commit_details: &'a mpsc::Receiver<CommitDetailResolution>,
-    pub(super) git_views: &'a mpsc::Receiver<GitViewResolution>,
+    pub(super) code_changes: &'a mpsc::Receiver<ChangesResolution>,
+    pub(super) code_files: &'a mpsc::Receiver<FileResolution>,
     pub(super) occupancy: &'a mpsc::Receiver<OccupancyResolution>,
     pub(super) placements: &'a mpsc::Receiver<PlacementResolution>,
 }
@@ -2159,11 +2306,16 @@ impl Attach<'_> {
         while let Ok(resolution) = inbox.commit_details.try_recv() {
             self.model.dirty |= self.model.absorb_commit_detail(resolution);
         }
-        while let Ok(resolution) = inbox.git_views.try_recv() {
-            self.model.dirty |= self.model.absorb_git_view_reload(resolution);
+        while let Ok(resolution) = inbox.code_changes.try_recv() {
+            self.model.dirty |= self.model.absorb_changes(resolution);
+        }
+        while let Ok(resolution) = inbox.code_files.try_recv() {
+            self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
         self.model.schedule_git_read(&self.answers.git);
-        self.model.schedule_git_view_reload(&self.answers.git_views);
+        self.model
+            .schedule_changes_refresh(&self.answers.code_changes);
+        self.model.schedule_file_request(&self.answers.code_files);
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }

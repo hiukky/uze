@@ -9,7 +9,12 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-
+unicode-width = "0.2"
+# CommonMark, for the markdown preview. `pulldown-cmark` is what rustdoc
+# itself parses with (pulldown-cmark org, MIT); with default features off
+# it drops the HTML writer and the CLI, leaving one crate the workspace
+# does not already have (`unicase`) and no C anywhere in the tree.
+pulldown-cmark = { version = "0.13", default-features = false }
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
 [dev-dependencies]

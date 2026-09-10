@@ -35,7 +35,7 @@ use uze_application::{
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
-    ExtensionHit, git,
+    ExtensionHit, code,
     view::{ScrollDirection, ViewHit},
 };
 use uze_keys::{Action, Chord, Key};
@@ -420,10 +420,10 @@ fn describe_delivery(report: &DeliveryReport) -> String {
 /// `None` the receiver would have to tell apart from "there is no
 /// history".
 enum GitAnswer {
-    Summary(Option<git::GitChangeSummary>),
+    Summary(Option<code::ChangeSummary>),
     Full {
-        summary: Option<git::GitChangeSummary>,
-        timeline: Option<git::Timeline>,
+        summary: Option<code::ChangeSummary>,
+        timeline: Option<code::Timeline>,
     },
 }
 
@@ -454,11 +454,11 @@ fn spawn_git_read(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.git_read").entered();
-        let summary = git::change_summary(&WorkspaceHost, &cwd);
+        let summary = code::change_summary(&WorkspaceHost, &cwd);
         let answer = if history {
             GitAnswer::Full {
                 summary,
-                timeline: git::timeline(&WorkspaceHost, &cwd, TIMELINE_COMMITS, target.as_deref()),
+                timeline: code::timeline(&WorkspaceHost, &cwd, TIMELINE_COMMITS, target.as_deref()),
             }
         } else {
             GitAnswer::Summary(summary)
@@ -476,7 +476,7 @@ struct CommitDetailResolution {
     hash: String,
     anchor: Rect,
     target: Option<String>,
-    detail: Option<git::CommitDetail>,
+    detail: Option<code::CommitDetail>,
 }
 
 fn spawn_commit_detail(
@@ -490,7 +490,7 @@ fn spawn_commit_detail(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.commit_detail").entered();
-        let detail = git::commit_detail(&WorkspaceHost, &cwd, &hash);
+        let detail = code::commit_detail(&WorkspaceHost, &cwd, &hash);
         let _ = sender.send(CommitDetailResolution {
             hash,
             anchor,
@@ -616,30 +616,51 @@ fn spawn_occupancy_reconcile(
     });
 }
 
-/// A re-read of the open changes overlay, tagged with the checkout and the
-/// placement it was read for — see [`git::ViewPlacement`] for why the
-/// placement travels with the answer.
-struct GitViewResolution {
+/// A re-read of the open surface's changes half, tagged with the checkout
+/// it was read for.
+///
+/// The changes only, never the whole view: the same surface holds a file
+/// someone may be typing into, and a refresh that could reach it would be
+/// a refresh that eats what was typed.
+struct ChangesResolution {
     root: PathBuf,
-    placement: git::ViewPlacement,
-    view: git::GitView,
+    refreshed: code::RefreshedChanges,
 }
 
-fn spawn_git_view_reload(
+/// One answered [`code::FileRequest`], tagged the same way and for the
+/// same reason: an answer landing after the viewer moved to another tab
+/// describes a tree nobody is looking at any more.
+struct FileResolution {
     root: PathBuf,
-    placement: git::ViewPlacement,
-    sender: mpsc::Sender<GitViewResolution>,
+    answer: code::FileAnswer,
+}
+
+/// Reading a directory, reading and highlighting a file, writing one:
+/// every one of them is unbounded, and none of them may happen on the
+/// thread that draws.
+fn spawn_file_request(
+    root: PathBuf,
+    request: code::FileRequest,
+    sender: mpsc::Sender<FileResolution>,
+) {
+    thread::spawn(move || {
+        let _span = tracing::info_span!("tui.code_file_request").entered();
+        let answer = code::fulfill(&WorkspaceHost, request);
+        let _ = sender.send(FileResolution { root, answer });
+    });
+}
+
+fn spawn_changes_refresh(
+    root: PathBuf,
+    placement: code::ViewPlacement,
+    sender: mpsc::Sender<ChangesResolution>,
 ) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.git_view_reload").entered();
-        let view = git::GitView::reload(&WorkspaceHost, root.clone(), placement.clone());
-        let _ = sender.send(GitViewResolution {
-            root,
-            placement,
-            view,
-        });
+        let _span = tracing::info_span!("tui.code_changes_refresh").entered();
+        let refreshed = code::CodeView::refresh(&WorkspaceHost, root.clone(), placement);
+        let _ = sender.send(ChangesResolution { root, refreshed });
     });
 }
 
@@ -823,8 +844,10 @@ pub(crate) fn attach_workspace(
     let git_receiver = &memory.git.receiver;
     let commit_detail_sender = memory.commit_details.sender.clone();
     let commit_detail_receiver = &memory.commit_details.receiver;
-    let git_view_sender = memory.git_views.sender.clone();
-    let git_view_receiver = &memory.git_views.receiver;
+    let changes_sender = memory.code_changes.sender.clone();
+    let changes_receiver = &memory.code_changes.receiver;
+    let files_sender = memory.code_files.sender.clone();
+    let files_receiver = &memory.code_files.receiver;
     let occupancy_sender = memory.occupancy.sender.clone();
     let occupancy_receiver = &memory.occupancy.receiver;
     let placement_sender = memory.placements.sender.clone();
@@ -886,7 +909,8 @@ pub(crate) fn attach_workspace(
             deliveries: delivery_sender,
             git: git_sender,
             commit_details: commit_detail_sender,
-            git_views: git_view_sender,
+            code_changes: changes_sender,
+            code_files: files_sender,
             occupancy: occupancy_sender,
             placements: placement_sender,
         },
@@ -901,7 +925,8 @@ pub(crate) fn attach_workspace(
         deliveries: delivery_receiver,
         git: git_receiver,
         commit_details: commit_detail_receiver,
-        git_views: git_view_receiver,
+        code_changes: changes_receiver,
+        code_files: files_receiver,
         occupancy: occupancy_receiver,
         placements: placement_receiver,
     };
@@ -942,8 +967,9 @@ pub(crate) fn attach_workspace(
             attach.model.hits = hits;
             attach.model.tree_overflow = metrics.tree_overflow;
             attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
-            if let Some(scroll) = metrics.git_tree_scroll {
-                attach.model.git_tree_scroll = scroll;
+            if let Some(rendered) = metrics.code {
+                attach.model.code_tree_scroll = rendered.navigator_scroll;
+                attach.model.code_scrollbars = rendered;
             }
             attach.model.dirty = false;
         }
@@ -1019,9 +1045,17 @@ pub(super) enum WorkspaceHit {
     /// picker.
     PickSpaceRoot(usize),
     /// The tab strip's right-corner button — opens the Git extension's
-    /// changes overlay (`WorkspaceModel::git_view`), scoped to the active
-    /// tab's live `cwd`.
-    OpenGitView,
+    /// changes of the active tab's checkout — the code surface
+    /// (`WorkspaceModel::code`), opened on its diff.
+    OpenChanges,
+    /// The tab strip's code button — the same surface, opened on the
+    /// checkout's file tree.
+    ///
+    /// Both are drawn unconditionally. A control that comes and goes with
+    /// the work is one the operator has to go looking for; what the
+    /// changes chip *says* still varies, which is where that signal
+    /// lives now.
+    OpenFiles,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
     /// The task mark on a sidebar agent row — opens the catalog of what
@@ -1078,6 +1112,105 @@ enum TabDragGroup {
     /// when `None` — a space's own shells with no agent selected. Matches
     /// `Tab::agent`'s own vocabulary.
     Strip(SpaceId, Option<TabId>),
+}
+
+/// A press on the code surface's navigator edge, before it has said what
+/// it is.
+///
+/// The edge is one line doing two jobs — the split moves sideways, the
+/// list scrolls down — and a press carries no direction. So nothing is
+/// decided when it lands: the first movement says which, by whichever of
+/// the two distances is larger, and it stays said until release. A press
+/// that never moves is a click, which on a scrollbar means "show me
+/// here".
+///
+/// The same shape `DraggingTab` uses, and for the same reason: a gesture
+/// that has not happened yet cannot be classified, and guessing early is
+/// how a drag becomes the wrong one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EdgeDrag {
+    origin: (u16, u16),
+    /// `None` until the pointer has moved.
+    intent: Option<EdgeIntent>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EdgeIntent {
+    Scroll,
+    Resize,
+}
+
+impl EdgeDrag {
+    fn armed_at(column: u16, row: u16) -> Self {
+        Self {
+            origin: (column, row),
+            intent: None,
+        }
+    }
+
+    /// What this drag is, once the pointer has reached `(column, row)`.
+    ///
+    /// Ties go to scrolling: an exact diagonal is nobody's intention, and
+    /// on a control that is mostly a scrollbar that is the likelier of
+    /// the two.
+    fn decide(&mut self, column: u16, row: u16) -> Option<EdgeIntent> {
+        if self.intent.is_none() {
+            let sideways = column.abs_diff(self.origin.0);
+            let along = row.abs_diff(self.origin.1);
+            if sideways == 0 && along == 0 {
+                return None;
+            }
+            self.intent = Some(match sideways > along {
+                true => EdgeIntent::Resize,
+                false => EdgeIntent::Scroll,
+            });
+        }
+        self.intent
+    }
+}
+
+#[cfg(test)]
+mod edge_drag_tests {
+    use super::{EdgeDrag, EdgeIntent};
+
+    /// A press carries no direction, so it decides nothing. Guessing when
+    /// it lands is how a resize becomes a scroll.
+    #[test]
+    fn a_press_that_has_not_moved_is_neither_gesture() {
+        let mut drag = EdgeDrag::armed_at(40, 10);
+        assert_eq!(drag.decide(40, 10), None);
+        assert_eq!(drag.intent, None);
+    }
+
+    #[test]
+    fn the_first_movement_says_which_gesture_it_is() {
+        let mut sideways = EdgeDrag::armed_at(40, 10);
+        assert_eq!(sideways.decide(44, 11), Some(EdgeIntent::Resize));
+
+        let mut along = EdgeDrag::armed_at(40, 10);
+        assert_eq!(along.decide(41, 16), Some(EdgeIntent::Scroll));
+    }
+
+    /// Once said, it stays said: a hand that wanders must not switch
+    /// gestures halfway through one.
+    #[test]
+    fn a_decided_drag_does_not_change_its_mind() {
+        let mut drag = EdgeDrag::armed_at(40, 10);
+        assert_eq!(drag.decide(48, 10), Some(EdgeIntent::Resize));
+        assert_eq!(
+            drag.decide(40, 40),
+            Some(EdgeIntent::Resize),
+            "still a resize, however far down the pointer then goes"
+        );
+    }
+
+    /// An exact diagonal is nobody's intention; on a control that is
+    /// mostly a scrollbar, that is the likelier of the two.
+    #[test]
+    fn a_tie_scrolls() {
+        let mut drag = EdgeDrag::armed_at(40, 10);
+        assert_eq!(drag.decide(43, 13), Some(EdgeIntent::Scroll));
+    }
 }
 
 /// A pending tab-reorder drop position, in exactly the shape
@@ -1535,7 +1668,10 @@ pub(crate) struct WorkspaceMemory {
     /// answering inline on the render path.
     git: Answers<GitResolution>,
     commit_details: Answers<CommitDetailResolution>,
-    git_views: Answers<GitViewResolution>,
+    code_changes: Answers<ChangesResolution>,
+    /// The surface's file reads and writes, off-thread for the same
+    /// reason its changes are.
+    code_files: Answers<FileResolution>,
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
 }
@@ -1758,24 +1894,32 @@ struct WorkspaceModel {
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
-    /// Open state of the Git changes overlay; `None` when closed. Unlike
+    /// Open state of the code surface; `None` when closed. Unlike
     /// `renaming`/`agent_picker`/`context_menu` there is no "click outside
     /// discards" rule — it covers the full frame, so there is no outside;
-    /// `Esc` (or the same shortcut that opened it) is the only dismissal.
-    git_view: Option<git::GitView>,
-    /// User-dragged Git changes tree width; `None` falls back to its own
+    /// `Esc` (or either shortcut that opens it) is the only dismissal.
+    code: Option<code::CodeView>,
+    /// User-dragged navigator width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
-    /// above, kept on the model rather than on `GitView` itself so it
-    /// survives closing and reopening the overlay within the same
+    /// above, kept on the model rather than on the view itself so it
+    /// survives closing and reopening the surface within the same
     /// session, the same way the sidebar's width survives switching tabs.
-    git_tree_width: Option<u16>,
-    /// Where the Git changes list is scrolled to. The host's, not the
+    code_tree_width: Option<u16>,
+    /// Where the navigator is scrolled to. The host's, not the
     /// extension's, for the reason the width is: how far a list of rows
     /// can scroll is a question about how many fit, and only the render
     /// knows — which is also why a frame hands it back settled (see
     /// `render::FrameMetrics`).
-    git_tree_scroll: extension_view::NavigatorScroll,
-    dragging_git_tree: bool,
+    code_tree_scroll: extension_view::NavigatorScroll,
+    /// The scrollbars the last frame drew, so a drag can answer *where in
+    /// the content* the pointer went. Geometry belongs to the render, so
+    /// it travels from there rather than being derived twice.
+    code_scrollbars: extension_view::Rendered,
+    /// A press on the navigator's edge, waiting to find out what it is.
+    code_edge_drag: Option<EdgeDrag>,
+    /// Whether the content's own scrollbar is being held. Unambiguous, so
+    /// it needs nothing but a flag.
+    dragging_code_content: bool,
     /// An in-progress tab-reorder drag; `None` when no tab is being
     /// dragged. Client-local presentation state — nothing is sent to the
     /// server until release (see `TabDragGroup`/`DraggingTab`).
@@ -1790,8 +1934,11 @@ struct WorkspaceModel {
     /// The commit a background `git show` is out for; see
     /// [`CommitDetailResolution`] for why the answer names it back.
     commit_detail_pending: Option<String>,
-    /// Whether a re-read of the open changes overlay is out.
-    git_view_pending: bool,
+    /// Whether a re-read of the surface's changes half is out, and
+    /// whether one of its file requests is. Two flags because the two
+    /// halves have two cadences and can be in flight at once.
+    code_changes_pending: bool,
+    code_request_pending: bool,
     /// Per-pane reconstruction of the line being typed, flushed on Enter.
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
@@ -1930,7 +2077,7 @@ struct WorkspaceModel {
 /// the account itself, the timeline row it was opened from, and how far
 /// its text has been scrolled.
 pub(super) struct CommitDetailPopup {
-    pub(super) detail: git::CommitDetail,
+    pub(super) detail: code::CommitDetail,
     /// The repository's delivery target, so the popup can single its
     /// label out among the refs standing at the commit.
     pub(super) target: Option<String>,
@@ -2033,11 +2180,11 @@ impl PromptBuffer {
 
 struct GitBadge {
     cwd: PathBuf,
-    summary: Option<git::GitChangeSummary>,
+    summary: Option<code::ChangeSummary>,
     /// The same checkout's recent history, for the same tab: what the
     /// sidebar's timeline section draws. Re-read on its own, slower
     /// cadence (`TIMELINE_REFRESH`).
-    timeline: Option<git::Timeline>,
+    timeline: Option<code::Timeline>,
     timeline_checked_at: Instant,
     checked_at: Instant,
 }
@@ -2196,7 +2343,7 @@ impl WorkspaceModel {
             && self.status_catalog.is_none()
             && self.preserved.is_none()
             && self.context_menu.is_none()
-            && self.git_view.is_none()
+            && self.code.is_none()
             && self.action_index.is_none()
             && !self.commit_detail_open()
     }
@@ -2251,7 +2398,7 @@ impl WorkspaceModel {
     fn over_timeline(&self, column: u16, row: u16) -> bool {
         matches!(
             self.hit_at(column, row),
-            Some(WorkspaceHit::Extension(ExtensionHit::GitTimeline(_)))
+            Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(_)))
         )
     }
 
@@ -2263,7 +2410,7 @@ impl WorkspaceModel {
             .filter(|(_, hit)| {
                 matches!(
                     hit,
-                    WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(_)))
+                    WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::SelectItem(_)))
                 )
             })
             .count()
@@ -2904,12 +3051,47 @@ impl WorkspaceModel {
 
     /// Asks for a re-read of the open changes overlay when its own cadence
     /// says so, carrying the placement the viewer is at (see
-    /// [`git::GitView::reload`]).
-    fn schedule_git_view_reload(&mut self, sender: &mpsc::Sender<GitViewResolution>) {
-        if self.git_view_pending {
+    /// Hands the surface's next file request to a thread, one at a time.
+    ///
+    /// Serialised on purpose: a save followed by the re-read that
+    /// re-highlights it must land in that order, and two reads racing
+    /// would let the older one describe the newer one's file.
+    fn schedule_file_request(&mut self, sender: &mpsc::Sender<FileResolution>) {
+        if self.code_request_pending {
             return;
         }
-        let Some(view) = self.git_view.as_ref() else {
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        let root = view.root().to_path_buf();
+        let Some(request) = view.take_request() else {
+            return;
+        };
+        self.code_request_pending = true;
+        spawn_file_request(root, request, sender.clone());
+    }
+
+    /// Installs one file answer, if the surface is still open on the
+    /// checkout it was read for.
+    fn absorb_file_answer(&mut self, resolution: FileResolution) -> bool {
+        self.code_request_pending = false;
+        let Some(view) = self
+            .code
+            .as_mut()
+            .filter(|view| view.root() == resolution.root)
+        else {
+            return false;
+        };
+        view.absorb(resolution.answer);
+        true
+    }
+
+    /// Asks for the changes half again, on its own cadence.
+    fn schedule_changes_refresh(&mut self, sender: &mpsc::Sender<ChangesResolution>) {
+        if self.code_changes_pending {
+            return;
+        }
+        let Some(view) = self.code.as_ref() else {
             return;
         };
         // A moved selection is asked for at once; the periodic re-read is
@@ -2917,25 +3099,23 @@ impl WorkspaceModel {
         if !view.diff_pending() && !view.refresh_due() {
             return;
         }
-        self.git_view_pending = true;
-        spawn_git_view_reload(view.root().to_path_buf(), view.placement(), sender.clone());
+        self.code_changes_pending = true;
+        spawn_changes_refresh(view.root().to_path_buf(), view.placement(), sender.clone());
     }
 
-    /// Installs a re-read overlay, or drops it.
-    ///
-    /// Dropped when the viewer moved while the read ran: the answer
-    /// describes a placement they have already left, and installing it
-    /// would drag them back to it. The view they are on still reads as
-    /// due, so the next tick asks again for where they now are.
-    fn absorb_git_view_reload(&mut self, resolution: GitViewResolution) -> bool {
-        self.git_view_pending = false;
-        let Some(view) = self.git_view.as_mut() else {
+    /// Installs a refreshed changes half, if the surface is still open on
+    /// the checkout it was read for. The view itself decides whether the
+    /// answer still describes where the viewer is.
+    fn absorb_changes(&mut self, resolution: ChangesResolution) -> bool {
+        self.code_changes_pending = false;
+        let Some(view) = self
+            .code
+            .as_mut()
+            .filter(|view| view.root() == resolution.root)
+        else {
             return false;
         };
-        if view.root() != resolution.root || view.placement() != resolution.placement {
-            return false;
-        }
-        *view = resolution.view;
+        view.absorb_changes(resolution.refreshed);
         true
     }
 }
@@ -3771,7 +3951,21 @@ fn open_commit_detail(
 /// `Workspace > Space > Agent/Shell > Git`, one level further down than
 /// the space itself. Snapshotted once here; the view doesn't track further
 /// `cd`s in that tab while it's open (see `git`'s own module doc).
-fn open_git_view(model: &mut WorkspaceModel) {
+/// Opens the file explorer on the active tab's checkout.
+///
+/// Asked for, not read: the first listing is a request the background
+/// thread fulfils, so the overlay appears the instant it is pressed.
+/// Opens the code surface on the active tab's checkout, in the mode the
+/// door that was used means.
+///
+/// Two doors rather than one because a person knows whether they are
+/// reviewing or navigating before they press anything; one button would
+/// only defer that choice by a level.
+///
+/// Asked for, not read: the reads are `schedule_changes_refresh`'s and
+/// `schedule_file_request`'s, on threads. Formatting the path is not a
+/// read, so the surface opens already knowing which checkout it is about.
+fn open_code(model: &mut WorkspaceModel, mode: code::NavigatorMode) {
     let Some(session) = model.session.as_ref() else {
         return;
     };
@@ -3779,13 +3973,10 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
         return;
     };
-    // Asked for, not read: the read is `schedule_git_view_reload`'s, on a
-    // thread. Formatting the path is not a read, so the overlay opens
-    // already knowing which checkout it is about.
     let cwd = pane.cwd.clone();
     let display_root = crate::ui::display_project_path(&cwd);
-    model.git_view = Some(git::GitView::opening(cwd, display_root));
-    model.git_tree_scroll = extension_view::NavigatorScroll::default();
+    model.code = Some(code::CodeView::opening(cwd, display_root, mode));
+    model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }
 

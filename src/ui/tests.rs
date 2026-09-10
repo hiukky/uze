@@ -3400,7 +3400,7 @@ fn a_list_taller_than_the_screen_says_where_the_window_is() {
         focus: Focus::Content,
         ..TuiModel::default()
     };
-    let thumb = theme::glyph(theme::Symbol::BarThick);
+    let thumb = theme::glyph(theme::Symbol::ScrollThumb);
     let column = |terminal: &Terminal<TestBackend>| -> Vec<usize> {
         buffer_rows(terminal)
             .into_iter()

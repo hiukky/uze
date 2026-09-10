@@ -311,7 +311,8 @@ fn default_bindings() -> Vec<Binding> {
         // --- Workspace, the container -----------------------------------
         bind(Scope::Workspace, "ctrl+t", Action::NewShellTab),
         bind(Scope::Workspace, "ctrl+w", Action::CloseTab),
-        bind(Scope::Workspace, "ctrl+g", Action::ToggleGitChanges),
+        bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
+        bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
         bind(Scope::Workspace, "f2", Action::RenameSelection),
         // The sidebar is vertical and holds spaces; the strip is
@@ -326,18 +327,36 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "alt+shift+i", Action::DeliverAllTasks),
         bind(Scope::Workspace, "alt+p", Action::TogglePreservedWork),
         // --- Workspace, the surfaces that seal --------------------------
-        bind(Scope::GitChanges, "esc", Action::Dismiss),
+        bind(Scope::Code, "esc", Action::Dismiss),
         // The same chord closes it: opening and closing one thing is one
         // action to learn, not two.
-        bind(Scope::GitChanges, "ctrl+g", Action::Dismiss),
-        bind(Scope::GitChanges, "tab", Action::FocusNext),
-        bind(Scope::GitChanges, "down", Action::SelectNext),
-        bind(Scope::GitChanges, "up", Action::SelectPrevious),
-        bind(Scope::GitChanges, "left", Action::Collapse),
-        bind(Scope::GitChanges, "right", Action::Expand),
-        bind(Scope::GitChanges, "enter", Action::Activate),
-        bind(Scope::GitChanges, "pagedown", Action::ScrollPageDown),
-        bind(Scope::GitChanges, "pageup", Action::ScrollPageUp),
+        bind(Scope::Code, "ctrl+g", Action::Dismiss),
+        bind(Scope::Code, "tab", Action::FocusNext),
+        bind(Scope::Code, "down", Action::SelectNext),
+        bind(Scope::Code, "up", Action::SelectPrevious),
+        bind(Scope::Code, "left", Action::Collapse),
+        bind(Scope::Code, "right", Action::Expand),
+        bind(Scope::Code, "enter", Action::Activate),
+        bind(Scope::Code, "pagedown", Action::ScrollPageDown),
+        bind(Scope::Code, "pageup", Action::ScrollPageUp),
+        bind(Scope::Code, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Code, "e", Action::EditFile),
+        bind(Scope::Code, "p", Action::TogglePreview),
+        bind(Scope::Code, "d", Action::DeleteFile),
+        bind(Scope::Code, "y", Action::ConfirmDelete),
+        // Typing has a scope of its own so nothing behind it answers a
+        // letter — the same reason the action index has one.
+        bind(Scope::CodeEditing, "esc", Action::Dismiss),
+        bind(Scope::CodeEditing, "ctrl+s", Action::SaveFile),
+        bind(Scope::CodeEditing, "up", Action::SelectPrevious),
+        bind(Scope::CodeEditing, "down", Action::SelectNext),
+        bind(Scope::CodeEditing, "left", Action::CaretLeft),
+        bind(Scope::CodeEditing, "right", Action::CaretRight),
+        bind(Scope::CodeEditing, "home", Action::CaretLineStart),
+        bind(Scope::CodeEditing, "end", Action::CaretLineEnd),
+        bind(Scope::CodeEditing, "enter", Action::InsertNewline),
+        bind(Scope::CodeEditing, "backspace", Action::EraseBack),
+        bind(Scope::CodeEditing, "delete", Action::EraseForward),
         bind(Scope::PreservedWork, "esc", Action::Dismiss),
         bind(Scope::PreservedWork, "down", Action::SelectNext),
         bind(Scope::PreservedWork, "up", Action::SelectPrevious),
@@ -420,8 +439,14 @@ mod tests {
         // A bare key is one keystroke away at all times, so putting a
         // destructive action on one is a choice that has to be defended —
         // each of these does ask before it acts. The list is here rather
-        // than in a comment so that adding a fourth fails the build and
+        // than in a comment so that adding another fails the build and
         // makes someone say why.
+        //
+        // The code surface's `d`/`y` are the newest pair, and they are the
+        // same shape as preserved work's: `d` only raises the question,
+        // and `y` is the answer to a question the footer is asking at that
+        // moment. Neither is live outside that surface — the scope is
+        // sealed while it is open — and neither can reach a directory.
         let bare: Vec<String> = default_keymap()
             .bindings()
             .iter()
@@ -443,6 +468,8 @@ mod tests {
                 "overview.clear-prompt-history=x",
                 "plugins.remove-plugin=r",
                 "profiles.delete-profile=d",
+                "code.delete-file=d",
+                "code.confirm-delete=y",
                 "preserved-work.discard-task=d",
                 "preserved-work.confirm-discard=y",
             ]

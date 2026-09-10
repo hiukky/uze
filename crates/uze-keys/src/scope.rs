@@ -62,8 +62,12 @@ pub enum Scope {
 
     /// The workspace client, with nothing of uze's own open.
     Workspace,
-    /// The Git extension's changes overlay.
-    GitChanges,
+    /// The code surface: a checkout's changes, its files and a file's
+    /// contents, read.
+    Code,
+    /// The same surface with a file open for typing. Its own scope
+    /// because it takes text — nothing behind it may answer a letter.
+    CodeEditing,
     /// The directory picker a new space is born from.
     RootPicker,
     /// The inline rename buffer over a tab or space label.
@@ -107,7 +111,8 @@ impl Scope {
             | Scope::RowMenu
             | Scope::KeyCapture => Mode::Management,
             Scope::Workspace
-            | Scope::GitChanges
+            | Scope::Code
+            | Scope::CodeEditing
             | Scope::RootPicker
             | Scope::Rename
             | Scope::AgentPicker
@@ -126,7 +131,8 @@ impl Scope {
                 Scope::Confirm
                     | Scope::ThemePicker
                     | Scope::RowMenu
-                    | Scope::GitChanges
+                    | Scope::Code
+                    | Scope::CodeEditing
                     | Scope::AgentPicker
                     | Scope::PreservedWork
                     | Scope::ContextMenu
@@ -166,7 +172,8 @@ impl Scope {
             Scope::ThemePicker => "theme-picker",
             Scope::RowMenu => "row-menu",
             Scope::Workspace => "workspace",
-            Scope::GitChanges => "git-changes",
+            Scope::Code => "code",
+            Scope::CodeEditing => "code-editing",
             Scope::RootPicker => "root-picker",
             Scope::Rename => "rename",
             Scope::AgentPicker => "agent-picker",
@@ -197,7 +204,8 @@ impl Scope {
             Scope::ThemePicker => "Appearance",
             Scope::RowMenu => "A row's actions",
             Scope::Workspace => "Workspace",
-            Scope::GitChanges => "Changes",
+            Scope::Code => "Code",
+            Scope::CodeEditing => "Editing a file",
             Scope::RootPicker => "Choosing a directory",
             Scope::Rename => "While renaming",
             Scope::AgentPicker => "Choosing an agent",
@@ -235,7 +243,8 @@ pub const ALL_SCOPES: &[Scope] = &[
     Scope::ThemePicker,
     Scope::RowMenu,
     Scope::Workspace,
-    Scope::GitChanges,
+    Scope::Code,
+    Scope::CodeEditing,
     Scope::RootPicker,
     Scope::Rename,
     Scope::AgentPicker,
