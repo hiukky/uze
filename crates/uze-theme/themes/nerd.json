@@ -40,7 +40,7 @@
       "width": 1
     },
     "mark.sparkle": {
-      "glyph": "",
+      "glyph": "",
       "width": 1
     },
     "mark.toggle-off": {
@@ -49,6 +49,10 @@
     },
     "mark.toggle-on": {
       "glyph": "",
+      "width": 1
+    },
+    "task.ready": {
+      "glyph": "",
       "width": 1
     },
     "status.completed": {
@@ -113,6 +117,54 @@
     },
     "code": {
       "glyph": "",
+      "width": 1
+    },
+    "file.directory": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.directory-open": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.default": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.code": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.markup": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.config": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.lock": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.data": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.image": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.archive": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.git": {
+      "glyph": "",
+      "width": 1
+    },
+    "file.legal": {
+      "glyph": "",
       "width": 1
     }
   }

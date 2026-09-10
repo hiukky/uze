@@ -528,6 +528,13 @@ impl TuiModel {
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
+                    Some(ResizablePanel::AppearanceDrawer) => {
+                        self.appearance_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
                     Some(ResizablePanel::ProfileColumns) => {
                         self.profile_columns_width =
                             Some(pointer_in_content.clamp(min_panel_width, max_panel_width));

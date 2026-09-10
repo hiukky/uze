@@ -170,3 +170,34 @@ and adds the page the Keys screen has never had.
   `theme glyphs` are what exist.
 - [x] 8.7 `docs/theming.md` renamed to `docs/appearance.md` for the same
   reason, and the reference in `AGENTS.md` updated with it.
+
+## 9. Icons where they earn their keep
+
+Opened after the first eight closed, because seeing the sets in a working
+terminal is what showed where the vocabulary was thin and where it was
+being misused.
+
+- [x] 9.1 A `file.` family in the vocabulary — kinds, never languages: a
+  theme can be asked to draw "source code" and cannot be asked to draw "a
+  Rust file". The built-in sets leave them blank, which is the honest
+  answer rather than a hole: plain Unicode has no folder or document mark
+  a terminal does not take from its emoji font.
+- [x] 9.2 `NavigatorRow` carries a `RowIcon` — what the row *is* — so the
+  extension classifies and the host draws, the way every other mark works.
+  The changes list asks for none: it marks status, and two marks per row
+  is one too many.
+- [x] 9.3 Classification by whole name as well as extension: `Makefile`
+  and `LICENSE` carry their meaning without one, and they are exactly the
+  files at the root of every repository.
+- [x] 9.4 `task.ready` stops borrowing `arrow.shift`, which the vocabulary
+  defines as the shift *key* in a hint line — a theme repainting the
+  keyboard's marks would have repainted a task's standing with them.
+- [x] 9.5 `mark.sparkle` becomes `oct-sparkle_fill`, the one deliberate
+  non-Codicon, named in the test so staying an exception is a decision.
+- [x] 9.6 The empty states say two things instead of one: what is the
+  matter, and what to do about it. Set a third of the way down rather than
+  pinned to the top edge, where a line of text reads as a document that
+  got cut off.
+- [x] 9.7 The Appearance drawer follows the house pattern — a recessed
+  slab behind a left rule, a drag handle on it, labelled blocks — and its
+  preview takes only the marks the column has room for.

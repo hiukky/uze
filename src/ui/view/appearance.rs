@@ -25,11 +25,11 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
-use super::super::model::{AppearanceRow, TuiModel};
+use super::super::model::{AppearanceRow, ResizablePanel, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area, small_caps};
 use crate::ui::theme::{self, Symbol, Token};
 
@@ -55,25 +55,52 @@ pub(crate) fn render_appearance(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
+    // What is in force, both halves, on the title's own row: the screen's
+    // whole claim is that these are two choices, and a reader should not
+    // have to find two ticks in two lists to know what they are on.
+    let in_force = |rows: &[String]| -> String {
+        rows.first()
+            .cloned()
+            .unwrap_or_else(|| "default".to_owned())
+    };
+    let theme = in_force(
+        &model
+            .appearance_themes
+            .iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let glyphs = in_force(
+        &model
+            .appearance_glyph_sets
+            .iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>(),
+    );
     let content = render_screen_header(
         frame,
         area,
         "Appearance",
         "the palette, and the glyphs — chosen apart",
-        None,
+        Some(Span::styled(
+            format!(
+                "{theme} {} {glyphs}",
+                theme::glyph(Symbol::HintSeparator).trim()
+            ),
+            theme::fg(Token::TextMuted),
+        )),
     );
 
-    let drawer_width = super::DRAWER_DEFAULT_WIDTH;
+    let drawer_width = model
+        .appearance_drawer_width
+        .unwrap_or(super::DRAWER_DEFAULT_WIDTH);
     let list_width = content.width.saturating_sub(drawer_width);
     let list_area = Rect::new(content.x, content.y, list_width, content.height);
 
     render_list(frame, list_area, model, hits);
-    render_detail(
-        frame,
-        side_panel_area(content, drawer_width),
-        model,
-        list_width,
-    );
+    render_drawer(frame, content, drawer_width, model, hits);
 }
 
 fn render_list(
@@ -125,6 +152,11 @@ fn render_list(
                 hits.push((rect, Hit::AppearanceRow(index)));
             }
             AppearanceRow::GlyphSet { id, active } => {
+                // Only as many marks as the column actually has room for.
+                // A preview clipped by the drawer beside it says nothing
+                // about the set and everything about the layout.
+                let spent = 1 + usize::from(theme::width(Symbol::MarkOk)) + 1 + id_width + 2;
+                let room = usize::from(rect.width).saturating_sub(spent);
                 render_choice(
                     frame,
                     rect,
@@ -133,7 +165,7 @@ fn render_list(
                     *active,
                     selected,
                     "",
-                    Some(preview_spans(id)),
+                    Some(preview_spans(id, room)),
                 );
                 hits.push((rect, Hit::AppearanceRow(index)));
             }
@@ -195,7 +227,7 @@ fn render_choice(
 /// currently drawing with — and it has to, because the question the screen
 /// answers is "can this terminal render *that*", which no amount of
 /// resolving the active theme can reach.
-fn preview_spans(id: &str) -> Vec<Span<'static>> {
+fn preview_spans(id: &str, room: usize) -> Vec<Span<'static>> {
     let mut layers = vec![uze_theme::default_file()];
     layers.extend(uze_theme::glyph_set_file(id));
     let Ok(resolved) = uze_theme::resolve_stack(
@@ -207,82 +239,159 @@ fn preview_spans(id: &str) -> Vec<Span<'static>> {
     // Padded to each glyph's *declared* width rather than to its measured
     // one: that is what makes a set whose widths are wrong show up here as
     // a ragged column instead of shearing a row somewhere else later.
-    PREVIEWED
-        .iter()
-        .map(|symbol| {
-            let definition = resolved.theme.symbol(*symbol);
-            let width = usize::from(definition.width()).max(1);
-            Span::styled(
-                format!("{:<width$} ", definition.glyph()),
-                theme::fg(Token::TextPrimary),
-            )
-        })
-        .collect()
+    let mut spans = Vec::new();
+    let mut spent = 0;
+    for symbol in PREVIEWED {
+        let definition = resolved.theme.symbol(*symbol);
+        let width = usize::from(definition.width()).max(1);
+        if spent + width + 1 > room {
+            break;
+        }
+        spent += width + 1;
+        spans.push(Span::styled(
+            format!("{:<width$} ", definition.glyph()),
+            theme::fg(Token::TextPrimary),
+        ));
+    }
+    spans
 }
 
-fn render_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel, list_width: u16) {
-    if list_width == 0 || area.width < 8 {
+/// The detail side, drawn the way Keys and Plugins draw theirs: a
+/// recessed slab behind a left rule, a drag handle on the rule, and the
+/// content in labelled blocks. A screen someone visits rarely is better
+/// off looking like one they already know.
+fn render_drawer(
+    frame: &mut ratatui::Frame<'_>,
+    content: Rect,
+    width: u16,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    let drawer = side_panel_area(content, width);
+    if drawer.width < 8 {
         return;
     }
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(theme::fg(Token::BorderDefault));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let inner = Rect::new(
-        inner.x + 2,
-        inner.y + 1,
-        inner.width.saturating_sub(3),
-        inner.height,
+    frame.render_widget(Clear, drawer);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(
+                if model.dragging_panel == Some(ResizablePanel::AppearanceDrawer) {
+                    theme::color(Token::Accent)
+                } else {
+                    theme::color(Token::SurfaceRecessed)
+                },
+            ))
+            .style(theme::bg(Token::SurfaceRecessed)),
+        drawer,
+    );
+    // First, so the rule answers the pointer before the rows behind it do.
+    hits.insert(
+        0,
+        (
+            Rect::new(drawer.x, drawer.y, 1, drawer.height),
+            Hit::ResizePanel(ResizablePanel::AppearanceDrawer),
+        ),
     );
 
+    let inner = Rect::new(
+        drawer.x + 2,
+        drawer.y + 1,
+        drawer.width.saturating_sub(3),
+        drawer.height.saturating_sub(2),
+    );
+    let block = |label: &str| {
+        Line::from(Span::styled(
+            small_caps(label),
+            theme::fg_bold(Token::TextMuted),
+        ))
+    };
+    let title = |text: String| {
+        Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(theme::color(Token::TextBright))
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    let prose = |text: &str| {
+        Line::from(Span::styled(
+            text.to_owned(),
+            theme::fg(Token::TextSecondary),
+        ))
+    };
+
     let lines = match model.selected_appearance_row() {
-        Some(AppearanceRow::Theme { id, path, .. }) => vec![
-            Line::from(Span::styled(
-                id,
-                theme::fg(Token::TextBright).add_modifier(Modifier::BOLD),
-            )),
-            Line::raw(""),
-            Line::from(Span::styled(
-                match path {
-                    Some(path) => path.display().to_string(),
-                    None => "A theme UZE carries.".to_owned(),
-                },
-                theme::fg(Token::TextMuted),
-            )),
-            Line::raw(""),
-            Line::from(Span::styled(
-                "Colours only. Whichever glyphs you chose stay chosen — \
-                 unless this theme deliberately claims a mark of its own, \
-                 in which case it decides that one.",
-                theme::fg(Token::TextMuted),
-            )),
+        Some(AppearanceRow::Theme { id, active, path }) => vec![
+            block("Theme"),
+            title(id),
+            prose(match &path {
+                Some(_) => "Yours.",
+                None => "A theme UZE carries.",
+            }),
+            Line::from(""),
+            block("Where"),
+            prose(&match path {
+                Some(path) => path.display().to_string(),
+                None => "built in — no file to edit".to_owned(),
+            }),
+            Line::from(""),
+            block("What it decides"),
+            prose(
+                "Colours. Whichever glyphs you chose stay chosen, unless \
+                 this theme deliberately claims a mark of its own — then it \
+                 decides that one.",
+            ),
+            Line::from(""),
+            block("In force"),
+            prose(if active {
+                "Yes — this is what UZE draws in."
+            } else {
+                "No. Enter to draw in it."
+            }),
         ],
-        Some(AppearanceRow::GlyphSet { id, .. }) => {
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    id.clone(),
-                    theme::fg(Token::TextBright).add_modifier(Modifier::BOLD),
-                )),
-                Line::raw(""),
-            ];
-            lines.push(Line::from(Span::styled(
-                glyph_set_note(&id),
-                theme::fg(Token::TextMuted),
-            )));
-            lines.push(Line::raw(""));
-            lines.push(Line::from(Span::styled(
-                "Glyphs only — no colour moves.",
-                theme::fg(Token::TextMuted),
-            )));
-            lines
-        }
-        _ => vec![Line::from(Span::styled(
-            "Choose a theme or a glyph set.",
-            theme::fg(Token::TextMuted),
-        ))],
+        Some(AppearanceRow::GlyphSet { id, active }) => vec![
+            block("Glyphs"),
+            title(id.clone()),
+            prose(glyph_set_note(&id)),
+            Line::from(""),
+            block("What it decides"),
+            prose("Marks only — no colour moves, and no theme is disturbed."),
+            Line::from(""),
+            block("Needs"),
+            prose(glyph_set_requirement(&id)),
+            Line::from(""),
+            block("In force"),
+            prose(if active {
+                "Yes — every mark on screen comes from this set."
+            } else {
+                "No. Enter to draw with it."
+            }),
+        ],
+        _ => vec![
+            block("Appearance"),
+            Line::from(""),
+            prose(
+                "Two choices, and neither changes the other: the palette, and \
+             the set every mark is drawn from.",
+            ),
+        ],
     };
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+/// What a set asks of the machine, which is the question the preview
+/// beside it cannot answer on its own.
+fn glyph_set_requirement(id: &str) -> &'static str {
+    match id {
+        "ascii" => "Nothing at all. Every mark is inside ASCII.",
+        "nerd" => {
+            "A font patched by Nerd Fonts v3 or newer — the Mono build, \
+             whose icons take one cell. If the preview is empty boxes, \
+             this terminal has neither."
+        }
+        _ => "A terminal font with ordinary Unicode coverage. No install.",
+    }
 }
 
 /// What each set is for, said where someone is deciding between them.

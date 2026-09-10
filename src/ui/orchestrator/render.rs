@@ -1395,7 +1395,7 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
         // arrow — that arrow claims a delivery.
         TaskStateView::Running | TaskStateView::Closed => return None,
         TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
-        TaskStateView::Ready => (Symbol::ArrowShift, theme::color(Token::Accent)),
+        TaskStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
         // The one mark that points away from UZE, because the work does:
         // it is on the forge, and what happens to it next happens there.
         // Muted for the same reason the button is — nothing is being asked

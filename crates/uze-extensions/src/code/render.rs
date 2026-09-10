@@ -16,7 +16,8 @@ use super::{
     diff::{content_line, unified_lines},
 };
 use crate::view::{
-    Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, Size, Span, View,
+    Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon, Size,
+    Span, View,
 };
 
 /// `space` is advisory: it bounds how much content is worth producing,
@@ -35,6 +36,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             navigator: None,
             content: Content::Message {
                 text: message.clone(),
+                hint: None,
                 role: Role::Danger,
             },
             footer,
@@ -150,6 +152,7 @@ pub(super) fn changes_navigator(code: &CodeView) -> Navigator {
                     name: format!("{name}/"),
                     depth: *depth,
                     collapsed: *folded,
+                    icon: RowIcon::None,
                 },
                 FileTreeItem::File { index, name, depth } => NavigatorRow::Item {
                     id: *index,
@@ -160,6 +163,7 @@ pub(super) fn changes_navigator(code: &CodeView) -> Navigator {
                         code.changes.files[*index].status.role(),
                     ),
                     selected: selected == Some(*index),
+                    icon: RowIcon::None,
                 },
             })
             .collect(),
@@ -186,6 +190,7 @@ fn files_navigator(code: &CodeView) -> Navigator {
                     name: row.name.clone(),
                     depth: row.depth,
                     collapsed: !row.expanded,
+                    icon: super::files::icon_for(&row.name, true, row.expanded),
                 },
                 false => NavigatorRow::Item {
                     id: index,
@@ -201,6 +206,7 @@ fn files_navigator(code: &CodeView) -> Navigator {
                     },
                     depth: row.depth,
                     selected: code.selected.as_ref() == Some(&row.path),
+                    icon: super::files::icon_for(&row.name, false, false),
                 },
             })
             .collect(),
@@ -211,18 +217,21 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
     if let Some(message) = &code.changes.error {
         return Content::Message {
             text: message.clone(),
+            hint: None,
             role: Role::Danger,
         };
     }
     if code.changes.files.is_empty() {
         return Content::Message {
-            text: "no changes".to_owned(),
+            text: "Nothing has changed".to_owned(),
+            hint: Some("This checkout matches the branch it started from.".to_owned()),
             role: Role::Muted,
         };
     }
     let Some(index) = code.selected_change() else {
         return Content::Message {
-            text: "select a changed file".to_owned(),
+            text: "No file selected".to_owned(),
+            hint: Some("Pick one on the left to read what changed in it, line by line.".to_owned()),
             role: Role::Muted,
         };
     };
@@ -232,6 +241,7 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
         // name, and beats an empty pane that reads as "no changes".
         return Content::Message {
             text: "reading…".to_owned(),
+            hint: None,
             role: Role::Muted,
         };
     }
@@ -268,19 +278,25 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
 fn preview_content(code: &CodeView, space: Size) -> Content {
     let Some(open) = code.open.as_ref() else {
         return Content::Message {
-            text: "select a document".to_owned(),
+            text: "No document selected".to_owned(),
+            hint: Some(
+                "Pick a file on the left. This shows it rendered; Source shows what is in it."
+                    .to_owned(),
+            ),
             role: Role::Muted,
         };
     };
     if let Some(message) = &open.error {
         return Content::Message {
             text: message.clone(),
+            hint: None,
             role: Role::Danger,
         };
     }
     if open.loading {
         return Content::Message {
             text: "reading…".to_owned(),
+            hint: None,
             role: Role::Muted,
         };
     }
@@ -306,19 +322,24 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
 fn contents_content(code: &CodeView, space: Size) -> Content {
     let Some(open) = code.open.as_ref() else {
         return Content::Message {
-            text: "select a file".to_owned(),
+            text: "No file selected".to_owned(),
+            hint: Some(
+                "Pick one on the left to read it, or press e to edit it in place.".to_owned(),
+            ),
             role: Role::Muted,
         };
     };
     if let Some(message) = &open.error {
         return Content::Message {
             text: message.clone(),
+            hint: None,
             role: Role::Danger,
         };
     }
     if open.loading {
         return Content::Message {
             text: "reading…".to_owned(),
+            hint: None,
             role: Role::Muted,
         };
     }

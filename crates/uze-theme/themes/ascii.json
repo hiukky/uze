@@ -17,6 +17,21 @@
     "mark.toggle-off": "o",
     "mark.toggle-on": "@",
 
+    "file.directory": "",
+    "file.directory-open": "",
+    "file.default": "",
+    "file.code": "",
+    "file.markup": "",
+    "file.config": "",
+    "file.lock": "",
+    "file.data": "",
+    "file.image": "",
+    "file.archive": "",
+    "file.git": "",
+    "file.legal": "",
+
+    "task.ready": "^",
+
     "status.working": ["|", "/", "-", "\\"],
     "status.completed": "*",
     "status.selected": "@",

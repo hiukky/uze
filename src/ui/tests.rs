@@ -3803,7 +3803,8 @@ fn each_glyph_set_is_previewed_in_its_own_glyphs() {
 
     let row_for = |id: &str| -> String {
         rows.iter()
-            .find(|row| row.contains(id))
+            // Not the header, which names what is in force by the same ids.
+            .find(|row| row.contains(id) && !row.contains("Appearance"))
             .unwrap_or_else(|| panic!("no row for the `{id}` set in {rows:#?}"))
             .clone()
     };

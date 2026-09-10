@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::DirEntry;
+use crate::{DirEntry, view::RowIcon};
 
 /// The checkout's own tree, as far as it has been listed.
 ///
@@ -81,5 +81,50 @@ fn push_rows(
         if open {
             push_rows(&path, depth + 1, listings, expanded, rows);
         }
+    }
+}
+
+/// What kind of thing a name is, for the mark the host draws beside it.
+///
+/// By extension and by whole name, because both carry the answer: `.toml`
+/// says configuration wherever it appears, and `Makefile` says code
+/// without an extension at all. Deliberately not a language table — the
+/// vocabulary is kinds, and a kind is what a theme can be asked to draw.
+pub(super) fn icon_for(name: &str, directory: bool, expanded: bool) -> RowIcon {
+    if directory {
+        return match expanded {
+            true => RowIcon::DirectoryOpen,
+            false => RowIcon::Directory,
+        };
+    }
+    let lower = name.to_ascii_lowercase();
+    // A whole name first: the files that carry their meaning without an
+    // extension are exactly the ones at the root of every repository.
+    match lower.as_str() {
+        "makefile" | "justfile" | "dockerfile" | "rakefile" | "procfile" => return RowIcon::Code,
+        "license" | "licence" | "notice" | "copying" | "patents" => return RowIcon::Legal,
+        "readme" | "changelog" | "authors" | "contributing" => return RowIcon::Markup,
+        _ => {}
+    }
+    if lower.starts_with(".git") || lower == ".mailmap" {
+        return RowIcon::Git;
+    }
+    let extension = lower.rsplit_once('.').map(|(_, tail)| tail).unwrap_or("");
+    match extension {
+        "rs" | "go" | "py" | "rb" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "c" | "h"
+        | "cc" | "cpp" | "hpp" | "java" | "kt" | "swift" | "php" | "lua" | "sh" | "bash"
+        | "zsh" | "fish" | "ps1" | "nu" | "ex" | "exs" | "zig" | "hs" | "ml" | "scala" => {
+            RowIcon::Code
+        }
+        "md" | "mdx" | "markdown" | "rst" | "adoc" | "txt" | "html" | "htm" | "tex" | "hbs" => {
+            RowIcon::Markup
+        }
+        "toml" | "json" | "jsonc" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "properties"
+        | "env" | "editorconfig" => RowIcon::Config,
+        "lock" | "sum" => RowIcon::Lock,
+        "csv" | "tsv" | "sql" | "db" | "sqlite" | "parquet" => RowIcon::Data,
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp" | "avif" => RowIcon::Image,
+        "zip" | "gz" | "tar" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" => RowIcon::Archive,
+        _ => RowIcon::File,
     }
 }

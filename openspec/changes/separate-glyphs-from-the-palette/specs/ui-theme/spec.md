@@ -75,6 +75,32 @@ Unicode font has a complete answer that costs no palette.
 - **WHEN** the operator asks UZE which glyph sets exist
 - **THEN** UZE lists every set it carries and identifies the active one
 
+### Requirement: A set may draw what plain Unicode cannot
+
+The symbol vocabulary SHALL be able to name marks that only a patched icon
+font can draw — the kinds of thing a file tree's rows are, among them — and
+a set that cannot draw one SHALL resolve it to nothing rather than to a
+substitute. UZE SHALL then draw nothing and reserve no space for it, so a
+surface reads the same as it did before the mark existed.
+
+This is what keeps the vocabulary honest about the emoji rule: plain
+Unicode has no folder or document mark a terminal does not take from its
+emoji font, and UZE carries no emoji, so "nothing" is the correct answer
+for a set with no patched font behind it rather than a gap in that set.
+
+#### Scenario: A set with no icons for a mark simply does not draw it
+
+- **WHEN** a surface asks for a mark the active glyph set leaves blank
+- **THEN** nothing is drawn in its place and no column is held for it, and
+  every other mark on the row keeps the position it had
+
+#### Scenario: A set with icons draws them without the surface knowing
+
+- **WHEN** the active set declares those marks and a file tree is drawn
+- **THEN** each row carries the mark for what it is, chosen by the surface
+  as a *kind* rather than as a glyph, so the same tree draws differently
+  under a different set with no change to the surface
+
 ### Requirement: Appearance is chosen by looking at it, never inferred
 
 UZE SHALL provide a surface inside the product where the themes this machine

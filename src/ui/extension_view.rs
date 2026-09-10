@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role,
+    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
     ScrollTarget, Section, Size, Span, View, ViewHit,
 };
 
@@ -279,13 +279,9 @@ pub(crate) fn render(
         ViewHit::GrabNavigatorEdge,
     ));
     match &view.content {
-        Content::Message { text, role } => frame.render_widget(
-            Paragraph::new(TextSpan::styled(
-                text.clone(),
-                Style::default().fg(color(*role)),
-            )),
-            content_area,
-        ),
+        Content::Message { text, hint, role } => {
+            render_message(frame, content_area, text, hint.as_deref(), color(*role))
+        }
         Content::Lines {
             heading,
             scroll,
@@ -388,21 +384,24 @@ fn render_navigator(
                 name,
                 depth,
                 collapsed,
+                icon,
             } => {
                 let fold = theme::glyph(if *collapsed {
                     Symbol::ChevronCollapsed
                 } else {
                     Symbol::ChevronExpanded
                 });
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        TextSpan::raw(" "),
-                        TextSpan::raw("  ".repeat(*depth)),
-                        TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
-                        TextSpan::styled(name.clone(), theme::fg(Token::TextSecondary)),
-                    ])),
-                    rect,
-                );
+                let mut spans = vec![
+                    TextSpan::raw(" "),
+                    TextSpan::raw("  ".repeat(*depth)),
+                    TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
+                ];
+                spans.extend(row_icon(*icon));
+                spans.push(TextSpan::styled(
+                    name.clone(),
+                    theme::fg(Token::TextSecondary),
+                ));
+                frame.render_widget(Paragraph::new(Line::from(spans)), rect);
                 hits.push((rect, ViewHit::ToggleGroup(*id)));
             }
             NavigatorRow::Item {
@@ -411,6 +410,7 @@ fn render_navigator(
                 depth,
                 marker,
                 selected,
+                icon,
             } => {
                 let label_style = match (*selected, navigator.focused) {
                     (true, true) => Style::default()
@@ -437,8 +437,9 @@ fn render_navigator(
                         text: format!("{} ", marker.text),
                         ..marker.clone()
                     }),
-                    TextSpan::styled(name.clone(), label_style),
                 ];
+                spans.extend(row_icon(*icon));
+                spans.push(TextSpan::styled(name.clone(), label_style));
                 if *selected {
                     crate::ui::fill_row_bg(
                         &mut spans,
@@ -567,6 +568,86 @@ fn render_lines(
         hits,
         ViewHit::DragContentScrollbar,
     )
+}
+
+/// An empty surface, or one that failed: what is the matter, and — when
+/// there is something to do about it — what to do.
+///
+/// Set a third of the way down rather than pinned to the top edge. A line
+/// of text against the top-left corner reads as a document that got cut
+/// off, which is the one thing an empty surface must not look like; the
+/// same words with space above and below read as the state they are.
+fn render_message(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    text: &str,
+    hint: Option<&str>,
+    colour: Color,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let mut lines = vec![Line::from(TextSpan::styled(
+        text.to_owned(),
+        Style::default().fg(colour).add_modifier(Modifier::BOLD),
+    ))];
+    if let Some(hint) = hint {
+        lines.push(Line::from(""));
+        lines.push(Line::from(TextSpan::styled(
+            hint.to_owned(),
+            theme::fg(Token::TextMuted),
+        )));
+    }
+    let top = area.y.saturating_add(area.height / 3);
+    let body = Rect::new(
+        area.x,
+        top,
+        area.width,
+        area.height.saturating_sub(area.height / 3),
+    );
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(ratatui::layout::Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        body,
+    );
+}
+
+/// The mark a navigator row carries before its name.
+///
+/// The one place a [`RowIcon`] becomes a glyph: the extension said what
+/// the row *is*, and the vocabulary says what that looks like under the
+/// active theme. A set that draws none of them — every built-in one but
+/// `nerd`, since plain Unicode has no folder mark that is not an emoji —
+/// resolves to nothing, and nothing is what gets drawn, without a column
+/// held open for it.
+fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
+    let symbol = match icon {
+        RowIcon::None => return None,
+        RowIcon::Directory => Symbol::FileDirectory,
+        RowIcon::DirectoryOpen => Symbol::FileDirectoryOpen,
+        RowIcon::File => Symbol::FileDefault,
+        RowIcon::Code => Symbol::FileCode,
+        RowIcon::Markup => Symbol::FileMarkup,
+        RowIcon::Config => Symbol::FileConfig,
+        RowIcon::Lock => Symbol::FileLock,
+        RowIcon::Data => Symbol::FileData,
+        RowIcon::Image => Symbol::FileImage,
+        RowIcon::Archive => Symbol::FileArchive,
+        RowIcon::Git => Symbol::FileGit,
+        RowIcon::Legal => Symbol::FileLegal,
+    };
+    let glyph = theme::glyph(symbol);
+    if glyph.trim().is_empty() {
+        return None;
+    }
+    // Muted on purpose: the icon classifies, the name identifies, and an
+    // icon drawn at the name's weight competes with the thing the reader
+    // is actually scanning for.
+    Some(TextSpan::styled(
+        format!("{glyph} "),
+        theme::fg(Token::TextDim),
+    ))
 }
 
 /// How much of the heading row the mode control takes, so the heading
@@ -965,6 +1046,7 @@ mod tests {
                         name: "src/".to_owned(),
                         depth: 0,
                         collapsed: false,
+                        icon: RowIcon::Directory,
                     },
                     NavigatorRow::Item {
                         id: 7,
@@ -972,6 +1054,7 @@ mod tests {
                         depth: 1,
                         marker: Span::new("M", Role::Warning),
                         selected: true,
+                        icon: RowIcon::Code,
                     },
                 ],
             }),
@@ -1050,6 +1133,58 @@ mod tests {
             "the edge is one target for both of its jobs"
         );
         assert!(hits.iter().any(|(_, hit)| *hit == ViewHit::Close));
+    }
+
+    /// An extension says what a row *is*; the vocabulary says what that
+    /// looks like. So the icon appears only where the active set draws
+    /// one, and takes no column where it does not — which is every
+    /// built-in set but `nerd`, because plain Unicode has no folder mark
+    /// that is not an emoji.
+    #[test]
+    fn a_rows_icon_comes_from_the_set_and_takes_no_column_when_there_is_none() {
+        // The active theme is process-wide, so a test that swaps it takes
+        // a turn — otherwise this one's swap is another's flake.
+        static SWAPPING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _turn = SWAPPING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let with = |id: &str| {
+            let mut layers = vec![uze_theme::default_file()];
+            layers.extend(uze_theme::glyph_set_file(id));
+            let theme = uze_theme::resolve_stack(
+                &uze_theme::Identity::from_file(id, uze_theme::default_file()),
+                &layers,
+            )
+            .expect("resolves")
+            .theme;
+            uze_theme::set_active(theme);
+            let (rows, _) = draw(&sample());
+            rows.iter()
+                // Not the content heading, which names the file too.
+                .find(|row: &&String| row.contains("ui.rs") && !row.contains("DIFF"))
+                .cloned()
+                .expect("the item is drawn")
+        };
+
+        let plain = with("default");
+        let nerd = with("nerd");
+        uze_theme::set_active(uze_theme::default_theme().clone());
+
+        let column_of = |row: &str, needle: &str| {
+            row.find(needle)
+                .map(|byte| row[..byte].chars().count())
+                .expect("drawn")
+        };
+        assert_eq!(
+            column_of(&nerd, "ui.rs") - column_of(&plain, "ui.rs"),
+            2,
+            "the nerd set's icon must take a column of its own:\n  {plain:?}\n  {nerd:?}"
+        );
+        assert!(
+            nerd.chars().any(|c| ('\u{ea60}'..='\u{ec84}').contains(&c)),
+            "no Codicon on the row: {nerd:?}"
+        );
     }
 
     /// A rendered document is the one content with no gutter, and the
@@ -1418,6 +1553,7 @@ mod tests {
                 anchor,
                 rows: (0..40)
                     .map(|index| NavigatorRow::Item {
+                        icon: RowIcon::None,
                         id: index,
                         name: format!("file-{index}.rs"),
                         depth: 0,
@@ -1496,6 +1632,7 @@ mod tests {
             navigator: None,
             content: Content::Message {
                 text: "not a git repository".to_owned(),
+                hint: None,
                 role: Role::Danger,
             },
             ..sample()

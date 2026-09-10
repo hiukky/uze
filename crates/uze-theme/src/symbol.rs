@@ -133,6 +133,52 @@ vocabulary! {
         /// Selectable, currently on.
         MarkToggleOn = "mark.toggle-on",
 
+        // ── what a row of a file tree is ───────────────────────────────
+        //
+        // A *kind*, never a language: "source code" is a meaning a theme
+        // can be asked to draw, and "a Rust file" is not — an icon set
+        // per language is an icon theme, a different artifact from this
+        // vocabulary, which every set including the ASCII one has to be
+        // able to answer completely.
+        //
+        // The built-in sets leave these blank, and that is the honest
+        // answer rather than a gap: plain Unicode has no folder or
+        // document mark that a terminal does not draw from its emoji
+        // font, and this vocabulary carries no emoji. A set drawn from a
+        // patched font has them, which is one of the things installing
+        // one buys.
+        /// A directory, closed.
+        FileDirectory = "file.directory",
+        /// A directory whose contents are showing.
+        FileDirectoryOpen = "file.directory-open",
+        /// A file with nothing more specific to say about it.
+        FileDefault = "file.default",
+        /// Source in a programming language.
+        FileCode = "file.code",
+        /// Prose and markup — what a person reads rather than runs.
+        FileMarkup = "file.markup",
+        /// Configuration: what a tool reads to decide how to behave.
+        FileConfig = "file.config",
+        /// A resolved lockfile — derived, and not edited by hand.
+        FileLock = "file.lock",
+        /// Data: a table, a query, a store.
+        FileData = "file.data",
+        FileImage = "file.image",
+        FileArchive = "file.archive",
+        /// Git's own files, which are about the repository rather than in
+        /// it.
+        FileGit = "file.git",
+        /// A licence, a notice — the legal half of a repository.
+        FileLegal = "file.legal",
+
+        /// Work that is finished and waiting to become a request.
+        ///
+        /// Its own symbol rather than a borrowed arrow: this used to draw
+        /// `arrow.shift`, which the vocabulary defines as the shift *key*
+        /// in a hint line. A theme repainting the keyboard's marks would
+        /// have silently repainted a task's standing with them.
+        TaskReady = "task.ready",
+
         // ── an agent's standing in the sidebar ─────────────────────────
         /// Producing output right now. The one animated symbol.
         StatusWorking = "status.working",

@@ -126,6 +126,7 @@ pub(crate) enum ResizablePanel {
     HarnessDrawer,
     ProfileColumns,
     KeysDrawer,
+    AppearanceDrawer,
 }
 
 impl ProfilePanel {
@@ -392,6 +393,7 @@ pub(crate) struct TuiModel {
     /// [`Overlay::ThemePicker`] carries its own: the themes are a directory
     /// listing, and a list that changed between two frames would move the
     /// selection out from under the operator.
+    pub(crate) appearance_drawer_width: Option<u16>,
     pub(crate) appearance_selected: usize,
     pub(crate) appearance_themes: Vec<uze_application::application::ThemeSummary>,
     pub(crate) appearance_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
@@ -539,6 +541,7 @@ impl Default for TuiModel {
             keys_drawer_width: None,
             keys_selected: 0,
             keys_filter: String::new(),
+            appearance_drawer_width: None,
             appearance_selected: 0,
             appearance_themes: Vec::new(),
             appearance_glyph_sets: Vec::new(),

@@ -669,6 +669,14 @@ mod tests {
             let _ = theme.color(*token);
         }
         for symbol in Symbol::ALL {
+            // The `file.` family is the one place "draw nothing" is an
+            // answer rather than a hole: plain Unicode has no folder or
+            // document mark a terminal does not take from its emoji font,
+            // and this vocabulary carries no emoji. A patched font has
+            // them, which is one of the things installing one buys.
+            if symbol.to_string().starts_with("file.") {
+                continue;
+            }
             assert!(
                 !theme.glyph(*symbol).is_empty(),
                 "`{symbol}` resolved to nothing"
@@ -1219,14 +1227,21 @@ mod tests {
     }
 
     /// The `nerd` set is generated from Nerd Fonts' own `glyphnames.json` by
-    /// Codicon name, so a wrong codepoint cannot come from a typo — but it
+    /// icon name, so a wrong codepoint cannot come from a typo — but it
     /// could come from a regenerated file pointing at another icon source,
     /// and mixing sources is what makes a row look assembled from spare
     /// parts. This pins the class, not the individual glyph.
+    ///
+    /// One symbol is deliberately not a Codicon, and is named here so that
+    /// staying an exception is a decision rather than a drift.
     #[test]
-    fn every_nerd_glyph_is_a_codicon() {
+    fn every_nerd_glyph_is_a_codicon_but_the_one_that_is_named() {
         /// Where Nerd Fonts v3 places the Codicons.
         const CODICONS: std::ops::RangeInclusive<u32> = 0xEA60..=0xEC84;
+        /// `mark.sparkle` is `oct-sparkle_fill`: filled where the Codicon
+        /// is an outline, on the one chip that should read as an
+        /// invitation rather than as a status.
+        const EXCEPTIONS: &[(&str, u32)] = &[("mark.sparkle", 0xF51B)];
 
         let file = glyph_set_file("nerd").expect("bundled");
         for (name, value) in &file.symbols {
@@ -1242,10 +1257,14 @@ mod tests {
             };
             assert_eq!(*width, 1, "`{name}` is declared for the Mono builds");
             for character in glyph.chars() {
+                let point = character as u32;
+                if EXCEPTIONS.contains(&(name.as_str(), point)) {
+                    continue;
+                }
                 assert!(
-                    CODICONS.contains(&(character as u32)),
-                    "`{name}` is U+{:04X}, outside the Codicon range",
-                    character as u32
+                    CODICONS.contains(&point),
+                    "`{name}` is U+{point:04X}, outside the Codicon range and \
+                     not one of the named exceptions"
                 );
             }
         }
