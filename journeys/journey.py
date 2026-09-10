@@ -16,6 +16,7 @@ that a gesture landed — never as an assertion.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob as globlib
 import hashlib
 import json
@@ -284,9 +285,39 @@ def guard(root: Path) -> None:
             die(f"refusing to run: the sandbox at {root} would contain {real}")
 
 
+def hold_world(root: Path) -> None:
+    """One run in a world at a time, for as long as this process lives.
+
+    A world is one directory, one HOME and therefore one terminal-server
+    endpoint and one task store, so two runs of the same journey at once
+    are one world with two owners: the second `build_world` deletes the
+    first run's checkouts from under its agent, and the first run's
+    teardown stops the second run's server and signals its processes.
+    Each then fails in whatever scene it was in — a `wait` that never
+    happens, a pane that says `Terminated` — and records a store the other
+    run wrote. The lease lives beside the world, not inside it, because
+    the world itself is deleted and rebuilt; it is never closed on purpose,
+    so it is released only when the process exits, which is after teardown.
+    A second run waits rather than refusing: it is usually the operator
+    comparing two builds of the same journey, and both measurements are
+    only worth having if they ran alone.
+    """
+    root.parent.mkdir(parents=True, exist_ok=True)
+    lease = os.open(f"{root}.lease", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder = os.pread(lease, 32, 0).decode(errors="replace").strip() or "?"
+        say(f"waiting for the run holding {root} (pid {holder})")
+        fcntl.flock(lease, fcntl.LOCK_EX)
+    os.ftruncate(lease, 0)
+    os.pwrite(lease, str(os.getpid()).encode(), 0)
+
+
 def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
     root = WORLDS / slug
     guard(root)
+    hold_world(root)
     if root.exists() and not keep:
         shutil.rmtree(root)
     world_spec = spec.get("world", {})

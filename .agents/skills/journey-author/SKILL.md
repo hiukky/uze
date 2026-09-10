@@ -1,6 +1,6 @@
 ---
 name: journey-author
-description: Writing, changing or debugging a product journey (journeys/) — use whenever you are adding a scenario for a user-facing flow, a journey fails or flakes, a selector stopped matching after a TUI change, you need to decide whether something is a new scene or a new file, or you are about to assert on UZE's own output instead of on the machine. Covers the chapter spine, the scene/file split rule, the gesture and check vocabularies, the probe loop, reading evidence/verdict.json, and the three world constraints a naive runner gets wrong.
+description: Writing, changing or debugging a product journey (journeys/) — use whenever you are adding a scenario for a user-facing flow, a journey fails or flakes, a selector stopped matching after a TUI change, you need to decide whether something is a new scene or a new file, or you are about to assert on UZE's own output instead of on the machine. Covers the chapter spine, the scene/file split rule, the gesture and check vocabularies, the probe loop, reading evidence/verdict.json, and the four world constraints a naive runner gets wrong.
 ---
 
 # Writing a product journey
@@ -132,6 +132,11 @@ scene ended on, the world's tree, and the processes it was holding.
   a terminal server still shutting down when the next run starts is a live
   socket the next client connects to and then watches die — which looks like
   "a tab was created and its pane never painted".
+- **One run per world.** Two runs of the same journey at once share a HOME,
+  a terminal server and a task store, and each tears the other down
+  mid-scene — a `wait` that never happens, a pane that says `Terminated`, a
+  recorded store the other run wrote. The runner makes the second wait; a
+  flake that only shows up when two suites run side by side is this.
 
 ## Before you finish
 

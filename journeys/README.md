@@ -243,7 +243,10 @@ A run refuses to start if its sandbox could contain the developer's real
 `~/.uze`, `~/.claude`, `~/.codex`, `~/.agents` or `~/.config/opencode`, and it
 stops every process its world started — the terminal server is a daemon by
 design, and waiting for it to actually exit is what keeps the next run from
-connecting to a socket that is about to die.
+connecting to a socket that is about to die. One run holds a world at a time:
+a second run of the same journey waits for the first to finish, because two
+runs in one world share a HOME, a terminal server and a task store, and each
+then tears the other down mid-scene.
 
 A journey addresses the world through `{world}`, `{home}`, `{uze_home}`,
 `{project}`, `{repo}` and `{uze}` — plus `{shell_rc}`, which is the file the
