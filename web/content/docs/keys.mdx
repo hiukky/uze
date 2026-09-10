@@ -1,0 +1,139 @@
+---
+title: Keys
+description: Rebind anything, and know before you try whether your terminal can send it
+---
+
+# Keys
+
+uze is meant to be used without learning anything: everything on screen is
+clickable, every action is offered where the thing it acts on is, and one
+surface lists the rest. Keys are the accelerator on top of that — for the
+fortieth session, not the first.
+
+Inside the TUI, the **Keys** route does all of this with a pointer: every
+action, where it is live, the chord that reaches it, and whether the terminal
+in front of you can actually send that chord. `F1` opens the index of what is
+reachable right now.
+
+```text
+~/.uze/keys.json   your keyboard, beside theme-overrides.json
+```
+
+Machine-scoped, like appearance — a project does not get to decide what your
+fingers do. It holds **only what differs** from what uze ships with, which is
+what lets a later release move a key nobody had an opinion about instead of
+freezing your keyboard at the version you first opened the screen on.
+
+```json
+{
+  "bindings": {
+    "workspace": {
+      "new-shell-tab": ["f4"],
+      "close-tab": []
+    }
+  }
+}
+```
+
+An empty list unbinds. Put everything back and the file is deleted rather than
+left holding a copy of the default — the default is not a thing to write down.
+
+## The three parts
+
+**An action** is a meaning: `remove-plugin`, `next-space`,
+`toggle-git-changes`. Actions are the product's vocabulary, and an action is
+never a key — which is the whole point.
+
+**A scope** is where an action is live: `global`, `plugins`, `workspace`,
+`appearance`, `git-changes`. The innermost open surface answers first, and a
+surface that seals — a dialog, a picker, the changes overlay — answers for
+everything except `global`. That is what keeps *leave* and *help* reachable
+from inside anything.
+
+**A chord** is what you press: `ctrl+o`, `alt+shift+i`, `f2`, `/`. Modifiers
+in any order and any case, joined with `+`; `alt+I` and `alt+shift+i` are the
+same chord written two ways.
+
+## What a terminal can actually send
+
+Worth reading before you rebind anything, because a key that never arrives
+looks exactly like a broken feature.
+
+A terminal without an enhanced keyboard protocol has three ways to encode a
+keystroke: a character, a control byte (`Ctrl` plus a letter), and an escape
+sequence (function and navigation keys, and `Alt` as a prefix). Everything
+else has no encoding at all.
+
+**Refused outright.** Six control chords *are* other keys on a terminal, and
+uze will not let you bind them:
+
+| You wrote | It is |
+| --- | --- |
+| `ctrl+i` | Tab |
+| `ctrl+m` | Enter |
+| `ctrl+j` | line feed |
+| `ctrl+h` | Backspace |
+| `ctrl+[` | Esc |
+| `ctrl+space` | NUL |
+
+**Universal.** `Ctrl`+letter (except the above), `F1`–`F12`, `Shift+F…`, and
+unmodified `Enter`/`Esc`/`Tab`/`Shift+Tab`/arrows/`Page…`/`Home`/`End`. These
+reach uze over ssh, inside tmux, on WSL, anywhere.
+
+**Depends on your terminal.** `Alt`+letter and `Alt`+digit are ESC-prefixed
+and need the host to send Meta rather than compose a character: the default on
+Linux, WSL and Windows Terminal, and **off by default on macOS Terminal.app
+and iTerm2**, where Option composes accented characters. Also here: modified
+navigation keys (`ctrl+up`, `ctrl+pageup`), which an emulator often claims
+first for its own tabs.
+
+**Needs an enhanced protocol.** `Ctrl`+digit, `Ctrl+Shift`+letter,
+`shift+enter`, `ctrl+enter`. uze asks for the protocol at startup and uses it
+when the terminal agrees (kitty, foot, WezTerm, ghostty, Alacritty, recent
+iTerm2 and Windows Terminal). Where it does not, the Keys screen says the
+chord cannot be sent rather than binding it and leaving it dead.
+
+<Callout type="info">
+  **The answer that is actually true for your machine** is the Keys screen's
+  capture — it is a probe. Press the key you are wondering about; it says what
+  arrived. No table can enumerate every emulator × multiplexer × ssh × layout,
+  and this one does not have to.
+</Callout>
+
+## The rules the screen enforces
+
+- **A key means one thing per keyboard.** uze has two: management, where it
+  owns the whole keyboard, and the workspace, where every bare key belongs to
+  the agent running in the pane. Within one of them, two actions may not share
+  a mnemonic. Structural keys (Enter, Esc, Tab, the arrows) are contextual by
+  nature and exempt — "go on" reads from the surface, and nobody is confused
+  by it.
+- **A conflict is refused before it is written**, and the screen says what the
+  key already means.
+- **A file that cannot be used changes nothing.** The keyboard already in
+  force stays in force, and the problem is printed with the entry that caused
+  it — an operator without a keyboard cannot fix the file that took it away.
+  An entry naming an action or a surface this build has never heard of is a
+  *warning*: a keymap written for a newer uze still loads on an older one.
+
+## What a keymap deliberately cannot change
+
+- **What happens inside a pane.** Keys uze does not claim are the agent's, and
+  rebinding one takes it away from every agent you run.
+- **Mouse gestures.** Every action bound outside a pane is reachable with the
+  pointer, and that is the floor the keyboard sits on rather than a fallback
+  for it.
+
+<Callout type="warn">
+  Windows Terminal keeps `Ctrl+Shift+*`, `Alt+Enter`, `Ctrl+Tab` and `Ctrl+V`
+  for itself, and under tmux or screen the multiplexer's own prefix wins first.
+  None of those ever reach uze, whatever you bind them to.
+</Callout>
+
+The full guide, including the file's every field, is
+[`docs/keymap.md`](https://github.com/hiukky/uze/blob/main/docs/keymap.md).
+
+<Cards>
+  <Card title="Appearance" href="/docs/appearance" />
+  <Card title="The agent workspace" href="/docs/workspace" />
+</Cards>

@@ -24,6 +24,12 @@ const config = {
   env: {
     NEXT_PUBLIC_UZE_VERSION: version,
   },
+  // A published URL is a promise to whoever linked it. `theming` became
+  // `appearance` when appearance stopped being one choice — the palette and
+  // the glyph set are chosen apart now, and only one of them is a theme.
+  async redirects() {
+    return [{ source: '/docs/theming', destination: '/docs/appearance', permanent: true }];
+  },
 };
 
 export default withMDX(config);

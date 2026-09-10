@@ -105,13 +105,17 @@ progress rather than a document, and don't.
 ## Appearance
 
 ```bash
-uze theme list       # what this machine can draw with, marking the active one
-uze theme use <id>   # draw in it from now on, in both the CLI and the TUI
-uze theme show [id]  # a theme's resolved colours and glyphs, and its warnings
+uze theme list          # what this machine can draw with, marking the active one
+uze theme set <id>      # draw in it from now on, in both the CLI and the TUI
+uze theme show [id]     # a theme's resolved colours and glyphs, and its warnings
+
+uze theme glyphs        # the glyph sets, each drawn in its own glyphs
+uze theme glyphs <set>  # draw every mark from that set, whatever theme is on
 ```
 
-Machine-level, and `--format json` on `list` and `show`. See
-[Theming](/docs/theming).
+The palette and the glyph set are separate choices, and neither changes the
+other. Machine-level, and `--format json` on `list`, `show` and `glyphs`. See
+[Appearance](/docs/appearance).
 
 ## Terminal session
 

@@ -1,0 +1,233 @@
+---
+title: Appearance
+description: Choose what uze looks like — the palette and the glyph set, chosen apart, and which font to install
+---
+
+# Appearance
+
+uze's appearance is data. Every colour it draws and every mark it prints is
+selected by *what the thing means*; what that means looks like comes from the
+active theme. So a theme is a file you write, and applying it changes nothing
+else about how uze behaves.
+
+Appearance is **two choices, not one**: the palette, and the set of glyphs
+every mark is drawn from. They are separate because they are facts of
+different kinds — a font is installed once, a palette is picked on a whim —
+and neither ever changes the other.
+
+```bash
+uze theme list          # what this machine can draw with, marking the active one
+uze theme set dawn      # draw in it from now on, in the CLI and the TUI
+uze theme show          # the active theme's resolved values, and its warnings
+
+uze theme glyphs        # the glyph sets, each drawn in its own glyphs
+uze theme glyphs nerd   # draw every mark from that set, whatever theme is on
+```
+
+Inside the TUI, the **Appearance** route holds both lists; `t` still opens the
+quick theme picker from anywhere. Selecting redraws the next frame; no session,
+pane or agent is disturbed.
+
+## Fonts
+
+**Install a [Nerd Font](https://www.nerdfonts.com/font-downloads) and run
+`uze theme glyphs nerd`.** That is the recommendation, and everything below is
+why.
+
+uze draws its marks from one of three sets. Choosing one never touches your
+colours — a set declares glyphs and nothing else, so it composes with any
+palette.
+
+| Set | What it draws | When |
+| --- | --- | --- |
+| `default` | Unicode: box drawing, block elements, geometric shapes, a braille spinner | The default. No font to install. |
+| `nerd` | [Codicons](https://microsoft.github.io/vscode-codicons/dist/codicon.html) — the icons VS Code draws its own chrome with | You installed a patched font. **Recommended.** |
+| `ascii` | Every mark inside 7-bit ASCII | A console with no Unicode coverage and no font fallback. |
+
+### Why a Nerd Font is worth installing
+
+The `default` set is honest Unicode, but "Unicode" is not one guarantee — it
+is a different guarantee per font, and most monospace fonts fall short of it.
+Measured across five common ones, counting the symbols the font does **not**
+serve itself:
+
+| Font | Symbols served by some other font (of 42) |
+| --- | --- |
+| DejaVu Sans Mono | 0 |
+| JetBrainsMono Nerd Font | 5 |
+| Noto Sans Mono | 13 |
+| Liberation Mono | 20 |
+| Ubuntu Mono | 27 |
+
+Your terminal papers over this with font fallback — it borrows the missing
+glyph from another family and squeezes it into the cell — so what you get is
+a wobble in weight and style rather than a broken layout. It still means a
+row of marks drawn from two or three different typefaces.
+
+The `nerd` set has no such gamble: every glyph comes from the one patched
+font, at one weight, drawn for a monospace grid. It needs **Nerd Fonts v3** or
+newer, where Codicons live at `U+EA60`–`U+EC84`; they do not exist in v2.
+
+### Which build to install
+
+Nerd Fonts ships each family in several builds, and the difference matters
+here. Take the **Mono** one — `JetBrainsMono Nerd Font Mono`, not
+`JetBrainsMono Nerd Font` — whose icons occupy exactly one cell. The plain
+build draws the same codepoints two cells wide, and nothing in Unicode
+distinguishes the two, so uze's declared widths target Mono. If your preview
+column comes out ragged, that is which build you have; one `width` override
+per glyph in your own overrides settles it.
+
+### uze never guesses your font
+
+There is no honest way to detect it. No escape sequence asks a terminal which
+font it is rendering with; `$TERM` and `$TERM_PROGRAM` name the emulator, not
+the font; and a cursor-position probe measures *width* rather than presence —
+a missing glyph and a present one both come back as one cell.
+
+So uze does not detect, and does not ask you to recall what you installed.
+`uze theme glyphs` and the Appearance route draw **each set in its own
+glyphs**, and you pick the row that looks right. A set your terminal cannot
+render shows as empty boxes before you choose it. The preview is the
+interface, and that is a decision rather than a gap.
+
+<Callout type="info">
+  `ascii` is not a museum piece, but its case is narrow: a surface with no font
+  fallback to rescue it — a Linux virtual console, a recovery shell, output
+  captured by something that is not UTF-8. On a desktop terminal you will never
+  need it. It costs you no palette if you do.
+</Callout>
+
+## Which layer wins
+
+```text
+built-in default → the glyph set → a theme's ancestors → the theme → your overrides
+```
+
+Later layer wins, which is the stack's only rule. Two consequences:
+
+- A theme that declares only `colors` — the ordinary case — leaves your glyphs
+  alone.
+- A theme that deliberately declares a symbol decides that symbol, even over
+  the set you chose. `theme-overrides.json` is the layer above both.
+
+`uze theme show` prints the layers in the order they applied, so "which one
+won" is a question you can answer rather than guess at.
+
+## Where a theme lives
+
+```text
+~/.uze/themes/<id>.json      a theme you wrote; the file's stem is its id
+~/.uze/theme-overrides.json  your own last word, over whichever theme is on
+~/.uze/state/theme.json      the palette and the glyph set you chose
+```
+
+One theme is built in and needs no file: `default`. A file of your own named
+`default.json` wins over it.
+
+## A theme is partial
+
+Everything a theme leaves out resolves from the built-in default, so a usable
+theme is a handful of lines:
+
+```json
+{
+  "name": "dawn",
+  "colors": {
+    "surface.background": "#faf7f2",
+    "text.primary": "#2b2a28",
+    "text.muted": "#7b736a",
+    "accent": "#2f7d4f"
+  }
+}
+```
+
+That is a complete light theme — every surface, border and diff wash derives
+from the background you declared.
+
+`extends` makes a theme a variation of another, merging *declarations* rather
+than resolved colours: change the parent's background and every surface it
+derived from that background is recomputed against the new one.
+
+## The five ways to write a colour
+
+| Form | Means |
+| --- | --- |
+| `#rrggbb` | exactly this colour |
+| `#rrggbbaa` | this colour at that alpha, over the theme's own `surface.background` |
+| `~aa` | separated from the background by that much, in whichever direction is visible against it |
+| `@another.token` | whatever that token resolves to |
+| `@another.token/aa` | that token's value, at that alpha, over the background |
+
+`~aa` is the one worth understanding: a terminal has no alpha channel, so a
+raised surface must be a real colour — a little white on a near-black backdrop,
+a little black on a light page. Same intent, opposite colour. Writing `~17` says
+*how far to separate* and lets the loader decide which way, which is why
+declaring a light background is enough to get a light theme's whole surface
+stack.
+
+<Callout type="info">
+  `ansi.1`–`ansi.6` and their bright forms are literal colours, not references: a
+  program inside a pane that emits index 2 means *green*, whatever your theme
+  calls green. Only the four that are genuinely a role — background, foreground
+  and its dim and bright forms — follow your tokens.
+</Callout>
+
+## Symbols
+
+Every mark uze draws as chrome is a named symbol, and a theme can replace any of
+them — with a string, a list of animation frames, or an object carrying an
+explicit `width` for a glyph the terminal and Unicode disagree about.
+
+uze's own themes and glyph sets carry **no emoji**: a different font family, a
+width that varies by terminal, and a picture that ignores the hue carrying the
+meaning. A test holds everything bundled to that. Your theme is yours.
+
+A set need not declare every symbol. `nerd` declares the marks, statuses,
+chevrons and arrows and inherits the rest — a patched font already draws `├─`
+and `…` correctly, and an icon there would be a downgrade. `ascii` is the
+exception and declares all of them, because one Unicode glyph left in an
+otherwise-ASCII screen defeats the only reason to choose it.
+
+## Your own overrides
+
+`~/.uze/theme-overrides.json` is the same format, applied last, over whichever
+theme *and* whichever glyph set is active — and it keeps applying when you
+change either. It is for the **individual** glyph: one your own font draws
+differently, a width your build disagrees with, a theme's symbol you would
+rather not have. A whole set is `uze theme glyphs`. It never appears in
+`uze theme list`.
+
+## How far a theme reaches
+
+One choice changes all of these at once:
+
+- the workspace client and the management TUI;
+- the CLI's own output, including the usage and error text it generates;
+- what a program inside a pane is told when it asks the terminal for its
+  background or foreground (OSC 10/11), and the sixteen indexed colours it can
+  name — so an agent picking a light- or dark-adapted UI picks the one you are
+  actually looking at;
+- the palette syntax-highlighted diffs are rendered with.
+
+It does **not** control layout — paddings and minimum widths are invariants of a
+keyboard-driven interface, not appearance — or anything but appearance.
+
+<Callout type="warn">
+  A theme that will not load reports the token and value that broke it on every
+  run, because it silently is not in force until you fix it; uze keeps drawing in
+  the default meanwhile. Contrast and unknown-token warnings are printed when you
+  ask (`theme show`, `theme set`), never on every command.
+</Callout>
+
+Point your editor at
+[`crates/uze-theme/themes/theme.schema.json`](https://github.com/hiukky/uze/blob/main/crates/uze-theme/themes/theme.schema.json)
+for completion over every token and symbol name. The full authoring guide,
+including every token and what each warning means, is
+[`docs/appearance.md`](https://github.com/hiukky/uze/blob/main/docs/appearance.md).
+
+<Cards>
+  <Card title="Keys" href="/docs/keys" />
+  <Card title="CLI reference" href="/docs/cli" />
+  <Card title="The agent workspace" href="/docs/workspace" />
+</Cards>
