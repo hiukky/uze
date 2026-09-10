@@ -280,7 +280,7 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-llvm-cov
       # `--skip` filters out tests that fail due to environment issues,
@@ -318,7 +318,7 @@ jobs:
       # 2026-09-03). The audit itself is unchanged: our Cargo.lock
       # against the RustSec advisory database.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-audit
       - run: cargo audit
@@ -342,7 +342,7 @@ jobs:
       # whether what it links has a known defect, and a red one here is
       # read by a different person.
       - name: Install cargo-deny and cargo-about
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-deny,cargo-about
       # Licences, advisories, bans and sources — the policy lives in
@@ -433,7 +433,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install ruff
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: ruff
       - run: ruff format --check conformance/
