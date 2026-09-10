@@ -35,6 +35,17 @@ const MIN_EXTENSION_CONTENT_WIDTH: u16 = 40;
 
 const GUTTER_WIDTH: u16 = 7;
 
+/// Margin on each side of unnumbered content.
+///
+/// A numbered line already starts a gutter's width in, and ends well
+/// short of the edge because code is short; that is where every other
+/// mode's breathing room comes from. A rendered document has neither — it
+/// has no gutter, and its paragraphs wrap to the full width — so without
+/// this it runs into both borders. Two columns, the same as the
+/// management screens' own content inset, so the two surfaces indent
+/// their text by the same amount.
+const PROSE_INSET: u16 = 2;
+
 /// Columns of padding on each side of a mode segment's label. The padding
 /// is part of the button — it is filled, and clicked, like the label is.
 const MODE_PAD: u16 = 1;
@@ -507,8 +518,20 @@ fn render_lines(
         body.height as usize,
         total,
     );
-    let content = body;
     let gutter = gutter_width(lines);
+    // Unnumbered content is prose, and prose is the case the gutter was
+    // silently paying for everywhere else.
+    let inset = if gutter == 0 { PROSE_INSET } else { 0 };
+    let content = if body.width > inset.saturating_mul(2) {
+        Rect::new(
+            body.x.saturating_add(inset),
+            body.y,
+            body.width.saturating_sub(inset.saturating_mul(2)),
+            body.height,
+        )
+    } else {
+        body
+    };
     let text_width = text_width(content.width, gutter);
     let mut y = content.y;
     for (offset, line) in lines.iter().enumerate().skip(scroll as usize) {
@@ -1027,6 +1050,61 @@ mod tests {
             "the edge is one target for both of its jobs"
         );
         assert!(hits.iter().any(|(_, hit)| *hit == ViewHit::Close));
+    }
+
+    /// A rendered document is the one content with no gutter, and the
+    /// gutter is where every other mode's left margin quietly came from.
+    /// Without a margin of its own, a wrapped paragraph runs into both
+    /// borders.
+    #[test]
+    fn unnumbered_content_is_inset_where_numbered_content_leans_on_its_gutter() {
+        let prose = |text: &str| ContentLine {
+            gutter: String::new(),
+            number: String::new(),
+            tone: LineTone::Neutral,
+            spans: vec![Span {
+                text: text.to_owned(),
+                role: Role::Default,
+                color: None,
+                bold: false,
+                italic: false,
+            }],
+        };
+
+        let mut view = sample();
+        let Content::Lines { lines, heading, .. } = &mut view.content else {
+            unreachable!("the sample is Lines")
+        };
+        *lines = vec![prose("PROSE")];
+        *heading = "HEADING".to_owned();
+        let (rows, _) = draw(&view);
+
+        // Measured against the heading rather than the frame, because the
+        // heading is drawn at the content area's own left edge — so the
+        // difference is the margin and nothing else. In *columns*: the
+        // frame's own rules are multi-byte, so a byte offset is not where
+        // the terminal put anything.
+        let column_of = |needle: &str| -> usize {
+            rows.iter()
+                .find_map(|row: &String| row.find(needle).map(|byte| row[..byte].chars().count()))
+                .unwrap_or_else(|| panic!("`{needle}` is drawn"))
+        };
+        assert_eq!(
+            column_of("PROSE") - column_of("HEADING"),
+            usize::from(PROSE_INSET),
+            "prose must be inset from the edge its own heading sits on"
+        );
+
+        // And the numbered case is untouched — its gutter is the margin.
+        let (numbered, _) = draw(&sample());
+        let row = numbered
+            .iter()
+            .find(|row: &&String| row.contains("let x = 1;"))
+            .expect("the code line is drawn");
+        assert!(
+            row.contains("12"),
+            "the gutter still carries the number: {row:?}"
+        );
     }
 
     /// A scrollbar is drawn only when there is something to scroll, and
