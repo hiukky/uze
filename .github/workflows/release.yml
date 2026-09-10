@@ -66,7 +66,7 @@ jobs:
         with:
           # git-cliff needs the full history plus existing tags.
           fetch-depth: 0
-      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           # cargo-release and git-cliff are pinned: the release changelog
           # depends on `git-cliff -t` naming. The rest are what the
@@ -321,7 +321,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           # git-cliff pinned to the same version `propose` uses: both render
           # the same commits, and a reader comparing the changelog against the
