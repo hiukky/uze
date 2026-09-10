@@ -1081,6 +1081,17 @@ mod tests {
         }
     }
 
+    /// The active theme is process-wide, so a test that swaps it and a
+    /// test that reads it take turns. Without this, swapping the glyph set
+    /// under a neighbour changes the very row it is looking for.
+    static ACTIVE_THEME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn theme_turn() -> std::sync::MutexGuard<'static, ()> {
+        ACTIVE_THEME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn draw(view: &View) -> (Vec<String>, Vec<(Rect, ViewHit)>) {
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         let mut hits = Vec::new();
@@ -1142,13 +1153,7 @@ mod tests {
     /// that is not an emoji.
     #[test]
     fn a_rows_icon_comes_from_the_set_and_takes_no_column_when_there_is_none() {
-        // The active theme is process-wide, so a test that swaps it takes
-        // a turn — otherwise this one's swap is another's flake.
-        static SWAPPING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _turn = SWAPPING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
+        let _turn = theme_turn();
         let with = |id: &str| {
             let mut layers = vec![uze_theme::default_file()];
             layers.extend(uze_theme::glyph_set_file(id));
@@ -1182,8 +1187,8 @@ mod tests {
             "the nerd set's icon must take a column of its own:\n  {plain:?}\n  {nerd:?}"
         );
         assert!(
-            nerd.chars().any(|c| ('\u{ea60}'..='\u{ec84}').contains(&c)),
-            "no Codicon on the row: {nerd:?}"
+            nerd.chars().any(|c| c as u32 >= 0xE000),
+            "no icon from the patched ranges on the row: {nerd:?}"
         );
     }
 
@@ -1452,6 +1457,9 @@ mod tests {
     /// extension that drifts from the design system.
     #[test]
     fn chrome_uses_the_hosts_palette_and_content_keeps_its_own() {
+        // Reads the active theme, so it takes its turn with the test that
+        // swaps it.
+        let _turn = theme_turn();
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         terminal
             .draw(|frame| {

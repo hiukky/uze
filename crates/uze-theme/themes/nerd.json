@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "uze nerd",
-  "description": "UZE's marks drawn in Codicons, the icon set VS Code draws its own chrome with. Needs a Nerd Fonts v3 patched font, where Codicons live at U+EA60-EC84; transcribed from the official glyphnames.json (Nerd Fonts 3.5.1) by name, never by codepoint. Widths are declared for the `Nerd Font Mono` builds, whose icons occupy one cell; on a non-Mono build they occupy two, and unicode-width cannot tell the two apart. Declares symbols only, and only the ones an icon says better than a letterform: box drawing, bars and typography are the built-in default's, which any patched font draws.",
+  "description": "UZE's marks drawn from a patched icon font. Needs Nerd Fonts v3 or newer. Each entry is chosen by meaning first and then by metrics: of the names that would say the right thing, the one whose glyph sits closest to the band a patched font normalises every source to (62% of the em, on the baseline), so a row of marks is one optical size rather than a range. Generated from the official glyphnames.json by name, never by codepoint. Widths are declared for the `Nerd Font Mono` builds, whose icons occupy one cell. Declares only the marks an icon says better than a letterform: box drawing, bars and typography are the built-in default's, which any patched font draws.",
   "symbols": {
     "mark.native": {
       "glyph": "",
@@ -16,7 +16,7 @@
       "width": 1
     },
     "mark.adapted": {
-      "glyph": "",
+      "glyph": "",
       "width": 1
     },
     "mark.unsupported": {
@@ -32,7 +32,7 @@
       "width": 1
     },
     "mark.dot": {
-      "glyph": "",
+      "glyph": "󰧟",
       "width": 1
     },
     "mark.done": {
@@ -72,11 +72,11 @@
       "width": 1
     },
     "arrow.up": {
-      "glyph": "",
+      "glyph": "󰁝",
       "width": 1
     },
     "arrow.down": {
-      "glyph": "",
+      "glyph": "󰁅",
       "width": 1
     },
     "arrow.external": {
@@ -88,15 +88,15 @@
       "width": 1
     },
     "arrow.ahead": {
-      "glyph": "",
+      "glyph": "󰜷",
       "width": 1
     },
     "arrow.behind": {
-      "glyph": "",
+      "glyph": "󰜮",
       "width": 1
     },
     "arrow.to": {
-      "glyph": "",
+      "glyph": "󰁔",
       "width": 1
     },
     "chevron.right": {
@@ -116,7 +116,7 @@
       "width": 1
     },
     "menu": {
-      "glyph": "",
+      "glyph": "",
       "width": 1
     },
     "code": {
@@ -124,51 +124,51 @@
       "width": 1
     },
     "file.directory": {
-      "glyph": "",
+      "glyph": "󰉋",
       "width": 1
     },
     "file.directory-open": {
-      "glyph": "",
+      "glyph": "󰝰",
       "width": 1
     },
     "file.default": {
-      "glyph": "",
+      "glyph": "󰈔",
       "width": 1
     },
     "file.code": {
-      "glyph": "",
+      "glyph": "󰈮",
       "width": 1
     },
     "file.markup": {
-      "glyph": "",
+      "glyph": "󰈙",
       "width": 1
     },
     "file.config": {
-      "glyph": "",
+      "glyph": "󰒓",
       "width": 1
     },
     "file.lock": {
-      "glyph": "",
+      "glyph": "󰌾",
       "width": 1
     },
     "file.data": {
-      "glyph": "",
+      "glyph": "󰆼",
       "width": 1
     },
     "file.image": {
-      "glyph": "",
+      "glyph": "󰈟",
       "width": 1
     },
     "file.archive": {
-      "glyph": "",
+      "glyph": "󰗄",
       "width": 1
     },
     "file.git": {
-      "glyph": "",
+      "glyph": "󰊢",
       "width": 1
     },
     "file.legal": {
-      "glyph": "",
+      "glyph": "󰗑",
       "width": 1
     }
   }

@@ -1226,22 +1226,31 @@ mod tests {
         }
     }
 
-    /// The `nerd` set is generated from Nerd Fonts' own `glyphnames.json` by
-    /// icon name, so a wrong codepoint cannot come from a typo — but it
-    /// could come from a regenerated file pointing at another icon source,
-    /// and mixing sources is what makes a row look assembled from spare
-    /// parts. This pins the class, not the individual glyph.
+    /// Every glyph the `nerd` set draws is an icon a patched font supplies,
+    /// declared at one cell.
     ///
-    /// One symbol is deliberately not a Codicon, and is named here so that
-    /// staying an exception is a decision rather than a drift.
+    /// The set is generated from Nerd Fonts' own `glyphnames.json` by icon
+    /// name, so a wrong codepoint cannot come from a typo. What this
+    /// catches is the other way in: a hand edit, or a regeneration that
+    /// reached outside the patched ranges entirely and left a glyph no
+    /// patched font has.
+    ///
+    /// It cannot check the thing that actually matters about the set —
+    /// that every mark sits at one optical size — because that is a
+    /// property of a *font file*, and which one renders is the terminal's
+    /// business rather than this build's. The generator measures it
+    /// against a real font; nothing here can.
     #[test]
-    fn every_nerd_glyph_is_a_codicon_but_the_one_that_is_named() {
-        /// Where Nerd Fonts v3 places the Codicons.
-        const CODICONS: std::ops::RangeInclusive<u32> = 0xEA60..=0xEC84;
-        /// `mark.sparkle` is `oct-sparkle_fill`: filled where the Codicon
-        /// is an outline, on the one chip that should read as an
-        /// invitation rather than as a status.
-        const EXCEPTIONS: &[(&str, u32)] = &[("mark.sparkle", 0xF51B)];
+    fn every_nerd_glyph_is_an_icon_a_patched_font_supplies() {
+        /// Where Nerd Fonts v3 places the sources this set draws from.
+        const RANGES: &[(u32, u32)] = &[
+            (0xE5FA, 0xE6BB),   // Seti-UI and Custom
+            (0xE700, 0xE8EF),   // Devicons
+            (0xEA60, 0xEC84),   // Codicons
+            (0xED00, 0xF2FF),   // Font Awesome, and Octicons among them
+            (0xF400, 0xF533),   // Octicons
+            (0xF0001, 0xF1AF0), // Material Design Icons
+        ];
 
         let file = glyph_set_file("nerd").expect("bundled");
         for (name, value) in &file.symbols {
@@ -1252,19 +1261,18 @@ mod tests {
             } = value
             else {
                 panic!(
-                    "`{name}` must declare a glyph and its width: a Nerd Font's icons sit in the private-use area, where unicode-width cannot measure them"
+                    "`{name}` must declare a glyph and its width: a patched font's icons sit in \
+                     the private-use area, where unicode-width cannot measure them"
                 );
             };
             assert_eq!(*width, 1, "`{name}` is declared for the Mono builds");
             for character in glyph.chars() {
                 let point = character as u32;
-                if EXCEPTIONS.contains(&(name.as_str(), point)) {
-                    continue;
-                }
                 assert!(
-                    CODICONS.contains(&point),
-                    "`{name}` is U+{point:04X}, outside the Codicon range and \
-                     not one of the named exceptions"
+                    RANGES
+                        .iter()
+                        .any(|(low, high)| (*low..=*high).contains(&point)),
+                    "`{name}` is U+{point:04X}, which no patched font puts an icon at"
                 );
             }
         }
