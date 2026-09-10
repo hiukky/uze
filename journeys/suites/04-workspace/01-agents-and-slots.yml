@@ -50,13 +50,22 @@ scenes:
         in: pane
         row_offset: 1
         offset: 3
-        expect: Claude Code v
+        # UZE's own drawing, not the harness's banner. A gate says the
+        # gesture landed; waiting on a *stand-in's* first line of stdout
+        # makes the gate depend on something the journey does not drive,
+        # and that is what made this scene time out on a loaded runner
+        # while every record UZE keeps was already correct. That the
+        # agent's process really started is a claim about the machine, so
+        # it is a `then:` below.
+        expect: agent 1
         expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
         count: 1
         about: one checkout exists, named by its slot
+      - process: { matching: claude, cwd: "/.worktrees/", alive: true }
+        about: the agent's own process is running, in its own checkout
       - git: { worktrees: 2 }
         about: Git registers the checkout as a worktree of the project
       - git: { branches: "agent/*", count: 1 }
@@ -81,13 +90,15 @@ scenes:
         in: pane
         row_offset: 2
         offset: 3
-        expect: Codex v
+        expect: agent 2
         expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
         count: 2
         about: a second checkout, not a shared one
+      - process: { matching: codex, cwd: "/.worktrees/", alive: true }
+        about: the second agent runs its own harness, in its own checkout
       - git: { worktrees: 3 }
       - git: { branches: "agent/*", count: 2 }
         about: two branches, one per agent
@@ -133,12 +144,14 @@ scenes:
         in: pane
         row_offset: 3
         offset: 3
-        expect: OpenCode v
+        expect: agent 3
         expect_timeout: 90
         pause: 1.5
     then:
       - dir: "{project}/.worktrees/*"
         count: 3
+      - process: { matching: opencode, cwd: "/.worktrees/", alive: true }
+        about: the third agent runs its own harness, in its own checkout
       - git: { worktrees: 4 }
       - tasks: { count: 3, checkouts: 3 }
         about: three tasks, three distinct slots
@@ -180,7 +193,11 @@ scenes:
         in: pane
         row_offset: 2
         offset: 3
-        expect: Codex v
+        # The count, not the label: closing an agent frees its *number*
+        # as well as its slot, so the one placed here is `agent 3` again
+        # — a string the screen was showing a moment ago, which would let
+        # the gate pass on a stale frame.
+        expect: 3 agents
         expect_timeout: 90
         pause: 2.0
     then:
