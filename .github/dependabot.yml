@@ -8,6 +8,16 @@ updates:
       cargo-dependencies:
         patterns:
           - "*"
+    ignore:
+      # bincode stays on 1.3.3 — every version, not just the majors, so the
+      # robot stops re-proposing this. 3.0.0 is not a release at all: its
+      # whole lib.rs is `compile_error!("https://xkcd.com/2347/")`, published
+      # by an account since deleted, and it broke every job in this pipeline
+      # the one week it was offered. 2.x is a different encoder API over a
+      # versioned wire, so it is a protocol change somebody designs, never
+      # something that arrives here as an automated bump. The manifests pin
+      # `=1.3.3` and say the same thing at the call site.
+      - dependency-name: bincode
 
   - package-ecosystem: github-actions
     directory: /
