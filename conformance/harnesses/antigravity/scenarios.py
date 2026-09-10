@@ -369,6 +369,15 @@ EOF
 
 HOOK_DENIAL_MARKERS = ("blocked by protect-env", "Denied by UZE hook")
 
+#: Every wording this harness has used to ask a person to approve the tool
+#: call — an unanswered prompt stalls the turn, and the allow scenario then
+#: reads as "the hook never let the command run", which is what 1.1.28 did
+#: to it. Through 1.1.27 the question was "Do you want to proceed"; 1.1.28
+#: made it say what is being approved ("Run this command?", "Allow access
+#: to this URL?", "Allow calling this tool?" — its changelog), so the match
+#: is on the header above them all rather than on any one question.
+PERMISSION_PROMPTS = ("Do you want to proceed", "Requesting permission for:")
+
 
 def hook_turn(cfg, prov_ip, tag, args, plugins, prelude="", auth="consumer"):
     """One interactive AGY turn around a scripted `run_command` (in the
@@ -444,7 +453,7 @@ def hook_turn(cfg, prov_ip, tag, args, plugins, prelude="", auth="consumer"):
         # The vendor's own permission prompt for the command: a person
         # approves it, and the hook decision — never this prompt — is what
         # the turn is judged on. A deny hook that ran never shows it.
-        if "Do you want to proceed" in seen and not prompted:
+        if any(m in seen for m in PERMISSION_PROMPTS) and not prompted:
             prompted = True
             child.send("\r")
             time.sleep(1.0)
