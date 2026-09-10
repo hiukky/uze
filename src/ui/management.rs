@@ -377,7 +377,7 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Harnesses => "detected agents",
         Route::Profiles => "preferences",
         Route::Keys => "what each key does",
-        Route::Appearance => "the palette, and the glyphs — chosen apart",
+        Route::Appearance => "theme & glyphs",
     }
 }
 

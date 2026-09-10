@@ -83,7 +83,7 @@ pub(crate) fn render_appearance(
         frame,
         area,
         "Appearance",
-        "the palette, and the glyphs — chosen apart",
+        "theme & glyphs",
         Some(Span::styled(
             format!(
                 "{theme} {} {glyphs}",
