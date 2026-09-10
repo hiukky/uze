@@ -75,21 +75,23 @@ jobs:
       - name: Install Lab runner dependency
         run: python3 -m pip install --user pexpect
       # ADR-035 promotion gate: 3 consecutive clean runs per vertical.
-      # A run counts clean when the gate line reports PASS == total, no
-      # check failure (❌), and no run-level crash.
+      # A run counts clean when the runner says so — `lab.py` exits 0 only
+      # when every asserted check passed and no run-level crash happened.
+      # Re-deriving that from the log is how this gate spent months green
+      # over red runs: it searched for a `❌` the runner never prints (a
+      # failure line is `✕`) and accepted any `N/M asserted PASS` line,
+      # including 46/49.
       - name: Run 3 consecutive gate runs
         run: |
           mkdir -p /tmp/stability/${{ matrix.harness }}
           fails=0
           for i in 1 2 3; do
-            python3 conformance/lab.py --harness ${{ matrix.harness }} --write-summary \
-              > /tmp/stability/${{ matrix.harness }}/run$i.log 2>&1 || true
             log=/tmp/stability/${{ matrix.harness }}/run$i.log
-            if grep -q "RUN CRASH\|❌" "$log" \
-               || ! grep -q "=== [0-9]*/[0-9]* asserted PASS" "$log"; then
-              echo "flake in run $i:"; tail -n 12 "$log"; fails=$((fails+1))
-            else
+            if python3 conformance/lab.py --harness ${{ matrix.harness }} --write-summary \
+                 > "$log" 2>&1; then
               echo "run $i clean"
+            else
+              echo "flake in run $i:"; tail -n 12 "$log"; fails=$((fails+1))
             fi
           done
           echo "stability: $((3-fails))/3 clean for ${{ matrix.harness }}"
