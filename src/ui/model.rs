@@ -36,7 +36,9 @@ pub(crate) enum Route {
     Harnesses,
     Profiles,
     /// The keyboard itself: every action, the key that reaches it, and
-    /// whether this terminal can deliver that key at all.
+    /// whether this terminal can deliver that key at all. Called
+    /// *Shortcuts* on screen — "keys" is what a harness authenticates with,
+    /// and the product already says shortcut everywhere else.
     Keys,
     /// What UZE looks like: the palette, and — chosen apart from it — the
     /// glyph set, each shown drawn in its own marks. The only way to answer
@@ -44,12 +46,18 @@ pub(crate) enum Route {
     Appearance,
 }
 
+/// Sidebar order, and it is an argument rather than a list: what UZE
+/// delivers (plugins, then the preferences that travel with them), then who
+/// receives it, then UZE's own surface. Profiles used to sit after
+/// Integrations, among the screens about the app, where "preferences" read
+/// as *uze's* preferences — they are an agent's, applied to harnesses, and
+/// they belong beside the other thing UZE hands a harness.
 pub(crate) const ROUTES: [Route; 7] = [
     Route::Overview,
     Route::Plugins,
-    Route::Extensions,
-    Route::Harnesses,
     Route::Profiles,
+    Route::Harnesses,
+    Route::Extensions,
     Route::Keys,
     Route::Appearance,
 ];
@@ -62,7 +70,7 @@ impl Route {
             Route::Extensions => "Extensions",
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
-            Route::Keys => "Keys",
+            Route::Keys => "Shortcuts",
             Route::Appearance => "Appearance",
         }
     }

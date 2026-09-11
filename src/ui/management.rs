@@ -375,7 +375,7 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Plugins => "skills · agents · MCP",
         Route::Extensions => "official tool extensions",
         Route::Harnesses => "detected agents",
-        Route::Profiles => "preferences",
+        Route::Profiles => "autonomy · sandbox · model",
         Route::Keys => "what each key does",
         Route::Appearance => "theme & glyphs",
     }

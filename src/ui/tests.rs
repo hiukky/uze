@@ -283,13 +283,16 @@ fn sidebar_keyboard_navigation_cycles_routes() {
         focus: Focus::Sidebar,
         ..TuiModel::default()
     };
-    assert_eq!(model.route, Route::Overview);
+    // Against the sidebar's own order rather than against named routes:
+    // what this proves is that the keys walk it and turn around, which is
+    // still true the next time the order is argued over.
+    assert_eq!(model.route, ROUTES[0]);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.route, ROUTES[1]);
     model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Extensions);
+    assert_eq!(model.route, ROUTES[2]);
     model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.route, ROUTES[1]);
 }
 
 #[test]

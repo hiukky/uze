@@ -197,7 +197,7 @@ impl Scope {
             Scope::Harnesses => "Integrations",
             Scope::Profiles => "Profiles",
             Scope::ProfileEditor => "Editing a preference",
-            Scope::Keys => "Keys",
+            Scope::Keys => "Shortcuts",
             Scope::Appearance => "Appearance",
             Scope::Filter => "While searching",
             Scope::TextPrompt => "While typing an answer",
