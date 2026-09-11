@@ -4448,6 +4448,33 @@ fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
     );
 }
 
+/// Coming back to Appearance builds the model afresh, so the selection has
+/// to be settled again — on the theme in force, not on the first card.
+#[test]
+fn returning_to_appearance_lands_on_the_theme_in_force() {
+    let theme = |id: &str, active: bool| uze_application::application::ThemeSummary {
+        id: id.to_owned(),
+        active,
+        path: None,
+    };
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_themes: vec![
+            theme("default", false),
+            theme("dracula", false),
+            theme("tokyo-night", true),
+        ],
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectTheme("tokyo-night".to_owned()),
+        "the selection fell back to the first card"
+    );
+}
+
 #[test]
 fn opening_appearance_asks_for_the_lists_it_chooses_from() {
     let mut model = TuiModel::default();
