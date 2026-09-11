@@ -63,12 +63,27 @@ already covers are ticked.
 ## 4. Workspace journeys (the regression class)
 
 - [x] 4.1 Placing an agent creates a worktree, a branch and a live pane.
-- [~] 4.2 A slot a pane still sits in is never handed to the next agent.
-      (The PoC proves the freed slot *is* reused; the negative case —
-      an occupied slot never handed on — is not covered yet.)
+- [x] 4.2 A slot a pane still sits in is never handed to the next agent.
+      `04-workspace/02-a-slot-a-pane-still-sits-in` is the negative case;
+      `04-workspace/01-agents-and-slots` proves the freed slot *is* reused,
+      and by one task alone (`one_task_per_checkout`).
 - [ ] 4.3 A closed space stays closed across a manage round trip.
-- [ ] 4.4 A picked directory opens its project, not a slot inside it.
-- [ ] 4.5 An agent's changes are read from its own checkout.
+- [x] 4.4 A picked directory opens its project, not a slot inside it.
+      `04-workspace/05-a-picked-checkout-opens-its-project`: uze opens
+      outside the project so the pick has a space to create, and the new
+      space's root is read off `state/terminal/workspace.json`.
+- [x] 4.5 An agent's changes are read from its own checkout.
+      `04-workspace/04-an-agents-changes-are-its-own`: proven through the
+      one write the surface offers — a file deleted from the selected
+      agent's changes is gone from its checkout and from nowhere else.
+- [x] 4.6 The runner stops lying about what it could not do: an exception
+      that is not `Failed` (a gate that did not compile, a tmux that would
+      not start) recorded `held`, and now records a failure; and
+      `journey validate` compiles every `expect` and screen `until`, so a
+      pattern that cannot compile is refused before a run, not one gesture
+      into it. `04-workspace/02` gates on UZE's own drawing instead of the
+      stand-in's banner — the pattern `01` had already left for the same
+      flake — with the agent's process proven in `then:`.
 
 ## 5. Delivery journeys
 

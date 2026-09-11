@@ -1,0 +1,81 @@
+journey: a directory picked inside an agent's checkout opens the project, not the checkout
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  A space is a project. An agent's checkout under `.worktrees/<id>` belongs
+  to the repository it was cut from, so picking it as a new space's root
+  answers with that repository. Answered literally, it once put a
+  `.worktrees/<id>` space in the sidebar beside the space whose agent was
+  working there.
+
+  UZE opens somewhere else, so the pick has a space to create rather than
+  one to land on: a second space appearing is what proves the gesture
+  landed, and its root is read off what UZE records, never off the sidebar.
+  The checkout is laid down by hand — the claim is about the pick, and
+  placing agents is proven elsewhere.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 2
+
+scenes:
+  - scene: uze opens outside the project, which holds an agent's checkout
+    when:
+      - shell: |
+          set -e
+          git -C {project} worktree add -q -b agent/t0pick .worktrees/t0pick HEAD
+        say: the project holds a checkout under its isolation directory
+      - open: "{uze}"
+        in: "{home}"
+        say: uze opens in the home directory, not in the project
+        # A pattern, like every `expect`: the `+` is escaped.
+        expect: '\+ new'
+        expect_timeout: 20
+        pause: 1.0
+    then:
+      - dir: "{project}/.worktrees/t0pick"
+        count: 1
+        about: the checkout exists to be picked
+
+  - scene: picking the checkout as a new space's root opens the project
+    when:
+      - click: "+ new"
+        say: open the new-space prompt
+        in: sidebar
+        expect: " at "
+      - type: "{project}/.worktrees/t0pick"
+        say: name the agent's checkout itself
+        clear: all
+        submit: false
+        pause: 0.5
+      - key: "Enter"
+        say: pick it
+        expect: demo-app
+        expect_timeout: 20
+        pause: 2.0
+    then:
+      - cmd:
+          run: |
+            python3 -c "
+            import json
+            spaces = json.load(open('{uze_home}/state/terminal/workspace.json'))['spaces']
+            print('%d space(s)' % len(spaces))
+            print('\n'.join(space['root'] for space in spaces))
+            "
+          stdout_contains: "2 space(s)"
+        about: the pick opened a space beside the one uze started in
+      - cmd:
+          run: |
+            python3 -c "
+            import json
+            spaces = json.load(open('{uze_home}/state/terminal/workspace.json'))['spaces']
+            inside = [space['root'] for space in spaces if '/.worktrees/' in space['root'] + '/']
+            project = [space['root'] for space in spaces if space['root'] == '{project}']
+            print('rooted at the project' if project and not inside else 'inside: %s' % inside)
+            "
+          stdout_contains: "rooted at the project"
+        about: rooted at the repository the checkout was cut from, and never at the checkout

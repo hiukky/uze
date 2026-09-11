@@ -1,0 +1,94 @@
+journey: work the target already carries is delivered, never replayed onto itself
+tags: [gate, tui, delivery]
+proves: web/content/docs/workspace.mdx
+about: |
+  Most forges squash what they merge, so none of a branch's own commits ever
+  becomes reachable from the target — and a target that moved is one a live
+  task follows. Followed naively, the branch is replayed onto its own squash:
+  every file it touched twice conflicts, the rebase pauses in the agent's
+  checkout, and delivered work is listed as work nobody delivered.
+
+  The squash is made by hand in the primary checkout, the way a forge's
+  button leaves it; every check reads Git, the checkout and the task store.
+  A file of its own: a different world (handoff, no remote) and a claim that
+  does not depend on how the other delivery journeys end.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 2
+
+scenes:
+  - scene: an agent's work is ready, in two commits touching one file
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn ping() {}\n' > "$slot/src/ping.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): answer ping'
+          printf 'pub fn ping() -> &str { "pong" }\n' > "$slot/src/ping.rs"
+          git -C "$slot" commit -qam 'fix(api): answer ping with pong'
+        say: the agent commits the feature, then its fix
+      - wait: shell
+        until: |
+          python3 -c "import json, glob, sys; tasks = [t for f in glob.glob('{uze_home}/state/tasks/*.json') for t in json.load(open(f))['tasks']]; sys.exit(0 if any(t['state']['state'] == 'ready' for t in tasks) else 1)"
+        # The sidebar re-reads task state on a 20-second timer; three
+        # intervals, so the wait is bounded by the cadence, not racing it.
+        timeout: 70
+        say: the workspace reads the work as deliverable
+    then:
+      - tasks: { count: 1, states: [ready] }
+        about: one task, commits ahead of its base on a clean tree
+      - git: { in: "{project}", dirty: false }
+        about: the target has not moved yet
+
+  - scene: the forge squashes it into the target, and the task reads as delivered
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          branch=$(git -C "$slot" symbolic-ref --short HEAD)
+          git -C {project} merge --squash "$branch"
+          git -C {project} commit -qm 'feat(api): answer ping with pong (#7)'
+        say: the operator squash-merges the branch, as a forge's button would
+      - wait: shell
+        until: |
+          python3 -c "import json, glob, sys; tasks = [t for f in glob.glob('{uze_home}/state/tasks/*.json') for t in json.load(open(f))['tasks']]; sys.exit(0 if any(t['state']['state'] == 'integrated' for t in tasks) else 1)"
+        timeout: 70
+        say: the next evaluation reads the patch the target now carries
+    then:
+      - tasks: { count: 1, newest_state: integrated }
+        about: the work is recorded as delivered, from the patch alone
+      - dir: "{project}/.git/worktrees/*/rebase-merge"
+        count: 0
+        about: no rebase was started, so none is paused in the agent's checkout
+      - file: "{project}/.worktrees/*/src/ping.rs"
+        contains: '"pong"'
+        about: the checkout holds the agent's last version, with no conflict written into it
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "answer ping with pong (#7)"
+        about: and the target is exactly what the operator merged
