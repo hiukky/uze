@@ -4543,3 +4543,58 @@ fn clicking_a_glyph_set_chooses_it() {
         crate::ui::worker::Intent::SelectGlyphSet("ascii".to_owned())
     );
 }
+
+/// A confirmation reads top to bottom as one thing: what is asked (once),
+/// of what, what it means — wrapped, never cut — and the answers on the
+/// right, the affirmative last, with the keys for them in the border.
+#[test]
+fn a_confirmation_dialog_reads_as_heading_subject_body_and_answers() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut model = model_with_data();
+    model.overlay = Overlay::ConfirmDeleteProfile {
+        id: "default".to_owned(),
+        focus: 1,
+    };
+    let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+    let position = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} is drawn: {rows:#?}"))
+    };
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("Delete profile"))
+            .count(),
+        1,
+        "the question is asked once, not in the border and again below it"
+    );
+    assert_eq!(position("default"), position("Delete profile") + 1);
+    assert!(
+        position("configuration is touched.") > position("default"),
+        "the explanation wraps inside the dialog rather than off its edge"
+    );
+    let answers = position("  Delete  ");
+    assert!(answers > position("configuration is touched."));
+    let row = &rows[answers];
+    assert!(
+        row.find("Cancel").unwrap() < row.find("Delete").unwrap(),
+        "the affirmative is last, where reading ends: {row}"
+    );
+    assert!(
+        position("esc cancel") > answers,
+        "how to answer from the keyboard sits in the bottom border"
+    );
+    for action in [uze_keys::Action::ConfirmYes, uze_keys::Action::ConfirmNo] {
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| *hit == Hit::OfferedAction(action)),
+            "each answer is a target: {action:?}"
+        );
+    }
+}

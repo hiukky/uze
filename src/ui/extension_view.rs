@@ -624,7 +624,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     } else {
         text.to_owned()
     };
-    let mut lines: Vec<Line<'static>> = wrap_words(&title, measure)
+    let mut lines: Vec<Line<'static>> = crate::ui::wrap_words(&title, measure)
         .into_iter()
         .map(|line| {
             Line::from(TextSpan::styled(
@@ -636,32 +636,10 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     if let Some(hint) = hint {
         lines.push(Line::from(""));
         lines.extend(
-            wrap_words(hint, measure)
+            crate::ui::wrap_words(hint, measure)
                 .into_iter()
                 .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
         );
-    }
-    lines
-}
-
-/// `text` broken between words into lines of at most `measure` columns; a
-/// single word longer than that stands on a line of its own.
-fn wrap_words(text: &str, measure: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let cells = |text: &str| TextSpan::raw(text).width();
-        let wanted = cells(&line) + usize::from(!line.is_empty()) + cells(word);
-        if !line.is_empty() && wanted > measure {
-            lines.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        lines.push(line);
     }
     lines
 }

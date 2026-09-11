@@ -357,7 +357,9 @@ pub(crate) fn render(
         Overlay::ConfirmClearPromptHistory => {
             overlay::render_confirm_clear_prompt_history(frame, frame.area(), hits)
         }
-        Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
+        Overlay::ProtectedPlugin(id) => {
+            overlay::render_protected_plugin(frame, frame.area(), id, hits)
+        }
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
         }
