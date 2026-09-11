@@ -613,16 +613,13 @@ fn render_message(
     );
 }
 
-/// The mark a navigator row carries before its name.
+/// What a row's kind is called in the vocabulary.
 ///
-/// The one place a [`RowIcon`] becomes a glyph: the extension said what
-/// the row *is*, and the vocabulary says what that looks like under the
-/// active theme. A set that draws none of them — every built-in one but
-/// `nerd`, since plain Unicode has no folder mark that is not an emoji —
-/// resolves to nothing, and nothing is what gets drawn, without a column
-/// held open for it.
-fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
-    let symbol = match icon {
+/// Separate from drawing it so the mapping can be checked without a theme
+/// in force: putting one there is process-wide, and a test that did it
+/// would swap the glyphs under every neighbour drawing at the same moment.
+fn icon_symbol(icon: RowIcon) -> Option<Symbol> {
+    Some(match icon {
         RowIcon::None => return None,
         RowIcon::Directory => Symbol::FileDirectory,
         RowIcon::DirectoryOpen => Symbol::FileDirectoryOpen,
@@ -636,8 +633,19 @@ fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
         RowIcon::Archive => Symbol::FileArchive,
         RowIcon::Git => Symbol::FileGit,
         RowIcon::Legal => Symbol::FileLegal,
-    };
-    let glyph = theme::glyph(symbol);
+    })
+}
+
+/// The mark a navigator row carries before its name.
+///
+/// The one place a [`RowIcon`] becomes a glyph: the extension said what
+/// the row *is*, and the vocabulary says what that looks like under the
+/// active theme. A set that draws none of them — every built-in one but
+/// `nerd`, since plain Unicode has no folder mark that is not an emoji —
+/// resolves to nothing, and nothing is what gets drawn, without a column
+/// held open for it.
+fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
+    let glyph = theme::glyph(icon_symbol(icon)?);
     if glyph.trim().is_empty() {
         return None;
     }
@@ -1081,17 +1089,6 @@ mod tests {
         }
     }
 
-    /// The active theme is process-wide, so a test that swaps it and a
-    /// test that reads it take turns. Without this, swapping the glyph set
-    /// under a neighbour changes the very row it is looking for.
-    static ACTIVE_THEME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn theme_turn() -> std::sync::MutexGuard<'static, ()> {
-        ACTIVE_THEME
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     fn draw(view: &View) -> (Vec<String>, Vec<(Rect, ViewHit)>) {
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         let mut hits = Vec::new();
@@ -1151,44 +1148,61 @@ mod tests {
     /// one, and takes no column where it does not — which is every
     /// built-in set but `nerd`, because plain Unicode has no folder mark
     /// that is not an emoji.
+    ///
+    /// Asserted at the seam rather than on a frame drawn under a swapped
+    /// theme: the active theme is process-wide, and a test that put `nerd`
+    /// in force to photograph a row would change the glyphs — and with the
+    /// declared widths, the column positions — under every other test
+    /// drawing at that moment. Which set declares which glyph is
+    /// `uze-theme`'s own question, and it answers it in
+    /// `every_nerd_glyph_is_an_icon_a_patched_font_supplies`.
     #[test]
     fn a_rows_icon_comes_from_the_set_and_takes_no_column_when_there_is_none() {
-        let _turn = theme_turn();
-        let with = |id: &str| {
+        // Every kind names a symbol, so a kind added later cannot quietly
+        // draw nothing by falling through.
+        for icon in [
+            RowIcon::Directory,
+            RowIcon::DirectoryOpen,
+            RowIcon::File,
+            RowIcon::Code,
+            RowIcon::Markup,
+            RowIcon::Config,
+            RowIcon::Lock,
+            RowIcon::Data,
+            RowIcon::Image,
+            RowIcon::Archive,
+            RowIcon::Git,
+            RowIcon::Legal,
+        ] {
+            let symbol = icon_symbol(icon).unwrap_or_else(|| panic!("{icon:?} names no symbol"));
+            // And the set that has icons draws every one of them, in one
+            // cell — resolved here rather than put in force.
             let mut layers = vec![uze_theme::default_file()];
-            layers.extend(uze_theme::glyph_set_file(id));
-            let theme = uze_theme::resolve_stack(
-                &uze_theme::Identity::from_file(id, uze_theme::default_file()),
+            layers.extend(uze_theme::glyph_set_file("nerd"));
+            let nerd = uze_theme::resolve_stack(
+                &uze_theme::Identity::from_file("nerd", uze_theme::default_file()),
                 &layers,
             )
-            .expect("resolves")
+            .expect("the bundled nerd set resolves")
             .theme;
-            uze_theme::set_active(theme);
-            let (rows, _) = draw(&sample());
-            rows.iter()
-                // Not the content heading, which names the file too.
-                .find(|row: &&String| row.contains("ui.rs") && !row.contains("DIFF"))
-                .cloned()
-                .expect("the item is drawn")
-        };
+            let drawn = nerd.symbol(symbol);
+            assert!(
+                !drawn.glyph().trim().is_empty(),
+                "the nerd set draws nothing for {icon:?}"
+            );
+            assert_eq!(drawn.width(), 1, "{icon:?} is not one cell wide");
 
-        let plain = with("default");
-        let nerd = with("nerd");
-        uze_theme::set_active(uze_theme::default_theme().clone());
-
-        let column_of = |row: &str, needle: &str| {
-            row.find(needle)
-                .map(|byte| row[..byte].chars().count())
-                .expect("drawn")
-        };
-        assert_eq!(
-            column_of(&nerd, "ui.rs") - column_of(&plain, "ui.rs"),
-            2,
-            "the nerd set's icon must take a column of its own:\n  {plain:?}\n  {nerd:?}"
-        );
+            // The default draws none of them, and the row holds no column
+            // open for what is not there.
+            assert!(
+                uze_theme::default_theme().glyph(symbol).trim().is_empty(),
+                "the default set grew a {icon:?} glyph — it has no column for one"
+            );
+        }
+        assert!(row_icon(RowIcon::None).is_none());
         assert!(
-            nerd.chars().any(|c| c as u32 >= 0xE000),
-            "no icon from the patched ranges on the row: {nerd:?}"
+            row_icon(RowIcon::Code).is_none(),
+            "a blank glyph must take no column at all"
         );
     }
 
@@ -1459,7 +1473,6 @@ mod tests {
     fn chrome_uses_the_hosts_palette_and_content_keeps_its_own() {
         // Reads the active theme, so it takes its turn with the test that
         // swaps it.
-        let _turn = theme_turn();
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         terminal
             .draw(|frame| {

@@ -201,11 +201,35 @@ fn unusable(message: String) -> UzeError {
 /// A theme that will not load at all is different: it silently is not in
 /// force, so it has to say so every time until it is fixed.
 pub fn install(home: &UzeHome) -> Vec<String> {
+    match chosen(home) {
+        Ok(Some(loaded)) => {
+            uze_theme::set_active(loaded.theme);
+            Vec::new()
+        }
+        Ok(None) => Vec::new(),
+        Err(problem) => vec![problem],
+    }
+}
+
+/// What this machine's appearance resolves to, before any of it is in force.
+///
+/// Split from [`install`] because the two are different claims, and only one
+/// of them is a test's business: *which theme this machine chose and what it
+/// resolves to* is answered here, in the caller's own hands, while putting it
+/// in force is process-wide and happens once, from the one place that runs on
+/// every command. A test that asserted through the global would be swapping
+/// the theme under every neighbour drawing at the same moment — which is a
+/// flake that only ever appears on a runner with more cores than the author's
+/// machine.
+///
+/// `Ok(None)` is "nothing to apply": no theme chosen, no glyph set, no
+/// overrides — the built-in default is already in force and needs no I/O.
+fn chosen(home: &UzeHome) -> std::result::Result<Option<Loaded>, String> {
     let Ok(app) = UzeApplication::from_env(home.clone()) else {
         // Appearance is not worth failing a command over. If the facade
         // cannot be built, whatever the operator actually asked for is
         // about to report the same problem far more usefully.
-        return Vec::new();
+        return Ok(None);
     };
 
     // A glyph set, or overrides, with no theme selected still apply: how
@@ -218,16 +242,12 @@ pub fn install(home: &UzeHome) -> Vec<String> {
     let id = match app.themes().active() {
         Ok(Some(id)) => id,
         Ok(None) if has_opinion(&app) => "default".to_owned(),
-        _ => return Vec::new(),
+        _ => return Ok(None),
     };
 
-    match resolve(&app, home, &id) {
-        Ok(loaded) => {
-            uze_theme::set_active(loaded.theme);
-            Vec::new()
-        }
-        Err(error) => vec![error.to_string()],
-    }
+    resolve(&app, home, &id)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -259,10 +279,9 @@ mod tests {
     #[test]
     fn no_selection_says_nothing_and_leaves_the_default_in_force() {
         let home = scratch("theme-install-none");
-        assert!(install(&home).is_empty());
-        assert_eq!(
-            uze_theme::active().color(uze_theme::Token::Accent),
-            uze_theme::default_theme().color(uze_theme::Token::Accent)
+        assert!(
+            matches!(chosen(&home), Ok(None)),
+            "nothing chosen is nothing to do"
         );
     }
 
@@ -276,11 +295,11 @@ mod tests {
         );
         select(&home, "broken");
 
-        let problems = install(&home);
-        assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].contains("broken"), "{problems:?}");
-        assert!(problems[0].contains("accent"), "{problems:?}");
-        // Still drawing: a theme nobody can load is not a reason to stop.
+        let problem = chosen(&home).expect_err("a theme that will not load");
+        assert!(problem.contains("broken"), "{problem}");
+        assert!(problem.contains("accent"), "{problem}");
+        // Still drawing: nothing is put in force, so the built-in default
+        // stays, which is what makes a broken theme survivable.
         assert_eq!(
             uze_theme::active().color(uze_theme::Token::Accent),
             uze_theme::default_theme().color(uze_theme::Token::Accent)
@@ -291,12 +310,11 @@ mod tests {
     fn a_selection_naming_nothing_says_where_it_looked() {
         let home = scratch("theme-install-missing");
         select(&home, "nocturne");
-        let problems = install(&home);
-        assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].contains("nocturne"), "{problems:?}");
+        let problem = chosen(&home).expect_err("a selection naming nothing");
+        assert!(problem.contains("nocturne"), "{problem}");
         assert!(
-            problems[0].contains(&home.themes_dir().display().to_string()),
-            "{problems:?}"
+            problem.contains(&home.themes_dir().display().to_string()),
+            "{problem}"
         );
     }
 
@@ -371,13 +389,9 @@ mod tests {
     fn selecting_a_glyph_set_as_a_theme_says_which_axis_it_moved_to() {
         let home = scratch("theme-moved-axis");
         select(&home, "ascii");
-        let problems = install(&home);
-        assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].contains("glyph set"), "{problems:?}");
-        assert!(
-            problems[0].contains("uze theme glyphs ascii"),
-            "{problems:?}"
-        );
+        let problem = chosen(&home).expect_err("a set named as a theme");
+        assert!(problem.contains("glyph set"), "{problem}");
+        assert!(problem.contains("uze theme glyphs ascii"), "{problem}");
     }
 
     #[test]
@@ -434,14 +448,12 @@ mod tests {
         let home = scratch("theme-set-alone");
         set_glyphs(&home, "ascii");
 
-        // `install` is the path every command takes, and it is where a set
-        // with no palette used to fall through and draw nothing.
-        assert!(install(&home).is_empty());
-        assert_eq!(
-            uze_theme::active().glyph(uze_theme::Symbol::StatusIdle),
-            "."
-        );
-        uze_theme::set_active(uze_theme::default_theme().clone());
+        // `chosen` is what every command resolves through, and it is where a
+        // set with no palette used to fall through and answer with nothing.
+        let loaded = chosen(&home)
+            .expect("a set alone resolves")
+            .expect("and is something to apply");
+        assert_eq!(loaded.theme.glyph(uze_theme::Symbol::StatusIdle), ".");
     }
 
     #[test]
