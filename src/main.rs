@@ -1114,7 +1114,7 @@ fn preview_of(id: &str) -> String {
     const SHOWN: &[uze_theme::Symbol] = &[
         uze_theme::Symbol::MarkOk,
         uze_theme::Symbol::MarkOfficial,
-        uze_theme::Symbol::MarkNative,
+        uze_theme::Symbol::MarkAdapted,
         uze_theme::Symbol::MarkAttention,
         uze_theme::Symbol::StatusSelected,
         uze_theme::Symbol::StatusIdle,

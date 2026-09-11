@@ -4,7 +4,7 @@
   "description": "UZE's marks drawn from a patched icon font. Needs Nerd Fonts v3 or newer. Each entry is chosen by meaning first and then by metrics: of the names that would say the right thing, the one whose glyph sits closest to the band a patched font normalises every source to (62% of the em, on the baseline), so a row of marks is one optical size rather than a range. Generated from the official glyphnames.json by name, never by codepoint. Widths are declared for the `Nerd Font Mono` builds, whose icons occupy one cell. Declares only the marks an icon says better than a letterform: box drawing, bars and typography are the built-in default's, which any patched font draws.",
   "symbols": {
     "mark.native": {
-      "glyph": "",
+      "glyph": "",
       "width": 1
     },
     "mark.official": {

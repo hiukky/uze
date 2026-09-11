@@ -39,7 +39,7 @@ use crate::ui::theme::{self, Symbol, Token};
 const PREVIEWED: &[Symbol] = &[
     Symbol::MarkOk,
     Symbol::MarkOfficial,
-    Symbol::MarkNative,
+    Symbol::MarkAdapted,
     Symbol::MarkAttention,
     Symbol::StatusSelected,
     Symbol::StatusIdle,
