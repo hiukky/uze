@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "Dracula",
+  "description": "Dracula's palette: a purple accent and neon states over a blue-grey night. Colours from the Dracula Theme specification (MIT).",
+  "colors": {
+    "surface.background": "#282a36",
+
+    "text.bright": "#ffffff",
+    "text.primary": "#f8f8f2",
+    "text.tertiary": "#f8f8f2cc",
+    "text.secondary": "#f8f8f2a6",
+    "text.inactive": "#f8f8f299",
+    "text.muted": "#f8f8f273",
+    "text.dim": "#6272a4",
+    "text.faint": "#44475a",
+
+    "accent": "#bd93f9",
+    "state.success": "#50fa7b",
+    "state.warning": "#ffb86c",
+    "state.danger": "#ff5555",
+    "state.info": "#8be9fd",
+    "state.in-flight": "#f1fa8c",
+    "state.landed": "#ff79c6",
+    "state.published": "#6272a4",
+
+    "ansi.1": "#ff5555",
+    "ansi.2": "#50fa7b",
+    "ansi.3": "#f1fa8c",
+    "ansi.4": "#bd93f9",
+    "ansi.5": "#ff79c6",
+    "ansi.6": "#8be9fd",
+    "ansi.9": "#ff6e6e",
+    "ansi.10": "#69ff94",
+    "ansi.11": "#ffffa5",
+    "ansi.12": "#d6acff",
+    "ansi.13": "#ff92df",
+    "ansi.14": "#a4ffff"
+  },
+  "syntax": { "theme": "base16-eighties.dark" }
+}

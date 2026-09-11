@@ -32,6 +32,23 @@ const BUILTIN_DEFAULT: &str = include_str!("../themes/default.json");
 const BUILTIN_ASCII: &str = include_str!("../themes/ascii.json");
 const BUILTIN_NERD: &str = include_str!("../themes/nerd.json");
 
+/// The third-party palettes UZE carries, by id. Each is a partial theme over
+/// the built-in default — the same shape as a file someone writes, which is
+/// what lets one of theirs `extends` one of these. Where each palette comes
+/// from and the terms it comes under is recorded in `about.hbs`.
+const BUNDLED_PALETTES: &[(&str, &str)] = &[
+    ("dracula", include_str!("../themes/dracula.json")),
+    (
+        "catppuccin-mocha",
+        include_str!("../themes/catppuccin-mocha.json"),
+    ),
+    ("tokyo-night", include_str!("../themes/tokyo-night.json")),
+    (
+        "tokyo-night-light",
+        include_str!("../themes/tokyo-night-light.json"),
+    ),
+];
+
 /// The syntax themes a theme file may name.
 ///
 /// These are syntect's bundled set, listed here so this crate does not have
@@ -147,18 +164,66 @@ pub struct Loaded {
     pub warnings: Vec<Warning>,
 }
 
-/// The built-in themes, by the id a user selects them with.
+/// The built-in themes, by the id a user selects them with. `default` comes
+/// first: it is what an unset selection means.
 pub fn builtin_names() -> &'static [&'static str] {
-    &["default"]
+    &[
+        "default",
+        "dracula",
+        "catppuccin-mocha",
+        "tokyo-night",
+        "tokyo-night-light",
+    ]
 }
 
-/// A theme UZE carries. `default` is the one every other theme is resolved
-/// on top of, so it is the only one required to be complete.
+/// A theme UZE carries, resolved. `default` is the one every other theme is
+/// resolved on top of, so it is the only one required to be complete.
 pub fn builtin(id: &str) -> Option<&'static Theme> {
-    match id {
-        "default" => Some(default_theme()),
-        _ => None,
+    static PALETTES: OnceLock<Vec<Theme>> = OnceLock::new();
+    if id == "default" {
+        return Some(default_theme());
     }
+    let index = palette_index(id)?;
+    let palettes = PALETTES.get_or_init(|| {
+        BUNDLED_PALETTES
+            .iter()
+            .map(|(id, _)| {
+                let file = builtin_file(id).expect("listed");
+                resolve_stack(&Identity::from_file(id, file), &[default_file(), file])
+                    .unwrap_or_else(|error| panic!("the bundled `{id}` palette resolves: {error}"))
+                    .theme
+            })
+            .collect()
+    });
+    Some(&palettes[index])
+}
+
+/// The layer a bundled palette contributes, or `None` for the default and
+/// for any id UZE does not carry.
+///
+/// A layer rather than a resolved theme, because a palette is one step in a
+/// stack like any other: the glyph set sits under it, a variation someone
+/// wrote may sit over it, and merging happens between declarations.
+pub fn builtin_file(id: &str) -> Option<&'static ThemeFile> {
+    static FILES: OnceLock<Vec<ThemeFile>> = OnceLock::new();
+    let index = palette_index(id)?;
+    let files = FILES.get_or_init(|| {
+        BUNDLED_PALETTES
+            .iter()
+            .map(|(id, json)| {
+                serde_json::from_str(json).unwrap_or_else(|error| {
+                    panic!("the bundled `{id}` palette is valid JSON: {error}")
+                })
+            })
+            .collect()
+    });
+    Some(&files[index])
+}
+
+fn palette_index(id: &str) -> Option<usize> {
+    BUNDLED_PALETTES
+        .iter()
+        .position(|(candidate, _)| *candidate == id)
 }
 
 /// The glyph sets UZE carries, by the id a user selects them with.
@@ -1148,6 +1213,72 @@ mod tests {
             assert!(builtin(name).is_some(), "`{name}` is listed but absent");
         }
         assert!(builtin("nocturne").is_none());
+        assert!(
+            builtin_file("default").is_none(),
+            "the default is the bottom of every stack, not a layer on it"
+        );
+    }
+
+    fn palettes() -> impl Iterator<Item = (&'static str, &'static ThemeFile)> {
+        BUNDLED_PALETTES
+            .iter()
+            .map(|(id, _)| (*id, builtin_file(id).expect("bundled")))
+    }
+
+    /// A warning on a palette UZE ships would print the moment someone
+    /// selects it, as if they had made a mistake. Contrast is where it
+    /// bites: a faithful port can carry a hue its own author tuned for code
+    /// rather than for UZE's chrome, and the fix is choosing another of the
+    /// palette's colours for that meaning — never repainting theirs.
+    #[test]
+    fn every_bundled_palette_resolves_without_a_warning() {
+        for (id, file) in palettes() {
+            let loaded = resolve_stack(&Identity::from_file(id, file), &[default_file(), file])
+                .unwrap_or_else(|error| panic!("the bundled `{id}` palette resolves: {error}"));
+            assert!(
+                loaded.warnings.is_empty(),
+                "`{id}` warns: {:?}",
+                loaded.warnings
+            );
+        }
+    }
+
+    /// A palette that left the pane's hues to the default would draw a
+    /// program's red in UZE's red, inside a frame drawn in someone else's.
+    /// The four role entries are exempt: they follow the palette's own
+    /// background and text already.
+    #[test]
+    fn every_bundled_palette_declares_the_hues_a_pane_names() {
+        const ROLES: [Token; 4] = [Token::Ansi0, Token::Ansi7, Token::Ansi8, Token::Ansi15];
+        for (id, file) in palettes() {
+            for token in Token::ANSI.iter().filter(|token| !ROLES.contains(token)) {
+                assert!(
+                    file.colors.contains_key(token.name()),
+                    "`{id}` leaves `{token}` to UZE's own palette"
+                );
+            }
+        }
+    }
+
+    /// Highlighted diff text is drawn over the palette's own background, so
+    /// a light palette naming a dark syntax set paints pale code on a pale
+    /// page.
+    #[test]
+    fn every_bundled_palette_highlights_for_its_own_background() {
+        for (id, file) in palettes() {
+            let theme = builtin(id).expect("bundled");
+            let syntax = file
+                .syntax
+                .as_ref()
+                .and_then(|syntax| syntax.theme.as_deref())
+                .unwrap_or_else(|| panic!("`{id}` names no syntax set"));
+            let light_syntax = syntax.contains("light") || syntax == "InspiredGitHub";
+            assert_eq!(
+                light_syntax,
+                theme.background().is_light(),
+                "`{id}` highlights with `{syntax}`, against the other kind of background"
+            );
+        }
     }
 
     /// A glyph set as it is actually drawn: its layer over the default,

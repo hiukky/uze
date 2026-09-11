@@ -75,7 +75,7 @@ pub fn resolve_with_layers(
         chain.push(current.clone());
 
         let Some(file) = written(app, home, &current, id)? else {
-            // A built-in ends the chain: it is complete, and it is already
+            // The default ends the chain: it is complete, and it is already
             // the layer underneath everything.
             break;
         };
@@ -136,8 +136,8 @@ pub fn resolve_with_layers(
         })
 }
 
-/// The file the operator wrote for this id, or `None` when the id names a
-/// theme UZE carries instead.
+/// The layer this id contributes: the file the operator wrote for it, else a
+/// palette UZE carries, else `None` for the built-in default.
 fn written(
     app: &UzeApplication,
     home: &UzeHome,
@@ -148,6 +148,9 @@ fn written(
         return uze_theme::parse_file(&path)
             .map(Some)
             .map_err(|error| unusable(format!("theme `{id}`: {error}")));
+    }
+    if let Some(palette) = uze_theme::builtin_file(id) {
+        return Ok(Some(palette.clone()));
     }
     if uze_theme::builtin_names().contains(&id) {
         return Ok(None);
@@ -379,6 +382,45 @@ mod tests {
         assert_eq!(
             loaded.theme.glyph(uze_theme::Symbol::StatusIdle),
             uze_theme::default_theme().glyph(uze_theme::Symbol::StatusIdle)
+        );
+    }
+
+    /// A bundled palette is a layer like any other, not the end of the
+    /// chain: treating every built-in as the default is how selecting one
+    /// used to draw UZE's own colours under the palette's name.
+    #[test]
+    fn a_bundled_palette_resolves_as_a_layer_over_the_default() {
+        let home = scratch("theme-bundled-palette");
+        let (loaded, layers) =
+            resolve_with_layers(&app(&home), &home, "dracula").expect("resolves");
+        assert_eq!(loaded.theme.name(), "Dracula");
+        assert_eq!(
+            loaded.theme.color(uze_theme::Token::Accent),
+            uze_theme::Rgb(0xbd, 0x93, 0xf9)
+        );
+        assert_eq!(
+            layers,
+            ["the built-in default".to_owned(), "`dracula`".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_variation_can_extend_a_bundled_palette() {
+        let home = scratch("theme-extends-palette");
+        write_theme(
+            &home,
+            "dracula-soft",
+            r##"{ "extends": "dracula", "colors": { "surface.background": "#343746" } }"##,
+        );
+        let loaded = resolve(&app(&home), &home, "dracula-soft").expect("resolves");
+        assert_eq!(
+            loaded.theme.color(uze_theme::Token::SurfaceBackground),
+            uze_theme::Rgb(0x34, 0x37, 0x46)
+        );
+        assert_eq!(
+            loaded.theme.color(uze_theme::Token::Accent),
+            uze_theme::Rgb(0xbd, 0x93, 0xf9),
+            "the palette's accent did not reach its variation"
         );
     }
 
