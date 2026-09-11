@@ -18,7 +18,7 @@
 //! Same popup shape the workspace TUI's `AgentPicker`/`ContextMenu` already
 //! use (an `Option<T>` the caller renders last, on top of everything, and
 //! discards on `Esc`), just sized to the whole frame instead of a small
-//! anchored box — see `openspec/changes/add-git-diff-overlay/design.md`.
+//! anchored box — see `openspec/changes/archive/2026-09-11-add-git-diff-overlay/design.md`.
 //! Its own module (originally its own file inside the TUI crate itself,
 //! before the `uze-extensions` split) for the unified-diff parsing and
 //! syntax highlighting this needs that nothing else in the client does.

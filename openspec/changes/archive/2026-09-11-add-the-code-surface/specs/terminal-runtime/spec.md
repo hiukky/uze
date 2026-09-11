@@ -24,7 +24,13 @@ the directory tree.
 - **WHEN** the active tab's working directory has nothing uncommitted
 - **THEN** the files entry point SHALL still be present
 - **AND THEN** the changes SHALL still be reachable from the surface it
-  opens
+  opens, as an empty list rather than an error
+
+#### Scenario: The working directory is outside a repository
+- **WHEN** the surface is opened for a tab whose working directory is not
+  inside a git repository
+- **THEN** the client SHALL say so where the changes would be
+- **AND THEN** the directory's files SHALL still be listable
 
 #### Scenario: User opens a directory
 - **WHEN** a user opens a directory in the tree
@@ -159,6 +165,11 @@ NOT create a file or a directory.
 - **WHEN** a save would write to a path that is not an existing file
 - **THEN** the client SHALL refuse the write
 
+#### Scenario: The surface leaves the repository alone
+- **WHEN** a user views a diff, edits a file or deletes one
+- **THEN** the client SHALL NOT stage, unstage, commit or discard anything
+  in the repository
+
 ### Requirement: A document can be read as itself or as its markup
 Where the selected file is a document the client can render, the code
 surface SHALL offer both ways of showing it — the document, and the
@@ -245,3 +256,25 @@ process.
   was before it opened
 - **AND THEN** every pane's process SHALL be unaffected by the surface
   having been open
+
+## REMOVED Requirements
+
+### Requirement: Contextual git changes view
+**Reason**: The changes view became one mode of the code surface.
+"One code surface for the active checkout" states it, reached through the
+changes entry point, and carries its two edge cases — nothing uncommitted,
+and a directory outside any repository.
+**Migration**: None; `Ctrl+G` and the changes chip open the same view.
+
+### Requirement: Non-disruptive dismissal
+**Reason**: Stated for the whole surface by "The code surface never blocks
+the workspace", which keeps the same guarantee and adds that nothing
+unsaved is closed without asking.
+**Migration**: None.
+
+### Requirement: Read-only git changes view
+**Reason**: The surface now edits and deletes the files it shows, so it is
+no longer read-only. What stays true — it never stages, unstages, commits
+or discards — is a scenario of "The surface creates nothing it was not
+shown".
+**Migration**: None.
