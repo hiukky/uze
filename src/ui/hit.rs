@@ -29,8 +29,8 @@ pub(crate) enum Hit {
     ExtensionRow(usize),
     HarnessRow(usize),
     NewProfile,
-    /// The Profiles header's switch between the list and the preview.
-    ToggleProfilePreview,
+    /// A harness's row in the profile preview: opens or closes it.
+    PreviewHarness(usize),
     ProfileRow(usize),
     PreferenceRow(usize),
     /// A preference row's `‹`/`›`: select that preference and step its value.
@@ -190,8 +190,9 @@ impl TuiModel {
                 self.focus = Focus::Overlay;
                 Intent::None
             }
-            Hit::ToggleProfilePreview => {
-                self.toggle_profile_preview();
+            Hit::PreviewHarness(index) => {
+                self.focus = Focus::Content;
+                self.toggle_profile_preview_harness(index);
                 Intent::None
             }
             Hit::ProfileRow(index) => {

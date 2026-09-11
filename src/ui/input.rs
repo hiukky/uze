@@ -353,9 +353,7 @@ impl TuiModel {
         }
         match self.route {
             Route::Profiles if self.profile_preview_open => {
-                self.profile_preview_scroll = self
-                    .profile_preview_scroll
-                    .saturating_add_signed(delta as i16);
+                self.move_profile_preview_cursor(delta);
                 Intent::None
             }
             Route::Profiles => {
@@ -467,6 +465,10 @@ impl TuiModel {
             // drawer elsewhere. Editor: change the highlighted value.
             // Harnesses: no-op — toggling is the toggle action's job,
             // deliberately not doubled onto Enter.
+            Route::Profiles if self.profile_preview_open => {
+                self.toggle_profile_preview_harness(self.profile_preview_cursor);
+                Intent::None
+            }
             Route::Profiles => match self.profile_panel {
                 ProfilePanel::List => {
                     self.profile_panel = ProfilePanel::Editor;

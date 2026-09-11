@@ -12,9 +12,9 @@ use uze_extensions::registry::BuiltinExtension;
 
 use uze_application::application::offers::ActionOffer;
 use uze_application::application::{
-    ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
-    MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
-    ProfileApplyResult, ProfilePreview, ProfileSummary, ProjectContextStatus,
+    ContextPlan, DoctorReport, HarnessHealth, HarnessPreview, MarketplacePluginDetail,
+    MarketplacePluginSummary, MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection,
+    PluginSummary, ProfileApplyResult, ProfilePreview, ProfileSummary, ProjectContextStatus,
     ProjectEnvironmentState,
 };
 
@@ -485,8 +485,12 @@ pub(crate) struct TuiModel {
     /// Whether the Profiles screen shows the selected profile's preview —
     /// what applying it writes into each harness — instead of the list.
     pub(crate) profile_preview_open: bool,
-    /// How many preview lines have scrolled off the top.
-    pub(crate) profile_preview_scroll: u16,
+    /// The harness the preview's cursor is on, by its position in the
+    /// preview.
+    pub(crate) profile_preview_cursor: usize,
+    /// Harnesses opened or closed by hand, against their default: open
+    /// when applying would write something there, closed when not.
+    pub(crate) profile_preview_toggled: BTreeSet<String>,
     /// The last preview answer, kept with the question it answered. Read
     /// through [`TuiModel::profile_preview_answer`], which refuses one that
     /// answers a question nobody is asking any more.
@@ -621,7 +625,8 @@ impl Default for TuiModel {
             profile_harness_defaulted: false,
             profile_apply_results: Vec::new(),
             profile_preview_open: false,
-            profile_preview_scroll: 0,
+            profile_preview_cursor: 0,
+            profile_preview_toggled: BTreeSet::new(),
             profile_preview: None,
             profile_preview_epoch: 0,
             profile_preview_asked: None,
@@ -1508,7 +1513,42 @@ impl TuiModel {
 
     pub(crate) fn toggle_profile_preview(&mut self) {
         self.profile_preview_open = !self.profile_preview_open;
-        self.profile_preview_scroll = 0;
+        self.profile_preview_cursor = 0;
+        self.profile_preview_toggled.clear();
+    }
+
+    /// Whether the preview shows a harness's settings, not just its row.
+    pub(crate) fn profile_preview_expanded(&self, harness: &HarnessPreview) -> bool {
+        let pending = harness
+            .plan
+            .as_ref()
+            .map_or(true, |plan| plan.pending() > 0);
+        pending != self.profile_preview_toggled.contains(&harness.integration)
+    }
+
+    pub(crate) fn move_profile_preview_cursor(&mut self, delta: isize) {
+        let count = self
+            .current_profile_preview()
+            .map_or(0, |preview| preview.harnesses.len());
+        self.profile_preview_cursor = self
+            .profile_preview_cursor
+            .saturating_add_signed(delta)
+            .min(count.saturating_sub(1));
+    }
+
+    /// Opens or closes the harness at `index` in the preview.
+    pub(crate) fn toggle_profile_preview_harness(&mut self, index: usize) {
+        let Some(id) = self
+            .current_profile_preview()
+            .and_then(|preview| preview.harnesses.get(index))
+            .map(|harness| harness.integration.clone())
+        else {
+            return;
+        };
+        self.profile_preview_cursor = index;
+        if !self.profile_preview_toggled.remove(&id) {
+            self.profile_preview_toggled.insert(id);
+        }
     }
 
     /// Starts a new epoch, so the next frame asks again and anything read

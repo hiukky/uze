@@ -44,8 +44,8 @@ scenes:
         expect: "Harnesses"
         expect_timeout: 20
         pause: 1.0
-      - click: "preview"
-        say: switch the screen to the preview
+      - click: "  Preview  "
+        say: preview the profile from its drawer
         in: pane
         expect: "would change"
         expect_timeout: 20

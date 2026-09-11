@@ -114,10 +114,7 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     );
     put(Action::DeleteProfile, Control("the drawer's buttons"));
     put(Action::ApplyProfile, Control("the drawer's buttons"));
-    put(
-        Action::PreviewProfile,
-        Control("the Profiles screen's preview button"),
-    );
+    put(Action::PreviewProfile, Control("the drawer's buttons"));
     put(
         Action::ToggleProfileHarness,
         Control("clicking the harness checkbox"),

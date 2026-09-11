@@ -1151,6 +1151,7 @@ fn a_preview_that_could_not_be_read_says_so_and_is_not_retried_in_a_loop() {
     model.profile_previewed(question, Err("the store is locked".to_owned()));
     assert_eq!(model.profile_preview_intent(), Intent::None);
     let lines: Vec<String> = crate::ui::view::profiles::preview_lines(&model, 80)
+        .lines
         .iter()
         .map(ToString::to_string)
         .collect();
@@ -1308,35 +1309,91 @@ fn the_preview_shows_each_key_as_it_is_and_as_it_will_be() {
             .position(|row| row.contains(needle))
             .unwrap_or_else(|| panic!("no row with {needle}: {rows:#?}"))
     };
-    assert!(row(".claude/settings.json").contains("1 change"));
+    let heading = row("autonomy   sandbox");
+    assert!(
+        heading.contains("model"),
+        "the table names its axes: {heading}"
+    );
+    let claude_row = rows
+        .iter()
+        .position(|row| row.contains("Claude Code") && row.contains("as asked"))
+        .unwrap_or_else(|| panic!("Claude's row in the table: {rows:#?}"));
+    for cell in ["partial", "1 change"] {
+        assert!(
+            rows[claude_row].contains(cell),
+            "{cell}: {}",
+            rows[claude_row]
+        );
+    }
+    let open = crate::ui::theme::glyph(crate::ui::theme::Symbol::ChevronExpanded);
+    assert!(
+        row(&format!("{open} Codex ")).contains("cannot apply"),
+        "a harness whose file cannot be read says so on its row"
+    );
+    assert!(
+        position(".claude/settings.json") > claude_row,
+        "a harness with something to write opens by itself"
+    );
     let model_row = row("\"default\"");
     assert!(
         model_row.contains("remove  ") && model_row.contains("unset"),
-        "a row says what applying does to the key: {model_row}"
+        "a setting says what applying does to it: {model_row}"
     );
-    assert!(row("permissions.defaultMode").contains("keep"));
+    assert!(
+        position("without socat") < position("remove  "),
+        "what keeps an axis from being honoured is read before the settings"
+    );
     assert!(
         position("remove  ") < position("permissions.defaultMode"),
-        "what changes is read first"
-    );
-    assert!(row("without socat").contains("sandbox: "));
-    assert!(
-        position("permissions.defaultMode") < position("without socat"),
-        "notes follow the keys they explain"
+        "what changes is read before what already holds"
     );
     row("not valid TOML");
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("  Codex  ") && row.contains("cannot apply")),
-        "a harness whose file cannot be read says so in its heading: {rows:#?}"
-    );
+    row("partial: not fully honoured");
     assert!(
         row("would change").contains("1 setting in 1 harness"),
         "the preview leads with its answer"
     );
     assert!(
+        rows.iter()
+            .any(|row| row.contains("Apply") && row.contains("Preview") && row.contains("Delete")),
+        "previewing is one of the drawer's buttons: {rows:#?}"
+    );
+    assert!(
         rows.iter().any(|row| row.contains("Active, not in effect")),
         "the drawer no longer claims the profile is in use: {rows:#?}"
+    );
+}
+
+/// Nothing to write is one quiet row; opening it shows the file anyway,
+/// and a click on the row does what Enter does.
+#[test]
+fn a_harness_in_the_preview_opens_and_closes() {
+    let mut model = model_with_data();
+    model.set_route(Route::Profiles);
+    model.focus = Focus::Content;
+    answer_preview(&mut model);
+    model.profile_preview_open = true;
+    let claude_open = |model: &TuiModel| {
+        crate::ui::view::profiles::preview_lines(model, 120)
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains(".claude/settings.json"))
+    };
+    assert!(claude_open(&model), "open by itself: it has a change");
+    model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !claude_open(&model),
+        "Enter closes the harness under the cursor"
+    );
+    model.hits = vec![(Rect::new(0, 5, 80, 1), Hit::PreviewHarness(0))];
+    model.click(3, 5);
+    assert!(claude_open(&model), "and a click on its row opens it again");
+    model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(model.profile_preview_cursor, 1);
+    model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        model.profile_preview_cursor, 1,
+        "the cursor stops at the last harness"
     );
 }
 

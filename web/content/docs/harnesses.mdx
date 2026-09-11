@@ -103,11 +103,11 @@ selected profile active and writes it into every checked harness; being active a
 are different things, so the drawer says which — a profile edited since it was applied, or a
 settings file changed by hand, reads *Active, not in effect*.
 
-**Preview** (`v`, or *preview* in the screen's header) shows the profile the way each harness will
-read it: every native key, what the file holds now, and what applying leaves there. Nothing is
-written until you apply. Each axis reports its own translation fidelity on the same
-Native/Adapted/Unsupported scale the capability router uses, with the reason attached whenever it
-is not native — for example:
+**Preview** (`v`, or the drawer's *Preview* button) answers before anything is written: one row
+per harness with a word for each axis — *as asked*, *adapted* (set another way), *partial* (not
+fully honoured) or *n/a* (no such setting) — and whether applying would change anything there. A
+harness with something to write opens by itself onto its own file: each key with what applying
+adds, changes or removes, and the reason behind any *partial* or *n/a*. For example:
 
 - Claude Code's sandbox limits writes to the working directory, which is `workspace-write`
   exactly; `read-only` cannot be delivered from user-scope settings and is reported degraded. On
