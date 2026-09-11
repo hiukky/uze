@@ -113,13 +113,17 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Control("the Profiles screen's new button"),
     );
     put(Action::DeleteProfile, Control("the drawer's buttons"));
-    put(Action::ActivateProfile, Control("the drawer's buttons"));
+    put(Action::ApplyProfile, Control("the drawer's buttons"));
+    put(
+        Action::PreviewProfile,
+        Control("the Profiles screen's preview button"),
+    );
     put(
         Action::ToggleProfileHarness,
         Control("clicking the harness checkbox"),
     );
-    put(Action::NextValue, Control("clicking a preference row"));
-    put(Action::PreviousValue, Control("clicking a preference row"));
+    put(Action::NextValue, Control("a preference row's `›`"));
+    put(Action::PreviousValue, Control("a preference row's `‹`"));
 
     // --- Workspace ------------------------------------------------------
     put(Action::NewShellTab, Control("the tab strip's `+`"));

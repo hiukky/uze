@@ -108,6 +108,8 @@
     "arrow.behind": "⇣",
     "arrow.to": "→",
     "chevron.right": "›",
+    "step.previous": "‹",
+    "step.next": "›",
     "chevron.collapsed": "▸",
     "chevron.expanded": "▾",
     "prompt": "❯",

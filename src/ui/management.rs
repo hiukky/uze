@@ -150,9 +150,13 @@ pub(crate) fn run_management(
         let mut hits = Vec::new();
         terminal.draw(|frame| render(frame, &model, &mut hits))?;
         model.hits = hits;
-        let missing = model.drawer_inspect_intent();
-        if missing != Intent::None {
-            dispatch(missing, &home, &sender, &mut model);
+        for missing in [
+            model.drawer_inspect_intent(),
+            model.profile_preview_intent(),
+        ] {
+            if missing != Intent::None {
+                dispatch(missing, &home, &sender, &mut model);
+            }
         }
         if event::poll(super::POLL_INTERVAL).map_err(super::io_error)? {
             match event::read().map_err(super::io_error)? {

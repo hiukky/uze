@@ -16,7 +16,7 @@ use uze_application::{
     PromptEntry, Result, UzeApplication, UzeError, UzeHome,
     application::{
         ContextPlan, ContextReconciliationReport, InstallReport, ProfileApplyResult,
-        ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
+        ProfilePreview, ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
     },
 };
 
@@ -85,7 +85,8 @@ pub(crate) enum Intent {
     InstallProjectEnvironment(PathBuf),
     CreateProfile(String),
     DeleteProfile(String),
-    SetActiveProfile(String),
+    /// Read what applying these preferences would write into each harness.
+    PreviewProfile(super::model::PreviewQuestion),
     /// Fired on every Editor-panel value cycle — deliberately silent/no
     /// refresh (see `dispatch`'s arm), since the model already applied the
     /// new value optimistically and a status toast per keystroke would be
@@ -94,8 +95,12 @@ pub(crate) enum Intent {
         id: String,
         preferences: Preferences,
     },
+    /// Carries the preferences on screen, written before applying: the
+    /// editor persists each change on a thread of its own, and an apply
+    /// that read the profile back from disk could overtake that write.
     ApplyProfile {
         id: String,
+        preferences: Preferences,
         harness_ids: Vec<String>,
     },
 }
@@ -128,7 +133,7 @@ impl Intent {
             Self::InstallProjectEnvironment(_) => "install_project_environment",
             Self::CreateProfile(_) => "create_profile",
             Self::DeleteProfile(_) => "delete_profile",
-            Self::SetActiveProfile(_) => "set_active_profile",
+            Self::PreviewProfile(_) => "preview_profile",
             Self::UpdatePreferences { .. } => "update_preferences",
             Self::ApplyProfile { .. } => "apply_profile",
         }
@@ -150,6 +155,10 @@ pub(crate) enum WorkerResult {
     ContextAnalyzed(std::result::Result<(ProjectContextStatus, ContextPlan), String>),
     ContextApplied(std::result::Result<(String, ContextReconciliationReport), String>),
     ProfileApplied(std::result::Result<(String, Vec<ProfileApplyResult>, RefreshData), String>),
+    ProfilePreviewed(
+        super::model::PreviewQuestion,
+        std::result::Result<ProfilePreview, String>,
+    ),
 }
 
 pub(crate) fn dispatch(
@@ -465,17 +474,21 @@ pub(crate) fn dispatch(
                 },
             );
         }
-        Intent::SetActiveProfile(id) => {
-            spawn_mutation(
-                home.clone(),
-                sender.clone(),
-                model.context_root.clone(),
-                move |app| {
-                    app.profiles()
-                        .set_active(&id)
-                        .map(|()| format!("\"{id}\" is now the active profile"))
-                },
-            );
+        Intent::PreviewProfile(question) => {
+            model.profile_preview_asked = Some(question.clone());
+            let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
+            thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
+                let result = tui_application(home)
+                    .map(|app| {
+                        app.profiles()
+                            .preview(&question.preferences, &question.harness_ids)
+                    })
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(WorkerResult::ProfilePreviewed(question, result));
+            });
         }
         Intent::UpdatePreferences { id, preferences } => {
             let home = home.clone();
@@ -488,7 +501,11 @@ pub(crate) fn dispatch(
                 }
             });
         }
-        Intent::ApplyProfile { id, harness_ids } => {
+        Intent::ApplyProfile {
+            id,
+            preferences,
+            harness_ids,
+        } => {
             model.status = Status::Working(format!("Applying \"{id}\"…"));
             let (home, sender, context_root) =
                 (home.clone(), sender.clone(), model.context_root.clone());
@@ -498,6 +515,7 @@ pub(crate) fn dispatch(
                 let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home.clone())
                     .and_then(|app| {
+                        app.profiles().update_preferences(&id, preferences)?;
                         app.profiles().set_active(&id)?;
                         let results = app.profiles().apply(&id, &harness_ids)?;
                         let data = load_refresh_data(home, &context_root)?;
@@ -762,9 +780,11 @@ pub(crate) fn drain_worker_results(
             WorkerResult::ProfileApplied(Ok((message, results, data))) => {
                 model.refreshed(data);
                 model.profile_apply_results = results;
-                let _ = message;
-                model.status = Status::Success("Profile applied".to_owned());
-                model.status_expires_at = Some(Instant::now() + Duration::from_secs(3));
+                model.status = Status::Success(message);
+                model.status_expires_at = Some(Instant::now() + Duration::from_secs(5));
+            }
+            WorkerResult::ProfilePreviewed(question, result) => {
+                model.profile_previewed(question, result);
             }
             WorkerResult::Refreshed(Err(error)) => {
                 model.maintenance_in_flight = false;

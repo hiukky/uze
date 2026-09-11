@@ -271,6 +271,7 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Profiles, "n", Action::NewProfile),
         bind(Scope::Profiles, "d", Action::DeleteProfile),
         bind(Scope::Profiles, "space", Action::ToggleProfileHarness),
+        bind(Scope::Profiles, "v", Action::PreviewProfile),
         bind(Scope::ProfileEditor, "left", Action::PreviousValue),
         bind(Scope::ProfileEditor, "right", Action::NextValue),
         // --- Management, the surfaces that seal -------------------------
@@ -425,7 +426,7 @@ mod tests {
                 "reset-key",
                 "install-project-environment",
                 "open-glossary",
-                "activate-profile",
+                "apply-profile",
                 "new-space"
             ],
             "an action gained or lost a chord; say so here on purpose"

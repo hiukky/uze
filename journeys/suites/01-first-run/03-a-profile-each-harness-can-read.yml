@@ -1,0 +1,105 @@
+journey: a profile lands in each harness's own configuration, in words that harness accepts
+tags: [gate, tui, profiles]
+proves: web/content/docs/harnesses.mdx
+about: |
+  A profile is UZE's vocabulary — autonomy, sandbox, model — and no harness
+  reads it. What a harness reads is its own configuration file, so the
+  claim is about those four files: the preview leaves them alone, applying
+  rewrites them, and what it writes is a value each harness accepts.
+
+  The world starts where a machine that ran an earlier uze was left: the
+  `default` profile had written `model: "default"` into Claude's settings
+  (which Claude cannot resolve), `approval_policy = "untrusted"` into
+  Codex's (with which Codex refuses to start) and `agentMode: "default"`
+  into Antigravity's (for which it throws the whole file away). Each file
+  also carries something of the operator's own. Every check reads those
+  files; the screen only gates that a gesture landed.
+
+world:
+  project: demo-app
+
+scenes:
+  - scene: a preview reads the harnesses and writes nothing
+    when:
+      - shell: |
+          mkdir -p {home}/.claude {home}/.codex {home}/.gemini/antigravity-cli
+          printf '%s' '{"model":"default","theme":"dark"}' > {home}/.claude/settings.json
+          printf '%s\n' '# the operator keeps this' 'approval_policy = "untrusted"' > {home}/.codex/config.toml
+          printf '%s' '{"agentMode":"default","trustedWorkspaces":["{project}"]}' > {home}/.gemini/antigravity-cli/settings.json
+        say: leave the harnesses as an earlier uze left them
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "Manage"
+        say: cross to the management side
+        in: sidebar
+        expect: Overview
+        expect_timeout: 20
+        pause: 1.0
+      - click: "Profiles"
+        say: open the Profiles screen
+        in: sidebar
+        expect: "Harnesses"
+        expect_timeout: 20
+        pause: 1.0
+      - click: "preview"
+        say: switch the screen to the preview
+        in: pane
+        expect: "would change"
+        expect_timeout: 20
+        pause: 1.0
+    then:
+      - file: "{home}/.claude/settings.json"
+        contains: '"model":"default"'
+        about: previewing read Claude's settings without rewriting them
+      - file: "{home}/.codex/config.toml"
+        contains: 'approval_policy = "untrusted"'
+        about: nor Codex's
+      - file: "{home}/.config/opencode/opencode.json"
+        exists: false
+        about: nor created a file for a harness that had none
+
+  - scene: applying writes what each harness accepts, around what the operator had
+    when:
+      - click: "  Apply  "
+        say: apply the profile from its drawer
+        in: pane
+        expect: "Applied profile"
+        expect_timeout: 30
+        pause: 1.0
+    then:
+      - file: "{home}/.claude/settings.json"
+        excludes: '"model"'
+        about: Claude picks its own model again — the word it could not resolve is gone
+      - file: "{home}/.claude/settings.json"
+        contains: '"defaultMode": "acceptEdits"'
+        about: and it asks before commands but not before edits, which is balanced autonomy
+      - file: "{home}/.claude/settings.json"
+        contains: '"theme": "dark"'
+        about: the operator's own setting survived the rewrite
+      - file: "{home}/.codex/config.toml"
+        excludes: "untrusted"
+        about: Codex no longer carries the policy it refuses to start with
+      - file: "{home}/.codex/config.toml"
+        contains: 'approval_policy = "on-request"'
+        about: it carries one it runs with
+      - file: "{home}/.codex/config.toml"
+        contains: "# the operator keeps this"
+        about: and the operator's comment is where they left it
+      - file: "{home}/.gemini/antigravity-cli/settings.json"
+        excludes: '"agentMode": "default"'
+        about: Antigravity no longer carries the mode name it throws the whole file away for
+      - file: "{home}/.gemini/antigravity-cli/settings.json"
+        contains: '"toolPermission": "request-review"'
+        about: and reviews tool calls before running them
+      - file: "{home}/.gemini/antigravity-cli/settings.json"
+        contains: "trustedWorkspaces"
+        about: the workspaces the operator trusted are still trusted
+      - file: "{home}/.config/opencode/opencode.json"
+        contains: '"bash": "ask"'
+        about: OpenCode, which had no file, now asks before shell commands
+      - file: "{uze_home}/state/profiles.json"
+        contains: '"active": "default"'
+        about: the profile that was written is the one recorded as active
