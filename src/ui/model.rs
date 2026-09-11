@@ -397,6 +397,11 @@ pub(crate) struct TuiModel {
     pub(crate) appearance_selected: usize,
     pub(crate) appearance_themes: Vec<uze_application::application::ThemeSummary>,
     pub(crate) appearance_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
+    /// Each theme's own colours, by id — resolved once with the list rather
+    /// than per frame, because resolving one reads files. A theme absent
+    /// from here resolved to nothing drawable and shows no swatches, which
+    /// is the honest answer for a file with a typo in it.
+    pub(crate) appearance_palettes: std::collections::BTreeMap<String, Vec<uze_theme::Rgb>>,
     pub(crate) keys_capture: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
@@ -545,6 +550,7 @@ impl Default for TuiModel {
             appearance_selected: 0,
             appearance_themes: Vec::new(),
             appearance_glyph_sets: Vec::new(),
+            appearance_palettes: std::collections::BTreeMap::new(),
             keys_capture: false,
             keys_problem: None,
             keys_probe: None,

@@ -35,6 +35,18 @@ pub(crate) fn content(red: u8, green: u8, blue: u8) -> Color {
     Color::Rgb(red, green, blue)
 }
 
+/// One colour of a theme that is *not* in force, for the Appearance
+/// screen's swatches.
+///
+/// The colour half of what `preview_spans` does for glyphs, and legitimate
+/// for the same reason: the question that screen answers is "what does
+/// *that* one look like", which no amount of resolving the active theme can
+/// reach. Narrow on purpose — it takes a resolved [`uze_theme::Rgb`], so
+/// the only thing it can draw is a colour some theme file already decided.
+pub(crate) fn swatch(rgb: uze_theme::Rgb) -> Color {
+    Color::Rgb(rgb.0, rgb.1, rgb.2)
+}
+
 /// Foreground only — by far the most common thing a span needs.
 pub(crate) fn fg(token: Token) -> Style {
     Style::default().fg(color(token))

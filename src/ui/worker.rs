@@ -939,6 +939,19 @@ fn select_glyph_set(home: &UzeHome, id: &str) -> std::result::Result<(), String>
     Ok(())
 }
 
+/// What a theme card shows of a palette: the accent it leads with, then
+/// the four states that carry meaning, then the brightest text. Six is what
+/// a card has room for, and these six are the ones a theme is actually
+/// judged on — a row of surfaces would be six shades of the same near-black.
+const SWATCHES: &[uze_theme::Token] = &[
+    uze_theme::Token::Accent,
+    uze_theme::Token::StateSuccess,
+    uze_theme::Token::StateWarning,
+    uze_theme::Token::StateDanger,
+    uze_theme::Token::StateInfo,
+    uze_theme::Token::TextBright,
+];
+
 /// Reads both lists the Appearance screen chooses from.
 ///
 /// Cheap enough to read on this thread rather than a worker, for the same
@@ -949,6 +962,20 @@ fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
         return;
     };
     if let Ok(themes) = application.themes().list(uze_theme::builtin_names()) {
+        // Resolved here rather than per frame: each one is a file read, and
+        // a screen that re-read the whole themes directory every tick would
+        // be paying a directory walk to draw six coloured cells.
+        model.appearance_palettes = themes
+            .iter()
+            .filter_map(|theme| {
+                let loaded = crate::theme::resolve(&application, home, &theme.id).ok()?;
+                let colours = SWATCHES
+                    .iter()
+                    .map(|token| loaded.theme.color(*token))
+                    .collect();
+                Some((theme.id.clone(), colours))
+            })
+            .collect();
         model.appearance_themes = themes;
     }
     if let Ok(sets) = application.themes().glyph_sets(uze_theme::glyph_sets()) {

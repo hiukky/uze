@@ -3727,6 +3727,59 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
     }
 }
 
+/// Every right-hand drawer is the same slab: it starts on the frame's own
+/// top row and runs to the bottom. A drawer handed the area *below* the
+/// screen header instead starts three rows down, which reads as a panel
+/// that failed to open rather than as a deliberate inset.
+#[test]
+fn every_drawer_runs_the_full_height_of_its_screen() {
+    let mut rules = Vec::new();
+    for route in [
+        Route::Plugins,
+        Route::Extensions,
+        Route::Harnesses,
+        Route::Keys,
+        Route::Appearance,
+    ] {
+        let mut model = model_with_data();
+        model.set_route(route);
+        model.focus = Focus::Content;
+        model.marketplace_drawer_open = true;
+        model.harnesses_drawer_open = true;
+        model.extension_drawer_open = true;
+        model.appearance_themes = vec![uze_application::application::ThemeSummary {
+            id: "default".to_owned(),
+            active: true,
+            path: None,
+        }];
+        model.appearance_glyph_sets = vec![uze_application::application::GlyphSetSummary {
+            id: "nerd".to_owned(),
+            active: false,
+        }];
+        model.settle_appearance_selection();
+
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rule = hits
+            .iter()
+            .find_map(|(rect, hit)| matches!(hit, Hit::ResizePanel(_)).then_some(*rect))
+            .unwrap_or_else(|| panic!("{route:?} drew no drawer"));
+        rules.push((route, rule));
+    }
+
+    let (first_route, first) = rules[0];
+    for (route, rule) in &rules[1..] {
+        assert_eq!(
+            (rule.y, rule.height),
+            (first.y, first.height),
+            "{route:?}'s drawer does not run the height {first_route:?}'s does"
+        );
+    }
+}
+
 /// A dialog answered only by a key would be the one place in the product
 /// where the keyboard is the way in rather than the accelerator.
 #[test]
@@ -3801,12 +3854,15 @@ fn each_glyph_set_is_previewed_in_its_own_glyphs() {
         .unwrap();
     let rows = buffer_rows(&terminal);
 
+    // A card names the set in its frame and draws the preview two rows
+    // below: the frame, the line saying what the set asks of the machine,
+    // then the marks themselves.
     let row_for = |id: &str| -> String {
-        rows.iter()
-            // Not the header, which names what is in force by the same ids.
-            .find(|row| row.contains(id) && !row.contains("Appearance"))
-            .unwrap_or_else(|| panic!("no row for the `{id}` set in {rows:#?}"))
-            .clone()
+        let title = rows
+            .iter()
+            .position(|row| row.contains('\u{256d}') && row.contains(id))
+            .unwrap_or_else(|| panic!("no card for the `{id}` set in {rows:#?}"));
+        rows[title + 2].clone()
     };
 
     // ASCII's own marks, on the ASCII row, while the default theme — the
@@ -3833,6 +3889,64 @@ fn each_glyph_set_is_previewed_in_its_own_glyphs() {
     assert!(
         nerd.chars().any(|c| ('\u{ea60}'..='\u{ec84}').contains(&c)),
         "the nerd row carries no Codicon: {nerd:?}"
+    );
+}
+
+/// The card the keyboard is on says so on its frame; the card in force says
+/// so with its fill. Painting the fill over the frame rather than inside it
+/// takes the frame away from every card that is in force but not selected —
+/// which is every card in force, most of the time.
+#[test]
+fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: uze_theme::glyph_sets()
+            .iter()
+            .map(|id| uze_application::application::GlyphSetSummary {
+                id: (*id).to_owned(),
+                active: *id == "nerd",
+            })
+            .collect(),
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+    let in_force = model
+        .appearance_rows()
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                crate::ui::model::AppearanceRow::GlyphSet { active: true, .. }
+            )
+        })
+        .expect("a set in force to draw");
+    assert_ne!(
+        in_force, model.appearance_selected,
+        "the case this guards is the card in force that the keyboard is not on"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(190, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+
+    let card = hits
+        .iter()
+        .find_map(|(rect, hit)| (*hit == Hit::AppearanceRow(in_force)).then_some(*rect))
+        .expect("the set in force drew no card");
+    let buffer = terminal.backend().buffer();
+    let fill = crate::ui::theme::color(uze_theme::Token::SurfaceSelected);
+    assert_eq!(
+        buffer[(card.x + 1, card.y + 1)].bg,
+        fill,
+        "the card in force is not filled"
+    );
+    assert_ne!(
+        buffer[(card.x, card.y + 1)].bg,
+        fill,
+        "the fill reached the frame, which is where the selection has to show"
     );
 }
 

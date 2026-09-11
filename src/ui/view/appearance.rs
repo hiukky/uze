@@ -6,9 +6,11 @@
 //! them together meant an operator with a patched font had to give up every
 //! theme, or copy forty-four glyphs into their overrides.
 //!
-//! Shaped like Keys — a grouped list with a detail side — for the reason
+//! Shaped like Keys — grouped choices with a detail side — for the reason
 //! Keys is shaped like Plugins: a screen someone visits rarely is better
-//! off looking like one they already know.
+//! off looking like one they already know. The choices themselves are cards
+//! rather than rows, because what a theme or a set *is* cannot be said in
+//! words: it has to be shown, and a row has one line to show it in.
 //!
 //! The one thing here that is its own: **every glyph set is drawn in its own
 //! glyphs.** No terminal can be asked which font it is rendering with — no
@@ -25,12 +27,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
 use super::super::model::{AppearanceRow, ResizablePanel, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area, small_caps};
+use super::super::{content_area, render_screen_header, side_panel_area};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// The marks a preview shows. Chosen to be the ones that differ most
@@ -63,125 +65,206 @@ pub(crate) fn render_appearance(
     let list_width = content.width.saturating_sub(drawer_width);
     let list_area = Rect::new(content.x, content.y, list_width, content.height);
 
-    render_list(frame, list_area, model, hits);
-    render_drawer(frame, content, drawer_width, model, hits);
+    render_catalog(frame, list_area, model, hits);
+    // The whole content area, not what the header left: a drawer runs the
+    // frame's full height on every other screen, and one that starts below
+    // the title reads as a panel that failed to open.
+    render_drawer(frame, area, drawer_width, model, hits);
 }
 
-fn render_list(
+/// A card in the catalogue. Wide enough for a glyph set's whole preview
+/// row, short enough that the palette and every set fit on an 80x24
+/// terminal at once — which is the point of a catalogue over a list.
+const CARD_WIDTH: u16 = 30;
+const CARD_HEIGHT: u16 = 4;
+const CARD_GAP: u16 = 1;
+
+/// The choices, as a grid of cards under their group headings.
+///
+/// Selection stays linear — reading order, left to right and down — so
+/// `up`/`down` mean what they did when this was a list, and a heading is
+/// crossed rather than landed on.
+fn render_catalog(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let rows = model.appearance_rows();
-    // The id column is reserved for the whole list or for none of it, so
-    // every preview starts at the same column and a misaligned glyph is
-    // the set's fault rather than the layout's.
-    let id_width = rows
-        .iter()
-        .map(|row| match row {
-            AppearanceRow::Heading(_) => 0,
-            AppearanceRow::Theme { id, .. } | AppearanceRow::GlyphSet { id, .. } => {
-                id.chars().count()
-            }
-        })
-        .max()
-        .unwrap_or(0)
-        .max(8);
+    let columns = usize::from(((area.width + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).max(1));
+    let mut y = area.y;
+    let mut column = 0usize;
+    let mut opened = false;
 
-    for (index, row) in rows.iter().enumerate() {
-        let y = area.y + index as u16;
-        if y >= area.bottom() {
+    for (index, row) in model.appearance_rows().iter().enumerate() {
+        if let AppearanceRow::Heading(title) = row {
+            // Close whatever line of cards is open before starting a group.
+            if column > 0 {
+                y += CARD_HEIGHT;
+                column = 0;
+            }
+            if opened {
+                y += 1;
+            }
+            opened = true;
+            if y >= area.bottom() {
+                return;
+            }
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    title.to_uppercase(),
+                    theme::fg(Token::TextDim).add_modifier(Modifier::BOLD),
+                )),
+                Rect::new(area.x, y, area.width, 1),
+            );
+            y += 1;
+            continue;
+        }
+
+        let x = area.x + column as u16 * (CARD_WIDTH + CARD_GAP);
+        let width = CARD_WIDTH.min(area.right().saturating_sub(x));
+        if y + CARD_HEIGHT > area.bottom() {
             return;
         }
-        let rect = Rect::new(area.x, y, area.width, 1);
+        let rect = Rect::new(x, y, width, CARD_HEIGHT);
         let selected = index == model.appearance_selected;
-
         match row {
-            AppearanceRow::Heading(title) => {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        small_caps(title),
-                        theme::fg(Token::TextDim).add_modifier(Modifier::BOLD),
-                    )),
-                    rect,
-                );
-            }
             AppearanceRow::Theme { id, active, path } => {
                 let source = match path {
-                    Some(path) => path.display().to_string(),
+                    // The file's own name, not its path: a card has room for
+                    // one, and the drawer beside it carries the other.
+                    Some(path) => path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    ),
                     None => "built in".to_owned(),
                 };
-                render_choice(frame, rect, id, id_width, *active, selected, &source, None);
-                hits.push((rect, Hit::AppearanceRow(index)));
-            }
-            AppearanceRow::GlyphSet { id, active } => {
-                // Only as many marks as the column actually has room for.
-                // A preview clipped by the drawer beside it says nothing
-                // about the set and everything about the layout.
-                let spent = 1 + usize::from(theme::width(Symbol::MarkOk)) + 1 + id_width + 2;
-                let room = usize::from(rect.width).saturating_sub(spent);
-                render_choice(
+                render_card(
                     frame,
                     rect,
                     id,
-                    id_width,
                     *active,
                     selected,
-                    "",
-                    Some(preview_spans(id, room)),
+                    &source,
+                    swatch_spans(model, id),
                 );
-                hits.push((rect, Hit::AppearanceRow(index)));
             }
+            AppearanceRow::GlyphSet { id, active } => {
+                let room = usize::from(rect.width).saturating_sub(4);
+                render_card(
+                    frame,
+                    rect,
+                    id,
+                    *active,
+                    selected,
+                    glyph_set_tagline(id),
+                    preview_spans(id, room),
+                );
+            }
+            AppearanceRow::Heading(_) => unreachable!("headings return above"),
+        }
+        hits.push((rect, Hit::AppearanceRow(index)));
+
+        column += 1;
+        if column == columns {
+            column = 0;
+            y += CARD_HEIGHT;
         }
     }
 }
 
-/// One selectable line: the mark saying whether it is in force, the id, and
-/// whatever that kind of choice shows beside itself.
-#[allow(clippy::too_many_arguments)]
-fn render_choice(
+/// One choice: its name in the frame, what it is beneath, and — the whole
+/// reason this is a card — what it actually looks like on the last line.
+///
+/// The two states are drawn by two different means on purpose. Which card
+/// the keyboard is on is the *frame*; which one is in force is the *fill*
+/// inside it, so the answer to "what am I about to choose" and the answer to
+/// "what is on right now" never compete for the same cells.
+fn render_card(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,
     id: &str,
-    id_width: usize,
     active: bool,
     selected: bool,
-    trailing: &str,
-    preview: Option<Vec<Span<'static>>>,
+    note: &str,
+    body: Vec<Span<'static>>,
 ) {
-    if selected {
+    let mut title = vec![Span::raw(" ")];
+    if active {
+        title.push(Span::styled(
+            theme::glyph(Symbol::MarkOk),
+            theme::fg(Token::Accent),
+        ));
+        title.push(Span::raw(" "));
+    }
+    title.push(Span::styled(
+        id.to_owned(),
+        if active {
+            theme::fg_bold(Token::TextBright)
+        } else {
+            theme::fg_bold(Token::TextPrimary)
+        },
+    ));
+    title.push(Span::raw(" "));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::fg(if selected {
+            Token::Accent
+        } else {
+            Token::BorderFaint
+        }))
+        .title(Line::from(title));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    // Inside the frame, never over it: a fill that covered the border cells
+    // too would paint out the one thing that says where the keyboard is,
+    // on every card that is in force but not selected.
+    if active {
         frame.render_widget(
-            Block::default().style(Style::default().bg(theme::color(Token::SurfaceSelected))),
-            rect,
+            Block::default().style(theme::bg(Token::SurfaceSelected)),
+            inner,
         );
     }
-    let mark = if active {
-        Span::styled(theme::glyph(Symbol::MarkOk), theme::fg(Token::Accent))
-    } else {
-        Span::raw(" ".repeat(usize::from(theme::width(Symbol::MarkOk))))
+
+    let text = Rect::new(
+        inner.x + 1,
+        inner.y,
+        inner.width.saturating_sub(2),
+        inner.height,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(note.to_owned(), theme::fg(Token::TextMuted))),
+            Line::from(body),
+        ]),
+        text,
+    );
+}
+
+/// A theme's own colours, drawn in themselves.
+///
+/// Empty when the theme did not resolve, which is the honest answer: a file
+/// with a typo in it has no palette to show, and inventing one here would
+/// hide exactly the mistake the author needs to see.
+fn swatch_spans(model: &TuiModel, id: &str) -> Vec<Span<'static>> {
+    let Some(colours) = model.appearance_palettes.get(id) else {
+        return Vec::new();
     };
-    let mut spans = vec![
-        Span::raw(" "),
-        mark,
-        Span::raw(" "),
-        Span::styled(
-            format!("{id:id_width$}  "),
-            if active {
-                theme::fg(Token::TextBright).add_modifier(Modifier::BOLD)
-            } else {
-                theme::fg(Token::TextPrimary)
-            },
-        ),
-    ];
-    match preview {
-        Some(preview) => spans.extend(preview),
-        None => spans.push(Span::styled(
-            trailing.to_owned(),
-            theme::fg(Token::TextMuted),
-        )),
+    colours
+        .iter()
+        .map(|rgb| Span::styled("███ ", Style::default().fg(theme::swatch(*rgb))))
+        .collect()
+}
+
+/// What a set asks of the machine, in the words a card has room for. The
+/// sentence is in the drawer.
+fn glyph_set_tagline(id: &str) -> &'static str {
+    match id {
+        "ascii" => "ASCII — any font at all",
+        "nerd" => "needs a Nerd Font v3",
+        _ => "Unicode — any modern font",
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 /// A set's own marks, resolved from that set rather than from the active
@@ -266,7 +349,7 @@ fn render_drawer(
     );
     let block = |label: &str| {
         Line::from(Span::styled(
-            small_caps(label),
+            label.to_uppercase(),
             theme::fg_bold(Token::TextMuted),
         ))
     };
