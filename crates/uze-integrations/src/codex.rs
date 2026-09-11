@@ -25,7 +25,9 @@ use uze_core::{
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
     },
-    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
+    preference::{
+        PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
+    },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -816,6 +818,10 @@ impl PreferencePort for CodexIntegration {
 
     fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
         preferences::apply(&self.config_toml_path(), preferences)
+    }
+
+    fn plan(&self, preferences: &Preferences) -> Result<PreferencePlan> {
+        preferences::plan(&self.config_toml_path(), preferences)
     }
 }
 

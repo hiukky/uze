@@ -11,6 +11,7 @@ mod hooks;
 mod identity;
 mod lifecycle_conformance;
 mod policy;
+mod preferences;
 mod runtime_boundary;
 mod runtime_projection;
 mod subjects;

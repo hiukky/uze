@@ -41,7 +41,44 @@ pub(crate) fn set_path(
             .as_table_mut()
             .ok_or_else(|| format!("`{key}` already holds a non-table value; preserved"))?;
     }
-    table.insert(last, Item::Value(value.into()));
+    let mut value = value.into();
+    // `insert` would replace the key along with its line's comments, so an
+    // existing value is swapped in place, keeping the decor around it.
+    match table.get_mut(last).and_then(Item::as_value_mut) {
+        Some(existing) => {
+            *value.decor_mut() = existing.decor().clone();
+            *existing = value;
+        }
+        None => {
+            table.insert(last, Item::Value(value));
+        }
+    }
+    Ok(())
+}
+
+/// The item at a dot-path, if every step of it exists.
+pub(crate) fn get_path<'a>(document: &'a DocumentMut, path: &[&str]) -> Option<&'a Item> {
+    path.iter()
+        .try_fold(document.as_item(), |cursor, key| cursor.get(key))
+}
+
+/// Whether `set_path` could write `path`: no ancestor holds anything but a
+/// table. Absent ancestors are fine — `set_path` creates them.
+pub(crate) fn writable(document: &DocumentMut, path: &[&str]) -> std::result::Result<(), String> {
+    let Some((_, ancestors)) = path.split_last() else {
+        return Err("empty config key path".to_owned());
+    };
+    let mut table: &Table = document.as_table();
+    for key in ancestors {
+        match table.get(key) {
+            None => return Ok(()),
+            Some(item) => {
+                table = item
+                    .as_table()
+                    .ok_or_else(|| format!("`{key}` already holds a non-table value; preserved"))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -115,6 +152,22 @@ mod tests {
         assert!(rendered.contains("[model_providers.openai]"));
         assert!(rendered.contains("approval_policy = \"never\""));
         let _ = fs::remove_file(&path);
+    }
+
+    /// A comment above a key belongs to that key's line, and `insert`
+    /// replaces the key along with it — so overwriting a value UZE owns
+    /// used to delete the operator's note about it.
+    #[test]
+    fn overwriting_a_key_keeps_the_comment_above_it() {
+        let mut document: DocumentMut =
+            "# the operator keeps this\napproval_policy = \"untrusted\" # and this\n"
+                .parse()
+                .unwrap();
+        set_path(&mut document, &["approval_policy"], "on-request").unwrap();
+        assert_eq!(
+            document.to_string(),
+            "# the operator keeps this\napproval_policy = \"on-request\" # and this\n"
+        );
     }
 
     #[test]

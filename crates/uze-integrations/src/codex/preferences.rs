@@ -4,6 +4,12 @@
 //! `docs/config-file/config-basic`, `docs/config-file/config-reference`,
 //! `docs/config-file/config-advanced`, `docs/agent-approvals-security`.
 //!
+//! Checked against the binary itself (codex-cli 0.153.4, `codex debug
+//! prompt-input`, which loads and validates `config.toml`): every value
+//! written here loads, except that `approval_policy = "untrusted"` — what
+//! `Manual` used to write — now refuses to start Codex at all ("no longer
+//! supported; remove this setting").
+//!
 //! Model tiers beyond `Default` are `Unsupported`: Codex requires an exact
 //! model id string and current docs give no tier-alias catalog to translate
 //! against (unlike Claude's documented `sonnet`/`opus`/`haiku` aliases) — a
@@ -17,8 +23,8 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferenceTranslation, Preferences,
-        SandboxScope,
+        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferencePlan, PreferenceTranslation,
+        Preferences, SandboxScope,
     },
     router::CompatibilityRoute,
 };
@@ -41,15 +47,26 @@ fn autonomy(autonomy: Autonomy) -> Axis {
     // Codex expresses a Claude-style auto mode as no command approvals
     // while retaining the separately configured sandbox boundary.
     let value = match autonomy {
-        Autonomy::Manual => "untrusted",
-        Autonomy::Balanced => "on-request",
+        Autonomy::Manual | Autonomy::Balanced => "on-request",
         Autonomy::Auto | Autonomy::Unattended => "never",
     };
-    Axis::new(
-        CompatibilityRoute::Native,
+    let axis = Axis::new(
+        if autonomy == Autonomy::Manual {
+            CompatibilityRoute::Degraded
+        } else {
+            CompatibilityRoute::Native
+        },
         format!("approval_policy = \"{value}\""),
     )
-    .set(APPROVAL_POLICY, Value::Text(value))
+    .set(APPROVAL_POLICY, Value::Text(value));
+    if autonomy == Autonomy::Manual {
+        axis.note(
+            "Codex no longer has a policy that asks before every command (`untrusted` stops it \
+             from starting); on-request is the most careful one it has",
+        )
+    } else {
+        axis
+    }
 }
 
 /// Codex's automatic mode is intended to run the whole development loop,
@@ -76,11 +93,12 @@ fn sandbox(preferences: &Preferences) -> Axis {
     // able to see that their sandbox choice was not the one applied — so it
     // can never report as a plain `Native` match either.
     let override_note = (effective != preferences.sandbox).then(|| {
-        format!(
-            "sandbox raised to full-access because autonomy is Auto (overrides your configured \
-             {:?})",
-            preferences.sandbox
-        )
+        let configured = match preferences.sandbox {
+            SandboxScope::ReadOnly => "read-only",
+            SandboxScope::WorkspaceWrite => "workspace-write",
+            SandboxScope::FullAccess => "full-access",
+        };
+        format!("Codex's auto mode runs with full access, not the {configured} you chose")
     });
     let summary = match &override_note {
         Some(note) => format!("sandbox_mode = \"{value}\" ({note})"),
@@ -132,6 +150,10 @@ pub(crate) fn apply(
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
     mapping(preferences).apply_toml(config_path)
+}
+
+pub(crate) fn plan(path: &Path, preferences: &Preferences) -> Result<PreferencePlan> {
+    mapping(preferences).plan_toml(path)
 }
 
 #[cfg(test)]
@@ -198,7 +220,7 @@ mod tests {
                 assert!(
                     notes
                         .iter()
-                        .any(|note| note.contains("Auto") && note.contains("WorkspaceWrite")),
+                        .any(|note| note.contains("auto mode") && note.contains("workspace-write")),
                     "expected a note naming the overridden sandbox, got: {notes:?}"
                 );
             }
@@ -224,7 +246,7 @@ mod tests {
                 .starts_with("sandbox_mode = \"danger-full-access\""),
         );
         assert!(
-            translation.sandbox.native_summary.contains("ReadOnly"),
+            translation.sandbox.native_summary.contains("read-only"),
             "the override must name what it overrode: {}",
             translation.sandbox.native_summary
         );
@@ -304,6 +326,30 @@ mod tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("[sandbox_workspace_write]"));
         assert!(contents.contains("network_access = false"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Codex 0.153 refuses to start with `approval_policy = "untrusted"`,
+    /// which is what `Manual` used to write.
+    #[test]
+    fn manual_never_writes_a_policy_codex_refuses_to_start_with() {
+        let path = temp_path("manual");
+        std::fs::write(&path, "approval_policy = \"untrusted\"\n").unwrap();
+        let outcome = apply(
+            &path,
+            &Preferences {
+                autonomy: Autonomy::Manual,
+                ..Preferences::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            PreferenceApplyOutcome::AppliedWithApproximation { .. }
+        ));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("untrusted"), "{written}");
+        assert!(written.contains("approval_policy = \"on-request\""));
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -21,8 +21,8 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferenceTranslation, Preferences,
-        SandboxScope,
+        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferencePlan, PreferenceTranslation,
+        Preferences, SandboxScope,
     },
     router::CompatibilityRoute,
 };
@@ -122,6 +122,10 @@ pub(crate) fn apply(
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
     mapping(preferences).apply_json(config_path)
+}
+
+pub(crate) fn plan(path: &Path, preferences: &Preferences) -> Result<PreferencePlan> {
+    mapping(preferences).plan_json(path)
 }
 
 #[cfg(test)]

@@ -14,6 +14,8 @@
 //! implementing it now: the translation/apply layer never needs to know
 //! where the value came from.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, router::CompatibilityRoute};
@@ -83,6 +85,93 @@ pub struct PreferenceTranslation {
     pub autonomy: PreferenceMapping,
     pub sandbox: PreferenceMapping,
     pub model: PreferenceMapping,
+}
+
+/// One of the three universal axes, named so a plan can say which axis a
+/// native key answers to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PreferenceAxis {
+    Autonomy,
+    Sandbox,
+    Model,
+}
+
+impl PreferenceAxis {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Autonomy => "autonomy",
+            Self::Sandbox => "sandbox",
+            Self::Model => "model",
+        }
+    }
+}
+
+/// What a native key will hold once the preferences are applied.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PlannedValue {
+    /// Written with this value, rendered the way the configuration spells it.
+    Set(String),
+    /// Removed, so the harness falls back to its own default.
+    Removed,
+    /// Left exactly as it is: the value there is the operator's own, and
+    /// the preference asks for nothing that would justify replacing it.
+    Kept,
+}
+
+/// One native key: what the configuration holds now, and what it will hold.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KeyPlan {
+    /// Dot path inside the configuration file (`permissions.defaultMode`).
+    pub key: String,
+    /// `None` when the key is absent today.
+    pub current: Option<String>,
+    pub planned: PlannedValue,
+}
+
+impl KeyPlan {
+    /// Whether applying would leave this key exactly as it already is.
+    pub fn in_effect(&self) -> bool {
+        match &self.planned {
+            PlannedValue::Set(value) => self.current.as_deref() == Some(value.as_str()),
+            PlannedValue::Removed => self.current.is_none(),
+            PlannedValue::Kept => true,
+        }
+    }
+}
+
+/// How one axis lands in one harness, key by key.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AxisPlan {
+    pub axis: PreferenceAxis,
+    pub route: CompatibilityRoute,
+    pub summary: String,
+    /// Why the route is not `Native`, or what the harness needs to honour it.
+    pub note: Option<String>,
+    /// Empty when the harness has no key for this axis, or when honouring
+    /// it means leaving the configuration alone.
+    pub keys: Vec<KeyPlan>,
+}
+
+/// What applying a set of preferences would do to one harness's own
+/// configuration, read against the file as it is now — the preview shown
+/// before anything is written, and the answer to "is this in effect".
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PreferencePlan {
+    pub config_path: PathBuf,
+    pub axes: Vec<AxisPlan>,
+}
+
+impl PreferencePlan {
+    /// Keys whose value on disk differs from what applying would leave.
+    pub fn pending(&self) -> usize {
+        self.axes
+            .iter()
+            .flat_map(|axis| &axis.keys)
+            .filter(|key| !key.in_effect())
+            .count()
+    }
 }
 
 /// The result of applying preferences to one harness. Mirrors the
@@ -174,10 +263,15 @@ pub fn summarize_apply(details: [PreferenceApplyDetail; 3]) -> PreferenceApplyOu
 pub trait PreferencePort: Send + Sync {
     fn preference_id(&self) -> &'static str;
 
-    /// What applying `preferences` to this harness would do, without writing
-    /// anything — used for read-only inspection (e.g. the TUI's editor
-    /// panel) and as the basis for `apply`'s outcome.
+    /// How each axis maps onto this harness, independent of what its
+    /// configuration holds today.
     fn translate(&self, preferences: &Preferences) -> PreferenceTranslation;
+
+    /// What applying `preferences` would change in this harness's
+    /// configuration as it stands now, without writing anything. Reads the
+    /// file, so it is an `Err` when that file cannot be read — the same
+    /// condition under which `apply` would refuse to write it.
+    fn plan(&self, preferences: &Preferences) -> Result<PreferencePlan>;
 
     /// Writes `preferences` into this harness's native configuration,
     /// non-destructively: only UZE-owned keys change, foreign content is

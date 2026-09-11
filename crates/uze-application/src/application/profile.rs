@@ -6,7 +6,7 @@
 use serde::Serialize;
 use uze_core::{
     Result, UzeError,
-    preference::{PreferenceApplyOutcome, Preferences},
+    preference::{PreferenceApplyOutcome, PreferencePlan, PreferencePort, Preferences},
     profile_state,
 };
 
@@ -29,6 +29,35 @@ pub struct ProfileSummary {
 pub struct ProfileApplyResult {
     pub integration: String,
     pub outcome: PreferenceApplyOutcome,
+}
+
+/// What applying one set of preferences would do to each harness, read
+/// against every harness's configuration as it is now.
+#[derive(Clone, Debug, Serialize)]
+pub struct ProfilePreview {
+    pub preferences: Preferences,
+    pub harnesses: Vec<HarnessPreview>,
+}
+
+/// One harness's part of a [`ProfilePreview`]. `plan` is the reason as
+/// text when the configuration cannot be read — the same condition under
+/// which applying would fail for this harness alone.
+#[derive(Clone, Debug, Serialize)]
+pub struct HarnessPreview {
+    pub integration: String,
+    pub plan: std::result::Result<PreferencePlan, String>,
+}
+
+impl ProfilePreview {
+    /// Native keys, across every harness it could read, that applying
+    /// would change.
+    pub fn pending(&self) -> usize {
+        self.harnesses
+            .iter()
+            .filter_map(|harness| harness.plan.as_ref().ok())
+            .map(PreferencePlan::pending)
+            .sum()
+    }
 }
 
 impl Profiles<'_> {
@@ -94,6 +123,37 @@ impl Profiles<'_> {
         profile_state::set_active(&self.0.home, id)
     }
 
+    /// What applying `preferences` to each of `harness_ids` would write,
+    /// without writing anything. Takes the preferences rather than a
+    /// profile id: the editor changes them optimistically and persists in
+    /// the background, and a preview read from disk would race that write.
+    #[tracing::instrument(name = "profiles.preview", skip_all)]
+    pub fn preview(&self, preferences: &Preferences, harness_ids: &[String]) -> ProfilePreview {
+        ProfilePreview {
+            preferences: *preferences,
+            harnesses: harness_ids
+                .iter()
+                .map(|harness_id| HarnessPreview {
+                    integration: harness_id.clone(),
+                    plan: self
+                        .adapter(harness_id)
+                        .ok_or_else(|| unregistered(harness_id))
+                        .and_then(|adapter| {
+                            adapter.plan(preferences).map_err(|error| error.to_string())
+                        }),
+                })
+                .collect(),
+        }
+    }
+
+    fn adapter(&self, harness_id: &str) -> Option<&dyn PreferencePort> {
+        self.0
+            .preference_adapters
+            .iter()
+            .find(|adapter| adapter.preference_id() == harness_id)
+            .map(Box::as_ref)
+    }
+
     /// Applies one profile's preferences to exactly the requested harnesses.
     /// A single harness failing (a hard `Err` from its adapter, or no
     /// registered adapter for the id) never aborts the rest — it becomes a
@@ -107,19 +167,14 @@ impl Profiles<'_> {
         Ok(harness_ids
             .iter()
             .map(|harness_id| {
-                let outcome = match self
-                    .0
-                    .preference_adapters
-                    .iter()
-                    .find(|adapter| adapter.preference_id() == harness_id.as_str())
-                {
+                let outcome = match self.adapter(harness_id) {
                     Some(adapter) => adapter.apply(&record.preferences).unwrap_or_else(|error| {
                         PreferenceApplyOutcome::Failed {
                             reason: error.to_string(),
                         }
                     }),
                     None => PreferenceApplyOutcome::Failed {
-                        reason: format!("no preference adapter registered for `{harness_id}`"),
+                        reason: unregistered(harness_id),
                     },
                 };
                 ProfileApplyResult {
@@ -129,6 +184,10 @@ impl Profiles<'_> {
             })
             .collect())
     }
+}
+
+fn unregistered(harness_id: &str) -> String {
+    format!("no preference adapter registered for `{harness_id}`")
 }
 
 #[cfg(test)]
@@ -192,6 +251,12 @@ mod tests {
                 sandbox: mapping(CompatibilityRoute::Native),
                 model: mapping(CompatibilityRoute::Native),
             }
+        }
+        fn plan(&self, _preferences: &Preferences) -> Result<PreferencePlan> {
+            Ok(PreferencePlan {
+                config_path: std::path::PathBuf::from(format!("/fake/{}.json", self.id)),
+                axes: Vec::new(),
+            })
         }
         fn apply(&self, _preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
             self.result
@@ -432,6 +497,82 @@ mod tests {
         assert!(codex_written.contains("[model_providers.openai]"));
         assert!(codex_written.contains("approval_policy = \"never\""));
         assert!(codex_written.contains("sandbox_mode = \"danger-full-access\""));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn previewing_an_unregistered_harness_answers_for_that_harness_alone() {
+        let home = temp_home("preview-unregistered");
+        let app = app_with_adapters(
+            home.clone(),
+            vec![Box::new(FakeAdapter::succeeding("good"))],
+        );
+        let preview = app.profiles().preview(
+            &Preferences::default(),
+            &["good".to_owned(), "ghost".to_owned()],
+        );
+        assert!(preview.harnesses[0].plan.is_ok());
+        assert!(preview.harnesses[1].plan.is_err());
+        let _ = std::fs::remove_dir_all(home.root());
+    }
+
+    /// The failure that started this: a `default` profile had put
+    /// `model: "default"` into Claude's settings, which Claude cannot
+    /// resolve. The preview has to show it leaving, and after applying,
+    /// nothing may be left pending anywhere.
+    #[test]
+    fn preview_shows_what_apply_changes_and_nothing_is_pending_afterwards() {
+        let root = uze_testkit::temp::scratch("profile-preview");
+        let home = UzeHome::at(root.join("uze"));
+        let claude_settings = root.join("claude").join("settings.json");
+        std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
+        std::fs::write(
+            &claude_settings,
+            r#"{"model":"default","permissions":{"defaultMode":"acceptEdits"}}"#,
+        )
+        .unwrap();
+
+        let registry = uze_integrations::registry::IntegrationRegistry::isolated(&root, &home);
+        let (integrations, preference_adapters) = registry.into_parts();
+        let app = UzeApplication::new_with_runner_and_preferences(
+            home,
+            integrations,
+            preference_adapters,
+            Box::new(SystemProcessRunner),
+        );
+        app.profiles().list().unwrap();
+        let harnesses: Vec<String> = ["claude-code", "codex", "opencode", "antigravity"]
+            .map(str::to_owned)
+            .to_vec();
+
+        let before = app.profiles().preview(&Preferences::default(), &harnesses);
+        let settings_before = std::fs::read_to_string(&claude_settings).unwrap();
+        let claude = before.harnesses[0].plan.as_ref().unwrap();
+        assert_eq!(claude.config_path, claude_settings);
+        let model = claude
+            .axes
+            .iter()
+            .find(|axis| axis.axis == uze_core::preference::PreferenceAxis::Model)
+            .unwrap();
+        assert_eq!(model.keys[0].current.as_deref(), Some("\"default\""));
+        assert_eq!(
+            model.keys[0].planned,
+            uze_core::preference::PlannedValue::Removed
+        );
+        assert!(before.pending() > 0);
+        assert_eq!(
+            std::fs::read_to_string(&claude_settings).unwrap(),
+            settings_before,
+            "a preview writes nothing"
+        );
+
+        app.profiles().apply("default", &harnesses).unwrap();
+        let after = app.profiles().preview(&Preferences::default(), &harnesses);
+        assert_eq!(after.pending(), 0, "{after:#?}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude_settings).unwrap()).unwrap();
+        assert!(written.get("model").is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }
