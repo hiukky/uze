@@ -129,6 +129,11 @@ enum Command {
         #[arg(long = "command", required = true)]
         commands: Vec<String>,
     },
+    /// Internal: the release check a CLI command hands to a detached
+    /// process of its own once the last answer has gone stale (see
+    /// `uze::self_update`). Not for interactive use and hidden from help.
+    #[command(hide = true)]
+    SelfUpdate,
     /// Reached only when the first argument matches none of the built-ins
     /// above — `clap`'s own generated matcher tries every named variant
     /// first, so this is the *sole* place `<plugin>@<market>` project
@@ -608,9 +613,19 @@ fn run(cli: Cli) -> Result<()> {
     // an agent running `uze` itself — continues the launch's trace.
     uze::telemetry::adopt_parent_from_env(&span);
     let _entered = span.enter();
-    let result = dispatch(cli, home);
+    let tells =
+        cli.command.as_ref().is_some_and(tells_about_releases) && std::io::stderr().is_terminal();
+    let result = dispatch(cli, home.clone());
     if let Err(error) = &result {
         tracing::error!(error = %error, "command failed");
+    }
+    // After the command's own output, on stderr, and only when it worked:
+    // a failure's last line is the failure.
+    if tells
+        && result.is_ok()
+        && let Some(line) = uze::self_update::after_command(&home)
+    {
+        eprintln!("{}", line.as_str().dim());
     }
     result
 }
@@ -703,6 +718,12 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             TerminalAction::Serve { root } => uze_terminal::serve(root)
                 .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string())),
         };
+    }
+    // Ahead of the application: a check running detached from the command
+    // that started it has no business seeding plugins on the way.
+    if matches!(command, Command::SelfUpdate) {
+        uze::self_update::check_now(&home);
+        return Ok(());
     }
     let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
@@ -825,8 +846,22 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         Command::Terminal { .. } => {
             unreachable!("terminal commands return before application setup")
         }
+        Command::SelfUpdate => unreachable!("the release check returns before application setup"),
     }
     Ok(())
+}
+
+/// Whether a command ends by saying what it knows about releases. Not the
+/// surfaces whose reader is not a person at a prompt — an agent, a hook, the
+/// terminal server — and not the TUI, which says it in its own sidebar.
+fn tells_about_releases(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Agent { .. }
+            | Command::HookExec { .. }
+            | Command::Terminal { .. }
+            | Command::SelfUpdate
+    )
 }
 
 /// The `hook-exec` runtime wrapper (ADR-033): reads the harness's native

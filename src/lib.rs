@@ -8,6 +8,7 @@
 //! they mean.
 
 pub mod keymap;
+pub mod self_update;
 /// Assembling the theme both surfaces draw in. Shared by the TUI and the
 /// CLI, so it sits in the library half rather than beside either of them.
 /// Where a trace goes: the text log `UZE_LOG` switches on, the OTLP

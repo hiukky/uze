@@ -130,7 +130,7 @@ sh -n "$installer"
 check "install.sh parses cleanly under /bin/sh" $?
 
 # Default (glibc, latest) happy path.
-run_installer "$work/out1.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin1"
+run_installer "$work/out1.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin1" UZE_HOME="$work/home1"
 check "glibc/latest install succeeds" $?
 "$work/bin1/uze" --version | grep -q "9.9.9-glibc"
 check "installed binary is the glibc artifact" $?
@@ -138,6 +138,13 @@ grep -q "latest/download" "$work/out1.log"
 check "latest release URL shape is used" $?
 grep -q "Downloaded ${archive_glibc}" "$work/out1.log"
 check "each step reports what it settled on" $?
+# The updater replaces the file this names and no other, so it has to name
+# the one that was actually written, resolved the way `canonicalize` will.
+receipt="$work/home1/state/install.json"
+grep -qF "\"binary\": \"$(cd "$work/bin1" && pwd -P)/uze\"" "$receipt"
+check "the install leaves a receipt naming the file it placed" $?
+grep -qF '"version": "9.9.9-glibc"' "$receipt"
+check "and the release it placed there" $?
 # The install ends on the version the binary itself reports, not on the
 # step's own generic wording — the fixture binary prints "uze 9.9.9-glibc".
 grep -q "9.9.9-glibc" "$work/out1.log"

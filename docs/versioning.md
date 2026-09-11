@@ -135,3 +135,41 @@ check on every line already settled, closes on the two commands worth
 running next, and falls back to a plain, escape-free transcript whenever
 stdout is not a terminal or `NO_COLOR` is set, which is what CI and the
 fixture suite read. That suite is `make test-installer` (also gating CI).
+
+## Staying current
+
+A binary `install.sh` placed keeps itself current. The installer leaves a
+receipt at `~/.uze/state/install.json` naming the file it wrote and the
+release it was, and that file is the only one the updater ever replaces: a
+`uze` running from anywhere else — `cargo install`, `make install`, a
+package manager, a build tree — was put there by something else, and is
+told a newer release exists rather than replaced.
+
+The terminal workspace checks when it opens and every hour it stays open,
+on a thread of its own. A CLI command never touches the network: when the
+last answer is more than an hour old it hands the check to a detached
+`uze self-update` and exits, and what that finds is what the next command
+mentions — once per release, on stderr, and never after `uze agent`,
+`hook-exec` or `terminal`, whose reader is not a person at a prompt.
+
+"Latest" is where `releases/latest` redirects, the same answer the
+installer resolves. The archive is verified against `SHASUMS256.txt` the
+way the installer verifies it, the binary inside is made to report the
+release it claims to be, and only then is it renamed over the old file —
+beside it, on the same filesystem, so the swap is one rename and a pane's
+shim never runs a half-written binary. Anything already running keeps the
+binary it started from; the next launch is the first to run the new one,
+and both sidebars say so, linking to the release's notes.
+
+One consequence is worth knowing before it happens: when a release changes
+the terminal protocol, the first client of the new release replaces the
+server the old one left running. Tabs are restored and every agent's
+conversation resumes (see ADR-047), but a program in the middle of
+something in a pane is restarted. That is what any upgrade does today; an
+automatic one only changes who started it.
+
+`UZE_AUTOUPDATE=off` stops the check, `notify` checks without replacing,
+and `on` is the default — except where `CI` is set, which is off unless the
+variable says otherwise. `UZE_BASE_URL` means what it means to the
+installer: a mirror, or a local fixture. What the updater remembers between
+runs is in `~/.uze/state/update.json`.

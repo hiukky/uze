@@ -1078,6 +1078,10 @@ pub(super) enum WorkspaceHit {
     ToggleFirstSteps,
     /// The mark on that header, which puts the section away for good.
     CloseFirstSteps,
+    /// The release notice's row, which opens that release's notes.
+    OpenReleaseNotes,
+    /// The mark on the notice's header, which puts it away.
+    DismissRelease,
     /// One entry of the sidebar's quick strip — performed exactly as the
     /// keyboard performs it, which is why it carries the action rather
     /// than naming a surface: a control that took its own path to the
@@ -1854,6 +1858,9 @@ struct WorkspaceModel {
     /// User-dragged sidebar width; `None` falls back to `sidebar_width_for`.
     /// Client-local presentation state — never sent to the server.
     sidebar_width: Option<u16>,
+    /// What the sidebar's foot says about releases, as of `release_revision`.
+    release: Option<crate::self_update::Notice>,
+    release_revision: u64,
     /// Whether the sidebar's first-steps section is folded to its header.
     first_steps_collapsed: bool,
     /// Whether it has been put away for good, which is offered only once

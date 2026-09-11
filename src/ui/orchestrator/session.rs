@@ -1698,6 +1698,24 @@ impl Attach<'_> {
         } = *viewport;
         match hit {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
+            WorkspaceHit::OpenReleaseNotes => {
+                if let Some(notice) = &self.model.release {
+                    let url = notice.notes();
+                    // Handing a URL over spawns a process, which is not
+                    // something the thread drawing the frame should wait on.
+                    let parent = tracing::Span::current();
+                    std::thread::spawn(move || {
+                        let _parent = parent.enter();
+                        crate::ui::worker::open_in_browser(&url);
+                    });
+                }
+            }
+            WorkspaceHit::DismissRelease => {
+                if let Some(notice) = self.model.release.take() {
+                    crate::self_update::acknowledge(self.home, notice.version());
+                    self.model.dirty = true;
+                }
+            }
             WorkspaceHit::CloseFirstSteps => {
                 self.model.first_steps_closed = true;
                 self.model.remember_sidebar();
@@ -2157,6 +2175,11 @@ impl Attach<'_> {
     /// its own and answers through [`AttachInbox`], which is what lets
     /// this be called every tick without the frame waiting on any of it.
     pub(super) fn pump(&mut self, inbox: &AttachInbox<'_>) {
+        if let Some((revision, notice)) = crate::self_update::since(self.model.release_revision) {
+            self.model.release = notice;
+            self.model.release_revision = revision;
+            self.model.dirty = true;
+        }
         while let Ok(event) = inbox.events.try_recv() {
             self.model.apply(event, &self.identities);
         }

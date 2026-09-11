@@ -106,6 +106,9 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
 pub fn run(home: UzeHome) -> Result<()> {
     let session = tracing::info_span!("tui.session");
     let _entered = session.enter();
+    // Once per process rather than per attach: a Ctrl+O round trip is not
+    // a reason to ask GitHub again, and both modes read the one answer.
+    crate::self_update::watch(home.clone());
     let mut terminal = TerminalSession::start()?;
     // The client's shape as this user last left it — read once, here,
     // and owned by neither mode: both draw the same sidebar column, and a
@@ -847,6 +850,64 @@ impl FirstSteps<'_> {
         let height = self.height();
         (column.height >= height + HEADROOM)
             .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))
+    }
+}
+
+/// The release notice at the very foot of both sidebars, under the first
+/// steps and in the same section vocabulary — it is the same kind of thing:
+/// chrome that belongs to uze rather than to a screen.
+pub(crate) struct ReleaseNotice<'a>(pub(crate) &'a crate::self_update::Notice);
+
+impl ReleaseNotice<'_> {
+    /// A heading and the one row under it, never folded: there is nothing
+    /// beneath it to fold away, and it is put away by its own mark instead.
+    const HEIGHT: u16 = 2;
+
+    pub(crate) fn section(&self) -> uze_extensions::view::Section {
+        use uze_extensions::view::{Role, SectionRow, Span as ViewSpan};
+
+        let notice = self.0;
+        uze_extensions::view::Section {
+            title: notice.heading().to_owned(),
+            caption: ViewSpan::new(
+                format!("v{} {}", notice.version(), theme::glyph(Symbol::MarkClose)),
+                Role::Faint,
+            ),
+            collapsed: false,
+            resizable: false,
+            scroll: 0,
+            rows: vec![SectionRow {
+                marker: ViewSpan::new(theme::glyph(Symbol::ArrowUp), Role::Accent),
+                name: ViewSpan::new(notice.line(), Role::Default),
+                trailing: ViewSpan::new(theme::glyph(Symbol::ArrowExternal), Role::Faint),
+            }],
+        }
+    }
+
+    /// Where it goes at the foot of `column`, or nothing when the column
+    /// cannot spare the rows — the same headroom rule the steps keep.
+    pub(crate) fn rect(&self, column: Rect) -> Option<Rect> {
+        const HEADROOM: u16 = 5;
+        (column.height >= Self::HEIGHT + HEADROOM).then(|| {
+            Rect::new(
+                column.x,
+                column.bottom() - Self::HEIGHT,
+                column.width,
+                Self::HEIGHT,
+            )
+        })
+    }
+
+    /// The cells of the header its closing mark occupies: the caption's own
+    /// last glyph, as on the steps' header.
+    pub(crate) fn close_rect(&self, header: Rect) -> Rect {
+        let mark = theme::width(Symbol::MarkClose);
+        Rect::new(
+            header.right().saturating_sub(mark + TRAILING_PAD),
+            header.y,
+            mark,
+            1,
+        )
     }
 }
 

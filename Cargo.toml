@@ -53,6 +53,9 @@ uze-keys = { path = "crates/uze-keys" }
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The updater verifies a release archive the way `install.sh` does. Already
+# in the tree through `uze-core`'s package digests.
+sha2 = "0.11"
 thiserror = "2"
 ratatui = "0.30"
 crossterm = "0.29"

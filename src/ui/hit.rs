@@ -75,6 +75,10 @@ pub(crate) enum Hit {
     ToggleFirstSteps,
     /// The mark on that header, which puts the section away for good.
     CloseFirstSteps,
+    /// The release notice's row, which opens that release's notes.
+    OpenReleaseNotes,
+    /// The mark on the notice's header, which puts it away.
+    DismissRelease,
     /// A list's search field. It is drawn on three screens and, until
     /// this, clicking it did nothing at all.
     FocusFilter,
@@ -231,6 +235,13 @@ impl TuiModel {
                 self.first_steps_closed = true;
                 Intent::None
             }
+            Hit::OpenReleaseNotes => self
+                .release
+                .as_ref()
+                .map_or(Intent::None, |notice| Intent::OpenLink(notice.notes())),
+            Hit::DismissRelease => self.release.take().map_or(Intent::None, |notice| {
+                Intent::AcknowledgeRelease(notice.version().to_owned())
+            }),
             Hit::ResizeSidebar => {
                 self.dragging_sidebar = true;
                 Intent::None

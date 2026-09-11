@@ -19,6 +19,11 @@ model {
     description 'Peer coding-agent runtime. It can discover compatible project Agent Skills without becoming UZE core configuration.'
   }
 
+  githubReleases = system 'GitHub Releases' {
+    #external
+    description 'Where every UZE release is published: one archive per platform and the SHASUMS256.txt that authenticates them. install.sh places a binary from here, and that binary keeps itself current from here.'
+  }
+
   conformanceLab = system 'Harness Conformance Lab' {
     description 'Workspace-member test tooling that executes real harnesses in isolated environments. It is intentionally outside UZE product dependencies.'
   }
@@ -132,6 +137,8 @@ model {
   uze.workspaceClient -> uze.core.designSystem 'resolves chrome appearance, and configures the runtime with the theme a pane reports'
   uze.workspaceClient -> uze.terminalRuntime 'private local attach, input, resize, and detach protocol'
   uze.terminalRuntime -> agentClient 'owns interactive shell or agent process PTYs'
+
+  uze -> githubReleases 'asks for the latest release and, when it is the binary install.sh placed, replaces itself with it'
 
   conformanceLab -> uze 'exercises the installable CLI and public application behavior'
   conformanceLab -> claudeCode 'runs opt-in real-harness conformance'

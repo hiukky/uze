@@ -78,6 +78,9 @@ pub(crate) enum Intent {
     /// it spawns a process, which is not something the render thread
     /// should be doing.
     OpenLink(String),
+    /// Put the release notice about this version away, in both modes and
+    /// every run after — a write, so not on the render thread.
+    AcknowledgeRelease(String),
     ContextAnalyze(PathBuf),
     ContextApply(PathBuf),
     /// Reproduce the detected consumer workspace's `agents.lock` through
@@ -128,6 +131,7 @@ impl Intent {
             Self::Setup(_) => "setup",
             Self::AddMarketplace(_) => "add_marketplace",
             Self::OpenLink(_) => "open_link",
+            Self::AcknowledgeRelease(_) => "acknowledge_release",
             Self::ContextAnalyze(_) => "context_analyze",
             Self::ContextApply(_) => "context_apply",
             Self::InstallProjectEnvironment(_) => "install_project_environment",
@@ -287,6 +291,7 @@ pub(crate) fn dispatch(
                 let _ = sender.send(WorkerResult::MarketplaceInspected(result));
             });
         }
+        Intent::AcknowledgeRelease(version) => crate::self_update::acknowledge(home, &version),
         Intent::OpenLink(url) => {
             model.status = match open_in_browser(&url) {
                 // Present tense on purpose: the opener took the address,
@@ -885,7 +890,7 @@ fn update_message(report: UpdatePluginReport) -> String {
 /// Every stream is closed: the alternate screen belongs to ratatui, and a
 /// browser's startup chatter written into it lands in the middle of the
 /// frame.
-fn open_in_browser(url: &str) -> Option<String> {
+pub(crate) fn open_in_browser(url: &str) -> Option<String> {
     // `$BROWSER` is a colon-separated list, and an entry may carry the URL
     // in a `%s` placeholder rather than as a trailing argument.
     let configured = std::env::var("BROWSER").unwrap_or_default();

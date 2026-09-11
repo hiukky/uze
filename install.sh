@@ -305,6 +305,27 @@ confirm() {
 }
 step "Verifying the install" "Verified" confirm
 
+# The receipt the updater reads (`src/self_update.rs`): the file this
+# installer placed, and the release it was. The updater replaces that file
+# and no other — a `uze` running from anywhere else was put there by
+# something else, and is that thing's to update.
+record_receipt() {
+  receipt_home="${UZE_HOME:-}"
+  if [ -z "$receipt_home" ]; then
+    [ -n "${HOME:-}" ] || return 0
+    receipt_home="${HOME}/.uze"
+  fi
+  installed="$(cd "$bin_dir" && pwd -P)/uze"
+  installed_version="$("${bin_dir}/uze" --version 2>/dev/null | sed -n 's/^uze //p')"
+  [ -n "$installed_version" ] || return 1
+  mkdir -p "${receipt_home}/state" || return 1
+  printf '{\n  "binary": "%s",\n  "version": "%s"\n}\n' \
+    "$(json_escape "$installed")" "$(json_escape "$installed_version")" \
+    >"${receipt_home}/state/install.json"
+}
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+record_receipt || warn "could not record this install; it will not update itself until the next one"
+
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
   *)

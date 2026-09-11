@@ -142,6 +142,10 @@ pub(crate) fn run_management(
         model.tick = model.tick.wrapping_add(1);
         model.expire_status();
         model.expire_update_badges();
+        if let Some((revision, notice)) = crate::self_update::since(model.release_revision) {
+            model.release = notice;
+            model.release_revision = revision;
+        }
         // Before the frame, not after it: an answer that arrived while the
         // workspace had the screen is already in the channel when this
         // mode opens, and draining it first is what makes the very first
@@ -479,11 +483,40 @@ fn render_sidebar(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // The release notice keeps the very foot, and the steps sit on it.
+    let release = model.release.as_ref().map(super::ReleaseNotice);
+    let release_rect = release.as_ref().and_then(|notice| notice.rect(inner));
+    if let (Some(notice), Some(rect)) = (&release, release_rect) {
+        let mut section_hits = Vec::new();
+        super::extension_view::render_section(
+            frame,
+            &notice.section(),
+            &mut super::Rows::over(rect),
+            false,
+            &mut section_hits,
+        );
+        for (rect, hit) in section_hits {
+            match hit {
+                uze_extensions::view::ViewHit::ToggleSection => {
+                    hits.push((notice.close_rect(rect), Hit::DismissRelease))
+                }
+                uze_extensions::view::ViewHit::SelectItem(_) => {
+                    hits.push((rect, Hit::OpenReleaseNotes))
+                }
+                _ => {}
+            }
+        }
+    }
+    let column = release_rect.map_or(inner, |rect| Rect {
+        height: rect.y - inner.y,
+        ..inner
+    });
+
     // The quick strip takes its rows out of the column before anything
     // else is laid out — pinned to the foot means the routes above cannot
     // grow over it.
     let steps = model.first_steps();
-    let strip = steps.rect(inner);
+    let strip = steps.rect(column);
     if let Some(rect) = strip {
         let mut section_hits = Vec::new();
         super::extension_view::render_section(
@@ -519,7 +552,7 @@ fn render_sidebar(
     }
 
     let mut y = inner.y;
-    let bottom = strip.map_or(inner.bottom(), |rect| rect.y);
+    let bottom = strip.map_or(column.bottom(), |rect| rect.y);
     let mut row = |height: u16| -> Option<Rect> {
         if y + height > bottom {
             return None;

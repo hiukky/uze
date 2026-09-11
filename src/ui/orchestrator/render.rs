@@ -578,6 +578,21 @@ pub(super) fn render_sidebar(
     // drawn over the other. Only one of them is open at a time (see
     // `toggle_timeline`), which is what keeps the pair from eating the
     // column the spaces are for.
+    // Under both of those, the release notice keeps the very foot: chrome
+    // that belongs to uze rather than to the work, like the version at the
+    // foot of management's own sidebar.
+    let release = model.release.as_ref().map(crate::ui::ReleaseNotice);
+    if let Some(notice) = &release
+        && let Some(rect) = notice.rect(Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            rows.bottom.saturating_sub(inner.y),
+        ))
+    {
+        render_release_notice(frame, notice, rect, hits);
+        rows.bottom = rect.y;
+    }
     let column_bottom = rows.bottom;
     let steps = model.first_steps();
     let steps_height = steps.height();
@@ -593,7 +608,9 @@ pub(super) fn render_sidebar(
         inner.x,
         inner.y,
         inner.width,
-        inner.height.saturating_sub(reserved),
+        column_bottom
+            .saturating_sub(inner.y)
+            .saturating_sub(reserved),
     ));
 
     rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
@@ -975,6 +992,33 @@ pub(super) fn render_sidebar(
         rows.bottom = column_bottom;
         rows.y = column_bottom - reserved;
         render_timeline(frame, timeline, model, &mut rows, hits);
+    }
+}
+
+fn render_release_notice(
+    frame: &mut ratatui::Frame<'_>,
+    notice: &crate::ui::ReleaseNotice<'_>,
+    rect: Rect,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let mut section_hits = Vec::new();
+    crate::ui::extension_view::render_section(
+        frame,
+        &notice.section(),
+        &mut Rows::over(rect),
+        false,
+        &mut section_hits,
+    );
+    for (rect, hit) in section_hits {
+        match hit {
+            // Only the mark on the header answers; there is nothing under
+            // the notice for the header itself to fold.
+            ViewHit::ToggleSection => {
+                hits.push((notice.close_rect(rect), WorkspaceHit::DismissRelease))
+            }
+            ViewHit::SelectItem(_) => hits.push((rect, WorkspaceHit::OpenReleaseNotes)),
+            _ => {}
+        }
     }
 }
 

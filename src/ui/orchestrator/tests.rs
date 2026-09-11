@@ -3108,6 +3108,58 @@ mod workspace_tests {
         }
     }
 
+    /// The release notice keeps the very foot of the column, with the
+    /// steps sitting on it, and both of its parts are targets.
+    #[test]
+    fn a_release_notice_keeps_the_foot_of_the_sidebar() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        let mut hits = Vec::new();
+        sidebar_rows(&model, &mut hits);
+        assert!(
+            !hits.iter().any(|(_, hit)| matches!(
+                hit,
+                WorkspaceHit::OpenReleaseNotes | WorkspaceHit::DismissRelease
+            )),
+            "no release, no notice"
+        );
+
+        model.release = Some(crate::self_update::Notice::Installed("9.9.9".to_owned()));
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let (row, _) = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::OpenReleaseNotes))
+            .expect("its row opens the notes");
+        let (mark, _) = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::DismissRelease))
+            .expect("its mark puts it away");
+        let header = &rows[usize::from(mark.y)];
+        assert!(
+            header.contains("update installed") && header.contains("v9.9.9"),
+            "{rows:?}"
+        );
+        assert!(
+            rows[usize::from(row.y)].contains("restart uze to use it"),
+            "{rows:?}"
+        );
+        let steps = rows
+            .iter()
+            .position(|line| line.contains("first steps"))
+            .expect("the steps are still there");
+        assert!(
+            steps < usize::from(mark.y),
+            "and sit on the notice: {rows:?}"
+        );
+        assert!(
+            rows[usize::from(row.y) + 1..]
+                .iter()
+                .all(|line| line.trim().is_empty() || line.trim() == "│"),
+            "nothing is drawn under it: {rows:?}"
+        );
+    }
+
     /// The header folds it, and it stays folded: a section that came back
     /// open every run would be one nobody could put away.
     #[test]
