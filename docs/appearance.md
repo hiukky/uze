@@ -23,8 +23,28 @@ of different kinds — a font is installed once, a palette is picked on a whim
 ~/.uze/state/theme.json      which one is active
 ```
 
-One theme is built in and needs no file: `default`, UZE's own look. A file
-of your own named `default.json` wins over it — a theme you wrote is yours.
+Five themes are built in and need no file:
+
+| Id | What it is |
+|---|---|
+| `default` | UZE's own look: a near-black backdrop and one sage accent. |
+| `dracula` | [Dracula](https://draculatheme.com): a purple accent and neon states over a blue-grey night. |
+| `catppuccin-mocha` | [Catppuccin](https://catppuccin.com) Mocha: pastels over a deep indigo base. |
+| `tokyo-night` | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme): soft blues over deep navy. |
+| `tokyo-night-light` | Tokyo Night's light palette, the same hues deepened for a pale page. |
+
+The four palettes are faithful ports: every colour is one the palette's
+authors publish, including the pane's sixteen, and where a palette's hue
+falls under the contrast floor for a meaning, another of *its* colours
+carries that meaning instead. That is also why Catppuccin's light flavour is
+not among them — Latte's yellow, peach and green all sit below 3:1 on its own
+page. Diff highlighting uses the nearest syntax set UZE bundles (see *Where a
+theme reaches*), so code in a diff is close to the palette rather than
+identical to it. Where each palette comes from, and its licence, is in
+`CREDITS.md`.
+
+A file of your own with a built-in's id — `dracula.json` — wins over it: a
+theme you wrote is yours.
 
 ```bash
 uze theme list          # what this machine can draw with, marking the active one
@@ -135,8 +155,9 @@ from the background you declared — see *Separation* below.
 Point your editor at
 [`crates/uze-theme/themes/theme.schema.json`](../crates/uze-theme/themes/theme.schema.json)
 for completion over every token and symbol name. `default.json` and
-`ascii.json` beside it are the worked examples: UZE loads them through the
-same resolver it loads yours with.
+`ascii.json` beside it are the worked examples, and the four palettes there
+are partial themes of exactly the shape above: UZE loads them all through
+the same resolver it loads yours with.
 
 ## Variations
 
@@ -158,7 +179,8 @@ reference still follows: change the background and every surface the parent
 derived from it is recomputed against the new one; change the accent and
 everything written `@accent` moves with it.
 
-You can extend a theme UZE carries, too — `"extends": "default"`. A chain
+You can extend a theme UZE carries, too — the example above needs no
+`dracula.json` of your own, and `"extends": "default"` works the same way. A chain
 that loops is refused with the loop written out, and UZE stops following one
 more than eight deep. Glyphs are not something to extend a theme for: they
 are the other axis, and `uze theme glyphs` is where they are chosen.

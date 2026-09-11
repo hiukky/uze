@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "Tokyo Night Light",
+  "description": "Tokyo Night's light palette: the same hues, deepened to read on a pale grey page. Colours from enkia/tokyo-night-vscode-theme (MIT).",
+  "colors": {
+    "surface.background": "#e6e7ed",
+
+    "text.bright": "#343b58",
+    "text.primary": "#343b58",
+    "text.tertiary": "#40434f",
+    "text.secondary": "#484c61",
+    "text.inactive": "#343b58b3",
+    "text.muted": "#707280",
+    "text.dim": "#707280d9",
+    "text.faint": "#acb0bf",
+
+    "accent": "#2959aa",
+    "state.success": "#385f0d",
+    "state.warning": "#8f5e15",
+    "state.danger": "#8c4351",
+    "state.info": "#006c86",
+    "state.in-flight": "#007a75",
+    "state.landed": "#65359d",
+    "state.published": "#707280",
+
+    "ansi.1": "#8c4351",
+    "ansi.2": "#33635c",
+    "ansi.3": "#8f5e15",
+    "ansi.4": "#2959aa",
+    "ansi.5": "#7b43ba",
+    "ansi.6": "#006c86",
+    "ansi.9": "#8c4351",
+    "ansi.10": "#33635c",
+    "ansi.11": "#8f5e15",
+    "ansi.12": "#2959aa",
+    "ansi.13": "#7b43ba",
+    "ansi.14": "#006c86"
+  },
+  "syntax": { "theme": "base16-ocean.light" }
+}

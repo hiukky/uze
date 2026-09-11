@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "Catppuccin Mocha",
+  "description": "Catppuccin's darkest flavour: pastel hues over a deep indigo base, with mauve as the accent. Colours from catppuccin/palette (MIT).",
+  "colors": {
+    "surface.background": "#1e1e2e",
+
+    "text.bright": "#cdd6f4",
+    "text.primary": "#cdd6f4",
+    "text.tertiary": "#bac2de",
+    "text.secondary": "#a6adc8",
+    "text.inactive": "#9399b2",
+    "text.muted": "#7f849c",
+    "text.dim": "#6c7086",
+    "text.faint": "#585b70",
+
+    "accent": "#cba6f7",
+    "state.success": "#a6e3a1",
+    "state.warning": "#f9e2af",
+    "state.danger": "#f38ba8",
+    "state.info": "#89b4fa",
+    "state.in-flight": "#94e2d5",
+    "state.landed": "#b4befe",
+    "state.published": "#9399b2",
+
+    "ansi.1": "#f38ba8",
+    "ansi.2": "#a6e3a1",
+    "ansi.3": "#f9e2af",
+    "ansi.4": "#89b4fa",
+    "ansi.5": "#f5c2e7",
+    "ansi.6": "#94e2d5",
+    "ansi.9": "#f37799",
+    "ansi.10": "#89d88b",
+    "ansi.11": "#ebd391",
+    "ansi.12": "#74a8fc",
+    "ansi.13": "#f2aede",
+    "ansi.14": "#6bd7ca"
+  },
+  "syntax": { "theme": "base16-ocean.dark" }
+}

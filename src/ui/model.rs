@@ -1608,8 +1608,13 @@ impl TuiModel {
         self.appearance_selected = index.clamp(0, rows.len() as isize - 1) as usize;
     }
 
-    /// Puts the selection on the first thing that can be chosen. The list
-    /// opens with a heading, so starting at zero would start on a label.
+    /// Puts the selection on the theme in force, or on the first thing that
+    /// can be chosen when none is. The list opens with a heading, so
+    /// starting at zero would start on a label.
+    ///
+    /// The theme in force rather than the first card, because the client
+    /// forgets this screen's selection between visits: landing on `default`
+    /// every time read as the chosen theme having been lost.
     pub(crate) fn settle_appearance_selection(&mut self) {
         let rows = self.appearance_rows();
         if rows
@@ -1618,7 +1623,11 @@ impl TuiModel {
         {
             return;
         }
-        self.appearance_selected = rows.iter().position(AppearanceRow::selectable).unwrap_or(0);
+        self.appearance_selected = rows
+            .iter()
+            .position(|row| matches!(row, AppearanceRow::Theme { active: true, .. }))
+            .or_else(|| rows.iter().position(AppearanceRow::selectable))
+            .unwrap_or(0);
     }
 
     /// Chooses whatever the selection is on. Which axis it belongs to is

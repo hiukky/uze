@@ -60,6 +60,52 @@ attribution-required or non-commercial, and every asset above has determinable
 provenance. `.assets/` does not exist in this repository; everything the site
 serves is under `web/public/` or comes from a package above.
 
+## Theme palettes
+
+Colour values the binary carries as built-in themes, embedded from
+`crates/uze-theme/themes/`. Each file is a UZE theme written against the
+palette its authors publish: the hex values are theirs, and which of them
+carries which of UZE's meanings is this project's mapping. Where a palette
+has no colour for one of UZE's intermediate text levels, that level is the
+palette's own foreground at a stated alpha over its own background.
+
+| File | Palette source | Licence | Modification |
+| --- | --- | --- | --- |
+| `dracula.json` | [dracula/dracula-theme](https://github.com/dracula/dracula-theme) and its terminal port [dracula/alacritty](https://github.com/dracula/alacritty) | MIT | Mapped onto UZE's tokens; four text levels are the foreground at an alpha |
+| `catppuccin-mocha.json` | [catppuccin/palette](https://github.com/catppuccin/palette), Mocha flavour, including its ANSI colours | MIT | Mapped onto UZE's tokens |
+| `tokyo-night.json` | [enkia/tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme), `tokyo-night-color-theme.json` | MIT | Mapped onto UZE's tokens |
+| `tokyo-night-light.json` | [enkia/tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme), `tokyo-night-light-color-theme.json` | MIT | Mapped onto UZE's tokens; two text levels are a palette colour at an alpha |
+
+The names identify the palette each file ports — nominative use, as with the
+harness marks above. None of these projects has reviewed or endorsed uze,
+and a theme that departed from its palette would not carry its name.
+
+All three sources are offered under the MIT licence, with these notices:
+
+```
+Copyright (c) 2023 Dracula Theme
+Copyright (c) 2021 Catppuccin
+Copyright (c) 2018-present Enkia
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Rust dependencies
 
 The published binary statically links every crate below. uze's own crates are

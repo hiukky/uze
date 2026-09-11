@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "Tokyo Night",
+  "description": "Tokyo Night's dark palette: soft blues and violets over deep navy, with blue as the accent. Colours from enkia/tokyo-night-vscode-theme (MIT).",
+  "colors": {
+    "surface.background": "#1a1b26",
+
+    "text.bright": "#c0caf5",
+    "text.primary": "#a9b1d6",
+    "text.tertiary": "#a9b1d6",
+    "text.secondary": "#9aa5ce",
+    "text.inactive": "#868bc4",
+    "text.muted": "#787c99",
+    "text.dim": "#646e9c",
+    "text.faint": "#515c7e",
+
+    "accent": "#7aa2f7",
+    "state.success": "#9ece6a",
+    "state.warning": "#e0af68",
+    "state.danger": "#f7768e",
+    "state.info": "#7dcfff",
+    "state.in-flight": "#73daca",
+    "state.landed": "#bb9af7",
+    "state.published": "#6183bb",
+
+    "ansi.1": "#f7768e",
+    "ansi.2": "#73daca",
+    "ansi.3": "#e0af68",
+    "ansi.4": "#7aa2f7",
+    "ansi.5": "#bb9af7",
+    "ansi.6": "#7dcfff",
+    "ansi.9": "#f7768e",
+    "ansi.10": "#73daca",
+    "ansi.11": "#e0af68",
+    "ansi.12": "#7aa2f7",
+    "ansi.13": "#bb9af7",
+    "ansi.14": "#7dcfff"
+  },
+  "syntax": { "theme": "base16-ocean.dark" }
+}
