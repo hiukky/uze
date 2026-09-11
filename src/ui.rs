@@ -106,6 +106,9 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
 pub fn run(home: UzeHome) -> Result<()> {
     let session = tracing::info_span!("tui.session");
     let _entered = session.enter();
+    // Once per process rather than per attach: a Ctrl+O round trip is not
+    // a reason to ask GitHub again, and both modes read the one answer.
+    crate::self_update::watch(home.clone());
     let mut terminal = TerminalSession::start()?;
     // The client's shape as this user last left it — read once, here,
     // and owned by neither mode: both draw the same sidebar column, and a
@@ -847,6 +850,119 @@ impl FirstSteps<'_> {
         let height = self.height();
         (column.height >= height + HEADROOM)
             .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))
+    }
+}
+
+/// The release notice both sidebars carry, sitting on the sections that
+/// hold their foot. It borrows a section row's layout — a marker column,
+/// the text, anything right-aligned kept `TRAILING_PAD` off the divider —
+/// but not a section's header: there is nothing under it to fold, and a
+/// band with a chevron that folds nothing reads as a control that does
+/// nothing.
+pub(crate) struct ReleaseNotice<'a>(pub(crate) &'a crate::self_update::Notice);
+
+/// What a drawn notice answers to.
+pub(crate) struct ReleaseTargets {
+    /// Every row that opens the release's notes.
+    pub(crate) notes: Vec<Rect>,
+    /// The mark that puts the notice away. It goes into a frame's hits
+    /// ahead of `notes`, because it sits on one of them.
+    pub(crate) dismiss: Rect,
+}
+
+impl ReleaseNotice<'_> {
+    /// Two rows and a blank one under them, which keeps the notice off the
+    /// header of the section it sits on. A heading of its own was tried and
+    /// read as a third thing to take in, where the version and what to do
+    /// about it are the whole of the news.
+    const HEIGHT: u16 = 3;
+
+    /// Where it goes at the foot of `column`, or nothing when the column
+    /// cannot spare the rows — the same headroom rule the steps keep.
+    pub(crate) fn rect(&self, column: Rect) -> Option<Rect> {
+        const HEADROOM: u16 = 5;
+        (column.height >= Self::HEIGHT + HEADROOM).then(|| {
+            Rect::new(
+                column.x,
+                column.bottom() - Self::HEIGHT,
+                column.width,
+                Self::HEIGHT,
+            )
+        })
+    }
+
+    /// The mark rides on the version's row rather than on a caption: a
+    /// caption is the first thing a narrow column elides, and a mark at its
+    /// end went with it — a notice nobody could put away. What gives way on
+    /// a narrow column is the text, the way a section row's name does; the
+    /// mark and the arrow never do.
+    pub(crate) fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect) -> ReleaseTargets {
+        use ratatui::{text::Line, widgets::Paragraph};
+
+        let notice = self.0;
+        let version = Rect::new(area.x, area.y, area.width, 1);
+        let action = Rect::new(area.x, area.y + 1, area.width, 1);
+        let gutter = theme::width(Symbol::ArrowUp) + 1;
+        // The room a row's text has once its gutter, the gap `push_trailing`
+        // keeps and its right-aligned glyph are paid for.
+        let room = |trailing: Symbol, used: u16| {
+            usize::from(
+                area.width
+                    .saturating_sub(gutter + used + 1 + theme::width(trailing) + TRAILING_PAD),
+            )
+        };
+
+        let mut spans = vec![
+            Span::styled(
+                format!("{} ", theme::glyph(Symbol::ArrowUp)),
+                theme::fg(theme::Token::Accent),
+            ),
+            Span::styled(
+                elide_tail(
+                    &format!("v{}", notice.version()),
+                    room(Symbol::MarkClose, 0),
+                ),
+                theme::fg(theme::Token::TextPrimary),
+            ),
+        ];
+        push_trailing(
+            &mut spans,
+            version.width,
+            theme::glyph(Symbol::MarkClose),
+            theme::color(theme::Token::TextFaint),
+        );
+        frame.render_widget(Paragraph::new(Line::from(spans)), version);
+
+        let mut spans = vec![Span::raw(" ".repeat(usize::from(gutter)))];
+        let mut used = 0;
+        if let Some(state) = notice.state() {
+            let joint = format!(" {} ", theme::glyph(Symbol::MarkDot));
+            used = (state.chars().count() + joint.chars().count()) as u16;
+            spans.push(Span::styled(state, theme::fg(theme::Token::TextSecondary)));
+            spans.push(Span::styled(joint, theme::fg(theme::Token::TextFaint)));
+        }
+        spans.push(Span::styled(
+            elide_tail(notice.action(), room(Symbol::ArrowExternal, used)),
+            theme::fg(theme::Token::TextDim),
+        ));
+        push_trailing(
+            &mut spans,
+            action.width,
+            theme::glyph(Symbol::ArrowExternal),
+            theme::color(theme::Token::TextFaint),
+        );
+        frame.render_widget(Paragraph::new(Line::from(spans)), action);
+
+        let mark = theme::width(Symbol::MarkClose);
+        ReleaseTargets {
+            notes: vec![version, action],
+            dismiss: Rect::new(
+                version.right().saturating_sub(mark + TRAILING_PAD),
+                version.y,
+                mark,
+                1,
+            ),
+        }
     }
 }
 

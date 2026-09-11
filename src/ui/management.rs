@@ -142,6 +142,10 @@ pub(crate) fn run_management(
         model.tick = model.tick.wrapping_add(1);
         model.expire_status();
         model.expire_update_badges();
+        if let Some((revision, notice)) = crate::self_update::since(model.release_revision) {
+            model.release = notice;
+            model.release_revision = revision;
+        }
         // Before the frame, not after it: an answer that arrived while the
         // workspace had the screen is already in the channel when this
         // mode opens, and draining it first is what makes the very first
@@ -519,7 +523,25 @@ fn render_sidebar(
     }
 
     let mut y = inner.y;
-    let bottom = strip.map_or(inner.bottom(), |rect| rect.y);
+    let mut bottom = strip.map_or(inner.bottom(), |rect| rect.y);
+    // The release notice sits on the steps rather than under them — the
+    // workspace's sidebar says why.
+    if let Some(notice) = model.release.as_ref().map(super::ReleaseNotice)
+        && let Some(rect) = notice.rect(Rect {
+            height: bottom - inner.y,
+            ..inner
+        })
+    {
+        let targets = notice.render(frame, rect);
+        hits.push((targets.dismiss, Hit::DismissRelease));
+        hits.extend(
+            targets
+                .notes
+                .into_iter()
+                .map(|rect| (rect, Hit::OpenReleaseNotes)),
+        );
+        bottom = rect.y;
+    }
     let mut row = |height: u16| -> Option<Rect> {
         if y + height > bottom {
             return None;

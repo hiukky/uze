@@ -593,10 +593,33 @@ pub(super) fn render_sidebar(
         inner.x,
         inner.y,
         inner.width,
-        inner.height.saturating_sub(reserved),
+        column_bottom
+            .saturating_sub(inner.y)
+            .saturating_sub(reserved),
     ));
 
     rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
+    // The release notice sits on whatever holds the foot — the steps, or
+    // the history once the steps are put away — rather than under them: it
+    // is news, and news below two sections reads as the column's floor.
+    if let Some(notice) = model.release.as_ref().map(crate::ui::ReleaseNotice)
+        && let Some(rect) = notice.rect(Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            rows.bottom.saturating_sub(inner.y),
+        ))
+    {
+        let targets = notice.render(frame, rect);
+        hits.push((targets.dismiss, WorkspaceHit::DismissRelease));
+        hits.extend(
+            targets
+                .notes
+                .into_iter()
+                .map(|rect| (rect, WorkspaceHit::OpenReleaseNotes)),
+        );
+        rows.bottom = rect.y;
+    }
 
     // What the column cannot show is scrolled to, not lost: the tree grows
     // with the work, and a space that fell off the foot of it — under a

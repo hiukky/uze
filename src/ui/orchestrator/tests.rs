@@ -3108,6 +3108,52 @@ mod workspace_tests {
         }
     }
 
+    /// The release notice sits on the sections holding the foot, not under
+    /// them, and every part of it is whole at a real version's length.
+    #[test]
+    fn a_release_notice_sits_on_the_sections_at_the_foot() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        let mut hits = Vec::new();
+        sidebar_rows(&model, &mut hits);
+        assert!(
+            !hits.iter().any(|(_, hit)| matches!(
+                hit,
+                WorkspaceHit::OpenReleaseNotes | WorkspaceHit::DismissRelease
+            )),
+            "no release, no notice"
+        );
+
+        model.release = Some(crate::self_update::Notice::Installed(
+            "0.0.0-alpha.14".to_owned(),
+        ));
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let (mark, _) = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::DismissRelease))
+            .expect("its mark puts it away");
+        let y = usize::from(mark.y);
+        assert!(
+            rows[y].contains("v0.0.0-alpha.14")
+                && rows[y].contains(&theme::glyph(theme::Symbol::MarkClose)),
+            "the version, whole, with the mark on its row: {rows:?}"
+        );
+        assert!(rows[y + 1].contains("restart uze to use it"), "{rows:?}");
+        assert_eq!(
+            hits.iter()
+                .filter(|(_, hit)| matches!(hit, WorkspaceHit::OpenReleaseNotes))
+                .count(),
+            2,
+            "two rows, and each opens the notes"
+        );
+        let steps = rows
+            .iter()
+            .position(|line| line.contains("first steps"))
+            .expect("the steps are still there");
+        assert!(y < steps, "and the notice sits on them: {rows:?}");
+    }
+
     /// The header folds it, and it stays folded: a section that came back
     /// open every run would be one nobody could put away.
     #[test]

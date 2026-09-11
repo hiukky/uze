@@ -342,6 +342,10 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
         "GIT_COMMITTER_NAME": "Ada Lovelace",
         "GIT_COMMITTER_EMAIL": "ada@journey.test",
         "GIT_CONFIG_GLOBAL": str(root / "home" / ".gitconfig"),
+        # A world is sealed from the Internet by construction, and a release
+        # check is the one thing the binary under test would reach for on
+        # its own — and a notice it drew would be a screen no journey wrote.
+        "UZE_AUTOUPDATE": "off",
     }
     # Built, never inherited — with named exceptions, each one a question
     # that cannot be answered without it reaching the processes under test.

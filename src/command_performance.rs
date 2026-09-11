@@ -125,6 +125,15 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "internal hook runtime dispatch: spawns each authored handler with bounded stdout/timeout semantics",
         ),
     ),
+    // Internal: the release check a CLI command hands to a detached process
+    // of its own once the last answer has gone stale, so the command that
+    // noticed it never waits on the network.
+    (
+        "self-update",
+        PerformanceClass::JustifiedSlow(
+            "internal: asks for the latest release and downloads it, in a detached process the CLI starts",
+        ),
+    ),
 ];
 
 /// Every command in `CLASSIFICATION` marked `Budgeted`, for the

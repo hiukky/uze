@@ -1981,6 +1981,80 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
 /// that folds it and says how far along you are, and a row per step with
 /// the key that reaches it and a mark once you have taken it.
 #[test]
+fn the_sidebar_announces_a_release_above_the_steps() {
+    let mut model = model_with_plugins(&["flow"]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert!(
+        !hits
+            .iter()
+            .any(|(_, hit)| matches!(hit, Hit::OpenReleaseNotes | Hit::DismissRelease)),
+        "no release, no notice"
+    );
+
+    // As long as the real versions are: the first cut put the version in a
+    // caption beside the heading, where the column elided it — and the
+    // closing mark at the caption's end went with it.
+    model.release = Some(crate::self_update::Notice::Available(
+        "0.0.0-alpha.14".to_owned(),
+    ));
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let drawn = buffer_rows(&terminal);
+    let (mark, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::DismissRelease)
+        .expect("its mark puts it away");
+    let y = usize::from(mark.y);
+    let (version, action) = (&drawn[y], &drawn[y + 1]);
+    assert!(
+        version.contains("v0.0.0-alpha.14")
+            && version.contains(&theme::glyph(theme::Symbol::MarkClose)),
+        "the version, whole, with the mark on its row: {version:?}"
+    );
+    assert!(
+        action.contains("available") && action.contains("what's new"),
+        "what happened and what to do, on one row: {action:?}"
+    );
+    assert_eq!(
+        hits.iter()
+            .filter(|(_, hit)| *hit == Hit::OpenReleaseNotes)
+            .count(),
+        2,
+        "two rows, nothing more: {drawn:?}"
+    );
+    let steps = drawn
+        .iter()
+        .position(|line| line.contains("first steps"))
+        .expect("the steps are still there");
+    assert!(y < steps, "and the notice sits on them: {drawn:?}");
+
+    model.hits = hits.clone();
+    let (row, _) = hits
+        .iter()
+        .find(|(rect, hit)| *hit == Hit::OpenReleaseNotes && rect.y == mark.y + 1)
+        .expect("the action row opens the notes");
+    assert_eq!(
+        model.click(row.x, row.y),
+        Intent::OpenLink("https://github.com/hiukky/uze/releases/tag/v0.0.0-alpha.14".to_owned())
+    );
+    assert_eq!(
+        model.click(mark.x, mark.y),
+        Intent::AcknowledgeRelease("0.0.0-alpha.14".to_owned()),
+        "the mark wins over the row it sits on"
+    );
+    assert!(
+        model.release.is_none(),
+        "put away at once, not on the next check"
+    );
+}
+
+#[test]
 fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
     let mut model = model_with_plugins(&["flow"]);
     let taken = crate::ui::management::FIRST_STEPS[0];
