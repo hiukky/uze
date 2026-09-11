@@ -1643,6 +1643,60 @@ mod workspace_tests {
         );
     }
 
+    /// The task mark stands at the row's right edge, in the column the
+    /// space header's `⇄` does, and the row no longer spends that edge on
+    /// naming the harness.
+    #[test]
+    fn a_task_mark_is_pinned_to_the_sidebars_right_column() {
+        let model = agent_with_task(TaskStateView::Ready, 1);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let mark = hits
+            .iter()
+            .find_map(|(_, hit)| match hit {
+                WorkspaceHit::OpenStatusCatalog(anchor) => Some(*anchor),
+                _ => None,
+            })
+            .expect("the task is marked");
+        let toggle = hits
+            .iter()
+            .find_map(|(rect, hit)| {
+                matches!(hit, WorkspaceHit::ToggleSpaceRoot(_)).then_some(*rect)
+            })
+            .expect("the space header has its toggle");
+        assert_eq!(mark.x, toggle.x, "one right-hand column: {rows:#?}");
+        let alias = crate::ui::small_caps("agent");
+        assert!(
+            !rows.iter().any(|row| row.contains(&alias)),
+            "the harness is not named in the sidebar: {rows:#?}"
+        );
+    }
+
+    /// The same `⇄` that swaps a space's name for its root swaps each of
+    /// its agents' branch for the harness running it — what the work is,
+    /// or where and on what it runs — and swaps both back.
+    #[test]
+    fn the_root_toggle_shows_each_agents_harness_in_place_of_its_branch() {
+        let mut model = agent_with_task(TaskStateView::Running, 0);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let caption = rows
+            .iter()
+            .position(|row| row.contains("agent/t1"))
+            .unwrap_or_else(|| panic!("the branch is the caption: {rows:#?}"));
+
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        model.roots_shown.insert(space);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows[caption].contains("Agent") && !rows[caption].contains("agent/t1"),
+            "the harness in the branch's place: {rows:#?}"
+        );
+
+        model.roots_shown.remove(&space);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(rows[caption].contains("agent/t1"), "{rows:#?}");
+    }
+
     /// A space header says one thing at a time — its name, or where its
     /// work lives — and the `⇄` behind the text is the one way between
     /// them: a click on the name itself still selects the space.
