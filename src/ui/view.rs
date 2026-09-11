@@ -11,6 +11,7 @@ use crate::ui::hit::Hit;
 use crate::ui::theme::{self, Symbol, Token};
 use uze_application::application::offers::ActionOffer;
 
+pub mod appearance;
 pub mod extensions;
 pub mod harnesses;
 pub mod health;

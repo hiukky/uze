@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role,
+    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
     ScrollTarget, Section, Size, Span, View, ViewHit,
 };
 
@@ -34,6 +34,17 @@ const MAX_NAVIGATOR_WIDTH: u16 = 50;
 const MIN_EXTENSION_CONTENT_WIDTH: u16 = 40;
 
 const GUTTER_WIDTH: u16 = 7;
+
+/// Margin on each side of unnumbered content.
+///
+/// A numbered line already starts a gutter's width in, and ends well
+/// short of the edge because code is short; that is where every other
+/// mode's breathing room comes from. A rendered document has neither — it
+/// has no gutter, and its paragraphs wrap to the full width — so without
+/// this it runs into both borders. Two columns, the same as the
+/// management screens' own content inset, so the two surfaces indent
+/// their text by the same amount.
+const PROSE_INSET: u16 = 2;
 
 /// Columns of padding on each side of a mode segment's label. The padding
 /// is part of the button — it is filled, and clicked, like the label is.
@@ -268,13 +279,9 @@ pub(crate) fn render(
         ViewHit::GrabNavigatorEdge,
     ));
     match &view.content {
-        Content::Message { text, role } => frame.render_widget(
-            Paragraph::new(TextSpan::styled(
-                text.clone(),
-                Style::default().fg(color(*role)),
-            )),
-            content_area,
-        ),
+        Content::Message { text, hint, role } => {
+            render_message(frame, content_area, text, hint.as_deref(), color(*role))
+        }
         Content::Lines {
             heading,
             scroll,
@@ -377,21 +384,24 @@ fn render_navigator(
                 name,
                 depth,
                 collapsed,
+                icon,
             } => {
                 let fold = theme::glyph(if *collapsed {
                     Symbol::ChevronCollapsed
                 } else {
                     Symbol::ChevronExpanded
                 });
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        TextSpan::raw(" "),
-                        TextSpan::raw("  ".repeat(*depth)),
-                        TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
-                        TextSpan::styled(name.clone(), theme::fg(Token::TextSecondary)),
-                    ])),
-                    rect,
-                );
+                let mut spans = vec![
+                    TextSpan::raw(" "),
+                    TextSpan::raw("  ".repeat(*depth)),
+                    TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
+                ];
+                spans.extend(row_icon(*icon));
+                spans.push(TextSpan::styled(
+                    name.clone(),
+                    theme::fg(Token::TextSecondary),
+                ));
+                frame.render_widget(Paragraph::new(Line::from(spans)), rect);
                 hits.push((rect, ViewHit::ToggleGroup(*id)));
             }
             NavigatorRow::Item {
@@ -400,6 +410,7 @@ fn render_navigator(
                 depth,
                 marker,
                 selected,
+                icon,
             } => {
                 let label_style = match (*selected, navigator.focused) {
                     (true, true) => Style::default()
@@ -426,8 +437,9 @@ fn render_navigator(
                         text: format!("{} ", marker.text),
                         ..marker.clone()
                     }),
-                    TextSpan::styled(name.clone(), label_style),
                 ];
+                spans.extend(row_icon(*icon));
+                spans.push(TextSpan::styled(name.clone(), label_style));
                 if *selected {
                     crate::ui::fill_row_bg(
                         &mut spans,
@@ -507,8 +519,20 @@ fn render_lines(
         body.height as usize,
         total,
     );
-    let content = body;
     let gutter = gutter_width(lines);
+    // Unnumbered content is prose, and prose is the case the gutter was
+    // silently paying for everywhere else.
+    let inset = if gutter == 0 { PROSE_INSET } else { 0 };
+    let content = if body.width > inset.saturating_mul(2) {
+        Rect::new(
+            body.x.saturating_add(inset),
+            body.y,
+            body.width.saturating_sub(inset.saturating_mul(2)),
+            body.height,
+        )
+    } else {
+        body
+    };
     let text_width = text_width(content.width, gutter);
     let mut y = content.y;
     for (offset, line) in lines.iter().enumerate().skip(scroll as usize) {
@@ -544,6 +568,94 @@ fn render_lines(
         hits,
         ViewHit::DragContentScrollbar,
     )
+}
+
+/// An empty surface, or one that failed: what is the matter, and — when
+/// there is something to do about it — what to do.
+///
+/// Set a third of the way down rather than pinned to the top edge. A line
+/// of text against the top-left corner reads as a document that got cut
+/// off, which is the one thing an empty surface must not look like; the
+/// same words with space above and below read as the state they are.
+fn render_message(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    text: &str,
+    hint: Option<&str>,
+    colour: Color,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let mut lines = vec![Line::from(TextSpan::styled(
+        text.to_owned(),
+        Style::default().fg(colour).add_modifier(Modifier::BOLD),
+    ))];
+    if let Some(hint) = hint {
+        lines.push(Line::from(""));
+        lines.push(Line::from(TextSpan::styled(
+            hint.to_owned(),
+            theme::fg(Token::TextMuted),
+        )));
+    }
+    let top = area.y.saturating_add(area.height / 3);
+    let body = Rect::new(
+        area.x,
+        top,
+        area.width,
+        area.height.saturating_sub(area.height / 3),
+    );
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(ratatui::layout::Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        body,
+    );
+}
+
+/// What a row's kind is called in the vocabulary.
+///
+/// Separate from drawing it so the mapping can be checked without a theme
+/// in force: putting one there is process-wide, and a test that did it
+/// would swap the glyphs under every neighbour drawing at the same moment.
+fn icon_symbol(icon: RowIcon) -> Option<Symbol> {
+    Some(match icon {
+        RowIcon::None => return None,
+        RowIcon::Directory => Symbol::FileDirectory,
+        RowIcon::DirectoryOpen => Symbol::FileDirectoryOpen,
+        RowIcon::File => Symbol::FileDefault,
+        RowIcon::Code => Symbol::FileCode,
+        RowIcon::Markup => Symbol::FileMarkup,
+        RowIcon::Config => Symbol::FileConfig,
+        RowIcon::Lock => Symbol::FileLock,
+        RowIcon::Data => Symbol::FileData,
+        RowIcon::Image => Symbol::FileImage,
+        RowIcon::Archive => Symbol::FileArchive,
+        RowIcon::Git => Symbol::FileGit,
+        RowIcon::Legal => Symbol::FileLegal,
+    })
+}
+
+/// The mark a navigator row carries before its name.
+///
+/// The one place a [`RowIcon`] becomes a glyph: the extension said what
+/// the row *is*, and the vocabulary says what that looks like under the
+/// active theme. A set that draws none of them — every built-in one but
+/// `nerd`, since plain Unicode has no folder mark that is not an emoji —
+/// resolves to nothing, and nothing is what gets drawn, without a column
+/// held open for it.
+fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
+    let glyph = theme::glyph(icon_symbol(icon)?);
+    if glyph.trim().is_empty() {
+        return None;
+    }
+    // Muted on purpose: the icon classifies, the name identifies, and an
+    // icon drawn at the name's weight competes with the thing the reader
+    // is actually scanning for.
+    Some(TextSpan::styled(
+        format!("{glyph} "),
+        theme::fg(Token::TextDim),
+    ))
 }
 
 /// How much of the heading row the mode control takes, so the heading
@@ -942,6 +1054,7 @@ mod tests {
                         name: "src/".to_owned(),
                         depth: 0,
                         collapsed: false,
+                        icon: RowIcon::Directory,
                     },
                     NavigatorRow::Item {
                         id: 7,
@@ -949,6 +1062,7 @@ mod tests {
                         depth: 1,
                         marker: Span::new("M", Role::Warning),
                         selected: true,
+                        icon: RowIcon::Code,
                     },
                 ],
             }),
@@ -1027,6 +1141,124 @@ mod tests {
             "the edge is one target for both of its jobs"
         );
         assert!(hits.iter().any(|(_, hit)| *hit == ViewHit::Close));
+    }
+
+    /// An extension says what a row *is*; the vocabulary says what that
+    /// looks like. So the icon appears only where the active set draws
+    /// one, and takes no column where it does not — which is every
+    /// built-in set but `nerd`, because plain Unicode has no folder mark
+    /// that is not an emoji.
+    ///
+    /// Asserted at the seam rather than on a frame drawn under a swapped
+    /// theme: the active theme is process-wide, and a test that put `nerd`
+    /// in force to photograph a row would change the glyphs — and with the
+    /// declared widths, the column positions — under every other test
+    /// drawing at that moment. Which set declares which glyph is
+    /// `uze-theme`'s own question, and it answers it in
+    /// `every_nerd_glyph_is_an_icon_a_patched_font_supplies`.
+    #[test]
+    fn a_rows_icon_comes_from_the_set_and_takes_no_column_when_there_is_none() {
+        // Every kind names a symbol, so a kind added later cannot quietly
+        // draw nothing by falling through.
+        for icon in [
+            RowIcon::Directory,
+            RowIcon::DirectoryOpen,
+            RowIcon::File,
+            RowIcon::Code,
+            RowIcon::Markup,
+            RowIcon::Config,
+            RowIcon::Lock,
+            RowIcon::Data,
+            RowIcon::Image,
+            RowIcon::Archive,
+            RowIcon::Git,
+            RowIcon::Legal,
+        ] {
+            let symbol = icon_symbol(icon).unwrap_or_else(|| panic!("{icon:?} names no symbol"));
+            // And the set that has icons draws every one of them, in one
+            // cell — resolved here rather than put in force.
+            let mut layers = vec![uze_theme::default_file()];
+            layers.extend(uze_theme::glyph_set_file("nerd"));
+            let nerd = uze_theme::resolve_stack(
+                &uze_theme::Identity::from_file("nerd", uze_theme::default_file()),
+                &layers,
+            )
+            .expect("the bundled nerd set resolves")
+            .theme;
+            let drawn = nerd.symbol(symbol);
+            assert!(
+                !drawn.glyph().trim().is_empty(),
+                "the nerd set draws nothing for {icon:?}"
+            );
+            assert_eq!(drawn.width(), 1, "{icon:?} is not one cell wide");
+
+            // The default draws none of them, and the row holds no column
+            // open for what is not there.
+            assert!(
+                uze_theme::default_theme().glyph(symbol).trim().is_empty(),
+                "the default set grew a {icon:?} glyph — it has no column for one"
+            );
+        }
+        assert!(row_icon(RowIcon::None).is_none());
+        assert!(
+            row_icon(RowIcon::Code).is_none(),
+            "a blank glyph must take no column at all"
+        );
+    }
+
+    /// A rendered document is the one content with no gutter, and the
+    /// gutter is where every other mode's left margin quietly came from.
+    /// Without a margin of its own, a wrapped paragraph runs into both
+    /// borders.
+    #[test]
+    fn unnumbered_content_is_inset_where_numbered_content_leans_on_its_gutter() {
+        let prose = |text: &str| ContentLine {
+            gutter: String::new(),
+            number: String::new(),
+            tone: LineTone::Neutral,
+            spans: vec![Span {
+                text: text.to_owned(),
+                role: Role::Default,
+                color: None,
+                bold: false,
+                italic: false,
+            }],
+        };
+
+        let mut view = sample();
+        let Content::Lines { lines, heading, .. } = &mut view.content else {
+            unreachable!("the sample is Lines")
+        };
+        *lines = vec![prose("PROSE")];
+        *heading = "HEADING".to_owned();
+        let (rows, _) = draw(&view);
+
+        // Measured against the heading rather than the frame, because the
+        // heading is drawn at the content area's own left edge — so the
+        // difference is the margin and nothing else. In *columns*: the
+        // frame's own rules are multi-byte, so a byte offset is not where
+        // the terminal put anything.
+        let column_of = |needle: &str| -> usize {
+            rows.iter()
+                .find_map(|row: &String| row.find(needle).map(|byte| row[..byte].chars().count()))
+                .unwrap_or_else(|| panic!("`{needle}` is drawn"))
+        };
+        assert_eq!(
+            column_of("PROSE") - column_of("HEADING"),
+            usize::from(PROSE_INSET),
+            "prose must be inset from the edge its own heading sits on"
+        );
+
+        // And the numbered case is untouched — its gutter is the margin.
+        let (numbered, _) = draw(&sample());
+        let row = numbered
+            .iter()
+            .find(|row: &&String| row.contains("let x = 1;"))
+            .expect("the code line is drawn");
+        assert!(
+            row.contains("12"),
+            "the gutter still carries the number: {row:?}"
+        );
     }
 
     /// A scrollbar is drawn only when there is something to scroll, and
@@ -1239,6 +1471,8 @@ mod tests {
     /// extension that drifts from the design system.
     #[test]
     fn chrome_uses_the_hosts_palette_and_content_keeps_its_own() {
+        // Reads the active theme, so it takes its turn with the test that
+        // swaps it.
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         terminal
             .draw(|frame| {
@@ -1340,6 +1574,7 @@ mod tests {
                 anchor,
                 rows: (0..40)
                     .map(|index| NavigatorRow::Item {
+                        icon: RowIcon::None,
                         id: index,
                         name: format!("file-{index}.rs"),
                         depth: 0,
@@ -1418,6 +1653,7 @@ mod tests {
             navigator: None,
             content: Content::Message {
                 text: "not a git repository".to_owned(),
+                hint: None,
                 role: Role::Danger,
             },
             ..sample()

@@ -31,7 +31,7 @@ pub(crate) fn render_keys(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, "Keys", "what each key does", None);
+    let content = render_screen_header(frame, area, "Shortcuts", "what each key does", None);
 
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     hits.push((filter_area, Hit::FocusFilter));

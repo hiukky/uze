@@ -271,7 +271,7 @@ fn reason_line(support: &AgentSupport, capability: CapabilityKind, width: usize)
 
 fn icon_for(state: State) -> (String, ratatui::style::Color) {
     let (symbol, color) = match state {
-        State::Ready => (Symbol::MarkOfficial, theme::color(Token::Accent)),
+        State::Ready => (Symbol::MarkOk, theme::color(Token::Accent)),
         State::Neutral => (Symbol::MarkDot, theme::color(Token::TextMuted)),
         State::Warning => (Symbol::MarkAttention, theme::color(Token::StateWarning)),
         State::Error => (Symbol::MarkClose, theme::color(Token::StateDanger)),

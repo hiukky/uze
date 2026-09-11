@@ -165,6 +165,37 @@ pub struct Navigator {
     pub anchor: Option<usize>,
 }
 
+/// What a navigator row *is*, so the host can mark it.
+///
+/// A kind rather than a glyph, for the same reason every other mark an
+/// extension asks for is a kind: an extension that wrote the icon would be
+/// writing a glyph nobody can theme, and would have to know whether the
+/// terminal in front of it can draw one.
+///
+/// Deliberately coarse. "Source code" is a meaning a theme can be asked to
+/// draw and "a Rust file" is not — per-language icons are an icon theme, a
+/// different artifact from the vocabulary every set has to answer in full.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RowIcon {
+    /// This list's rows are not files, so it marks them some other way —
+    /// the changes list marks status instead, and two marks per row would
+    /// be one too many.
+    #[default]
+    None,
+    Directory,
+    DirectoryOpen,
+    File,
+    Code,
+    Markup,
+    Config,
+    Lock,
+    Data,
+    Image,
+    Archive,
+    Git,
+    Legal,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NavigatorRow {
     /// A heading that groups the rows under it. Not selectable, but it
@@ -178,6 +209,8 @@ pub enum NavigatorRow {
         name: String,
         depth: usize,
         collapsed: bool,
+        /// What this row is, for the mark the host draws before its name.
+        icon: RowIcon,
     },
     Item {
         /// The extension's own identifier, handed back verbatim in
@@ -188,13 +221,27 @@ pub enum NavigatorRow {
         /// A short status mark before the name.
         marker: Span,
         selected: bool,
+        /// What this row is, for the mark the host draws before its name.
+        icon: RowIcon,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Content {
     /// Nothing to show, and why.
-    Message { text: String, role: Role },
+    ///
+    /// Two levels, because an empty surface has two things to say and one
+    /// line cannot carry both: what is the matter, and what to do about
+    /// it. A surface that only says "select a file" tells someone who
+    /// already knows that, and tells someone who does not nothing at all.
+    Message {
+        text: String,
+        /// What to do next, drawn quieter beneath. `None` when there is
+        /// nothing to do — a read still in flight, an error the viewer
+        /// cannot act on.
+        hint: Option<String>,
+        role: Role,
+    },
     /// Numbered lines with a gutter — a diff, a log, a file.
     Lines {
         heading: String,

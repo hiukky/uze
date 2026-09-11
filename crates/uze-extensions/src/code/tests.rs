@@ -941,3 +941,48 @@ fn a_changes_refresh_leaves_an_unsaved_buffer_alone() {
     );
     assert!(view.open.as_ref().is_some_and(|open| open.modified));
 }
+
+/// A file tree's rows say what they *are*, so the host can mark them.
+/// Classified by whole name as well as by extension, because the files at
+/// the root of a repository carry their meaning without one.
+#[test]
+fn a_row_is_classified_by_what_it_is_rather_than_by_its_language() {
+    use crate::code::files::icon_for;
+    use crate::view::RowIcon;
+
+    assert_eq!(icon_for("src", true, false), RowIcon::Directory);
+    assert_eq!(icon_for("src", true, true), RowIcon::DirectoryOpen);
+
+    // A whole name, where an extension would say nothing.
+    assert_eq!(icon_for("Makefile", false, false), RowIcon::Code);
+    assert_eq!(icon_for("LICENSE", false, false), RowIcon::Legal);
+    assert_eq!(icon_for(".gitignore", false, false), RowIcon::Git);
+
+    // And by extension, across the kinds this repository's own tree has.
+    assert_eq!(icon_for("main.rs", false, false), RowIcon::Code);
+    assert_eq!(icon_for("AGENTS.md", false, false), RowIcon::Markup);
+    assert_eq!(icon_for("Cargo.toml", false, false), RowIcon::Config);
+    assert_eq!(icon_for("Cargo.lock", false, false), RowIcon::Lock);
+    assert_eq!(icon_for("logo.svg", false, false), RowIcon::Image);
+    assert_eq!(icon_for("bundle.tar", false, false), RowIcon::Archive);
+
+    // Case is not a classification, and an unknown extension is a file.
+    assert_eq!(icon_for("README.MD", false, false), RowIcon::Markup);
+    assert_eq!(icon_for("notes.qqq", false, false), RowIcon::File);
+    assert_eq!(icon_for("noextension", false, false), RowIcon::File);
+}
+
+/// The changes list marks status, so it takes no file icon: two marks per
+/// row is one too many, and the status is the reason that list exists.
+#[test]
+fn the_changes_list_marks_status_rather_than_kind() {
+    let view = view(&fixture(), space());
+    let rows = &view.navigator.as_ref().expect("a navigator").rows;
+    assert!(
+        rows.iter().all(|row| match row {
+            crate::view::NavigatorRow::Group { icon, .. }
+            | crate::view::NavigatorRow::Item { icon, .. } => *icon == crate::view::RowIcon::None,
+        }),
+        "the changes list asked for a file icon: {rows:?}"
+    );
+}

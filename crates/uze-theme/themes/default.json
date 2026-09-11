@@ -54,6 +54,7 @@
   "symbols": {
     "mark.native": "√",
     "mark.official": "✓",
+    "mark.ok": "✓",
     "mark.adapted": "≈",
     "mark.unsupported": "—",
     "mark.attention": "!",
@@ -64,6 +65,22 @@
     "mark.sparkle": "✦",
     "mark.toggle-off": "○",
     "mark.toggle-on": "◉",
+
+    "file.directory": "",
+    "file.directory-open": "",
+    "file.default": "",
+    "file.code": "",
+    "file.markup": "",
+    "file.config": "",
+    "file.lock": "",
+    "file.data": "",
+    "file.image": "",
+    "file.archive": "",
+    "file.git": "",
+    "file.legal": "",
+
+    "task.ready": "⇧",
+    "task.retry": "⟳",
 
     "status.working": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     "status.completed": "✓",

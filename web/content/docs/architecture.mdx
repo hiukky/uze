@@ -59,7 +59,7 @@ graph TD
   names no rendering library, so every consumer adapts its `Rgb` to what it draws
   with. **Nothing outside `src/ui/theme.rs` may name a colour value or write a
   chrome glyph inline** — two architecture rules fail the build over it. See
-  [Theming](/docs/theming).
+  [Appearance](/docs/appearance).
 - **`uze-extensions`** — built-in TUI extensions. An extension answers with a
   view or a section and **never draws**: the host owns rendering, geometry,
   hit-testing and the palette, and every other capability (running Git, reading a

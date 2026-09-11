@@ -94,6 +94,29 @@ pub(super) struct Attach<'a> {
     pub(super) asked_for_a_tab: bool,
 }
 
+/// What a code door does when it is pressed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CodeDoor {
+    /// It is the door already open, so it shuts. The action is called a
+    /// toggle and the hint line promises one; re-showing what is already
+    /// showing looks exactly like a key that does nothing.
+    Close,
+    /// The other door, so the surface switches to it — the gesture of
+    /// someone reaching for the other half of the same surface.
+    Switch,
+    /// Nothing is open, so this door is not the one that opens it: that
+    /// is the workspace's own binding, one scope out.
+    Nothing,
+}
+
+pub(super) fn code_door(showing: Option<code::ContentMode>, wanted: code::ContentMode) -> CodeDoor {
+    match showing {
+        Some(mode) if mode == wanted => CodeDoor::Close,
+        Some(_) => CodeDoor::Switch,
+        None => CodeDoor::Nothing,
+    }
+}
+
 impl Attach<'_> {
     /// Routes one event to the half of the client that owns it.
     pub(super) fn handle(&mut self, event: Event, viewport: &Viewport) -> Flow {
@@ -835,16 +858,25 @@ impl Attach<'_> {
     /// opening anything.
     fn code_action(&mut self, action: Action) {
         match action {
-            Action::ToggleChanges => {
-                if let Some(view) = self.model.code.as_mut() {
-                    code::show(view, code::ContentMode::Diff);
-                }
-                self.model.dirty = true;
-                return;
-            }
-            Action::ToggleFiles => {
-                if let Some(view) = self.model.code.as_mut() {
-                    code::show(view, code::ContentMode::Contents);
+            // A *toggle*, which is what the action is called and what the
+            // key that reaches it promises: pressed on the surface it
+            // already opened, it closes. Pressed on the other one it
+            // switches, because that is the gesture someone reaching for
+            // the other half of the same surface means.
+            Action::ToggleChanges | Action::ToggleFiles => {
+                let wanted = match action {
+                    Action::ToggleChanges => code::ContentMode::Diff,
+                    _ => code::ContentMode::Contents,
+                };
+                let showing = self.model.code.as_ref().map(code::showing);
+                match code_door(showing, wanted) {
+                    CodeDoor::Close => self.model.code = None,
+                    CodeDoor::Switch => {
+                        if let Some(view) = self.model.code.as_mut() {
+                            code::show(view, wanted);
+                        }
+                    }
+                    CodeDoor::Nothing => {}
                 }
                 self.model.dirty = true;
                 return;

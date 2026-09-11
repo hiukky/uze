@@ -1395,7 +1395,7 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
         // arrow — that arrow claims a delivery.
         TaskStateView::Running | TaskStateView::Closed => return None,
         TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
-        TaskStateView::Ready => (Symbol::ArrowShift, theme::color(Token::Accent)),
+        TaskStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
         // The one mark that points away from UZE, because the work does:
         // it is on the forge, and what happens to it next happens there.
         // Muted for the same reason the button is — nothing is being asked
@@ -1821,11 +1821,7 @@ fn deliver_button(
         // request already carries. It stays pressable — the target moves,
         // and a re-sync is how the branch follows it.
         TaskStateView::Published => Some((
-            format!(
-                "{} {}",
-                theme::glyph(Symbol::MarkOfficial),
-                delivery_ending(task)
-            ),
+            format!("{} {}", theme::glyph(Symbol::MarkOk), delivery_ending(task)),
             theme::color(Token::TextMuted),
             true,
         )),
@@ -1836,7 +1832,7 @@ fn deliver_button(
             Some(unsynced) => (
                 format!(
                     "{}{unsynced} {}",
-                    theme::glyph(Symbol::ArrowShift),
+                    theme::glyph(Symbol::TaskReady),
                     delivery_ending(task)
                 ),
                 theme::color(Token::Accent),
@@ -1845,7 +1841,7 @@ fn deliver_button(
             None => (
                 format!(
                     "{}{} {}",
-                    theme::glyph(Symbol::ArrowShift),
+                    theme::glyph(Symbol::TaskReady),
                     task.ahead,
                     delivery_ending(task)
                 ),
@@ -1856,7 +1852,7 @@ fn deliver_button(
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
         TaskStateView::GateFailed => Some((
-            format!("{} retry", theme::glyph(Symbol::ArrowShift)),
+            format!("{} retry", theme::glyph(Symbol::TaskRetry)),
             theme::color(Token::StateDanger),
             true,
         )),

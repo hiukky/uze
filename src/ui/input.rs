@@ -30,6 +30,7 @@ impl TuiModel {
             Route::Harnesses => Scope::Harnesses,
             Route::Profiles => Scope::Profiles,
             Route::Keys => Scope::Keys,
+            Route::Appearance => Scope::Appearance,
         });
         if self.keys_capture {
             // Every keystroke is the answer here, including ones bound
@@ -189,6 +190,9 @@ impl TuiModel {
                     self.keys_problem = None;
                     return Intent::None;
                 }
+                if self.route == Route::Appearance {
+                    return self.activate_appearance();
+                }
                 self.open_or_act()
             }
             Action::ChangeKey => {
@@ -324,12 +328,17 @@ impl TuiModel {
     }
 
     /// One screen along the sidebar, wrapping, wherever the focus was.
+    ///
+    /// Answers with whatever arriving asks for. A screen that reads its own
+    /// data on arrival is empty if it is reached this way and the ask is
+    /// dropped — and stays empty, because arriving is the only moment it
+    /// asks.
     fn step_route(&mut self, delta: isize) -> Intent {
         let count = ROUTES.len();
         let step = if delta > 0 { 1 } else { count - 1 };
-        self.set_route(ROUTES[(self.route.index() + step) % count]);
+        let entering = self.set_route(ROUTES[(self.route.index() + step) % count]);
         self.focus = Focus::Content;
-        Intent::None
+        entering
     }
 
     /// Where the selection goes, which depends on what the screen is a
@@ -339,8 +348,7 @@ impl TuiModel {
         if self.focus == Focus::Sidebar {
             let count = ROUTES.len();
             let step = if delta > 0 { 1 } else { count - 1 };
-            self.set_route(ROUTES[(self.route.index() + step) % count]);
-            return Intent::None;
+            return self.set_route(ROUTES[(self.route.index() + step) % count]);
         }
         match self.route {
             Route::Profiles => {
@@ -352,6 +360,10 @@ impl TuiModel {
                 self.keys_selected = self.keys_selected.saturating_add_signed(delta).min(last);
                 self.keys_capture = false;
                 self.keys_problem = None;
+                Intent::None
+            }
+            Route::Appearance => {
+                self.move_appearance_selection(delta);
                 Intent::None
             }
             // The Overview's only navigable list is its prompt history.
@@ -516,6 +528,13 @@ impl TuiModel {
                     }
                     Some(ResizablePanel::KeysDrawer) => {
                         self.keys_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
+                    Some(ResizablePanel::AppearanceDrawer) => {
+                        self.appearance_drawer_width = Some(
                             total_width
                                 .saturating_sub(event.column)
                                 .clamp(min_panel_width, max_panel_width),

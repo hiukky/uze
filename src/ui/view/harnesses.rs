@@ -61,7 +61,7 @@ impl HarnessStatus {
         match self {
             Self::NotInstalled => theme::glyph(Symbol::MarkClose),
             Self::Installed => theme::glyph(Symbol::StatusSelected),
-            Self::Configured => theme::glyph(Symbol::MarkOfficial),
+            Self::Configured => theme::glyph(Symbol::MarkOk),
             Self::NeedsPath => theme::glyph(Symbol::MarkAttention),
         }
     }

@@ -997,18 +997,25 @@ content rather than from the design system passes through
 `theme::content`, named so it cannot be mistaken for chrome.
 
 A theme is a file, and a partial one is a whole one. Appearance resolves
-as a stack — the built-in default, then any theme a theme is a variation
-of, then the theme, then the operator's own overrides — and merging
-happens between *declarations* at every level, never between resolved
-colours. That is what keeps an ancestor's references alive: repaint the
+as a stack — the built-in default, then the selected glyph set, then any
+theme a theme is a variation of, then the theme, then the operator's own
+overrides — and merging happens between *declarations* at every level,
+never between resolved colours. That is what keeps an ancestor's references alive: repaint the
 accent in a variation and everything two layers down written `@accent`
 follows. Surfaces and borders are declared as a separation from the
 theme's own background rather than as the value they resolve to, which is
 what lets a background declaration alone carry a light theme.
 
-UZE's own themes carry no emoji — an emoji is a different font family, a
-width that varies by terminal, and a picture that ignores the hue carrying
-the meaning. Colours bound to a hue by contract are the one thing that does
+The palette and the glyph set are two selections, not one, because they
+are facts of different kinds: which marks a terminal can draw belongs to
+the font someone installed, and a palette belongs to this afternoon.
+Neither selection reads or writes the other's half. And UZE never infers
+the set — no terminal can be asked which font it renders with, so the
+choice is made by looking at each set drawn in its own glyphs.
+
+UZE's own themes and glyph sets carry no emoji — an emoji is a different
+font family, a width that varies by terminal, and a picture that ignores
+the hue carrying the meaning. Colours bound to a hue by contract are the one thing that does
 not follow a meaning: the sixteen a program inside a pane names by index are literal,
 because index 2 is *green* to whatever emitted it.
 
@@ -1020,6 +1027,11 @@ because index 2 is *green* to whatever emitted it.
 > `crates/uze-theme/src/load.rs::no_bundled_glyph_is_an_emoji`
 > `src/theme.rs::a_variation_resolves_over_the_theme_it_varies`
 > `src/theme.rs::the_operators_overrides_outlast_the_theme_they_are_applied_over`
+> `src/theme.rs::a_glyph_set_applies_under_a_theme_that_declares_no_symbols`
+> `src/theme.rs::a_themes_own_symbol_wins_over_the_selected_set`
+> `src/theme.rs::the_operators_overrides_win_over_the_set_and_the_theme_both`
+> `crates/uze-core/src/theme_state.rs::the_two_choices_do_not_overwrite_each_other`
+> `src/ui/tests.rs::each_glyph_set_is_previewed_in_its_own_glyphs`
 > `src/progress.rs::the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour`
 > `src/ui/orchestrator/tests.rs::the_palette_a_pane_is_told_about_is_the_one_being_drawn`
 > `crates/uze-terminal/src/runtime.rs::osc_background_and_foreground_queries_get_answered_instead_of_hanging`

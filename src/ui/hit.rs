@@ -55,6 +55,10 @@ pub(crate) enum Hit {
     OfferedAction(uze_keys::Action),
     /// One line of the Keys screen.
     KeyRow(usize),
+    /// One line of the Appearance screen — a theme or a glyph set, by its
+    /// place in the list. Headings are drawn but never registered: a label
+    /// has nothing to activate.
+    AppearanceRow(usize),
     /// The Keys list's scroll track, carrying its own rectangle: a click
     /// anywhere on it jumps there, and a drag keeps jumping while the
     /// button is held. The rect travels with the hit because the drag has
@@ -124,9 +128,9 @@ impl TuiModel {
         };
         match hit {
             Hit::Route(route) => {
-                self.set_route(route);
+                let entering = self.set_route(route);
                 self.focus = Focus::Content;
-                Intent::None
+                entering
             }
             Hit::SwitchToWorkspace => Intent::SwitchToWorkspace,
             Hit::MarketplaceRow(index) => {
@@ -150,7 +154,7 @@ impl TuiModel {
                     self.marketplace_selected = position;
                 }
                 self.marketplace_drawer_open = true;
-                self.set_route(Route::Plugins);
+                let _ = self.set_route(Route::Plugins);
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
@@ -256,6 +260,14 @@ impl TuiModel {
                 self.keys_problem = None;
                 self.focus = Focus::Content;
                 Intent::None
+            }
+            // A click on a choice is the choice. There is nothing to
+            // inspect first here the way a plugin row has: what the row
+            // does is drawn on the row.
+            Hit::AppearanceRow(index) => {
+                self.appearance_selected = index;
+                self.focus = Focus::Content;
+                self.activate_appearance()
             }
             Hit::FocusFilter => {
                 self.filtering = true;

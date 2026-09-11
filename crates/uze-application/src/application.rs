@@ -56,7 +56,7 @@ mod theme;
 pub use agent_context::{AgentContextStatus, ResourceDelivery, UndeliveredReason};
 pub use profile::{ProfileApplyResult, ProfileSummary};
 pub use read_models::*;
-pub use theme::ThemeSummary;
+pub use theme::{GlyphSetSummary, ThemeSummary};
 
 // Re-export project environment types for CLI access.
 pub use project_environment::{

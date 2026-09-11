@@ -283,13 +283,16 @@ fn sidebar_keyboard_navigation_cycles_routes() {
         focus: Focus::Sidebar,
         ..TuiModel::default()
     };
-    assert_eq!(model.route, Route::Overview);
+    // Against the sidebar's own order rather than against named routes:
+    // what this proves is that the keys walk it and turn around, which is
+    // still true the next time the order is argued over.
+    assert_eq!(model.route, ROUTES[0]);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.route, ROUTES[1]);
     model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Extensions);
+    assert_eq!(model.route, ROUTES[2]);
     model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.route, ROUTES[1]);
 }
 
 #[test]
@@ -3727,6 +3730,59 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
     }
 }
 
+/// Every right-hand drawer is the same slab: it starts on the frame's own
+/// top row and runs to the bottom. A drawer handed the area *below* the
+/// screen header instead starts three rows down, which reads as a panel
+/// that failed to open rather than as a deliberate inset.
+#[test]
+fn every_drawer_runs_the_full_height_of_its_screen() {
+    let mut rules = Vec::new();
+    for route in [
+        Route::Plugins,
+        Route::Extensions,
+        Route::Harnesses,
+        Route::Keys,
+        Route::Appearance,
+    ] {
+        let mut model = model_with_data();
+        model.set_route(route);
+        model.focus = Focus::Content;
+        model.marketplace_drawer_open = true;
+        model.harnesses_drawer_open = true;
+        model.extension_drawer_open = true;
+        model.appearance_themes = vec![uze_application::application::ThemeSummary {
+            id: "default".to_owned(),
+            active: true,
+            path: None,
+        }];
+        model.appearance_glyph_sets = vec![uze_application::application::GlyphSetSummary {
+            id: "nerd".to_owned(),
+            active: false,
+        }];
+        model.settle_appearance_selection();
+
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rule = hits
+            .iter()
+            .find_map(|(rect, hit)| matches!(hit, Hit::ResizePanel(_)).then_some(*rect))
+            .unwrap_or_else(|| panic!("{route:?} drew no drawer"));
+        rules.push((route, rule));
+    }
+
+    let (first_route, first) = rules[0];
+    for (route, rule) in &rules[1..] {
+        assert_eq!(
+            (rule.y, rule.height),
+            (first.y, first.height),
+            "{route:?}'s drawer does not run the height {first_route:?}'s does"
+        );
+    }
+}
+
 /// A dialog answered only by a key would be the one place in the product
 /// where the keyboard is the way in rather than the accelerator.
 #[test]
@@ -3773,5 +3829,255 @@ fn a_question_is_answered_with_the_pointer_too() {
     assert_eq!(
         model.click(confirm.x, confirm.y),
         Intent::Remove("one".to_owned())
+    );
+}
+
+/// The claim the Appearance screen exists to make: each glyph set is drawn
+/// in *its own* glyphs, not in the ones currently in force. Without that,
+/// choosing a set is choosing a name and hoping — which is the guess the
+/// whole change removes, since no terminal can be asked what font it has.
+#[test]
+fn each_glyph_set_is_previewed_in_its_own_glyphs() {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: uze_theme::glyph_sets()
+            .iter()
+            .map(|id| uze_application::application::GlyphSetSummary {
+                id: (*id).to_owned(),
+                active: false,
+            })
+            .collect(),
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+
+    // A card names the set in its frame and draws the preview two rows
+    // below: the frame, the line saying what the set asks of the machine,
+    // then the marks themselves.
+    let row_for = |id: &str| -> String {
+        let title = rows
+            .iter()
+            .position(|row| row.contains('\u{256d}') && row.contains(id))
+            .unwrap_or_else(|| panic!("no card for the `{id}` set in {rows:#?}"));
+        rows[title + 2].clone()
+    };
+
+    // ASCII's own marks, on the ASCII row, while the default theme — the
+    // one actually in force here — draws none of them.
+    let ascii = row_for("ascii");
+    assert!(
+        ascii.contains('*'),
+        "the ascii set is not in ascii: {ascii:?}"
+    );
+    assert!(
+        !ascii.contains('✓'),
+        "the ascii row borrowed the active theme's glyphs: {ascii:?}"
+    );
+
+    // The default set draws its own, on its own row.
+    let default = row_for("default");
+    assert!(
+        default.contains('✓'),
+        "the default set is not in its own glyphs: {default:?}"
+    );
+
+    // And the nerd set draws Codicons, which live in the private-use area.
+    let nerd = row_for("nerd");
+    assert!(
+        nerd.chars().any(|c| ('\u{ea60}'..='\u{ec84}').contains(&c)),
+        "the nerd row carries no Codicon: {nerd:?}"
+    );
+}
+
+/// The card the keyboard is on says so on its frame; the card in force says
+/// so with its fill. Painting the fill over the frame rather than inside it
+/// takes the frame away from every card that is in force but not selected —
+/// which is every card in force, most of the time.
+#[test]
+fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: uze_theme::glyph_sets()
+            .iter()
+            .map(|id| uze_application::application::GlyphSetSummary {
+                id: (*id).to_owned(),
+                active: *id == "nerd",
+            })
+            .collect(),
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+    let in_force = model
+        .appearance_rows()
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                crate::ui::model::AppearanceRow::GlyphSet { active: true, .. }
+            )
+        })
+        .expect("a set in force to draw");
+    assert_ne!(
+        in_force, model.appearance_selected,
+        "the case this guards is the card in force that the keyboard is not on"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(190, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+
+    let card = hits
+        .iter()
+        .find_map(|(rect, hit)| (*hit == Hit::AppearanceRow(in_force)).then_some(*rect))
+        .expect("the set in force drew no card");
+    let buffer = terminal.backend().buffer();
+    let fill = crate::ui::theme::color(uze_theme::Token::SurfaceSelected);
+    assert_eq!(
+        buffer[(card.x + 1, card.y + 1)].bg,
+        fill,
+        "the card in force is not filled"
+    );
+    assert_ne!(
+        buffer[(card.x, card.y + 1)].bg,
+        fill,
+        "the fill reached the frame, which is where the selection has to show"
+    );
+}
+
+#[test]
+fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_themes: vec![uze_application::application::ThemeSummary {
+            id: "dracula".to_owned(),
+            active: false,
+            path: None,
+        }],
+        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+            id: "nerd".to_owned(),
+            active: false,
+        }],
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+
+    // The list opens on the first *choice*, never on the heading above it.
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectTheme("dracula".to_owned())
+    );
+
+    // Walking down crosses the second heading without stopping on it.
+    model.move_appearance_selection(1);
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectGlyphSet("nerd".to_owned()),
+        "the glyph set was reached as if it were a theme"
+    );
+}
+
+#[test]
+fn opening_appearance_asks_for_the_lists_it_chooses_from() {
+    let mut model = TuiModel::default();
+    assert_eq!(
+        model.set_route(Route::Appearance),
+        crate::ui::worker::Intent::LoadAppearance
+    );
+    // Every other route asks for nothing on arrival, so this one is not
+    // paying for a read it does not need.
+    assert_eq!(
+        model.set_route(Route::Keys),
+        crate::ui::worker::Intent::None
+    );
+}
+
+/// Arriving is the only moment Appearance asks for its lists, so every way
+/// of arriving has to carry the ask. A gesture that dropped it left the
+/// screen showing its two headings and nothing under them — and leaving and
+/// coming back was no cure, because coming back was the gesture that dropped
+/// it.
+#[test]
+fn every_way_of_reaching_appearance_carries_the_ask() {
+    let steps = uze_keys::Action::NextScreen;
+    let landing = Route::Appearance.index();
+
+    let mut walked = TuiModel::default();
+    let mut asked = None;
+    for _ in 0..ROUTES.len() {
+        let intent = walked.act(steps);
+        if walked.route.index() == landing {
+            asked = Some(intent);
+            break;
+        }
+    }
+    assert_eq!(
+        asked,
+        Some(crate::ui::worker::Intent::LoadAppearance),
+        "walking the sidebar reached Appearance without asking for its lists"
+    );
+
+    let mut clicked = TuiModel::default();
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &clicked, &mut hits))
+        .unwrap();
+    clicked.hits = hits;
+    let (rect, _) = clicked
+        .hits
+        .iter()
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::Route(Route::Appearance))
+        .expect("Appearance is reachable from the sidebar")
+        .clone();
+    assert_eq!(
+        clicked.click(rect.x + 1, rect.y),
+        crate::ui::worker::Intent::LoadAppearance,
+        "clicking into Appearance reached it without asking for its lists"
+    );
+}
+
+#[test]
+fn clicking_a_glyph_set_chooses_it() {
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+            id: "ascii".to_owned(),
+            active: false,
+        }],
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+
+    let rows = model.appearance_rows();
+    let index = rows
+        .iter()
+        .position(|row| matches!(row, crate::ui::model::AppearanceRow::GlyphSet { .. }))
+        .expect("a set row");
+    let (rect, _) = model
+        .hits
+        .iter()
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::AppearanceRow(index))
+        .expect("the set row is clickable")
+        .clone();
+
+    assert_eq!(
+        model.click(rect.x + 3, rect.y),
+        crate::ui::worker::Intent::SelectGlyphSet("ascii".to_owned())
     );
 }

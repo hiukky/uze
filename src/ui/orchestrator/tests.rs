@@ -1119,6 +1119,32 @@ mod workspace_tests {
         );
     }
 
+    /// One meaning, one mark, wherever the state is drawn.
+    ///
+    /// The sidebar and the delivery button had drifted here: the sidebar
+    /// drew a task's readiness from one symbol and the button from
+    /// another, which showed as two marks for one state the moment a glyph
+    /// set gave them different glyphs. Asserted against the *vocabulary*
+    /// rather than a literal, since the glyph is whatever the set says.
+    ///
+    /// Only where the button reports the state. `GateFailed` marks `×` in
+    /// the sidebar and offers `retry` on the button, and those are
+    /// different things said to different ends — what happened, and what
+    /// you can do about it.
+    #[test]
+    fn a_ready_task_wears_the_same_mark_in_the_sidebar_and_on_its_button() {
+        let state = TaskStateView::Ready;
+        let model = agent_with_task(state.clone(), 3);
+        let (mark, _) = super::render::task_mark(&state).expect("ready is marked");
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join("\n");
+        assert!(
+            strip.contains(mark.trim()),
+            "the button does not wear the sidebar's mark: \
+             looking for {mark:?} in {strip}"
+        );
+    }
+
     /// `pr` is two actions over a task's life, and the button is how the
     /// operator tells them apart: an errand while no request exists, a
     /// sync onto a named one once it does.
@@ -5378,4 +5404,32 @@ mod prompt_buffer_tests {
         buffer.paste("one\r\ntwo");
         assert_eq!(buffer.submit().as_deref(), Some("one\n\ntwo"));
     }
+}
+
+/// A door pressed twice closes. `ctrl+e` on a surface already showing
+/// files used to re-show them, which is indistinguishable from a key that
+/// does nothing — and the action is called a toggle.
+#[test]
+fn a_code_door_pressed_on_the_surface_it_opened_closes_it() {
+    use super::session::{CodeDoor, code_door};
+    use uze_extensions::code::ContentMode;
+
+    assert_eq!(
+        code_door(Some(ContentMode::Contents), ContentMode::Contents),
+        CodeDoor::Close,
+        "its own door, pressed again, has to close"
+    );
+    assert_eq!(
+        code_door(Some(ContentMode::Diff), ContentMode::Diff),
+        CodeDoor::Close
+    );
+    // The other door switches instead: reaching for the other half of the
+    // same surface is not asking to leave it.
+    assert_eq!(
+        code_door(Some(ContentMode::Diff), ContentMode::Contents),
+        CodeDoor::Switch
+    );
+    // With nothing open, this scope is not live at all — the workspace's
+    // own binding is what opens the surface.
+    assert_eq!(code_door(None, ContentMode::Contents), CodeDoor::Nothing);
 }

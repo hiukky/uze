@@ -274,7 +274,7 @@ pub fn step_header(step: usize, total: usize, harness: &str) -> String {
 }
 
 pub fn success_icon() -> String {
-    success_text(glyph(Symbol::MarkOfficial))
+    success_text(glyph(Symbol::MarkOk))
 }
 pub fn warning_icon() -> String {
     warning_text(glyph(Symbol::MarkAttention))

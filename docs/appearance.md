@@ -1,4 +1,4 @@
-# Theming
+# Appearance
 
 Status: **implemented, 2026-09-05.** Owner: `crates/uze-theme`, which is
 the authority for everything on this page — the vocabulary, the file
@@ -10,6 +10,11 @@ selected by *what the thing means*, and what that means looks like comes
 from the active theme. So a theme is a file you write, and applying it
 changes nothing else about how UZE behaves.
 
+Appearance is **two choices, not one**: the palette, and the set of glyphs
+every mark is drawn from. They are chosen separately because they are facts
+of different kinds — a font is installed once, a palette is picked on a whim
+— and neither ever changes the other.
+
 ## Where a theme lives
 
 ```
@@ -18,20 +23,93 @@ changes nothing else about how UZE behaves.
 ~/.uze/state/theme.json      which one is active
 ```
 
-Two themes are built in and need no file: `default` (UZE's own look) and
-`ascii` (the same colours with every glyph inside ASCII, for a terminal
-with no Unicode font). A file of your own named `ascii.json` wins over the
-built-in — a theme you wrote is yours.
+One theme is built in and needs no file: `default`, UZE's own look. A file
+of your own named `default.json` wins over it — a theme you wrote is yours.
 
 ```bash
 uze theme list          # what this machine can draw with, marking the active one
-uze theme use dawn      # draw in it, from now on, in the CLI and the TUI
+uze theme set dawn      # draw in it, from now on, in the CLI and the TUI
 uze theme show          # the active theme's resolved values, and its warnings
 uze theme show dawn     # any theme's, whether or not it is active
+
+uze theme glyphs        # the glyph sets, each drawn in its own glyphs
+uze theme glyphs nerd   # draw every mark from that set, whatever theme is on
 ```
 
-Inside the TUI, `t` opens the same list. Selecting redraws the next frame;
-no session, pane or agent is disturbed.
+Inside the TUI, the **Appearance** screen holds both lists, and `t` still
+opens the quick theme picker from anywhere. Selecting redraws the next
+frame; no session, pane or agent is disturbed.
+
+## The glyph set
+
+Three sets ship, and choosing one never touches your colours:
+
+| Set | What it is |
+|---|---|
+| `default` | Unicode any modern terminal font draws. No emoji, no private-use glyphs. |
+| `ascii` | Every mark inside ASCII, for a terminal with no Unicode font. |
+| `nerd` | Codicons — the icons VS Code draws its own chrome with. Needs a font patched by Nerd Fonts **v3**. **Recommended.** |
+
+**Install a Nerd Font and run `uze theme glyphs nerd`.** The `default` set is
+honest Unicode, but "Unicode" is a different guarantee per font rather than
+one, and most monospace fonts fall short of it. Counting the symbols a font
+does *not* serve itself, of the 42 the default set draws with a non-ASCII
+glyph:
+
+| Font | Served by some other font |
+|---|---|
+| DejaVu Sans Mono | 0 |
+| JetBrainsMono Nerd Font | 5 |
+| Noto Sans Mono | 13 |
+| Liberation Mono | 20 |
+| Ubuntu Mono | 27 |
+
+Your terminal papers over this with font fallback — it borrows the glyph from
+another family and squeezes it into the cell — so what you get is a wobble in
+weight and style, not a broken layout. It still means a row of marks drawn
+from two or three typefaces. The `nerd` set has no such gamble: one patched
+font, one weight, drawn for a monospace grid.
+
+`uze theme glyphs` prints each set drawn in its own glyphs, and the
+Appearance screen does the same. **That is the whole interface for deciding**,
+because there is no honest alternative: no escape sequence asks a terminal
+which font it is rendering with, `$TERM` names the emulator rather than the
+font, and a cursor-position probe measures width rather than presence — a
+missing glyph and a present one both come back as one cell. So UZE never
+guesses your font and never asks you to declare it. It draws the marks; you
+pick the row that looks right.
+
+If the `nerd` row is a run of empty boxes, your font is not patched, or is
+patched by Nerd Fonts v2, where Codicons do not exist.
+
+`ascii` is not a museum piece, but its case is narrow: a surface with **no
+font fallback** to rescue it — a Linux virtual console, a recovery shell,
+output captured by something that is not UTF-8. On a desktop terminal you
+will never need it. It costs no palette if you do.
+
+The `nerd` set declares its widths for the **Mono** builds (`… Nerd Font
+Mono`), whose icons occupy one cell. The plain build draws the same
+codepoints two cells wide, and nothing in Unicode distinguishes them — if
+your preview column comes out ragged, that is which build you have, and one
+`width` override per glyph in your own overrides fixes it.
+
+## Which layer wins
+
+```
+built-in default → the glyph set → a theme's ancestors → the theme → your overrides
+```
+
+Later layer wins, which is the stack's only rule. Two consequences worth
+knowing:
+
+- A theme that declares only `colors` — the ordinary case — leaves your
+  glyphs alone.
+- A theme that deliberately declares a `symbol` decides that symbol, even
+  over the set you chose. If you want yours back, `theme-overrides.json` is
+  the layer above both.
+
+`uze theme show` prints the layers in the order they applied, so "which one
+won" is a question you can answer rather than guess at.
 
 ## A theme is partial
 
@@ -80,37 +158,38 @@ reference still follows: change the background and every surface the parent
 derived from it is recomputed against the new one; change the accent and
 everything written `@accent` moves with it.
 
-You can extend a theme UZE carries, too — `"extends": "ascii"` gives you its
-glyphs and leaves the colours to you. A chain that loops is refused with the
-loop written out, and UZE stops following one more than eight deep.
+You can extend a theme UZE carries, too — `"extends": "default"`. A chain
+that loops is refused with the loop written out, and UZE stops following one
+more than eight deep. Glyphs are not something to extend a theme for: they
+are the other axis, and `uze theme glyphs` is where they are chosen.
 
 `uze theme show` prints what a theme resolved from:
 
 ```
-resolved from the built-in default → `dracula` → `dracula-soft` → ~/.uze/theme-overrides.json
+resolved from the built-in default → the `nerd` glyphs → `dracula` → `dracula-soft` → ~/.uze/theme-overrides.json
 ```
 
 ## Your own overrides
 
 `~/.uze/theme-overrides.json` is the same format, applied last, over
-whichever theme is active — and it keeps applying when you switch themes.
-It is the right place for anything that belongs to *your machine* rather
-than to a palette:
+whichever theme *and* whichever glyph set is active — and it keeps applying
+when you change either. It is the top layer, so it is where you settle an
+argument between the two:
 
 ```json
 {
   "symbols": {
     "status.idle": "◌",
-    "mark.official": "󰄬"
+    "mark.official": { "glyph": "󰄬", "width": 2 }
   }
 }
 ```
 
-A Nerd Font is the case this exists for. Your glyphs are a fact about the
-font you installed, not about whether you are on Dracula today — so they
-live here instead of being copied into every theme you might switch to. It
-is not a theme: it never appears in `uze theme list`, and there is nothing
-to select.
+This is for the *individual* glyph, not for a whole set — a mark your own
+font draws differently, a width your build disagrees with, a theme's symbol
+you would rather not have. A whole set is `uze theme glyphs`. It is not a
+theme either: it never appears in `uze theme list`, and there is nothing to
+select.
 
 ## The five ways to write a colour
 
@@ -162,11 +241,18 @@ any of them:
 }
 ```
 
-UZE's own themes carry **no emoji** — only symbols. An emoji is a different
-font family, a width that varies by terminal, and a picture that ignores the
-hue carrying the meaning, which is three reasons a status mark cannot be
-one; a test holds the bundled themes to it. Your theme is yours, and may use
-whatever your terminal renders.
+UZE's own themes and sets carry **no emoji** — only symbols. An emoji is a
+different font family, a width that varies by terminal, and a picture that
+ignores the hue carrying the meaning, which is three reasons a status mark
+cannot be one; a test holds everything bundled to it. Your theme is yours,
+and may use whatever your terminal renders.
+
+A set need not declare every symbol. `nerd` declares the marks, statuses,
+chevrons and arrows, and inherits the tree glyphs, bars and typography —
+a patched font already draws `├─` and `…` correctly, and an icon there
+would be a downgrade. `ascii` is the exception and declares all of them,
+because one Unicode glyph left in an otherwise-ASCII screen defeats the
+only reason to choose it.
 
 A symbol is a string, a list of frames for an animation, or an object with
 an explicit `width` — for a glyph whose display width the terminal disagrees
@@ -192,7 +278,7 @@ sentence like "loading…" is content, and stays as written.
   you did not declare stay where they were. Every colour in your file looks
   fine; the ones you inherited are the problem.
 
-Warnings are printed when you ask — `uze theme show`, and `uze theme use`
+Warnings are printed when you ask — `uze theme show`, and `uze theme set`
 as you choose the theme — and not on every command after that. A theme that
 will not load *at all* is different: it reports the token and the value that
 broke it on every run, because it silently is not in force until you fix it.

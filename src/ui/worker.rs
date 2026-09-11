@@ -51,6 +51,13 @@ pub(crate) enum Intent {
     OpenThemePicker,
     /// Draw in this theme from now on, here and in the CLI.
     SelectTheme(String),
+    /// Draw every mark from this glyph set from now on. Independent of the
+    /// theme in both directions — neither call reads the other's half.
+    SelectGlyphSet(String),
+    /// Read the themes and the glyph sets the Appearance screen chooses
+    /// from. Sent on arriving there rather than per frame, so the list
+    /// cannot change under the cursor between two frames.
+    LoadAppearance,
     Refresh,
     InspectPlugin(String),
     InspectMarketplacePlugin {
@@ -104,6 +111,8 @@ impl Intent {
             Self::ClearPromptHistory => "clear_prompt_history",
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
+            Self::SelectGlyphSet(_) => "select_glyph_set",
+            Self::LoadAppearance => "load_appearance",
             Self::SelectTheme(_) => "select_theme",
             Self::Refresh => "refresh",
             Self::InspectPlugin(_) => "inspect_plugin",
@@ -182,9 +191,20 @@ pub(crate) fn dispatch(
             model.overlay = crate::ui::model::Overlay::ThemePicker { themes, selected };
         }
         Intent::SelectTheme(id) => match select_theme(home, &id) {
-            Ok(()) => model.status = Status::Success(format!("Drawing in {id}")),
+            Ok(()) => {
+                model.status = Status::Success(format!("Drawing in {id}"));
+                load_appearance(home, model);
+            }
             Err(error) => model.status = Status::Error(error),
         },
+        Intent::SelectGlyphSet(id) => match select_glyph_set(home, &id) {
+            Ok(()) => {
+                model.status = Status::Success(format!("Drawing with the {id} glyphs"));
+                load_appearance(home, model);
+            }
+            Err(error) => model.status = Status::Error(error),
+        },
+        Intent::LoadAppearance => load_appearance(home, model),
         Intent::PersistKeymap => {
             let file = uze_keys::difference_from_default(&uze_keys::active());
             let path = home.keymap_path();
@@ -897,6 +917,73 @@ fn open_in_browser(url: &str) -> Option<String> {
 /// Puts a theme in force and records it, so the next frame — and the next
 /// `uze` command — are drawn in it. No session, pane or agent is touched:
 /// changing what UZE looks like is not an event in the work it is hosting.
+/// Records the glyph set and puts the re-resolved stack in force.
+///
+/// Resolved against whichever theme is active — including none, which
+/// resolves the default — because the set is a layer beneath the theme
+/// rather than a theme of its own.
+fn select_glyph_set(home: &UzeHome, id: &str) -> std::result::Result<(), String> {
+    let application = tui_application(home.clone()).map_err(|error| error.to_string())?;
+    application
+        .themes()
+        .select_glyphs(id)
+        .map_err(|error| error.to_string())?;
+    let theme = application
+        .themes()
+        .active()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned());
+    let loaded =
+        crate::theme::resolve(&application, home, &theme).map_err(|error| error.to_string())?;
+    uze_theme::set_active(loaded.theme);
+    Ok(())
+}
+
+/// What a theme card shows of a palette: the accent it leads with, then
+/// the four states that carry meaning, then the brightest text. Six is what
+/// a card has room for, and these six are the ones a theme is actually
+/// judged on — a row of surfaces would be six shades of the same near-black.
+const SWATCHES: &[uze_theme::Token] = &[
+    uze_theme::Token::Accent,
+    uze_theme::Token::StateSuccess,
+    uze_theme::Token::StateWarning,
+    uze_theme::Token::StateDanger,
+    uze_theme::Token::StateInfo,
+    uze_theme::Token::TextBright,
+];
+
+/// Reads both lists the Appearance screen chooses from.
+///
+/// Cheap enough to read on this thread rather than a worker, for the same
+/// reason the theme picker reads its own: a JSON read and a directory
+/// listing, which is exactly the work `uze theme list` is budgeted for.
+fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
+    let Ok(application) = tui_application(home.clone()) else {
+        return;
+    };
+    if let Ok(themes) = application.themes().list(uze_theme::builtin_names()) {
+        // Resolved here rather than per frame: each one is a file read, and
+        // a screen that re-read the whole themes directory every tick would
+        // be paying a directory walk to draw six coloured cells.
+        model.appearance_palettes = themes
+            .iter()
+            .filter_map(|theme| {
+                let loaded = crate::theme::resolve(&application, home, &theme.id).ok()?;
+                let colours = SWATCHES
+                    .iter()
+                    .map(|token| loaded.theme.color(*token))
+                    .collect();
+                Some((theme.id.clone(), colours))
+            })
+            .collect();
+        model.appearance_themes = themes;
+    }
+    if let Ok(sets) = application.themes().glyph_sets(uze_theme::glyph_sets()) {
+        model.appearance_glyph_sets = sets;
+    }
+    model.settle_appearance_selection();
+}
+
 fn select_theme(home: &UzeHome, id: &str) -> std::result::Result<(), String> {
     let application = tui_application(home.clone()).map_err(|error| error.to_string())?;
     let loaded =

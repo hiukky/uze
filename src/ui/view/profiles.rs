@@ -236,7 +236,7 @@ fn render_profile_tree(
         spans.push(Span::styled(profile.id.clone(), name_style));
         if profile.active {
             spans.push(Span::styled(
-                format!(" ({} active)", theme::glyph(Symbol::MarkOfficial)),
+                format!(" ({} active)", theme::glyph(Symbol::MarkOk)),
                 theme::fg_bold(Token::Accent),
             ));
         }
