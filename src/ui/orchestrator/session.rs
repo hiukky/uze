@@ -2136,6 +2136,9 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
+        if let uze_application::Isolation::Slot { task, .. } = &placement.isolation {
+            self.model.claim_slot(&placement.cwd, task.as_str());
+        }
         self.model
             .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
         // The size the last frame actually drew — the same value the
@@ -2247,6 +2250,7 @@ impl Attach<'_> {
                 continue;
             }
             self.model.tasks.insert(primary, evaluation.tasks);
+            self.model.settle_slot_claims();
             self.model.bind_pane_tasks();
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as

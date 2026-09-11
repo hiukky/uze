@@ -2011,6 +2011,9 @@ struct WorkspaceModel {
     /// the reconciliation strips the task of that checkout, and this is
     /// the only thing left that says which task the pane was in.
     pane_tasks: BTreeMap<PaneId, String>,
+    /// The task a placement put in each slot — by primary checkout and
+    /// slot name — until an evaluation lists it. See [`Self::task_for_cwd`].
+    slot_claims: BTreeMap<(PathBuf, String), String>,
     /// The slot directories a pane still holds. A checkout that leaves this
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,
@@ -2713,10 +2716,24 @@ impl WorkspaceModel {
     /// The path stays as a fallback for a task recorded before slots were
     /// named. Slots are reused, so several tasks can carry the same one:
     /// the newest is the one standing there now.
+    ///
+    /// A placement names the task it put in a slot before any evaluation
+    /// lists that task, and in that window the newest task on record is the
+    /// slot's *previous* occupant: the new agent's tab took its name and,
+    /// since a generated label is never adopted, kept it. Nothing is the
+    /// answer until the claimed task arrives.
     fn task_for_cwd(&self, cwd: &Path) -> Option<&TaskView> {
         let checkout = uze_application::isolated_checkout(cwd)?;
-        self.tasks
-            .get(checkout.primary)?
+        let tasks = self.tasks.get(checkout.primary)?;
+        let claim = (checkout.primary.to_path_buf(), checkout.name.to_owned());
+        if self
+            .slot_claims
+            .get(&claim)
+            .is_some_and(|claimed| !tasks.iter().any(|task| &task.id == claimed))
+        {
+            return None;
+        }
+        tasks
             .iter()
             .filter(|task| match task.checkout_id.as_deref() {
                 Some(slot) => slot == checkout.name,
@@ -2727,6 +2744,27 @@ impl WorkspaceModel {
                     .is_some_and(|name| name == checkout.name),
             })
             .max_by_key(|task| task.created_at_unix)
+    }
+
+    /// Records that a placement put `task` in the slot `checkout` is.
+    pub(super) fn claim_slot(&mut self, checkout: &Path, task: &str) {
+        if let Some(slot) = uze_application::isolated_checkout(checkout) {
+            self.slot_claims.insert(
+                (slot.primary.to_path_buf(), slot.name.to_owned()),
+                task.to_owned(),
+            );
+        }
+    }
+
+    /// Drops every claim whose task an evaluation has listed: from then on
+    /// the record answers for the slot.
+    pub(super) fn settle_slot_claims(&mut self) {
+        let tasks = &self.tasks;
+        self.slot_claims.retain(|(primary, _), claimed| {
+            !tasks
+                .get(primary)
+                .is_some_and(|listed| listed.iter().any(|task| &task.id == claimed))
+        });
     }
 
     pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {

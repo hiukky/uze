@@ -40,10 +40,12 @@
 - [x] 3.2 `checkout::prune_integrated_branches` stops assuming the `agent/`
   prefix: it scans the prefix *and* the branches the task store names, or a
   renamed branch is never collected.
-- [ ] 3.3 `reconcile`'s adoption of an unrecorded checkout already takes the
-  branch as it finds it — confirmed by reading, **not yet pinned by a
-  test**. It is covered incidentally (the acceptance test names an adopted
-  checkout), never directly.
+- [x] 3.3 `reconcile`'s adoption of an unrecorded checkout takes the branch
+  as it finds it, pinned by
+  `checkout::tests::a_checkout_on_a_named_branch_is_adopted_under_its_name`.
+  Writing it found the label half wrong: a named branch was labelled with
+  the slot's identifier, which "the label is never the identifier once a
+  name exists" forbids; it now reads from the name.
 
 ## 4. The agent surface
 

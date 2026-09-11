@@ -73,6 +73,12 @@ the task.
 - **WHEN** a task has been named
 - **THEN** no surface shows its generated identifier in place of its name
 
+#### Scenario: A new agent never carries the name of the task before it
+- **WHEN** a new agent is placed in a slot an earlier task used, and the
+  workspace has not yet read the new agent's task
+- **THEN** its tab carries no name taken from the earlier task, and takes
+  its own task's name once that task is read
+
 ### Requirement: The project declares the vocabulary and every name is validated against it
 A project SHALL declare which branch types its names may use, as a named
 preset or as its own list. A proposed name SHALL be accepted only when its

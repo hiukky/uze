@@ -141,6 +141,20 @@ pub fn write_within(root: &Path, args: &[&str], timeout: Duration) -> Result<Out
     run(base_command(root, args))
 }
 
+/// [`write`] with variables set for this one command. For a write whose
+/// result must not depend on the moment it ran — an object written only to
+/// be compared, which a pinned date makes the same object every time.
+pub fn write_with_env(
+    root: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<Output, SpawnError> {
+    let _held = lock::acquire(root, DEFAULT_WRITE_TIMEOUT)?;
+    let mut command = base_command(root, args);
+    command.envs(env.iter().copied());
+    run(command)
+}
+
 /// Runs `body` with the repository write lock held throughout, so the
 /// writes it makes — through [`write`], which re-enters the lock on this
 /// thread — form one critical section: a prune, a name check and a

@@ -62,6 +62,11 @@ concurrency, and a project MAY declare a cap.
 - **WHEN** a task's work reached the target as a squash or a rebase merge, so none of the branch's own commits is reachable from it, and the agent is gone
 - **THEN** the checkout is free and the next agent is placed in it rather than in a new one
 
+#### Scenario: A reused slot answers for its new task alone
+- **WHEN** a new agent is placed in a checkout that earlier tasks ran in, and the record of one of them still reads as live
+- **THEN** only the new task holds that checkout
+- **AND** each earlier task ends by what its own branch holds, and keeps that branch
+
 #### Scenario: A new checkout is created only when none is free
 - **WHEN** every existing checkout is occupied or parked
 - **THEN** a new checkout is created
@@ -227,6 +232,11 @@ the remote before an agent is placed.
 - **THEN** the task's branch is rebased onto the target's tip inside its checkout, under the same rules as delivery
 - **AND** a conflict is returned to the agent and the target is unchanged
 - **AND** this holds under every completion behavior, from the local target and without a fetch of its own
+
+#### Scenario: Work the target already holds is delivered, not replayed
+- **WHEN** a live task's work reached the target as a squash or a rebase merge, so the target moved but none of the branch's commits is reachable from it
+- **THEN** the task is read as integrated from the patch the target carries
+- **AND** its branch is not rebased, nothing is returned to its agent, and its checkout is left as the agent left it
 
 #### Scenario: A task mid-edit is not rebased under its agent
 - **WHEN** the target has moved while a live task's working tree is dirty

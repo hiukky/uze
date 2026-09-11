@@ -90,6 +90,9 @@ pub enum DeliveryFailure {
     Overlap {
         files: Vec<PathBuf>,
     },
+    /// The target already carries the branch's work under commits of its
+    /// own — a squash or rebase merge made elsewhere.
+    AlreadyDelivered,
     NoRemote,
     Git(String),
 }
@@ -114,6 +117,7 @@ impl fmt::Display for DeliveryFailure {
                 "the primary checkout has uncommitted changes to {}",
                 join_paths(files)
             ),
+            Self::AlreadyDelivered => formatter.write_str("the target already carries this work"),
             Self::NoRemote => formatter.write_str("the repository has no `origin` remote"),
             Self::Git(reason) => formatter.write_str(reason),
         }
@@ -376,6 +380,13 @@ fn deliver_locked(
     let slot = slot_path(primary, task).ok_or(DeliveryFailure::NotReady(Readiness::Running))?;
     task.state = TaskState::Integrating;
     let tip = target_tip(primary, task, policy.completion)?;
+    // Merged elsewhere — squashed on the forge before the local target
+    // heard of it — the work is in the tip under commits of its own, and
+    // rebasing would replay it onto itself.
+    if checkout::is_integrated(primary, &tip, &task.branch) {
+        task.state = TaskState::Integrated;
+        return Err(DeliveryFailure::AlreadyDelivered);
+    }
     rebase_in_slot(primary, &slot, task, &tip)?;
     for step in policy.gate {
         let (passed, output) = run_shell_bounded(&slot, step, GATE_TIMEOUT);
@@ -437,6 +448,11 @@ pub fn refresh(primary: &Path, task: &mut Task) -> Result<bool, DeliveryFailure>
         let tip = target_tip(primary, task, CompletionBehavior::Handoff)?;
         if tip == task.base_commit || is_ancestor(primary, &tip, &task.branch) {
             task.base_commit = tip;
+            return Ok(false);
+        }
+        // The target already holds this work under commits of its own — a
+        // squash or rebase merge. Replaying it there conflicts with itself.
+        if checkout::is_integrated(primary, &tip, &task.branch) {
             return Ok(false);
         }
         rebase_in_slot(primary, &slot, task, &tip)?;
@@ -544,6 +560,43 @@ pub fn paused_rebase(slot: &Path) -> Option<Vec<PathBuf>> {
         .map(|stdout| stdout.lines().map(PathBuf::from).collect())
         .unwrap_or_default();
     Some(files)
+}
+
+/// Ends a task whose work the target already carries, when nothing of the
+/// agent's is at stake. Returns whether it was ended.
+///
+/// A rebase paused in its checkout can only be replaying that work onto
+/// itself, and is abandoned: the branch ref does not move until a rebase
+/// finishes, so it still names every commit the agent made, and aborting
+/// puts the checkout back exactly where the agent left it. A checkout with
+/// changes of its own is never touched.
+///
+/// Only for a task that has something to settle — one parked, or with a
+/// rebase paused: a branch with no commits of its own reads as integrated
+/// too, and a live agent that has committed nothing yet is not done.
+pub fn settle_delivered(primary: &Path, task: &mut Task) -> bool {
+    if !checkout::branch_exists(primary, &task.branch)
+        || !checkout::is_integrated(primary, &task.target, &task.branch)
+    {
+        return false;
+    }
+    if let Some(slot) = slot_path(primary, task) {
+        if paused_rebase(&slot).is_some() && !abort_rebase(primary, &slot) {
+            return false;
+        }
+        if is_dirty(&slot) {
+            return false;
+        }
+    }
+    task.state = TaskState::Integrated;
+    true
+}
+
+fn abort_rebase(primary: &Path, slot: &Path) -> bool {
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
+        uze_git::write(slot, &["rebase", "--abort"]).is_ok_and(|output| output.is_success())
+    })
+    .unwrap_or(false)
 }
 
 /// The message written into the owning agent's pane when its task cannot be
