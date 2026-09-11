@@ -150,9 +150,14 @@ pub(crate) fn run_management(
         let mut hits = Vec::new();
         terminal.draw(|frame| render(frame, &model, &mut hits))?;
         model.hits = hits;
-        let missing = model.drawer_inspect_intent();
-        if missing != Intent::None {
-            dispatch(missing, &home, &sender, &mut model);
+        for missing in [
+            model.drawer_inspect_intent(),
+            model.profile_preview_intent(),
+            model.appearance_intent(),
+        ] {
+            if missing != Intent::None {
+                dispatch(missing, &home, &sender, &mut model);
+            }
         }
         if event::poll(super::POLL_INTERVAL).map_err(super::io_error)? {
             match event::read().map_err(super::io_error)? {
@@ -352,7 +357,9 @@ pub(crate) fn render(
         Overlay::ConfirmClearPromptHistory => {
             overlay::render_confirm_clear_prompt_history(frame, frame.area(), hits)
         }
-        Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
+        Overlay::ProtectedPlugin(id) => {
+            overlay::render_protected_plugin(frame, frame.area(), id, hits)
+        }
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
         }

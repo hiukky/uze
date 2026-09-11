@@ -244,6 +244,10 @@ vocabulary! {
         ArrowTo = "arrow.to",
         /// Points at the item under discussion.
         ChevronRight = "chevron.right",
+        /// Steps a value back to the previous of its options.
+        StepPrevious = "step.previous",
+        /// Steps a value on to the next of its options.
+        StepNext = "step.next",
         /// A section that is folded shut.
         ChevronCollapsed = "chevron.collapsed",
         /// A section that is open.

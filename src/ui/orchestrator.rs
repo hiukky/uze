@@ -1392,18 +1392,20 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
 /// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
 /// tab's own label only for legacy tabs created before generic agent labels
 /// were introduced. Returns the harness's short binary/alias
-/// name (`claude`, `codex`, …) — what the sidebar and tab strip show in
-/// place of the raw process string, and what decides whether a tab lists
-/// under "agents" or "shell" at all.
+/// name (`claude`, `codex`, …) — what decides whether a tab lists under
+/// "agents" or "shell" at all.
 fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a str> {
+    agent_for_tab(identities, tab).map(|identity| identity.binary)
+}
+
+/// The harness running in `tab`, as [`agent_identity_for_tab`] recognizes
+/// it — the whole identity, for a caller that names it to a person.
+fn agent_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a AgentIdentity> {
     let process = pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.process.as_str());
-    identities
-        .iter()
-        .find(|identity| {
-            process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
-                || tab.label.eq_ignore_ascii_case(identity.display_name)
-        })
-        .map(|identity| identity.binary)
+    identities.iter().find(|identity| {
+        process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
+            || tab.label.eq_ignore_ascii_case(identity.display_name)
+    })
 }
 
 /// What the sidebar shows beside one agent tab. These four states are the

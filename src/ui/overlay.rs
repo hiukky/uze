@@ -1,7 +1,7 @@
 //! TUI — overlay state transitions and their rendering.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph},
@@ -510,111 +510,47 @@ pub(crate) fn render_confirm_remove(
     focus: usize,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    // Compact, centered confirmation ~52 wide instead of stretching full width.
-    let width = 52.min(area.width.saturating_sub(4));
-    let height = 8.min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-
-    frame.render_widget(Clear, popup);
-
-    let message = Line::from(vec![
-        Span::raw("Remove "),
-        Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
-        Span::raw("?"),
-    ]);
-    let hint = Line::from(Span::styled(
-        "Only matched artifacts will be detached.",
-        theme::fg(Token::TextMuted),
-    ));
-    // Centered button row with clear visual hierarchy; destructive action is
-    // red, safe action is muted, focused button gets solid background.
-    let footer = crate::ui::hint_for(
-        &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
-        &[
-            uze_keys::Action::FocusNext,
-            uze_keys::Action::ConfirmYes,
-            uze_keys::Action::ConfirmNo,
-        ],
-    );
-
-    let block = modal_block(" Remove plugin? ", theme::color(Token::StateDanger));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    // Layout inside popup: message, hint, empty, buttons, footer
-    let inner_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    frame.render_widget(
-        Paragraph::new(message).alignment(Alignment::Center),
-        inner_layout[0],
-    );
-    frame.render_widget(
-        Paragraph::new(hint).alignment(Alignment::Center),
-        inner_layout[1],
-    );
-    render_modal_buttons(
+    render_dialog(
         frame,
-        inner_layout[3],
-        Some("Remove"),
-        theme::color(Token::StateDanger),
-        Some(focus),
+        area,
+        &Dialog {
+            tone: Tone::Danger,
+            title: "Remove plugin",
+            subject: Some(Line::from(id.to_owned())),
+            body: vec![
+                "Takes back everything it delivered to each harness. If any of it was changed \
+                 by hand, nothing is removed."
+                    .to_owned(),
+            ],
+            confirm: Some("Remove"),
+            focus: Some(focus),
+        },
         hits,
-    );
-    frame.render_widget(
-        Paragraph::new(footer).alignment(Alignment::Center),
-        inner_layout[4],
     );
 }
 
-pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect, id: &str) {
-    let width = 56.min(area.width.saturating_sub(4));
-    let height = 7.min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
-            Span::raw(" is an official marketplace plugin"),
-        ]),
-        Line::from(Span::styled(
-            "and cannot be removed from the TUI.",
-            theme::fg(Token::TextMuted),
-        )),
-        Line::from(Span::styled(
-            "Use a custom source for removable plugins.",
-            theme::fg(Token::TextMuted),
-        )),
-        Line::from(Span::styled(
-            "esc / enter to dismiss",
-            theme::fg(Token::TextMuted),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(modal_block(
-                " Protected plugin ",
-                theme::color(Token::StateWarning),
-            ))
-            .wrap(ratatui::widgets::Wrap { trim: true })
-            .alignment(Alignment::Center),
-        popup,
+pub(crate) fn render_protected_plugin(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    id: &str,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    render_dialog(
+        frame,
+        area,
+        &Dialog {
+            tone: Tone::Caution,
+            title: "Protected plugin",
+            subject: Some(Line::from(id.to_owned())),
+            body: vec![
+                "An official marketplace plugin can't be removed from here. Install it from a \
+                 custom source to make it removable."
+                    .to_owned(),
+            ],
+            confirm: None,
+            focus: None,
+        },
+        hits,
     );
 }
 
@@ -624,17 +560,17 @@ pub(crate) fn render_confirm_update(
     id: &str,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_modal(
+    render_dialog(
         frame,
         area,
-        "Update plugin?",
-        vec![Line::from(vec![
-            Span::raw("Update "),
-            Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
-            Span::raw(" to the latest marketplace revision?"),
-        ])],
-        theme::color(Token::StateWarning),
-        Some("Update"),
+        &Dialog {
+            tone: Tone::Neutral,
+            title: "Update plugin",
+            subject: Some(Line::from(id.to_owned())),
+            body: vec!["Moves it to the latest revision its marketplace publishes.".to_owned()],
+            confirm: Some("Update"),
+            focus: None,
+        },
         hits,
     );
 }
@@ -644,15 +580,20 @@ pub(crate) fn render_confirm_clear_prompt_history(
     area: Rect,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_modal(
+    render_dialog(
         frame,
         area,
-        "Clear prompt history?",
-        vec![Line::from(Span::raw(
-            "Delete every recorded prompt for this workspace. This cannot be undone.",
-        ))],
-        theme::color(Token::StateDanger),
-        Some("Clear"),
+        &Dialog {
+            tone: Tone::Danger,
+            title: "Clear prompt history",
+            subject: None,
+            body: vec![
+                "Deletes every prompt recorded for this workspace. This cannot be undone."
+                    .to_owned(),
+            ],
+            confirm: Some("Clear"),
+            focus: None,
+        },
         hits,
     );
 }
@@ -664,19 +605,20 @@ pub(crate) fn render_confirm_install(
     marketplace: &str,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_modal(
+    render_dialog(
         frame,
         area,
-        "Install plugin?",
-        vec![Line::from(vec![
-            Span::raw("Install "),
-            Span::styled(name.to_owned(), theme::fg_bold(Token::Accent)),
-            Span::raw(" from "),
-            Span::styled(marketplace.to_owned(), theme::fg(Token::TextMuted)),
-            Span::raw("?"),
-        ])],
-        theme::color(Token::Accent),
-        Some("Install"),
+        &Dialog {
+            tone: Tone::Neutral,
+            title: "Install plugin",
+            subject: Some(Line::from(vec![
+                Span::raw(name.to_owned()),
+                Span::styled(format!("  from {marketplace}"), theme::fg(Token::TextMuted)),
+            ])),
+            body: vec!["Delivered to every harness on this machine, from one copy.".to_owned()],
+            confirm: Some("Install"),
+            focus: None,
+        },
         hits,
     );
 }
@@ -863,66 +805,21 @@ pub(crate) fn render_confirm_delete_profile(
     focus: usize,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = 52.min(area.width.saturating_sub(4));
-    let height = 8.min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-
-    let message = Line::from(vec![
-        Span::raw("Delete profile "),
-        Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
-        Span::raw("?"),
-    ]);
-    let hint = Line::from(Span::styled(
-        "This only removes UZE's own record — no harness config is touched.",
-        theme::fg(Token::TextMuted),
-    ));
-    let footer = crate::ui::hint_for(
-        &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
-        &[
-            uze_keys::Action::FocusNext,
-            uze_keys::Action::ConfirmYes,
-            uze_keys::Action::ConfirmNo,
-        ],
-    );
-
-    let block = modal_block(" Delete profile? ", theme::color(Token::StateDanger));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let inner_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    frame.render_widget(
-        Paragraph::new(message).alignment(Alignment::Center),
-        inner_layout[0],
-    );
-    frame.render_widget(
-        Paragraph::new(hint).alignment(Alignment::Center),
-        inner_layout[1],
-    );
-    render_modal_buttons(
+    render_dialog(
         frame,
-        inner_layout[3],
-        Some("Delete"),
-        theme::color(Token::StateDanger),
-        Some(focus),
+        area,
+        &Dialog {
+            tone: Tone::Danger,
+            title: "Delete profile",
+            subject: Some(Line::from(id.to_owned())),
+            body: vec![
+                "Removes UZE's own record of this profile. No harness configuration is touched."
+                    .to_owned(),
+            ],
+            confirm: Some("Delete"),
+            focus: Some(focus),
+        },
         hits,
-    );
-    frame.render_widget(
-        Paragraph::new(footer).alignment(Alignment::Center),
-        inner_layout[4],
     );
 }
 
@@ -931,15 +828,17 @@ pub(crate) fn render_confirm_context_apply(
     area: Rect,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_modal(
+    render_dialog(
         frame,
         area,
-        "Apply context changes?",
-        vec![Line::from(
-            "This reconciles AGENTS.md and its harness bridges.",
-        )],
-        theme::color(Token::StateWarning),
-        Some("Apply"),
+        &Dialog {
+            tone: Tone::Caution,
+            title: "Apply context changes",
+            subject: None,
+            body: vec!["Reconciles AGENTS.md and the bridge each harness reads.".to_owned()],
+            confirm: Some("Apply"),
+            focus: None,
+        },
         hits,
     );
 }
@@ -951,41 +850,121 @@ pub(crate) fn render_trust_required(
     detail: &str,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_modal(
+    render_dialog(
         frame,
         area,
-        "Trust required",
-        vec![
-            Line::from(vec![
-                Span::styled(plugin.to_owned(), theme::fg_bold(Token::StateWarning)),
-                Span::raw(" declares an executable capability that was not previously trusted:"),
-            ]),
-            Line::from(Span::styled(detail.to_owned(), theme::fg(Token::TextMuted))),
-        ],
-        theme::color(Token::StateWarning),
-        Some("Trust and continue"),
+        &Dialog {
+            tone: Tone::Caution,
+            title: "Trust required",
+            subject: Some(Line::from(plugin.to_owned())),
+            body: vec![
+                "It declares an executable capability that was not trusted before:".to_owned(),
+                detail.to_owned(),
+            ],
+            confirm: Some("Trust and continue"),
+            focus: None,
+        },
         hits,
     );
 }
 
-/// A modal with its own buttons.
+/// How much is at stake in a dialog's answer. It colours the thing being
+/// acted on and the button that acts — the only two places the answer
+/// lands — and nothing else, so the dialog reads calm until the eye
+/// reaches what it would do.
+#[derive(Clone, Copy)]
+enum Tone {
+    Neutral,
+    Caution,
+    Danger,
+}
+
+impl Tone {
+    fn token(self) -> Token {
+        match self {
+            Self::Neutral => Token::Accent,
+            Self::Caution => Token::StateWarning,
+            Self::Danger => Token::StateDanger,
+        }
+    }
+}
+
+/// A question the operator answers, or a notice they dismiss.
 ///
-/// The buttons are the point: a dialog that could only be answered with a
-/// key would be the one place in the product where the keyboard is the way
-/// in rather than the accelerator. `yes` is the affirmative's own word —
-/// "Install", "Remove" — because "OK" tells a reader nothing about what
-/// they are about to agree to. `None` makes it a notice with one way out.
-fn render_modal(
+/// Every dialog is the same four things in the same order — what is being
+/// asked, of what, what it means, and the answers — so that someone who
+/// has read one knows where to look in the next.
+struct Dialog<'a> {
+    tone: Tone,
+    /// What is being asked, as a heading: "Delete profile".
+    title: &'a str,
+    /// The thing it would happen to, when there is one: the profile's id.
+    subject: Option<Line<'static>>,
+    /// What answering yes does, one paragraph per entry.
+    body: Vec<String>,
+    /// The affirmative, in its own word — "Delete", not "OK". `None` makes
+    /// the dialog a notice with one way out.
+    confirm: Option<&'a str>,
+    /// Which answer the keyboard is on, for the dialogs that carry one.
+    focus: Option<usize>,
+}
+
+/// The widest a dialog is drawn: a sentence across a whole terminal is
+/// read as a strip, not a sentence.
+const DIALOG_WIDTH: u16 = 60;
+/// The breathing room between the border and everything inside it.
+const DIALOG_PAD_X: u16 = 3;
+
+/// A dialog, laid out from its content: a heading and its subject, the
+/// explanation wrapped to the dialog's measure, and the answers on the
+/// right, the affirmative last — where the eye ends up after reading. How
+/// to answer from the keyboard sits in the bottom border, out of the way
+/// of the reading. The height follows the wrapped text, so nothing is cut.
+fn render_dialog(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    title: &str,
-    lines: Vec<Line<'static>>,
-    color: Color,
-    yes: Option<&str>,
+    dialog: &Dialog<'_>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = area.width.min(76);
-    let height = (lines.len() as u16 + 6).min(area.height.saturating_sub(2));
+    let width = DIALOG_WIDTH.min(area.width.saturating_sub(4));
+    let measure = usize::from(width.saturating_sub(2 + DIALOG_PAD_X * 2).max(1));
+    let hue = dialog.tone.token();
+
+    let mut lines = vec![
+        Line::default(),
+        Line::from(Span::styled(
+            dialog.title.to_owned(),
+            theme::fg_bold(Token::TextBright),
+        )),
+    ];
+    if let Some(subject) = &dialog.subject {
+        let mut subject = subject.clone();
+        if let Some(first) = subject.spans.first_mut() {
+            first.style = theme::fg_bold(hue);
+        }
+        lines.push(subject);
+    }
+    for (index, paragraph) in dialog.body.iter().enumerate() {
+        lines.push(Line::default());
+        let style = if index == 0 {
+            theme::fg(Token::TextSecondary)
+        } else {
+            theme::fg(Token::TextMuted)
+        };
+        lines.extend(
+            crate::ui::wrap_words(paragraph, measure)
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, style))),
+        );
+    }
+    lines.push(Line::default());
+    let buttons_row = lines.len() as u16;
+    // The row the buttons are drawn over, then the same air below them as
+    // above the heading.
+    lines.push(Line::default());
+    lines.push(Line::default());
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -993,101 +972,115 @@ fn render_modal(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = modal_block(format!(" {title} "), color);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground))
+        .title_bottom(dialog_hint(dialog).right_aligned())
+        .padding(Padding::horizontal(DIALOG_PAD_X));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let body = Rect::new(
-        inner.x,
-        inner.y,
-        inner.width,
-        inner.height.saturating_sub(2),
-    );
-    frame.render_widget(
-        Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }),
-        body,
-    );
-    render_modal_buttons(
-        frame,
-        Rect::new(inner.x, inner.y + body.height, inner.width, 1),
-        yes,
-        color,
-        None,
-        hits,
-    );
-    frame.render_widget(
-        Paragraph::new(crate::ui::hint_for(
-            &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
-            &[uze_keys::Action::ConfirmYes, uze_keys::Action::ConfirmNo],
-        ))
-        .alignment(Alignment::Center),
-        Rect::new(inner.x, inner.y + body.height + 1, inner.width, 1),
-    );
+    frame.render_widget(Paragraph::new(lines), inner);
+    if buttons_row < inner.height {
+        render_dialog_buttons(
+            frame,
+            Rect::new(inner.x, inner.y + buttons_row, inner.width, 1),
+            dialog,
+            hits,
+        );
+    }
 }
 
-/// The affirmative and the way out, as targets.
-///
-/// `focus` is which one the keyboard is on, for the dialogs that carry a
-/// focus; `None` draws the affirmative as the filled one, which is what a
-/// yes/no question looks like when nothing has moved yet.
-fn render_modal_buttons(
+/// `y delete · esc cancel` — the dialog's own words for its answers, with
+/// whichever keys reach them now.
+fn dialog_hint(dialog: &Dialog<'_>) -> Line<'static> {
+    let keymap = uze_keys::active();
+    let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Confirm];
+    let answers = match dialog.confirm {
+        Some(confirm) => vec![
+            (uze_keys::Action::ConfirmYes, confirm.to_lowercase()),
+            (uze_keys::Action::Dismiss, "cancel".to_owned()),
+        ],
+        None => vec![(uze_keys::Action::Dismiss, "close".to_owned())],
+    };
+    let mut spans = vec![Span::raw(" ")];
+    for (index, (action, word)) in answers.into_iter().enumerate() {
+        let Some(chord) = keymap.chord_for(action, &scopes) else {
+            continue;
+        };
+        if index > 0 {
+            spans.push(Span::styled(
+                format!(" {} ", theme::glyph(Symbol::HintSeparator)),
+                theme::fg(Token::TextDim),
+            ));
+        }
+        spans.push(Span::styled(
+            chord.to_string(),
+            theme::fg(Token::TextSecondary),
+        ));
+        spans.push(Span::styled(
+            format!(" {word}"),
+            theme::fg(Token::TextMuted),
+        ));
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
+/// The answers, right-aligned, as targets: the way out first, the
+/// affirmative last. The one the keyboard is on is drawn solid, the other
+/// soft — the same two weights every button in the product has. With no
+/// focus to carry, the affirmative is the solid one, which is what a
+/// question looks like before anything has moved.
+fn render_dialog_buttons(
     frame: &mut ratatui::Frame<'_>,
     row: Rect,
-    yes: Option<&str>,
-    color: Color,
-    focus: Option<usize>,
+    dialog: &Dialog<'_>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let cancel = match yes {
-        Some(_) => "  Cancel  ",
-        None => "  Close  ",
+    let cancel = if dialog.confirm.is_some() {
+        "  Cancel  "
+    } else {
+        "  Close  "
     };
-    let yes_label = yes.map(|label| format!("  {label}  "));
-    let gap: u16 = if yes_label.is_some() { 2 } else { 0 };
-    let total = cancel.chars().count() as u16
-        + yes_label.as_ref().map_or(0, |l| l.chars().count() as u16)
-        + gap;
+    let confirm = dialog.confirm.map(|label| format!("  {label}  "));
+    let on_cancel = dialog.focus == Some(0) || dialog.confirm.is_none();
+    let mut buttons: Vec<(String, Style, uze_keys::Action)> = vec![(
+        cancel.to_owned(),
+        crate::ui::view::button_style(Token::TextSecondary, on_cancel, Token::SurfaceBackground),
+        uze_keys::Action::ConfirmNo,
+    )];
+    if let Some(label) = confirm {
+        buttons.push((
+            label,
+            crate::ui::view::button_style(
+                dialog.tone.token(),
+                !on_cancel,
+                Token::SurfaceBackground,
+            ),
+            uze_keys::Action::ConfirmYes,
+        ));
+    }
+    let gap = 2;
+    let total: u16 = buttons
+        .iter()
+        .map(|(label, ..)| label.chars().count() as u16)
+        .sum::<u16>()
+        + gap * (buttons.len() as u16 - 1);
     if row.width < total {
         return;
     }
-    let filled = |hue: Color| {
-        Style::default()
-            .fg(theme::color(Token::TextBright))
-            .bg(hue)
-            .add_modifier(Modifier::BOLD)
-    };
-    let mut x = row.x + (row.width - total) / 2;
-    let cancel_rect = Rect::new(x, row.y, cancel.chars().count() as u16, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            cancel,
-            if focus == Some(0) {
-                filled(theme::color(Token::TextMuted))
-            } else {
-                theme::fg(Token::TextMuted)
-            },
-        )),
-        cancel_rect,
-    );
+    let mut x = row.right() - total;
     // Prepended, because the dialog is drawn over whatever was behind it
     // and that is still in the hit list underneath.
-    let mut buttons = vec![(cancel_rect, Hit::OfferedAction(uze_keys::Action::ConfirmNo))];
-    x += cancel_rect.width + gap;
-    if let Some(label) = yes_label {
+    let mut targets = Vec::new();
+    for (label, style, action) in buttons {
         let rect = Rect::new(x, row.y, label.chars().count() as u16, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                label,
-                if focus == Some(0) {
-                    theme::fg_bold(Token::StateDanger)
-                } else {
-                    filled(color)
-                },
-            )),
-            rect,
-        );
-        buttons.push((rect, Hit::OfferedAction(uze_keys::Action::ConfirmYes)));
+        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+        targets.push((rect, Hit::OfferedAction(action)));
+        x += rect.width + gap;
     }
-    hits.splice(0..0, buttons);
+    hits.splice(0..0, targets);
 }
 
 /// The modal dialog surface: `theme::color(Token::SurfaceBackground)`-colored (so it reads as "still part of

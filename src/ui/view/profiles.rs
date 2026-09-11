@@ -3,6 +3,11 @@
 //! Profiles keeps the selected profile's preferences directly beneath its
 //! name. The screen therefore reads as one compact tree beside the harness
 //! checklist, instead of making people scan three independent columns.
+//!
+//! The preview takes the tree's place: the same profile, spelled the way
+//! each harness's own configuration spells it, against what that file holds
+//! now. Preferences are UZE's vocabulary and a harness never reads them —
+//! the preview is where a person sees what a harness will.
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -10,7 +15,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use uze_application::{Autonomy, ModelPreference, PreferenceApplyOutcome, SandboxScope};
+use uze_application::application::{HarnessPreview, ProfilePreview};
+use uze_application::{
+    Autonomy, AxisPlan, CompatibilityRoute, KeyPlan, ModelPreference, PlannedValue,
+    PreferenceApplyOutcome, SandboxScope,
+};
 
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
@@ -87,6 +96,15 @@ fn focus_color(focused: bool) -> Color {
     }
 }
 
+const PREVIEW_BUTTON: &str = "  Preview  ";
+
+/// Columns of a preference row: the cursor, the axis name, then the value
+/// between its steppers — wide enough for the longest value
+/// (`workspace-write`), so the steppers stand in one column on every row.
+const PREFERENCE_CURSOR: usize = 4;
+const PREFERENCE_LABEL: usize = 20;
+const PREFERENCE_VALUE: usize = 15;
+
 fn autonomy_label(value: Autonomy) -> &'static str {
     match value {
         Autonomy::Manual => "manual",
@@ -146,34 +164,105 @@ fn render_profile_tree(
     frame.render_widget(block, area);
     let header = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(7)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(PREVIEW_BUTTON.len() as u16),
+            Constraint::Length(2),
+            Constraint::Length(5),
+        ])
         .split(Rect::new(
             inner.x,
             inner.y,
             inner.width.saturating_sub(1),
             1,
         ));
+    let title = match (model.profile_preview_open, model.selected_profile()) {
+        (true, Some(profile)) => format!(
+            "Profiles {} {} preview",
+            theme::glyph(Symbol::ChevronRight),
+            profile.id
+        ),
+        _ => "Profiles".to_owned(),
+    };
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "Profiles",
+            title,
             Style::default()
                 .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         header[0],
     );
+    // Previewing is a way of looking at the screen rather than something
+    // done to the profile, so it sits with the screen's own controls; it
+    // is drawn as a button, engaged while the preview is open.
+    if model.selected_profile().is_some() {
+        let action = uze_keys::Action::PreviewProfile;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                PREVIEW_BUTTON,
+                super::button_style(
+                    if model.profile_preview_open {
+                        Token::StateWarning
+                    } else {
+                        Token::Accent
+                    },
+                    model.profile_preview_open || model.hovered_offer == Some(action),
+                    Token::SurfaceBackground,
+                ),
+            )),
+            header[1],
+        );
+        hits.push((header[1], Hit::OfferedAction(action)));
+    }
     frame.render_widget(
         Paragraph::new(Span::styled("+ new", theme::fg(Token::Accent))).alignment(Alignment::Right),
-        header[1],
+        header[3],
     );
-    hits.push((header[1], Hit::NewProfile));
+    hits.push((header[3], Hit::NewProfile));
+    let subtitle = match (model.profile_preview_open, model.selected_profile()) {
+        (true, Some(profile)) => preview_summary(model, &profile.id),
+        _ => "Configure preferences and apply them across harnesses".to_owned(),
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "Configure preferences and apply them across harnesses",
-            theme::fg(Token::TextMuted),
-        )),
+        Paragraph::new(Span::styled(subtitle, theme::fg(Token::TextMuted))),
         Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1),
     );
+
+    if model.profile_preview_open && !model.profiles.is_empty() {
+        let body = Rect::new(
+            inner.x,
+            inner.y.saturating_add(3),
+            inner.width.saturating_sub(1),
+            inner.height.saturating_sub(3),
+        );
+        let preview = preview_lines(model, body.width);
+        // Scrolled only as far as keeping the cursor's harness, and a few
+        // of its settings, on screen needs.
+        let cursor_line = preview
+            .harness_rows
+            .get(model.profile_preview_cursor)
+            .copied()
+            .unwrap_or(0);
+        let scroll = cursor_line.saturating_sub(usize::from(body.height).saturating_sub(6));
+        for (index, line) in preview.harness_rows.iter().enumerate() {
+            if let Some(row) = line
+                .checked_sub(scroll)
+                .and_then(|row| u16::try_from(row).ok())
+                && row < body.height
+            {
+                hits.push((
+                    Rect::new(body.x, body.y + row, body.width, 1),
+                    Hit::PreviewHarness(index),
+                ));
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(preview.lines).scroll((u16::try_from(scroll).unwrap_or(0), 0)),
+            body,
+        );
+        return;
+    }
 
     if model.profiles.is_empty() {
         frame.render_widget(
@@ -240,63 +329,10 @@ fn render_profile_tree(
                 theme::fg_bold(Token::Accent),
             ));
         }
-        let row = Rect::new(inner.x, y, inner.width, 1);
-        let controls = if selected && model.profiles.len() > 1 && inner.width >= 20 {
-            Some(
-                Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Min(1),
-                        Constraint::Length(10),
-                        Constraint::Length(3),
-                        Constraint::Length(10),
-                    ])
-                    .split(row),
-            )
-        } else {
-            None
-        };
-        let profile_rect = controls.as_ref().map_or(row, |parts| parts[0]);
+        // The row names the profile and nothing else: what can be done to
+        // it is the drawer's buttons, as on every other screen.
+        let profile_rect = Rect::new(inner.x, y, inner.width, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), profile_rect);
-        if let Some(parts) = controls {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    format!("{} remove", theme::glyph(Symbol::MarkClose)),
-                    theme::fg(Token::StateDanger),
-                ))
-                .alignment(Alignment::Right),
-                parts[1],
-            );
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    theme::glyph(Symbol::TreeColumnDivider),
-                    theme::fg(Token::BorderDefault),
-                ))
-                .alignment(Alignment::Center),
-                parts[2],
-            );
-            hits.push((parts[1], Hit::DeleteSelectedProfile));
-            if profile.active {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        format!("{} active", theme::glyph(Symbol::StatusSelected)),
-                        theme::fg_bold(Token::Accent),
-                    ))
-                    .alignment(Alignment::Left),
-                    parts[3],
-                );
-            } else {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        format!("{} apply", theme::glyph(Symbol::StatusIdle)),
-                        theme::fg(Token::Accent),
-                    ))
-                    .alignment(Alignment::Left),
-                    parts[3],
-                );
-                hits.push((parts[3], Hit::ApplySelectedProfile));
-            }
-        }
         hits.push((profile_rect, Hit::ProfileRow(index)));
         y += 1;
 
@@ -328,22 +364,56 @@ fn render_profile_tree(
                 if editing {
                     value_style = value_style.add_modifier(Modifier::BOLD);
                 }
+                // The steppers say the value is one of several before anyone
+                // tries a key, and they are what the pointer changes it with.
+                let stepper = theme::on(
+                    if editing {
+                        Token::Accent
+                    } else {
+                        Token::TextMuted
+                    },
+                    Token::SurfaceRaised,
+                );
                 let rect = Rect::new(inner.x, y, inner.width, 1);
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled(
-                            if editing { "  › " } else { "    " },
+                            if editing {
+                                format!("  {} ", theme::glyph(Symbol::ChevronRight))
+                            } else {
+                                " ".repeat(PREFERENCE_CURSOR)
+                            },
                             theme::on(Token::Accent, Token::SurfaceRaised),
                         ),
                         Span::styled(
-                            format!("{label:<20}"),
+                            format!("{label:<PREFERENCE_LABEL$}"),
                             theme::on(Token::TextSecondary, Token::SurfaceRaised),
                         ),
-                        Span::styled(value, value_style.bg(theme::color(Token::SurfaceRaised))),
+                        Span::styled(format!("{} ", theme::glyph(Symbol::StepPrevious)), stepper),
+                        Span::styled(
+                            format!("{value:<PREFERENCE_VALUE$}"),
+                            value_style.bg(theme::color(Token::SurfaceRaised)),
+                        ),
+                        Span::styled(format!(" {}", theme::glyph(Symbol::StepNext)), stepper),
                     ]))
                     .style(theme::bg(Token::SurfaceRaised)),
                     rect,
                 );
+                let previous_x = rect.x + (PREFERENCE_CURSOR + PREFERENCE_LABEL) as u16;
+                let next_x = previous_x + 2 + PREFERENCE_VALUE as u16;
+                // Two cells each — the glyph and the gap beside it — so the
+                // target is not a single column wide.
+                for (x, forward) in [(previous_x, false), (next_x, true)] {
+                    if x + 2 <= rect.right() {
+                        hits.push((
+                            Rect::new(x, y, 2, 1),
+                            Hit::StepPreference {
+                                index: preference_index,
+                                forward,
+                            },
+                        ));
+                    }
+                }
                 hits.push((rect, Hit::PreferenceRow(preference_index)));
                 y += 1;
             }
@@ -353,15 +423,17 @@ fn render_profile_tree(
 }
 
 fn outcome_badge(outcome: &PreferenceApplyOutcome) -> (&'static str, Color) {
+    // How faithfully each axis landed is the preview's table; the badge
+    // only says whether the write happened.
     match outcome {
-        PreferenceApplyOutcome::Applied { .. } => ("Applied", theme::color(Token::Accent)),
-        PreferenceApplyOutcome::AppliedWithApproximation { .. } => {
-            ("Applied~", theme::color(Token::StateWarning))
+        PreferenceApplyOutcome::Applied { .. }
+        | PreferenceApplyOutcome::AppliedWithApproximation { .. } => {
+            ("applied", theme::color(Token::Accent))
         }
         PreferenceApplyOutcome::Unsupported { .. } => {
-            ("Unsupported", theme::color(Token::TextMuted))
+            ("unsupported", theme::color(Token::TextMuted))
         }
-        PreferenceApplyOutcome::Failed { .. } => ("Failed", theme::color(Token::StateDanger)),
+        PreferenceApplyOutcome::Failed { .. } => ("failed", theme::color(Token::StateDanger)),
     }
 }
 
@@ -404,22 +476,25 @@ fn render_harnesses(
         panel_inner.height.saturating_sub(2 + footer_height),
     );
     frame.render_widget(block, area);
+    let checked: Vec<&str> = harnesses
+        .iter()
+        .filter(|harness| {
+            model
+                .profile_harness_selection
+                .contains(&harness.integration)
+        })
+        .map(|harness| harness.integration.as_str())
+        .collect();
     if let Some(profile) = model.selected_profile() {
+        let (color, headline, subtitle) =
+            drawer_status(profile.active, model.profile_preview_answer(), &checked);
         render_drawer_footer(
             frame,
             Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
-            if profile.active {
-                DrawerStatus {
-                    color: theme::color(Token::Accent),
-                    headline: "Active",
-                    subtitle: "Its preferences are in use",
-                }
-            } else {
-                DrawerStatus {
-                    color: theme::color(Token::TextMuted),
-                    headline: "Not active",
-                    subtitle: "Make it active to use it",
-                }
+            DrawerStatus {
+                color,
+                headline,
+                subtitle: &subtitle,
             },
             &offers,
             model.hovered_offer,
@@ -494,20 +569,522 @@ fn render_harnesses(
             ),
             Span::styled(harness.display_name.clone(), name_style),
         ];
-        if let Some((label, color)) = model
+        let badge = model
             .profile_apply_results
             .iter()
             .find(|result| result.integration == harness.integration)
-            .map(|result| outcome_badge(&result.outcome))
-        {
+            .map(|result| {
+                let (label, color) = outcome_badge(&result.outcome);
+                (label.to_owned(), color)
+            })
+            .or_else(|| {
+                model
+                    .current_profile_preview()?
+                    .harnesses
+                    .iter()
+                    .find(|preview| preview.integration == harness.integration)
+                    .map(standing_badge)
+            });
+        if let Some((label, color)) = badge {
             let used: usize = spans.iter().map(|span| span.width()).sum();
-            spans.push(Span::raw(
-                " ".repeat((inner.width as usize).saturating_sub(used + label.len())),
-            ));
+            spans.push(Span::raw(" ".repeat(
+                (inner.width as usize).saturating_sub(used + label.chars().count()),
+            )));
             spans.push(Span::styled(label, Style::default().fg(color)));
         }
         let rect = Rect::new(inner.x, y, inner.width, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, Hit::ProfileHarnessRow(index)));
     }
+}
+
+/// The drawer's headline for the selected profile. "Active" alone used to
+/// claim its preferences were in use, which nothing checked; the preview is
+/// what can say so.
+fn drawer_status(
+    active: bool,
+    answer: Option<Result<&ProfilePreview, &str>>,
+    checked: &[&str],
+) -> (Color, &'static str, String) {
+    let pending = match answer {
+        Some(Ok(preview)) => Some(pending_on(preview, checked)),
+        _ => None,
+    };
+    let (color, headline) = match (active, pending) {
+        (true, Some(0)) | (true, None) => (theme::color(Token::Accent), "Active"),
+        (true, Some(_)) => (theme::color(Token::StateWarning), "Active, not in effect"),
+        (false, _) => (theme::color(Token::TextMuted), "Not active"),
+    };
+    let subtitle = match (answer, pending) {
+        (None, _) => "Reading what the harnesses hold…".to_owned(),
+        (Some(Err(_)), _) => "Could not read the harnesses".to_owned(),
+        (_, Some(0)) if active => "In effect on every checked harness".to_owned(),
+        (_, Some(0)) => "Applying changes nothing on the checked harnesses".to_owned(),
+        (_, pending) => {
+            let pending = pending.unwrap_or(0);
+            format!(
+                "{pending} setting{} to write — see the preview, then apply",
+                plural(pending)
+            )
+        }
+    };
+    (color, headline, subtitle)
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
+/// Keys applying would change, on the harnesses it would be applied to.
+fn pending_on(preview: &ProfilePreview, checked: &[&str]) -> usize {
+    preview
+        .harnesses
+        .iter()
+        .filter(|harness| checked.contains(&harness.integration.as_str()))
+        .filter_map(|harness| harness.plan.as_ref().ok())
+        .map(|plan| plan.pending())
+        .sum()
+}
+
+/// The preview's one-line answer, where the list screen says what it is.
+fn preview_summary(model: &TuiModel, id: &str) -> String {
+    let checked: Vec<&str> = model
+        .profile_harness_selection
+        .iter()
+        .map(String::as_str)
+        .collect();
+    match model.profile_preview_answer() {
+        None => format!("Reading what \"{id}\" would change…"),
+        Some(Err(_)) => "Could not read the harnesses".to_owned(),
+        Some(Ok(preview)) => {
+            let pending = pending_on(preview, &checked);
+            let harnesses = preview
+                .harnesses
+                .iter()
+                .filter(|harness| checked.contains(&harness.integration.as_str()))
+                .filter(|harness| harness.plan.as_ref().is_ok_and(|plan| plan.pending() > 0))
+                .count();
+            if pending == 0 {
+                format!("\"{id}\" is already in effect on every checked harness")
+            } else {
+                format!(
+                    "\"{id}\" would change {pending} setting{} in {harnesses} harness{} — apply \
+                     writes them",
+                    plural(pending),
+                    if harnesses == 1 { "" } else { "es" }
+                )
+            }
+        }
+    }
+}
+
+/// One harness's standing against the selected profile: its checklist
+/// row's badge, and its heading in the preview.
+fn standing_badge(preview: &HarnessPreview) -> (String, Color) {
+    match &preview.plan {
+        Err(_) => ("cannot apply".to_owned(), theme::color(Token::StateDanger)),
+        Ok(plan) if plan.pending() == 0 => ("in effect".to_owned(), theme::color(Token::Accent)),
+        Ok(plan) => (
+            format!("{} change{}", plan.pending(), plural(plan.pending())),
+            theme::color(Token::StateWarning),
+        ),
+    }
+}
+
+/// Where a harness's settings start when it is open.
+const DETAIL_INDENT: usize = 6;
+const VERB_COLUMN: usize = 8;
+/// Each axis's column in the preview's table — wide enough for its words.
+const AXIS_CELL: usize = 11;
+
+/// What applying does to one key, in the word a person would use for it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Verb {
+    Add,
+    Change,
+    Remove,
+    /// Already what the profile asks for.
+    Keep,
+    /// The operator's own value, which the profile has no reason to touch.
+    Yours,
+}
+
+impl Verb {
+    fn of(key: &KeyPlan) -> Self {
+        match (&key.planned, key.in_effect(), key.current.is_some()) {
+            (PlannedValue::Kept, ..) => Self::Yours,
+            (_, true, _) => Self::Keep,
+            (PlannedValue::Removed, false, _) => Self::Remove,
+            (PlannedValue::Set(_), false, true) => Self::Change,
+            (PlannedValue::Set(_), false, false) => Self::Add,
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Change => "change",
+            Self::Remove => "remove",
+            Self::Keep => "keep",
+            Self::Yours => "yours",
+        }
+    }
+
+    fn changes(self) -> bool {
+        matches!(self, Self::Add | Self::Change | Self::Remove)
+    }
+}
+
+/// How faithfully a harness can do what one axis asks, in one word — the
+/// cell of the preview's table.
+fn fidelity(route: CompatibilityRoute) -> (&'static str, Color) {
+    match route {
+        CompatibilityRoute::Native => ("as asked", theme::color(Token::Accent)),
+        CompatibilityRoute::Adaptable => ("adapted", theme::color(Token::StateInfo)),
+        CompatibilityRoute::Degraded => ("partial", theme::color(Token::StateWarning)),
+        CompatibilityRoute::Unsupported => ("n/a", theme::color(Token::TextMuted)),
+    }
+}
+
+/// The preview's lines, and which line is each harness's row — so the
+/// screen can scroll to the cursor and make each row a click target.
+pub(crate) struct PreviewLines {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) harness_rows: Vec<usize>,
+}
+
+/// The preview of the selected profile: a table of every detected harness
+/// against the three axes, each cell saying how faithfully that harness
+/// can do what the axis asks. A harness opens onto its own file — what
+/// applying adds, changes or removes there, and whatever keeps an axis
+/// from being honoured — and opens by itself only when applying would
+/// write something. What is already in effect and delivered as asked is
+/// one quiet row, not a page of keys.
+pub(crate) fn preview_lines(model: &TuiModel, width: u16) -> PreviewLines {
+    let message = |text: String, token: Token| PreviewLines {
+        lines: wrapped(&text, 0, 0, width, theme::color(token)),
+        harness_rows: Vec::new(),
+    };
+    let preview = match model.profile_preview_answer() {
+        Some(Ok(preview)) => preview,
+        Some(Err(reason)) => {
+            return message(
+                format!("Could not read the harnesses: {reason}"),
+                Token::StateDanger,
+            );
+        }
+        None if model.detected_harness_ids().is_empty() => {
+            return message(
+                "No harnesses detected — nothing to preview".to_owned(),
+                Token::TextMuted,
+            );
+        }
+        None => {
+            return message(
+                "Reading each harness's configuration…".to_owned(),
+                Token::TextMuted,
+            );
+        }
+    };
+    let names: Vec<String> = preview
+        .harnesses
+        .iter()
+        .map(|harness| harness_name(model, &harness.integration))
+        .collect();
+    let name_width = names
+        .iter()
+        .map(|name| name.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let mut lines = vec![Line::from(vec![
+        Span::raw(" ".repeat(4 + name_width)),
+        Span::styled(
+            ["autonomy", "sandbox", "model"]
+                .map(|axis| format!("{axis:<AXIS_CELL$}"))
+                .concat(),
+            theme::fg(Token::TextMuted),
+        ),
+    ])];
+    let mut harness_rows = Vec::new();
+    for (index, (harness, name)) in preview.harnesses.iter().zip(names).enumerate() {
+        let open = model.profile_preview_expanded(harness);
+        harness_rows.push(lines.len());
+        lines.push(harness_row(
+            model, harness, &name, name_width, index, open, width,
+        ));
+        if open {
+            lines.extend(harness_detail(harness, width));
+            lines.push(Line::default());
+        }
+    }
+    lines.push(Line::default());
+    lines.extend(wrapped(
+        "adapted: set another way · partial: not fully honoured · n/a: no such setting",
+        0,
+        0,
+        width,
+        theme::color(Token::TextMuted),
+    ));
+    PreviewLines {
+        lines,
+        harness_rows,
+    }
+}
+
+fn harness_name(model: &TuiModel, integration: &str) -> String {
+    model
+        .doctor
+        .as_ref()
+        .and_then(|doctor| {
+            doctor
+                .harnesses
+                .iter()
+                .find(|health| health.integration == integration)
+        })
+        .map_or_else(
+            || integration.to_owned(),
+            |health| health.display_name.clone(),
+        )
+}
+
+fn harness_row(
+    model: &TuiModel,
+    harness: &HarnessPreview,
+    name: &str,
+    name_width: usize,
+    index: usize,
+    open: bool,
+    width: u16,
+) -> Line<'static> {
+    let checked = model
+        .profile_harness_selection
+        .contains(&harness.integration);
+    let cursor = index == model.profile_preview_cursor;
+    let mut spans = vec![
+        Span::styled(
+            if cursor {
+                format!("{} ", theme::glyph(Symbol::ChevronRight))
+            } else {
+                "  ".to_owned()
+            },
+            theme::fg(Token::Accent),
+        ),
+        Span::styled(
+            format!(
+                "{} ",
+                theme::glyph(if open {
+                    Symbol::ChevronExpanded
+                } else {
+                    Symbol::ChevronCollapsed
+                })
+            ),
+            theme::fg(Token::TextMuted),
+        ),
+        Span::styled(
+            format!("{name:<name_width$}"),
+            if checked {
+                theme::fg_bold(Token::TextBright)
+            } else {
+                theme::fg(Token::TextTertiary)
+            },
+        ),
+    ];
+    match &harness.plan {
+        Ok(plan) => {
+            for axis in &plan.axes {
+                let (word, color) = fidelity(axis.route);
+                spans.push(Span::styled(
+                    format!("{word:<AXIS_CELL$}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+        Err(_) => spans.push(Span::raw(" ".repeat(AXIS_CELL * 3))),
+    }
+    let (standing, color) = if checked {
+        standing_badge(harness)
+    } else {
+        ("not checked".to_owned(), theme::color(Token::TextMuted))
+    };
+    let used: usize = spans.iter().map(Span::width).sum();
+    spans.push(Span::raw(
+        " ".repeat(
+            (width as usize)
+                .saturating_sub(used + standing.chars().count())
+                .max(1),
+        ),
+    ));
+    spans.push(Span::styled(standing, Style::default().fg(color)));
+    let line = Line::from(spans);
+    if cursor {
+        line.style(theme::bg(Token::SurfaceRaised))
+    } else {
+        line
+    }
+}
+
+/// An open harness: its file, what keeps an axis from being honoured, and
+/// its settings — what applying changes first.
+fn harness_detail(harness: &HarnessPreview, width: u16) -> Vec<Line<'static>> {
+    let plan = match &harness.plan {
+        Ok(plan) => plan,
+        Err(reason) => {
+            return wrapped(
+                reason,
+                DETAIL_INDENT,
+                0,
+                width,
+                theme::color(Token::StateDanger),
+            );
+        }
+    };
+    let path = vec![Line::from(vec![
+        Span::raw(" ".repeat(DETAIL_INDENT)),
+        Span::styled(
+            crate::ui::display_project_path(&plan.config_path),
+            theme::fg(Token::TextMuted),
+        ),
+    ])];
+    let key_width = plan
+        .axes
+        .iter()
+        .flat_map(|axis| &axis.keys)
+        .map(|key| key.key.len())
+        .max()
+        .unwrap_or(0)
+        // A key longer than half the room pushes only its own line along,
+        // rather than every line's value off the edge.
+        .min((width as usize).saturating_sub(DETAIL_INDENT + VERB_COLUMN) / 2);
+    let mut keys: Vec<&KeyPlan> = plan.axes.iter().flat_map(|axis| &axis.keys).collect();
+    keys.sort_by_key(|key| !Verb::of(key).changes());
+    let settings: Vec<Line<'static>> = keys
+        .into_iter()
+        .map(|key| key_line(key, key_width))
+        .collect();
+    // Where the file is, what keeps an axis from being honoured, and what
+    // the file holds are three answers; a blank line keeps each its own.
+    let groups = [path, caveats(&plan.axes, width), settings];
+    let mut lines = Vec::new();
+    for group in groups.into_iter().filter(|group| !group.is_empty()) {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(group);
+    }
+    lines
+}
+
+/// `change  permissions.defaultMode  "auto" → "acceptEdits"`.
+fn key_line(key: &KeyPlan, key_width: usize) -> Line<'static> {
+    let verb = Verb::of(key);
+    let (verb_style, key_style) = if verb.changes() {
+        (
+            theme::fg_bold(Token::StateWarning),
+            theme::fg(Token::TextBright),
+        )
+    } else {
+        (theme::fg(Token::TextMuted), theme::fg(Token::TextTertiary))
+    };
+    let current = key.current.clone().unwrap_or_else(|| "unset".to_owned());
+    let arrow = || {
+        Span::styled(
+            format!(" {} ", theme::glyph(Symbol::ArrowTo)),
+            theme::fg(Token::TextMuted),
+        )
+    };
+    let planned = |value: String| Span::styled(value, theme::fg_bold(Token::StateWarning));
+    let mut spans = vec![
+        Span::raw(" ".repeat(DETAIL_INDENT)),
+        Span::styled(format!("{:<VERB_COLUMN$}", verb.word()), verb_style),
+        Span::styled(format!("{:<key_width$}  ", key.key), key_style),
+    ];
+    match (verb, &key.planned) {
+        (Verb::Add, PlannedValue::Set(value)) => spans.push(planned(value.clone())),
+        (Verb::Change, PlannedValue::Set(value)) => {
+            spans.push(Span::styled(current, theme::fg(Token::TextMuted)));
+            spans.push(arrow());
+            spans.push(planned(value.clone()));
+        }
+        (Verb::Remove, _) => {
+            spans.push(Span::styled(current, theme::fg(Token::TextMuted)));
+            spans.push(arrow());
+            spans.push(planned("unset".to_owned()));
+        }
+        (Verb::Yours, _) => {
+            spans.push(Span::styled(current, theme::fg(Token::TextSecondary)));
+            spans.push(Span::styled(
+                "  left as you set it",
+                theme::fg(Token::TextMuted),
+            ));
+        }
+        _ => spans.push(Span::styled(current, theme::fg(Token::TextMuted))),
+    }
+    Line::from(spans)
+}
+
+/// What keeps an axis from being honoured on this harness — a `partial`
+/// or `n/a` cell's reason. How an `adapted` axis is spelled is not one:
+/// the settings below already show it.
+fn caveats(axes: &[AxisPlan], width: u16) -> Vec<Line<'static>> {
+    let mut caveats: Vec<&AxisPlan> = axes
+        .iter()
+        .filter(|axis| {
+            matches!(
+                axis.route,
+                CompatibilityRoute::Degraded | CompatibilityRoute::Unsupported
+            )
+        })
+        .collect();
+    caveats.sort_by_key(|axis| axis.route != CompatibilityRoute::Degraded);
+    caveats
+        .into_iter()
+        .flat_map(|axis| {
+            let (mark, color) = if axis.route == CompatibilityRoute::Degraded {
+                (Symbol::MarkAttention, theme::color(Token::StateWarning))
+            } else {
+                (Symbol::MarkUnsupported, theme::color(Token::TextMuted))
+            };
+            let reason = axis.note.as_ref().unwrap_or(&axis.summary);
+            wrapped(
+                &format!("{} {}: {reason}", theme::glyph(mark), axis.axis.label()),
+                DETAIL_INDENT,
+                2,
+                width,
+                color,
+            )
+        })
+        .collect()
+}
+
+/// Word-wraps `text` into lines indented by `indent`, within `width`.
+/// Continuation lines hang `hang` columns further in, so a note after its
+/// mark reads as one block.
+fn wrapped(text: &str, indent: usize, hang: usize, width: u16, color: Color) -> Vec<Line<'static>> {
+    let room = (width as usize).saturating_sub(indent + hang).max(20);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > room {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let lead = if index == 0 { indent } else { indent + hang };
+            Line::from(vec![
+                Span::raw(" ".repeat(lead)),
+                Span::styled(line, Style::default().fg(color)),
+            ])
+        })
+        .collect()
 }

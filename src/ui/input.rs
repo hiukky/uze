@@ -317,10 +317,11 @@ impl TuiModel {
                 }
                 Intent::None
             }
-            Action::ActivateProfile => self
-                .selected_profile()
-                .map(|profile| Intent::SetActiveProfile(profile.id.clone()))
-                .unwrap_or(Intent::None),
+            Action::ApplyProfile => self.apply_selected_profile(),
+            Action::PreviewProfile => {
+                self.toggle_profile_preview();
+                Intent::None
+            }
             // Answered by the surfaces that own them; anywhere else they
             // are simply not offered.
             _ => Intent::None,
@@ -351,6 +352,10 @@ impl TuiModel {
             return self.set_route(ROUTES[(self.route.index() + step) % count]);
         }
         match self.route {
+            Route::Profiles if self.profile_preview_open => {
+                self.move_profile_preview_cursor(delta);
+                Intent::None
+            }
             Route::Profiles => {
                 self.move_profile_selection(delta);
                 Intent::None
@@ -415,9 +420,14 @@ impl TuiModel {
             return Intent::None;
         }
         if self.route == Route::Profiles {
-            // Collapses back to the List panel first, mirroring every other
-            // route's "Esc closes the drawer, doesn't touch focus" rule.
-            self.profile_panel = ProfilePanel::List;
+            // The preview closes first, then the panel collapses back to
+            // the List, mirroring every other route's "Esc closes the
+            // drawer, doesn't touch focus" rule.
+            if self.profile_preview_open {
+                self.profile_preview_open = false;
+            } else {
+                self.profile_panel = ProfilePanel::List;
+            }
             return Intent::None;
         }
         // Slides the open drawer away — the fetched detail stays cached, so
@@ -455,6 +465,10 @@ impl TuiModel {
             // drawer elsewhere. Editor: change the highlighted value.
             // Harnesses: no-op — toggling is the toggle action's job,
             // deliberately not doubled onto Enter.
+            Route::Profiles if self.profile_preview_open => {
+                self.toggle_profile_preview_harness(self.profile_preview_cursor);
+                Intent::None
+            }
             Route::Profiles => match self.profile_panel {
                 ProfilePanel::List => {
                     self.profile_panel = ProfilePanel::Editor;

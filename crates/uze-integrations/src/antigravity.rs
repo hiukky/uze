@@ -72,7 +72,9 @@ use uze_core::{
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
         detach_standard_receipt, inspect_standard_receipt,
     },
-    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
+    preference::{
+        PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
+    },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -759,5 +761,9 @@ impl PreferencePort for AntigravityIntegration {
 
     fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
         preferences::apply(&self.preferences_config_path(), preferences)
+    }
+
+    fn plan(&self, preferences: &Preferences) -> Result<PreferencePlan> {
+        preferences::plan(&self.preferences_config_path(), preferences)
     }
 }

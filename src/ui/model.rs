@@ -7,18 +7,28 @@ use std::{
 };
 
 use ratatui::layout::Rect;
-use uze_application::{Autonomy, ManagementLayout, ModelPreference, SandboxScope};
+use uze_application::{Autonomy, ManagementLayout, ModelPreference, Preferences, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
 use uze_application::application::offers::ActionOffer;
 use uze_application::application::{
-    ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
-    MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
-    ProfileApplyResult, ProfileSummary, ProjectContextStatus, ProjectEnvironmentState,
+    ContextPlan, DoctorReport, HarnessHealth, HarnessPreview, MarketplacePluginDetail,
+    MarketplacePluginSummary, MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection,
+    PluginSummary, ProfileApplyResult, ProfilePreview, ProfileSummary, ProjectContextStatus,
+    ProjectEnvironmentState,
 };
 
 use super::hit::Hit;
 use super::view::health::{Alert, actionable_alerts};
+
+/// What a profile preview answers: these preferences, against these
+/// harnesses. An answer that does not match the current question is stale.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreviewQuestion {
+    pub(crate) preferences: Preferences,
+    pub(crate) harness_ids: Vec<String>,
+    pub(crate) epoch: u64,
+}
 
 // --- Routes -----------------------------------------------------------------
 
@@ -410,6 +420,10 @@ pub(crate) struct TuiModel {
     /// from here resolved to nothing drawable and shows no swatches, which
     /// is the honest answer for a file with a typo in it.
     pub(crate) appearance_palettes: std::collections::BTreeMap<String, Vec<uze_theme::Rgb>>,
+    /// Whether the two lists have been read this visit — true even when a
+    /// read found nothing, so an empty machine is not asked again every
+    /// frame.
+    pub(crate) appearance_read: bool,
     pub(crate) keys_capture: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
@@ -472,6 +486,26 @@ pub(crate) struct TuiModel {
     /// badge next to each harness row. Empty (no badges) until an apply has
     /// actually run this session.
     pub(crate) profile_apply_results: Vec<ProfileApplyResult>,
+    /// Whether the Profiles screen shows the selected profile's preview —
+    /// what applying it writes into each harness — instead of the list.
+    pub(crate) profile_preview_open: bool,
+    /// The harness the preview's cursor is on, by its position in the
+    /// preview.
+    pub(crate) profile_preview_cursor: usize,
+    /// Harnesses opened or closed by hand, against their default: open
+    /// when applying would write something there, closed when not.
+    pub(crate) profile_preview_toggled: BTreeSet<String>,
+    /// The last preview answer, kept with the question it answered. Read
+    /// through [`TuiModel::profile_preview_answer`], which refuses one that
+    /// answers a question nobody is asking any more.
+    pub(crate) profile_preview: Option<(PreviewQuestion, Result<ProfilePreview, String>)>,
+    /// Bumped whenever a harness's configuration may have changed, so a
+    /// read that started before the change can never pass for one after.
+    pub(crate) profile_preview_epoch: u64,
+    /// The question last sent to the worker, so a frame does not ask it
+    /// again while the answer is on its way. Cleared whenever a harness's
+    /// configuration may have changed underneath it.
+    pub(crate) profile_preview_asked: Option<PreviewQuestion>,
 
     pub(crate) doctor: Option<DoctorReport>,
 
@@ -559,6 +593,7 @@ impl Default for TuiModel {
             appearance_themes: Vec::new(),
             appearance_glyph_sets: Vec::new(),
             appearance_palettes: std::collections::BTreeMap::new(),
+            appearance_read: false,
             keys_capture: false,
             keys_problem: None,
             keys_probe: None,
@@ -594,6 +629,12 @@ impl Default for TuiModel {
             profile_harness_selection: BTreeSet::new(),
             profile_harness_defaulted: false,
             profile_apply_results: Vec::new(),
+            profile_preview_open: false,
+            profile_preview_cursor: 0,
+            profile_preview_toggled: BTreeSet::new(),
+            profile_preview: None,
+            profile_preview_epoch: 0,
+            profile_preview_asked: None,
             doctor: None,
             resolved_at: None,
             update_badges: Vec::new(),
@@ -1383,6 +1424,159 @@ impl TuiModel {
         self.profiles.get(self.profiles_selected)
     }
 
+    /// Every harness on this machine, in the order the screen lists them.
+    /// The preview covers the unchecked ones too, so checking a box never
+    /// has to wait on a read.
+    pub(crate) fn detected_harness_ids(&self) -> Vec<String> {
+        self.doctor
+            .as_ref()
+            .map(|doctor| {
+                doctor
+                    .harnesses
+                    .iter()
+                    .filter(|harness| harness.detection.present)
+                    .map(|harness| harness.integration.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn profile_preview_question(&self) -> Option<PreviewQuestion> {
+        let profile = self.selected_profile()?;
+        let harness_ids = self.detected_harness_ids();
+        (!harness_ids.is_empty()).then_some(PreviewQuestion {
+            preferences: profile.preferences,
+            harness_ids,
+            epoch: self.profile_preview_epoch,
+        })
+    }
+
+    /// The read the Appearance screen is missing, or `Intent::None`.
+    ///
+    /// Arriving asks for it (see [`Self::set_route`]), but arriving is not
+    /// the only way onto the screen: the management client reopens on the
+    /// screen it was left on, restored without passing through a route
+    /// change, and that screen used to stay empty until clicked again.
+    pub(crate) fn appearance_intent(&self) -> super::worker::Intent {
+        if self.route == Route::Appearance && !self.appearance_read {
+            super::worker::Intent::LoadAppearance
+        } else {
+            super::worker::Intent::None
+        }
+    }
+
+    /// The preview read the Profiles screen is missing right now, or
+    /// `Intent::None`. Asked every frame, like the plugin drawer's detail:
+    /// the selection, an edited preference and a finished apply all change
+    /// the answer, and none of them should have to remember to ask.
+    pub(crate) fn profile_preview_intent(&self) -> super::worker::Intent {
+        if self.route != Route::Profiles {
+            return super::worker::Intent::None;
+        }
+        match self.profile_preview_question() {
+            Some(question) if self.profile_preview_asked.as_ref() != Some(&question) => {
+                super::worker::Intent::PreviewProfile(question)
+            }
+            _ => super::worker::Intent::None,
+        }
+    }
+
+    /// The answer to the question the screen is asking now — `None` while it
+    /// has not arrived. An `Err` stays until something changes the question:
+    /// asking again unchanged would repeat the failure forever.
+    pub(crate) fn profile_preview_answer(&self) -> Option<Result<&ProfilePreview, &str>> {
+        let question = self.profile_preview_question()?;
+        let (answered, result) = self.profile_preview.as_ref()?;
+        (*answered == question).then(|| result.as_ref().map_err(String::as_str))
+    }
+
+    /// The preview of the selected profile as it is now, when it was read.
+    pub(crate) fn current_profile_preview(&self) -> Option<&ProfilePreview> {
+        self.profile_preview_answer()?.ok()
+    }
+
+    pub(crate) fn profile_previewed(
+        &mut self,
+        question: PreviewQuestion,
+        result: Result<ProfilePreview, String>,
+    ) {
+        self.profile_preview = Some((question, result));
+    }
+
+    /// Writes the selected profile into the checked harnesses and makes it
+    /// the active one. Refuses, saying why, with nothing checked: marking a
+    /// profile active while writing it nowhere is how "active" stopped
+    /// meaning "in effect".
+    pub(crate) fn apply_selected_profile(&mut self) -> super::worker::Intent {
+        let Some((id, preferences)) = self
+            .selected_profile()
+            .map(|profile| (profile.id.clone(), profile.preferences))
+        else {
+            return super::worker::Intent::None;
+        };
+        let harness_ids: Vec<String> = self
+            .detected_harness_ids()
+            .into_iter()
+            .filter(|harness| self.profile_harness_selection.contains(harness))
+            .collect();
+        if harness_ids.is_empty() {
+            self.say("Check at least one harness to apply the profile to");
+            return super::worker::Intent::None;
+        }
+        super::worker::Intent::ApplyProfile {
+            id,
+            preferences,
+            harness_ids,
+        }
+    }
+
+    pub(crate) fn toggle_profile_preview(&mut self) {
+        self.profile_preview_open = !self.profile_preview_open;
+        self.profile_preview_cursor = 0;
+        self.profile_preview_toggled.clear();
+    }
+
+    /// Whether the preview shows a harness's settings, not just its row.
+    pub(crate) fn profile_preview_expanded(&self, harness: &HarnessPreview) -> bool {
+        let pending = harness
+            .plan
+            .as_ref()
+            .map_or(true, |plan| plan.pending() > 0);
+        pending != self.profile_preview_toggled.contains(&harness.integration)
+    }
+
+    pub(crate) fn move_profile_preview_cursor(&mut self, delta: isize) {
+        let count = self
+            .current_profile_preview()
+            .map_or(0, |preview| preview.harnesses.len());
+        self.profile_preview_cursor = self
+            .profile_preview_cursor
+            .saturating_add_signed(delta)
+            .min(count.saturating_sub(1));
+    }
+
+    /// Opens or closes the harness at `index` in the preview.
+    pub(crate) fn toggle_profile_preview_harness(&mut self, index: usize) {
+        let Some(id) = self
+            .current_profile_preview()
+            .and_then(|preview| preview.harnesses.get(index))
+            .map(|harness| harness.integration.clone())
+        else {
+            return;
+        };
+        self.profile_preview_cursor = index;
+        if !self.profile_preview_toggled.remove(&id) {
+            self.profile_preview_toggled.insert(id);
+        }
+    }
+
+    /// Starts a new epoch, so the next frame asks again and anything read
+    /// before now is refused — for when a harness's configuration may have
+    /// changed.
+    pub(crate) fn invalidate_profile_preview(&mut self) {
+        self.profile_preview_epoch = self.profile_preview_epoch.wrapping_add(1);
+    }
+
     /// Profiles has three independently-scrolled sub-panels rather than one
     /// list, so it bypasses the generic `move_selection`/`list_len`/
     /// `selected_mut` dispatch (designed for exactly one selection per
@@ -1578,6 +1772,9 @@ impl TuiModel {
         self.clamp_marketplace_selection();
         self.clamp_extension_selection();
         self.profiles = data.profiles;
+        // A refresh is the operator asking to see the machine as it is;
+        // a harness configuration edited by hand is part of that.
+        self.invalidate_profile_preview();
         self.profiles_selected = self
             .profiles_selected
             .min(self.profiles.len().saturating_sub(1));

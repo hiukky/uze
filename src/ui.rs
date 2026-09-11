@@ -467,6 +467,28 @@ const CONTENT_INSET_LEFT: u16 = 2;
 const CONTENT_INSET_RIGHT: u16 = 2;
 const CONTENT_INSET_TOP: u16 = 1;
 
+/// `text` broken between words into lines of at most `measure` columns; a
+/// single word longer than that stands on a line of its own.
+pub(crate) fn wrap_words(text: &str, measure: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let cells = |text: &str| Span::raw(text).width();
+        let wanted = cells(&line) + usize::from(!line.is_empty()) + cells(word);
+        if !line.is_empty() && wanted > measure {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Every content screen's outer inset — the design's `padding: 36px 44px`
 /// on each route's root div, translated to terminal cells. No border, no
 /// background: content just sits indented on the shared backdrop.

@@ -423,6 +423,12 @@ fn render_navigator(
                 // the product marks its selection — the accent bar and the
                 // selected surface the plugin list uses — rather than a
                 // neutral lift that the diff beside it easily outshone.
+                // The marker stands in the column a group's fold mark does,
+                // and holds that column's width even when it has nothing to
+                // say — so a file with no status still lines its icon and
+                // name up with the folders beside it.
+                let fold_width = TextSpan::raw(theme::glyph(Symbol::ChevronCollapsed)).width();
+                let marker_width = TextSpan::raw(marker.text.as_str()).width();
                 let mut spans = vec![
                     TextSpan::styled(
                         if *selected {
@@ -434,7 +440,11 @@ fn render_navigator(
                     ),
                     TextSpan::raw("  ".repeat(*depth)),
                     styled(&Span {
-                        text: format!("{} ", marker.text),
+                        text: format!(
+                            "{}{} ",
+                            marker.text,
+                            " ".repeat(fold_width.saturating_sub(marker_width))
+                        ),
                         ..marker.clone()
                     }),
                 ];
@@ -587,30 +597,51 @@ fn render_message(
     if area.height == 0 {
         return;
     }
-    let mut lines = vec![Line::from(TextSpan::styled(
-        text.to_owned(),
-        Style::default().fg(colour).add_modifier(Modifier::BOLD),
-    ))];
+    let lines = message_lines(text, hint, area.width, colour);
+    // Centred on the block's real height, wrapped lines included, so a
+    // long hint does not push the message off the middle it was aimed at.
+    let height = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let top = area.y + (area.height - height) / 2;
+    frame.render_widget(
+        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
+        Rect::new(area.x, top, area.width, height),
+    );
+}
+
+/// The widest a message's lines run: a sentence across a whole wide pane
+/// is read as a strip, not as a sentence.
+const MESSAGE_MEASURE: u16 = 48;
+
+/// A message as the lines it is drawn in. A message that carries a hint is
+/// a heading over it, so it reads as one in capitals; one on its own — an
+/// error, "reading…" — is a sentence and keeps its case.
+fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> Vec<Line<'static>> {
+    let measure = usize::from(width.clamp(1, MESSAGE_MEASURE));
+    let title = if hint.is_some() {
+        text.to_uppercase()
+    } else {
+        text.to_owned()
+    };
+    let mut lines: Vec<Line<'static>> = crate::ui::wrap_words(&title, measure)
+        .into_iter()
+        .map(|line| {
+            Line::from(TextSpan::styled(
+                line,
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
     if let Some(hint) = hint {
         lines.push(Line::from(""));
-        lines.push(Line::from(TextSpan::styled(
-            hint.to_owned(),
-            theme::fg(Token::TextMuted),
-        )));
+        lines.extend(
+            crate::ui::wrap_words(hint, measure)
+                .into_iter()
+                .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
+        );
     }
-    let top = area.y.saturating_add(area.height / 3);
-    let body = Rect::new(
-        area.x,
-        top,
-        area.width,
-        area.height.saturating_sub(area.height / 3),
-    );
-    frame.render_widget(
-        Paragraph::new(lines)
-            .alignment(ratatui::layout::Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        body,
-    );
+    lines
 }
 
 /// What a row's kind is called in the vocabulary.
@@ -1664,5 +1695,147 @@ mod tests {
             !rows.iter().any(|row| row.contains("CHANGES")),
             "nothing to navigate means no list, not an empty one: {rows:?}"
         );
+    }
+
+    fn draw_message(text: &str, hint: Option<&str>, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_message(
+                    frame,
+                    frame.area(),
+                    text,
+                    hint,
+                    theme::color(Token::TextMuted),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// An empty state sits in the middle of its pane, however many lines
+    /// its hint wraps onto.
+    #[test]
+    fn a_message_is_centred_on_its_own_height() {
+        let rows = draw_message(
+            "No file selected",
+            Some("Pick one on the left to read it, or press e to edit it in place."),
+            100,
+            21,
+        );
+        let drawn: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| !row.trim().is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        let above = drawn[0];
+        let below = rows.len() - 1 - drawn[drawn.len() - 1];
+        assert!(
+            above.abs_diff(below) <= 1,
+            "{above} above, {below} below: {rows:#?}"
+        );
+    }
+
+    #[test]
+    fn a_hint_wraps_to_a_reading_measure_under_a_capitalised_heading() {
+        let rows = draw_message(
+            "No file selected",
+            Some("Pick one on the left to read it, or press e to edit it in place."),
+            120,
+            12,
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("NO FILE SELECTED")),
+            "{rows:#?}"
+        );
+        let hint: Vec<&String> = rows
+            .iter()
+            .filter(|row| {
+                let row = row.trim();
+                !row.is_empty() && row != "NO FILE SELECTED"
+            })
+            .collect();
+        assert!(hint.len() >= 2, "the hint breaks into lines: {rows:#?}");
+        assert!(
+            hint.iter()
+                .all(|row| row.trim().chars().count() <= usize::from(MESSAGE_MEASURE)),
+            "{hint:#?}"
+        );
+    }
+
+    #[test]
+    fn a_message_without_a_hint_keeps_its_case() {
+        let rows = draw_message("not a git repository", None, 60, 5);
+        assert!(rows.iter().any(|row| row.contains("not a git repository")));
+    }
+
+    /// A file with nothing to report sits beside folders at its depth, and
+    /// its name starts where theirs do — its empty marker keeps the column
+    /// the folders' fold mark takes.
+    #[test]
+    fn an_item_without_a_marker_lines_up_with_the_groups_beside_it() {
+        let view = View {
+            navigator: Some(Navigator {
+                heading: "FILES".to_owned(),
+                badge: String::new(),
+                focused: true,
+                anchor: None,
+                rows: vec![
+                    NavigatorRow::Group {
+                        id: 0,
+                        name: "src".to_owned(),
+                        depth: 0,
+                        collapsed: true,
+                        icon: RowIcon::Directory,
+                    },
+                    NavigatorRow::Item {
+                        id: 1,
+                        name: "Cargo.toml".to_owned(),
+                        depth: 0,
+                        marker: Span::new(String::new(), Role::Muted),
+                        selected: false,
+                        icon: RowIcon::Config,
+                    },
+                    NavigatorRow::Item {
+                        id: 2,
+                        name: "main.rs".to_owned(),
+                        depth: 0,
+                        marker: Span::new("M", Role::Warning),
+                        selected: false,
+                        icon: RowIcon::Code,
+                    },
+                ],
+            }),
+            ..sample()
+        };
+        let (rows, _) = draw(&view);
+        let column = |name: &str| {
+            rows.iter()
+                .find_map(|row| {
+                    // The navigator column only: the content beside it
+                    // names files too.
+                    let cells: Vec<char> = row.chars().take(24).collect();
+                    let first = name.chars().next().unwrap();
+                    (0..cells.len()).find(|&start| {
+                        cells[start] == first
+                            && cells[start..]
+                                .iter()
+                                .take(name.chars().count())
+                                .copied()
+                                .eq(name.chars())
+                    })
+                })
+                .unwrap_or_else(|| panic!("{name} is drawn: {rows:#?}"))
+        };
+        assert_eq!(column("Cargo.toml"), column("src"), "{rows:#?}");
+        assert_eq!(column("main.rs"), column("src"), "{rows:#?}");
     }
 }

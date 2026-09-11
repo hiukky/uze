@@ -218,8 +218,10 @@ actions! {
         "New profile", "Create a profile of preferences";
     DeleteProfile => "delete-profile", Mode::Management, true,
         "Delete", "Delete the selected profile";
-    ActivateProfile => "activate-profile", Mode::Management, false,
-        "Make active", "Make the selected profile the active one";
+    ApplyProfile => "apply-profile", Mode::Management, false,
+        "Apply", "Make the selected profile active and write it into the checked harnesses";
+    PreviewProfile => "preview-profile", Mode::Management, false,
+        "Preview", "Show what the selected profile writes into each harness";
     ToggleProfileHarness => "toggle-profile-harness", Mode::Management, false,
         "Toggle harness", "Include or exclude the highlighted harness";
     NextValue => "next-value", Mode::Management, false,

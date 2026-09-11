@@ -28,7 +28,9 @@ use uze_core::{
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
         qualified_exposure_name_candidates,
     },
-    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
+    preference::{
+        PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
+    },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -792,13 +794,25 @@ impl PreferencePort for ClaudeIntegration {
     }
 
     fn translate(&self, preferences: &Preferences) -> PreferenceTranslation {
-        preferences::translate(preferences)
+        preferences::translate(preferences, &preferences::SandboxHost::detect())
     }
 
     fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
         // Preferences share Claude's user-scope settings file with Hooks
         // (ADR-033) — same file, disjoint keys.
-        preferences::apply(&self.hooks_config_path(), preferences)
+        preferences::apply(
+            &self.hooks_config_path(),
+            preferences,
+            &preferences::SandboxHost::detect(),
+        )
+    }
+
+    fn plan(&self, preferences: &Preferences) -> Result<PreferencePlan> {
+        preferences::plan(
+            &self.hooks_config_path(),
+            preferences,
+            &preferences::SandboxHost::detect(),
+        )
     }
 }
 

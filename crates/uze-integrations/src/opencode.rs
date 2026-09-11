@@ -33,7 +33,9 @@ use uze_core::{
         qualified_exposure_name_candidates,
     },
     persistence::write_atomic,
-    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
+    preference::{
+        PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
+    },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -467,6 +469,10 @@ impl PreferencePort for OpenCodeIntegration {
 
     fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
         preferences::apply(&self.config_path, preferences)
+    }
+
+    fn plan(&self, preferences: &Preferences) -> Result<PreferencePlan> {
+        preferences::plan(&self.config_path, preferences)
     }
 }
 

@@ -114,12 +114,11 @@ impl HarnessHealth {
 
 impl ProfileSummary {
     pub fn offers(&self) -> Vec<ActionOffer> {
+        // Applying stays available on the active profile: its preferences
+        // may have been edited since, or a harness's configuration changed
+        // by hand — being active is not the same as being in effect.
         vec![
-            if self.active {
-                ActionOffer::unavailable(Action::ActivateProfile, "already the active profile")
-            } else {
-                ActionOffer::available(Action::ActivateProfile)
-            },
+            ActionOffer::available(Action::ApplyProfile),
             ActionOffer::available(Action::DeleteProfile),
         ]
     }

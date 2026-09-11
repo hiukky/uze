@@ -410,9 +410,12 @@ fn caption_color(is_current: bool) -> Color {
     }
 }
 
-/// Appends a one-cell mark behind a space to an agent row, and makes that
-/// cell a click target opening the status catalog: a glyph nobody can
-/// look up is a glyph that reads as decoration.
+/// Pins a task's mark to an agent row's right edge — the column a space
+/// header pins its `⇄` to, off the divider by the same pad, so the
+/// sidebar's right-hand column is one column and a mark keeps its place
+/// however long the label is — and makes that cell a click target opening
+/// the status catalog: a glyph nobody can look up is a glyph that reads as
+/// decoration.
 fn push_trailing_mark(
     spans: &mut Vec<Span<'_>>,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
@@ -420,10 +423,17 @@ fn push_trailing_mark(
     mark: &str,
     hue: Color,
 ) {
-    let mark_x = label_rect.x + spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1; // the space this mark is drawn behind
-    spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
-    if mark_x < label_rect.right() {
-        let cell = Rect::new(mark_x, label_rect.y, 1, 1);
+    let mark = Span::styled(mark.to_owned(), Style::default().fg(hue));
+    let mark_width = mark.width() as u16;
+    let used =
+        spans.iter().map(|span| span.width() as u16).sum::<u16>() + mark_width + TRAILING_PAD;
+    spans.push(Span::raw(
+        " ".repeat(label_rect.width.saturating_sub(used).max(1) as usize),
+    ));
+    spans.push(mark);
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+    if let Some(mark_x) = label_rect.right().checked_sub(TRAILING_PAD + mark_width) {
+        let cell = Rect::new(mark_x, label_rect.y, mark_width, 1);
         hits.push((cell, WorkspaceHit::OpenStatusCatalog(cell)));
     }
 }
@@ -433,8 +443,9 @@ fn push_trailing_mark(
 /// into the agent tabs [`agent_identity_for_tab`] recognizes as running
 /// inside it — `●`/`○` for the space's context agent (see
 /// `space_context_agent`) vs. the rest, plus its label and, right-
-/// aligned on that same row, the harness alias in place of the raw process
-/// name (see [`agent_identity_for_tab`]). A caption line underneath —
+/// aligned on that same row, its task's mark (see [`push_trailing_mark`]).
+/// The harness an agent runs on is not named there: the sidebar's narrow
+/// column goes to what the work is and where it stands. A caption line underneath —
 /// dim, or in the warning hue under the agent receiving keystrokes (see
 /// [`caption_color`]) — names the task's own working branch, falling back to its
 /// pane's live cwd (as [`caption_path`] renders it, so an agent in a slot
@@ -715,6 +726,10 @@ pub(super) fn render_sidebar(
                     label_style = label_style.add_modifier(Modifier::BOLD);
                 }
                 let connector_span = Span::styled(connector, theme::fg(Token::TextFaint));
+                let indicator_span = Span::styled(indicator, Style::default().fg(indicator_fg));
+                let task_mark = model
+                    .tab_task(tab.id)
+                    .and_then(|task| task_mark(&model.drawn_state(task)));
                 let label = match renaming_this {
                     Some(buffer) => Span::styled(
                         format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
@@ -722,7 +737,20 @@ pub(super) fn render_sidebar(
                             .fg(theme::color(Token::TextBright))
                             .add_modifier(Modifier::BOLD),
                     ),
-                    None => Span::styled(tab.label.clone(), label_style),
+                    // Elided rather than run under the mark pinned to the
+                    // right edge, the way the branch beneath it is.
+                    None => {
+                        let taken = (connector_span.width() + indicator_span.width()) as u16
+                            + task_mark
+                                .as_ref()
+                                .map_or(0, |(mark, _)| 1 + Span::raw(mark.as_str()).width() as u16)
+                            + TRAILING_PAD;
+                        let room = label_rect.width.saturating_sub(taken).max(1);
+                        Span::styled(
+                            crate::ui::elide_tail(&tab.label, room as usize),
+                            label_style,
+                        )
+                    }
                 };
                 // The task mark behind the label is the one click target that
                 // opens the catalog (see `push_trailing_mark`): the status glyph
@@ -731,37 +759,10 @@ pub(super) fn render_sidebar(
                 // row's own `SelectTab` hit below, since the click search takes
                 // the first rect it lands in — a 1-column target inside a
                 // row-wide one only ever wins by being found first.
-                let mut spans = vec![
-                    connector_span,
-                    Span::styled(indicator, Style::default().fg(indicator_fg)),
-                    label,
-                ];
-                if let Some((mark, hue)) = model
-                    .tab_task(tab.id)
-                    .and_then(|task| task_mark(&model.drawn_state(task)))
-                {
+                let mut spans = vec![connector_span, indicator_span, label];
+                if let Some((mark, hue)) = task_mark {
                     push_trailing_mark(&mut spans, hits, label_rect, &mark, hue);
                 }
-                // The alias in place of the raw process name — this list only
-                // ever holds tabs `agent_identity_for_tab` already resolved, so
-                // it never falls back to showing something like a bare version
-                // string (see that function's doc comment). Right-aligned, not
-                // tacked onto the label behind a "·" — pinning it to the row's
-                // own right edge keeps its column stable as different labels
-                // vary in length. A 1-column trailing pad keeps it off the
-                // sidebar's own flush-right divider (see `render_sidebar`'s
-                // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
-                // button glued to the edge, not a plain text label.
-                let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-                let alias_span =
-                    Span::styled(crate::ui::small_caps(alias), theme::fg(Token::TextDim));
-                let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
-                    + alias_span.width() as u16
-                    + TRAILING_PAD;
-                let gap = label_rect.width.saturating_sub(used);
-                spans.push(Span::raw(" ".repeat(gap as usize)));
-                spans.push(alias_span);
-                spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
                 if is_active_space {
                     fill_row_bg(
                         &mut spans,
@@ -798,8 +799,16 @@ pub(super) fn render_sidebar(
                 // cannot work there any more, and the task it was running
                 // is what the preserved list now holds.
                 let lost = model.lost_checkouts.contains(&tab.focus.pane);
+                // The space's `⇄` shows the other side of it: where its work
+                // lives on the header, and what each agent runs on here —
+                // the branch is what the work is, the harness what does it.
+                let showing_runtime = model.roots_shown.contains(&space.id);
                 let detail = if lost {
                     "checkout removed".to_owned()
+                } else if let Some(harness) =
+                    agent_for_tab(identities, tab).filter(|_| showing_runtime)
+                {
+                    harness.display_name.to_owned()
                 } else {
                     model
                         .tab_task(tab.id)
@@ -814,7 +823,7 @@ pub(super) fn render_sidebar(
                     caption_color(is_current)
                 };
                 let mut spans = vec![continuation_span];
-                // Right-aligned under the alias, with the same trailing
+                // Right-aligned under the task mark, with the same trailing
                 // pad off the divider: a count pinned to the row's edge
                 // keeps its column as branches vary in length.
                 // The way back in, on the row itself: "resume" puts the
@@ -1340,11 +1349,13 @@ pub(super) fn render_space_header(
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
 
-/// Appends the `⇄` to a space header, pinned to the row's right edge — the
-/// same column the agent rows below pin their harness alias to (see
-/// `render_sidebar`'s `TRAILING_PAD`), so the sidebar's right-hand column
-/// stays one column — and makes that one cell the click target flipping
-/// the row between label and root. Readable, not faint: it is a control,
+/// Appends the `⇄` to a space header — which flips the space between what
+/// its work is (its label, each agent's branch) and where and on what it
+/// runs (its root, each agent's harness) — pinned to the row's right edge: the
+/// same column the agent rows below pin their task mark to (see
+/// [`push_trailing_mark`]), so the sidebar's right-hand column stays one
+/// column — and makes that one cell the click target that flips it.
+/// Readable, not faint: it is a control,
 /// not a tree-prefix glyph. Pushed before the row's own `SelectSpace` hit,
 /// since the click search takes the first rect it lands in (same rule as
 /// [`push_trailing_mark`]).
@@ -1385,7 +1396,7 @@ fn push_root_toggle(
 /// does *not* reuse `✓` — that is `AgentTabStatus::Completed`'s glyph one
 /// column to the left, and the same mark in the same accent meaning two
 /// different things is what made the second column read as an echo of the
-/// first. It wears the `⇧` of the delivery button it enables instead.
+/// first. It wears a mark of its own, `task.ready`, instead.
 /// [`render_status_catalog`] is this table's legend and must move with it.
 pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
     let (symbol, hue) = match state {
@@ -1829,22 +1840,16 @@ fn deliver_button(
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
+            // The count and the ending, no mark: the words already say
+            // what a press does, and an icon in front of them only made the
+            // button read as a badge.
             Some(unsynced) => (
-                format!(
-                    "{}{unsynced} {}",
-                    theme::glyph(Symbol::TaskReady),
-                    delivery_ending(task)
-                ),
+                format!("{unsynced} {}", delivery_ending(task)),
                 theme::color(Token::Accent),
                 true,
             ),
             None => (
-                format!(
-                    "{}{} {}",
-                    theme::glyph(Symbol::TaskReady),
-                    task.ahead,
-                    delivery_ending(task)
-                ),
+                format!("{} {}", task.ahead, delivery_ending(task)),
                 theme::color(Token::Accent),
                 true,
             ),

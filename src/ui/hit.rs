@@ -29,10 +29,15 @@ pub(crate) enum Hit {
     ExtensionRow(usize),
     HarnessRow(usize),
     NewProfile,
-    DeleteSelectedProfile,
-    ApplySelectedProfile,
+    /// A harness's row in the profile preview: opens or closes it.
+    PreviewHarness(usize),
     ProfileRow(usize),
     PreferenceRow(usize),
+    /// A preference row's `‹`/`›`: select that preference and step its value.
+    StepPreference {
+        index: usize,
+        forward: bool,
+    },
     /// Clicking a harness checkbox toggles it immediately — the click's
     /// obvious intent — rather than only selecting it the way `HarnessRow`
     /// does.
@@ -185,26 +190,10 @@ impl TuiModel {
                 self.focus = Focus::Overlay;
                 Intent::None
             }
-            Hit::DeleteSelectedProfile => {
-                if let Some(profile) = self.selected_profile() {
-                    self.overlay = Overlay::ConfirmDeleteProfile {
-                        id: profile.id.clone(),
-                        focus: 1,
-                    };
-                    self.focus = Focus::Overlay;
-                }
+            Hit::PreviewHarness(index) => {
+                self.focus = Focus::Content;
+                self.toggle_profile_preview_harness(index);
                 Intent::None
-            }
-            Hit::ApplySelectedProfile => {
-                let harness_ids: Vec<String> =
-                    self.profile_harness_selection.iter().cloned().collect();
-                self.selected_profile()
-                    .filter(|_| !harness_ids.is_empty())
-                    .map(|profile| Intent::ApplyProfile {
-                        id: profile.id.clone(),
-                        harness_ids,
-                    })
-                    .unwrap_or(Intent::None)
             }
             Hit::ProfileRow(index) => {
                 self.profiles_selected = index;
@@ -217,6 +206,12 @@ impl TuiModel {
                 self.profile_panel = super::model::ProfilePanel::Editor;
                 self.focus = Focus::Content;
                 Intent::None
+            }
+            Hit::StepPreference { index, forward } => {
+                self.profile_editor_selected = index;
+                self.profile_panel = super::model::ProfilePanel::Editor;
+                self.focus = Focus::Content;
+                self.cycle_selected_preference(forward)
             }
             Hit::ProfileHarnessRow(index) => {
                 self.profile_harness_selected = index;

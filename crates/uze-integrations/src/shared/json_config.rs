@@ -58,7 +58,38 @@ pub(crate) fn set_path(
     Ok(())
 }
 
-/// Writes `config` back with a trailing newline, atomically.
+/// The value at a dot-path, if every step of it exists.
+pub(crate) fn get_path<'a>(
+    config: &'a serde_json::Value,
+    path: &[&str],
+) -> Option<&'a serde_json::Value> {
+    path.iter().try_fold(config, |cursor, key| cursor.get(*key))
+}
+
+/// Whether `set_path` could write `path`: no ancestor holds a value that is
+/// not an object. Absent ancestors are fine — `set_path` creates them.
+pub(crate) fn writable(
+    config: &serde_json::Value,
+    path: &[&str],
+) -> std::result::Result<(), String> {
+    let Some((_, ancestors)) = path.split_last() else {
+        return Err("empty config key path".to_owned());
+    };
+    let mut cursor = config;
+    for key in ancestors {
+        match cursor.get(*key) {
+            None => return Ok(()),
+            Some(next) if next.is_object() => cursor = next,
+            Some(_) => {
+                return Err(format!(
+                    "`{key}` already holds a non-object value; preserved"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Removes `path` if it exists, leaving every other key untouched. An
 /// absent key is a successful no-op: the caller asked for it to be gone.
 pub(crate) fn remove_path(config: &mut serde_json::Value, path: &[&str]) {

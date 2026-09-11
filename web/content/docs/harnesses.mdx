@@ -98,18 +98,34 @@ translates it into that harness's own settings file. Three axes, deliberately sm
 | **Sandbox** | `read-only`, `workspace-write`, `full-access` | How far its writes and execution reach |
 | **Model** | `default`, `fast`, `capable` | A capability tier — never a literal vendor model id |
 
-Edit them on the **Profiles** screen of the management TUI (`Ctrl+O`). Each axis reports its own
-translation fidelity on the same Native/Adapted/Unsupported scale the capability router uses, with
-the reason attached whenever it is not native — for example:
+Edit them on the **Profiles** screen of the management TUI (`Ctrl+O`). **Apply** makes the
+selected profile active and writes it into every checked harness; being active and being in effect
+are different things, so the drawer says which — a profile edited since it was applied, or a
+settings file changed by hand, reads *Active, not in effect*.
 
-- Claude Code has no workspace-scoped write allowlist at user scope, so `sandbox` sets its coarse
-  enabled/disabled state only, and never claims native for a non-default value.
+**Preview** (`v`, or the drawer's *Preview* button) answers before anything is written: one row
+per harness with a word for each axis — *as asked*, *adapted* (set another way), *partial* (not
+fully honoured) or *n/a* (no such setting) — and whether applying would change anything there. A
+harness with something to write opens by itself onto its own file: each key with what applying
+adds, changes or removes, and the reason behind any *partial* or *n/a*. For example:
+
+- Claude Code's sandbox limits writes to the working directory, which is `workspace-write`
+  exactly; `read-only` cannot be delivered from user-scope settings and is reported degraded. On
+  Linux and WSL2 its sandbox needs `bubblewrap` and `socat`, and the preview says when one is
+  missing — without them Claude runs every command unsandboxed. Auto mode does not run on Haiku,
+  so `auto` with the `fast` model accepts edits instead and says why.
+- A `default` model is the key being absent, never the word `default`, which Claude Code cannot
+  resolve. Any model that does resolve is left where it is — nothing in the file says whether you
+  wrote it or an earlier profile did, so uze never assumes it was its own.
 - Codex needs an exact model id and publishes no tier-alias catalogue, so anything but `default`
-  is reported unsupported rather than guessed into a model that may not exist.
+  is reported unsupported rather than guessed into a model that may not exist. It no longer has a
+  policy that asks before every command, so `manual` is its most careful one, reported degraded.
 - OpenCode has no single autonomy key — permissions are independent per-category values — so
   `autonomy` is always adapted, decomposed across several keys.
-- Antigravity's settings are the least settled of the four, so every mapping there is
-  deliberately conservative — never native, and `model` unsupported outright rather than guessed.
+- Antigravity's model is a label from the signed-in account's own catalogue, so `fast` and
+  `capable` are unsupported; its other mappings are adapted, never native.
+
+Every value uze writes is checked against the shipped harness binaries, not only their docs.
 
 A preference is never carried by guessing a key. Where a harness cannot express an axis, uze says
 so and writes nothing: overwriting a setting you made yourself is worse than not carrying the
