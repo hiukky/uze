@@ -176,12 +176,16 @@ actions! {
         "Search", "Narrow the list by typing";
     OpenThemePicker => "open-theme-picker", Mode::Management, false,
         "Appearance", "Choose the theme every uze surface draws in";
-    OpenRowActions => "open-row-actions", Mode::Management, false,
-        "Actions", "Show what can be done to the selected row";
     ConfirmYes => "confirm-yes", Mode::Management, false,
         "Yes", "Answer the open question with yes";
     ConfirmNo => "confirm-no", Mode::Management, false,
         "No", "Answer the open question with no";
+
+    // --- Management, things done to a key ------------------------------
+    ChangeKey => "change-key", Mode::Management, false,
+        "Change key", "Bind the next key pressed to the selected action";
+    ResetKey => "reset-key", Mode::Management, false,
+        "Reset key", "Put back the key uze ships with for the selected action";
 
     // --- Management, things done to a package ---------------------------
     InstallPlugin => "install-plugin", Mode::Management, false,
@@ -213,7 +217,7 @@ actions! {
     NewProfile => "new-profile", Mode::Management, false,
         "New profile", "Create a profile of preferences";
     DeleteProfile => "delete-profile", Mode::Management, true,
-        "Delete profile", "Delete the selected profile";
+        "Delete", "Delete the selected profile";
     ActivateProfile => "activate-profile", Mode::Management, false,
         "Make active", "Make the selected profile the active one";
     ToggleProfileHarness => "toggle-profile-harness", Mode::Management, false,

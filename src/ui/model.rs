@@ -210,24 +210,6 @@ impl KeyRow {
     }
 }
 
-/// An open row menu: the offers for one row, and which of them the
-/// keyboard is on.
-///
-/// Only the available offers are here. A menu is a list of what can be
-/// done now; the reason an action *cannot* be done belongs in the detail
-/// view, where there is room to say it.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RowMenu {
-    pub(crate) offers: Vec<ActionOffer>,
-    /// `None` when nothing is highlighted, which is how a menu whose only
-    /// entry destroys something opens: reaching a destructive action is
-    /// always a deliberate move, never the state the menu arrived in.
-    pub(crate) selected: Option<usize>,
-    /// The row's own rect — the popup anchors just under it, the same
-    /// placement rule the workspace client's context menu uses.
-    pub(crate) anchor: Rect,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Overlay {
     None,
@@ -383,10 +365,6 @@ pub(crate) struct TuiModel {
     pub(crate) keys_probe: Option<String>,
     /// What this terminal turned out to be able to deliver.
     pub(crate) keyboard: super::keys::KeyboardSupport,
-    /// The action menu the selected row raised, if any — what can be done
-    /// to that row, from the row itself. Built fresh each time it opens
-    /// from the entity's own offers, never persisted.
-    pub(crate) row_menu: Option<RowMenu>,
     pub(crate) marketplace_detail: Option<MarketplacePluginDetail>,
     /// Whether the plugin-detail drawer is currently slid into view. Opens
     /// on selection, closes on `Esc` — the list panel reclaims the full
@@ -472,6 +450,8 @@ pub(crate) struct TuiModel {
     /// is the only thing that can answer the pointer — see the address's
     /// own style in `view::plugins`.
     pub(crate) source_link_hovered: bool,
+    /// The detail drawer's button under the pointer, if any.
+    pub(crate) hovered_offer: Option<uze_keys::Action>,
 
     /// Frame counter for spinner animation while background work is pending.
     pub(crate) tick: usize,
@@ -523,7 +503,6 @@ impl Default for TuiModel {
             keys_problem: None,
             keys_probe: None,
             keyboard: super::keys::KeyboardSupport::default(),
-            row_menu: None,
             status: Status::Idle,
             status_expires_at: None,
             maintenance_in_flight: false,
@@ -566,6 +545,7 @@ impl Default for TuiModel {
             overview_prompt_selected: 0,
             overview_prompt_hovered: None,
             source_link_hovered: false,
+            hovered_offer: None,
             tick: 0,
             hits: Vec::new(),
             sidebar_width: None,
@@ -1270,9 +1250,9 @@ impl TuiModel {
 
     /// What can be done to whatever is selected on this screen.
     ///
-    /// Read from the entity itself, never decided here: the row menu, the
-    /// detail view and the index all ask this, which is what keeps them
-    /// from disagreeing about whether a plugin can be updated.
+    /// Read from the entity itself, never decided here: the drawer's
+    /// buttons and the index both ask this, which is what keeps them from
+    /// disagreeing about whether a plugin can be updated.
     pub(crate) fn selected_offers(&self) -> Vec<ActionOffer> {
         match self.route {
             Route::Plugins => self
@@ -1290,6 +1270,10 @@ impl TuiModel {
             Route::Profiles => self
                 .selected_profile()
                 .map(ProfileSummary::offers)
+                .unwrap_or_default(),
+            Route::Keys => self
+                .selected_key_row()
+                .map(|row| uze_application::application::offers::key_offers(row.custom()))
                 .unwrap_or_default(),
             _ => Vec::new(),
         }

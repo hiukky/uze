@@ -257,8 +257,6 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Management, "f5", Action::Refresh),
         bind(Scope::Management, "/", Action::StartFilter),
         bind(Scope::Management, "t", Action::OpenThemePicker),
-        // The row's own actions, the keyboard's way of clicking its `⋯`.
-        bind(Scope::Management, ".", Action::OpenRowActions),
         bind(Scope::Management, "m", Action::AddMarketplace),
         bind(Scope::Management, "q", Action::Quit),
         bind(Scope::Management, "ctrl+c", Action::Quit),
@@ -297,10 +295,6 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::ThemePicker, "enter", Action::Activate),
         bind(Scope::ThemePicker, "esc", Action::Dismiss),
         bind(Scope::ThemePicker, "q", Action::Dismiss),
-        bind(Scope::RowMenu, "down", Action::SelectNext),
-        bind(Scope::RowMenu, "up", Action::SelectPrevious),
-        bind(Scope::RowMenu, "enter", Action::Activate),
-        bind(Scope::RowMenu, "esc", Action::Dismiss),
         bind(Scope::KeyCapture, "esc", Action::Dismiss),
         // --- The index, in either mode ----------------------------------
         bind(Scope::ActionIndex, "down", Action::SelectNext),
@@ -425,6 +419,10 @@ mod tests {
         assert_eq!(
             unbound,
             vec![
+                // Enter on the Keys screen already asks for a key, and a
+                // reset is rare enough to live on its button and menu.
+                "change-key",
+                "reset-key",
                 "install-project-environment",
                 "open-glossary",
                 "activate-profile",

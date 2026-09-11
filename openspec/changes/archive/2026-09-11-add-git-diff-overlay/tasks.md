@@ -39,5 +39,13 @@
 
 ## 7. Verification
 
-- [ ] 7.1 `cargo build --locked --bin uze`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and the full test suite all pass
-- [ ] 7.2 Live verification (isolated tmux session, this project's established method): open the overlay via the tab-strip button and via `Ctrl+G`; confirm the changed-files list, the first file's diff, and visible syntax-highlight color; confirm selecting a different file updates the diff; confirm `Esc` returns to the exact prior sidebar/tab-strip/pane state; confirm opening it from a tab whose `cwd` differs from the workspace root scopes to that directory
+- [x] 7.1 `cargo build --locked --bin uze`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and the full test suite all pass
+- [x] 7.2 Live verification (isolated tmux session, this project's established method): open the overlay via the tab-strip button and via `Ctrl+G`; confirm the changed-files list, the first file's diff, and visible syntax-highlight color; confirm selecting a different file updates the diff; confirm `Esc` returns to the exact prior sidebar/tab-strip/pane state; confirm opening it from a tab whose `cwd` differs from the workspace root scopes to that directory
+      Verified 2026-09-11 against what this view became — the changes mode
+      of the code surface (`add-the-code-surface`), which absorbed it: both
+      doors (the changes chip, clicked, and `Ctrl+G`) open on the changed
+      files and the first file's diff, with syntax colour; `Down` swaps the
+      diff for the next file; `Esc` leaves the screen byte-for-byte as it
+      was; a tab `cd`'d into another repository scopes the view to that
+      one and its branch. Run in an isolated `UZE_HOME` on a scratch
+      repository, with the full workspace suite, clippy and fmt green.

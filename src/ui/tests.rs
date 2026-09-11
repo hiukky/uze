@@ -1683,17 +1683,9 @@ fn a_key_with_nothing_to_act_on_here_says_so() {
         "and the key says so: {:?}",
         model.status
     );
-
-    model.act(uze_keys::Action::OpenRowActions);
-    assert!(model.row_menu.is_none());
-    assert!(
-        matches!(&model.status, Status::Success(said) if said.contains("act on")),
-        "{:?}",
-        model.status
-    );
     assert!(
         model.steps_taken.is_empty(),
-        "neither is a first step, and nothing was recorded either way"
+        "it is not a first step, and nothing was recorded either way"
     );
 
     // On a screen that has them, both land.
@@ -1704,9 +1696,6 @@ fn a_key_with_nothing_to_act_on_here_says_so() {
     };
     model.act(uze_keys::Action::StartFilter);
     assert!(model.filtering);
-    model.filtering = false;
-    model.act(uze_keys::Action::OpenRowActions);
-    assert!(model.row_menu.is_some());
 }
 
 /// The Keys screen draws a search field and answers clicks on it, but `/`
@@ -2199,29 +2188,6 @@ fn a_modal_pushes_the_screen_it_interrupts_behind_it() {
     assert!(
         asked[border].symbol().trim() != "",
         "and drew a border glyph there, not an empty cell"
-    );
-}
-
-/// The row menu is not a modal: it hangs off the row it is about, and that
-/// row has to stay readable — it is the subject of the question.
-#[test]
-fn a_menu_anchored_to_a_row_leaves_the_screen_alone() {
-    let quiet = drawn(&model_with_plugins(&["flow"]));
-    let mut model = model_with_plugins(&["flow"]);
-    model.open_row_actions();
-    assert!(model.row_menu.is_some(), "the row offered something to do");
-    let opened = drawn(&model);
-
-    let (column, row) = (0..40u16)
-        .flat_map(|row| (0..24u16).map(move |column| (column, row)))
-        .find(|position| {
-            quiet[*position].symbol().trim() != "" && theme::token_of(quiet[*position].fg).is_some()
-        })
-        .expect("the sidebar drew something");
-    assert_eq!(
-        quiet[(column, row)].fg,
-        opened[(column, row)].fg,
-        "nothing receded"
     );
 }
 
@@ -2987,108 +2953,150 @@ fn the_keys_route_carries_no_count() {
 
 // --- Actions where the thing they act on is -----------------------------
 
-/// The whole point of the row menu: performing an action without knowing
-/// a letter, and without the screen having decided for itself what is
-/// possible.
+/// The drawer's buttons are the plugin's offers, clickable where the
+/// plugin is described — and only what can run now.
 #[test]
-fn a_row_offers_its_own_actions_and_performing_one_needs_no_letter() {
-    let mut model = model_with_plugins(&["one"]);
-    model.focus = Focus::Content;
-
-    model.act(uze_keys::Action::OpenRowActions);
-    let menu = model.row_menu.clone().expect("the row raised its actions");
-    assert!(
-        menu.offers.iter().all(|offer| offer.is_available()),
-        "a menu lists what can be done now: {:?}",
-        menu.offers
-    );
-    assert!(
-        menu.selected
-            .is_none_or(|index| !menu.offers[index].action.destructive()),
-        "a destructive entry is never the one it opens on"
-    );
-
-    // Reach remove and take it: the confirmation still stands between the
-    // choice and the deletion.
-    let remove = menu
-        .offers
+fn the_drawer_offers_what_can_be_done_as_buttons() {
+    let summary = MarketplacePluginSummary {
+        marketplace: "team".to_owned(),
+        name: "kit".to_owned(),
+        description: None,
+        keywords: Vec::new(),
+        installed: true,
+        update_available: Some(true),
+        is_default: false,
+    };
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        marketplace_drawer_open: true,
+        marketplace_plugins: vec![summary],
+        ..TuiModel::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let buttons: Vec<_> = model
+        .hits
         .iter()
-        .position(|offer| offer.action == uze_keys::Action::RemovePlugin)
-        .expect("an installed plugin can be removed");
-    model.act(uze_keys::Action::SelectNext);
-    while model
-        .row_menu
-        .as_ref()
-        .and_then(|menu| menu.selected)
-        .is_some_and(|index| index < remove)
-    {
-        model.act(uze_keys::Action::SelectNext);
-    }
-    model.act(uze_keys::Action::Activate);
-    assert!(model.row_menu.is_none(), "choosing closes the menu");
+        .filter_map(|(rect, hit)| match hit {
+            // The first-steps section shares the hit; its entries are not
+            // this plugin's.
+            Hit::OfferedAction(
+                action @ (uze_keys::Action::InstallPlugin
+                | uze_keys::Action::UpdatePlugin
+                | uze_keys::Action::RemovePlugin),
+            ) => Some((*rect, *action)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        buttons
+            .iter()
+            .map(|(_, action)| *action)
+            .collect::<Vec<_>>(),
+        [
+            uze_keys::Action::UpdatePlugin,
+            uze_keys::Action::RemovePlugin
+        ],
+        "what builds first, what destroys last, and nothing that cannot run"
+    );
+
+    // Soft at rest, the full hue under the pointer.
+    let (remove, _) = buttons[1];
+    let resting = terminal.backend().buffer()[(remove.x, remove.y)].bg;
+    assert_ne!(
+        theme::token_of(resting),
+        Some(Token::StateDanger),
+        "a resting button is not the full hue"
+    );
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: remove.x,
+            row: remove.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        120,
+    );
+    assert_eq!(model.hovered_offer, Some(uze_keys::Action::RemovePlugin));
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert_eq!(
+        theme::token_of(terminal.backend().buffer()[(remove.x, remove.y)].bg),
+        Some(Token::StateDanger),
+        "and the one under the pointer is"
+    );
+
+    let (update, _) = buttons[0];
+    model.click(update.x, update.y);
     assert!(
-        matches!(model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"),
-        "and asks before deleting: {:?}",
+        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id.contains("kit")),
+        "the button asks, the same way the menu entry does: {:?}",
         model.overlay
     );
 }
 
-/// The menu and the detail view read one list, so they cannot disagree
-/// about whether a plugin can be updated — which is what a presentation
-/// layer filtering on `installed && update_available` itself could not
-/// promise.
+/// The drawer's resources are grouped by kind, so a skill never reads as
+/// a hook because the two shared one comma-joined line.
 #[test]
-fn the_menu_and_the_detail_view_read_one_list_of_offers() {
-    let mut model = model_with_plugins(&["one"]);
-    model.focus = Focus::Content;
-    let offers = model.selected_offers();
-    assert!(
-        !offers.is_empty(),
-        "an installed plugin has something that can be done to it"
-    );
+fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
+    use uze_application::CapabilityKind;
+    use uze_application::application::{MarketplacePluginDetail, PluginCapability};
 
-    model.act(uze_keys::Action::OpenRowActions);
-    let menu = model.row_menu.clone().expect("open");
-    let available: Vec<_> = offers
-        .iter()
-        .filter(|offer| offer.is_available())
-        .cloned()
-        .collect();
-    assert_eq!(
-        menu.offers, available,
-        "the menu is exactly the available half of the one list"
-    );
-    assert!(
-        offers.iter().any(|offer| !offer.is_available()),
-        "and the other half exists, with a reason the drawer prints"
-    );
-}
-
-/// An action that cannot run used to do nothing at all when its key was
-/// pressed, which reads as broken. The drawer says why instead.
-#[test]
-fn the_drawer_says_why_an_action_cannot_run() {
-    let mut model = model_with_plugins(&["one"]);
-    model.focus = Focus::Content;
-    model.marketplace_drawer_open = true;
+    let summary = MarketplacePluginSummary {
+        marketplace: "team".to_owned(),
+        name: "kit".to_owned(),
+        description: None,
+        keywords: Vec::new(),
+        installed: false,
+        update_available: None,
+        is_default: false,
+    };
+    let capability = |name: &str, kind| PluginCapability {
+        identity: name.to_owned(),
+        name: name.to_owned(),
+        kind,
+    };
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        marketplace_drawer_open: true,
+        marketplace_plugins: vec![summary.clone()],
+        marketplace_detail: Some(MarketplacePluginDetail {
+            summary,
+            capabilities: vec![
+                capability("review", CapabilityKind::AgentSkill),
+                capability("guard", CapabilityKind::Hook),
+                capability("plan", CapabilityKind::AgentSkill),
+            ],
+        }),
+        ..TuiModel::default()
+    };
+    model.marketplace_drawer_width = Some(52);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
+
+    let skills = rows
+        .iter()
+        .position(|row| row.contains("Skills") && row.contains("review, plan"))
+        .unwrap_or_else(|| panic!("skills on a row of their own: {rows:#?}"));
     assert!(
-        rows.iter().any(|row| row.contains("ACTIONS")),
-        "the drawer states what can be done: {rows:#?}"
+        rows[skills + 1].contains("Hooks") && rows[skills + 1].contains("guard"),
+        "hooks on the next: {rows:#?}"
     );
-    let reason = model
-        .selected_offers()
-        .into_iter()
-        .find_map(|offer| offer.reason().map(str::to_owned))
-        .expect("something is unavailable for an installed plugin");
     assert!(
-        rows.iter().any(|row| row.contains(&reason)),
-        "and why not, in words: looking for {reason:?} in {rows:#?}"
+        !rows.iter().any(|row| row.contains("ACTIONS")),
+        "no action list in the drawer: {rows:#?}"
     );
 }
 
@@ -3152,7 +3160,7 @@ fn the_keys_screen_rebinds_from_a_click_and_a_keystroke() {
     let (rect, _) = model
         .hits
         .iter()
-        .find(|(_, hit)| *hit == crate::ui::hit::Hit::CaptureKey)
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::OfferedAction(uze_keys::Action::ChangeKey))
         .expect("changing a key is a target, not only a keystroke")
         .clone();
     model.click(rect.x, rect.y);
@@ -3675,25 +3683,47 @@ fn a_key_this_terminal_cannot_send_is_never_bound() {
     );
 }
 
-/// A row menu that opened empty would read exactly like the silent no-op
-/// this whole mechanism replaced, so every list row answers with
-/// something — including the screens whose rows ship inside the binary.
+/// The drawer is where a row's actions are performed with the pointer, so
+/// every screen that has actions draws them there, as buttons, for exactly
+/// what can be done now.
 #[test]
-fn every_list_row_offers_at_least_one_thing() {
+fn every_drawer_draws_what_its_row_can_do_as_buttons() {
     for route in [
         Route::Plugins,
-        Route::Extensions,
         Route::Harnesses,
         Route::Profiles,
+        Route::Keys,
     ] {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.act(uze_keys::Action::OpenRowActions);
+        model.marketplace_drawer_open = true;
+        model.harnesses_drawer_open = true;
+        let available: Vec<_> = model
+            .selected_offers()
+            .into_iter()
+            .filter(|offer| offer.is_available())
+            .map(|offer| offer.action)
+            .collect();
+        // The sample's one plugin is the official one, installed and
+        // current: nothing to do, so nothing is drawn — the buttons a
+        // plugin does draw have a test of their own.
         assert!(
-            model.row_menu.is_some(),
-            "{route:?} raised no actions for its selected row"
+            route == Route::Plugins || !available.is_empty(),
+            "{route:?} offers nothing to do"
         );
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        for action in available {
+            assert!(
+                hits.iter()
+                    .any(|(_, hit)| *hit == Hit::OfferedAction(action)),
+                "{route:?} drew no button for {action}"
+            );
+        }
     }
 }
 

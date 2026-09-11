@@ -21,6 +21,7 @@ use uze_keys::CaveatKind;
 use super::super::hit::Hit;
 use super::super::model::{KeyRow, ResizablePanel, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
+use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_keys(
@@ -382,14 +383,51 @@ fn render_drawer(
         ),
     );
 
+    let offers = uze_application::application::offers::key_offers(row.custom());
+    let footer_height = drawer_footer_height(&offers);
     let inner = Rect::new(
         drawer.x + 2,
         drawer.y + 1,
         drawer.width.saturating_sub(3),
-        drawer.height.saturating_sub(2),
+        drawer.height.saturating_sub(2 + footer_height),
     );
+    let shipped = match row.default_chord {
+        Some(chord) => format!("uze ships with {chord}"),
+        None => "uze ships with no key for this".to_owned(),
+    };
+    let status = if model.keys_capture {
+        DrawerStatus {
+            color: theme::color(Token::StateWarning),
+            headline: "Waiting for a key",
+            subtitle: "Press the one you want · esc cancels",
+        }
+    } else if row.custom() {
+        DrawerStatus {
+            color: theme::color(Token::StateInfo),
+            headline: "Changed",
+            subtitle: &shipped,
+        }
+    } else {
+        DrawerStatus {
+            color: theme::color(Token::TextMuted),
+            headline: "Default",
+            subtitle: "The key uze ships with",
+        }
+    };
+    render_drawer_footer(
+        frame,
+        Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
+        status,
+        &offers,
+        model.hovered_offer,
+        model.keys_capture.then_some(uze_keys::Action::ChangeKey),
+        hits,
+    );
+
+    let heading =
+        |text: &'static str| Line::from(Span::styled(text, theme::fg_bold(Token::TextMuted)));
     let mut lines = vec![
-        Line::from(Span::styled("ACTION", theme::fg_bold(Token::TextMuted))),
+        heading("ACTION"),
         Line::from(Span::styled(
             row.action.label(),
             Style::default()
@@ -401,13 +439,13 @@ fn render_drawer(
             theme::fg(Token::TextSecondary),
         )),
         Line::from(""),
-        Line::from(Span::styled("WHERE", theme::fg_bold(Token::TextMuted))),
+        heading("WHERE"),
         Line::from(Span::styled(
             row.scope.heading().to_owned(),
             theme::fg(Token::TextSecondary),
         )),
         Line::from(""),
-        Line::from(Span::styled("KEY", theme::fg_bold(Token::TextMuted))),
+        heading("KEY"),
     ];
     match row.chord {
         Some(chord) => {
@@ -444,15 +482,6 @@ fn render_drawer(
             theme::fg(Token::TextDim),
         ))),
     }
-    if row.custom() {
-        lines.push(Line::from(Span::styled(
-            match row.default_chord {
-                Some(chord) => format!("uze ships with {chord}"),
-                None => "uze ships with no key for this".to_owned(),
-            },
-            theme::fg(Token::TextDim),
-        )));
-    }
     if let Some(problem) = &model.keys_problem {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -462,51 +491,11 @@ fn render_drawer(
     }
     if let Some(probe) = &model.keys_probe {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "THIS TERMINAL",
-            theme::fg_bold(Token::TextMuted),
-        )));
+        lines.push(heading("THIS TERMINAL"));
         lines.push(Line::from(Span::styled(
             probe.clone(),
             theme::fg(Token::TextSecondary),
         )));
     }
-    let body_height = inner.height.saturating_sub(3);
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: true }),
-        Rect::new(inner.x, inner.y, inner.width, body_height),
-    );
-
-    // The two things this screen is for, as targets rather than as keys —
-    // a screen about rebinding that could only be driven by the bindings
-    // it is rebinding would be a joke on itself.
-    let actions = Rect::new(inner.x, inner.y + body_height, inner.width, 3);
-    let rebind = Rect::new(actions.x, actions.y, actions.width, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            if model.keys_capture {
-                "press the key you want, or esc"
-            } else {
-                "change this key"
-            },
-            theme::fg_bold(if model.keys_capture {
-                Token::StateWarning
-            } else {
-                Token::Accent
-            }),
-        )),
-        rebind,
-    );
-    hits.push((rebind, Hit::CaptureKey));
-    if row.custom() {
-        let reset = Rect::new(actions.x, actions.y + 1, actions.width, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "put back what uze ships with",
-                theme::fg(Token::TextMuted),
-            )),
-            reset,
-        );
-        hits.push((reset, Hit::ResetKey));
-    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }

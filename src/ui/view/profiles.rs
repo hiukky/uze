@@ -15,6 +15,7 @@ use uze_application::{Autonomy, ModelPreference, PreferenceApplyOutcome, Sandbox
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{content_area, side_panel_area};
+use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_profiles(
@@ -296,7 +297,6 @@ fn render_profile_tree(
                 hits.push((parts[3], Hit::ApplySelectedProfile));
             }
         }
-        super::render_row_actions(frame, profile_rect, index, selected, hits);
         hits.push((profile_rect, Hit::ProfileRow(index)));
         y += 1;
 
@@ -385,13 +385,48 @@ fn render_harnesses(
         .unwrap_or_default();
     let block = panel(false, theme::color(Token::SurfaceRecessed));
     let panel_inner = block.inner(area);
+    // This panel is the screen's drawer: it sits on the drawers' surface,
+    // so the selected profile's actions end it the way they end every
+    // other drawer.
+    let offers = model
+        .selected_profile()
+        .map(|profile| profile.offers())
+        .unwrap_or_default();
+    let footer_height = if model.selected_profile().is_some() {
+        drawer_footer_height(&offers)
+    } else {
+        0
+    };
     let inner = Rect::new(
         panel_inner.x.saturating_add(2),
         panel_inner.y.saturating_add(1),
         panel_inner.width.saturating_sub(3),
-        panel_inner.height.saturating_sub(2),
+        panel_inner.height.saturating_sub(2 + footer_height),
     );
     frame.render_widget(block, area);
+    if let Some(profile) = model.selected_profile() {
+        render_drawer_footer(
+            frame,
+            Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
+            if profile.active {
+                DrawerStatus {
+                    color: theme::color(Token::Accent),
+                    headline: "Active",
+                    subtitle: "Its preferences are in use",
+                }
+            } else {
+                DrawerStatus {
+                    color: theme::color(Token::TextMuted),
+                    headline: "Not active",
+                    subtitle: "Make it active to use it",
+                }
+            },
+            &offers,
+            model.hovered_offer,
+            None,
+            hits,
+        );
+    }
     let header = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(1), Constraint::Length(12)])

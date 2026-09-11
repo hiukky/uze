@@ -25,13 +25,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use uze_application::application::{DoctorReport, MarketplacePluginSummary};
+use uze_application::CapabilityKind;
+use uze_application::application::{DoctorReport, MarketplacePluginSummary, PluginCapability};
 
+use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
-use super::super::route_style;
 use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{render_status_line, resource_summary};
+use super::{DrawerStatus, drawer_footer_height, fold, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
@@ -252,13 +253,6 @@ pub(crate) fn render_plugins(
                                 list_area.width,
                             )),
                             rect,
-                        );
-                        super::render_row_actions(
-                            frame,
-                            rect,
-                            *position,
-                            *position == model.marketplace_selected,
-                            hits,
                         );
                         hits.push((rect, Hit::MarketplaceRow(*position)));
                     }
@@ -487,53 +481,20 @@ fn render_plugin_drawer(
 
     let sections_x = drawer.x + 2;
     let sections_width = drawer.width.saturating_sub(3);
-    let status_height = 3;
-    // What can be done to this plugin, stated where the plugin is
-    // described. Unlike the row's own menu this lists the unavailable
-    // ones too, with the reason — a detail view is where someone asks
-    // why, and a keystroke that appears to do nothing is the alternative.
     let offers = plugin.offers();
-    let actions_height = offers.len() as u16 + 2;
+    let status_height = drawer_footer_height(&offers);
     let body = Rect::new(
         sections_x,
         drawer.y + 1,
         sections_width,
-        drawer
-            .height
-            .saturating_sub(2 + status_height + actions_height),
-    );
-    let actions_area = Rect::new(
-        sections_x,
-        body.y + body.height,
-        sections_width,
-        actions_height,
+        drawer.height.saturating_sub(2 + status_height),
     );
     let status_area = Rect::new(
         sections_x,
-        actions_area.y + actions_height,
+        body.y + body.height,
         sections_width,
         status_height,
     );
-    if actions_area.bottom() <= drawer.bottom() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "ACTIONS",
-                theme::fg_bold(Token::TextMuted),
-            ))),
-            Rect::new(actions_area.x, actions_area.y, actions_area.width, 1),
-        );
-        super::render_offers(
-            frame,
-            Rect::new(
-                actions_area.x,
-                actions_area.y + 1,
-                actions_area.width,
-                actions_area.height - 1,
-            ),
-            &offers,
-            hits,
-        );
-    }
 
     let room = body.width as usize;
     let mut lines = vec![Line::from(Span::styled(
@@ -555,6 +516,9 @@ fn render_plugin_drawer(
             .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextSecondary)))),
     );
     if !plugin.keywords.is_empty() {
+        if plugin.description.is_some() {
+            lines.push(Line::from(""));
+        }
         lines.extend(
             fold(&plugin.keywords.join(", "), room)
                 .into_iter()
@@ -651,177 +615,130 @@ fn render_plugin_drawer(
         "RESOURCES",
         theme::fg_bold(Token::TextMuted),
     )));
-    let resources = installed_inspection
+    let capabilities = installed_inspection
         .flatten()
-        .map(|detail| resource_summary(&detail.capabilities))
+        .map(|detail| detail.capabilities.as_slice())
         .or_else(|| {
             catalog_detail
                 .flatten()
-                .map(|detail| resource_summary(&detail.capabilities))
-        })
-        .unwrap_or_else(|| "loading…".to_owned());
-    lines.push(Line::from(Span::styled(
-        resources,
-        theme::fg(Token::TextPrimary),
-    )));
-
-    if let Some(detail) = installed_inspection.flatten() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "AVAILABLE IN",
-            theme::fg_bold(Token::TextMuted),
-        )));
-        for delivery in &detail.deliveries {
-            let route = delivery
-                .package_plan
-                .as_ref()
-                .map(package_strategy)
-                .unwrap_or_else(|| {
-                    delivery
-                        .capabilities
-                        .first()
-                        .and_then(|c| c.plan.as_ref())
-                        .map(exposure_route_label)
-                        .unwrap_or("unsupported")
-                });
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {:<12}", delivery.display_name),
-                    theme::fg(Token::TextSecondary),
-                ),
-                Span::styled(route, route_style(route)),
-            ]));
-        }
-        let state = &detail.managed_state;
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Managed  ", theme::fg(Token::TextMuted)),
-            Span::styled(
-                format!("{} matched", state.matched),
-                theme::fg(Token::Accent),
-            ),
-            Span::styled(
-                format!(
-                    " · {} missing · {} drifted · {} conflicts · {} blocked",
-                    state.missing, state.drifted, state.conflicts, state.blocked
-                ),
-                theme::fg(Token::TextMuted),
-            ),
-        ]));
+                .map(|detail| detail.capabilities.as_slice())
+        });
+    match capabilities {
+        None => lines.push(Line::from(Span::styled(
+            "loading…",
+            theme::fg(Token::TextMuted),
+        ))),
+        Some(capabilities) => lines.extend(resource_lines(capabilities, room)),
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
+    // Where the plugin reaches and how its receipts stand are left to the
+    // status line below: a uze plugin is meant for every harness, so a
+    // per-harness list restated the product's premise, and the receipt
+    // counts are what that line's one-word health is derived from.
+    // Untrimmed: every line is folded already, and trimming would strip the
+    // resource names' continuation indent back to the label column.
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 
-    if plugin.installed {
+    // The buttons below say what can be done, so the note no longer names
+    // the key that does it.
+    let status = if plugin.installed {
         let qualified_id = model.marketplace_plugin_id(plugin);
-        let health = plugin_health(model.doctor.as_ref(), &qualified_id);
-        let subtitle = match health {
-            "ready" => "Ready to use in your projects",
-            "missing" => "Installation is missing artifacts",
-            "needs attention" => "Managed state needs attention",
-            _ => "Health unknown",
-        };
         if model.was_just_updated(&qualified_id) {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::Accent),
-                "Updated",
-                "Brought up to date automatically when uze started",
-            );
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Updated",
+                subtitle: "Brought up to date automatically when uze started",
+            }
         } else if plugin.update_available == Some(true) {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::StateWarning),
-                "Update available",
-                "Needs your confirmation — press u to apply it",
-            );
+            DrawerStatus {
+                color: theme::color(Token::StateWarning),
+                headline: "Update available",
+                subtitle: "Needs your confirmation to apply",
+            }
         } else {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::Accent),
-                "Installed",
-                subtitle,
-            );
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Installed",
+                subtitle: match plugin_health(model.doctor.as_ref(), &qualified_id) {
+                    "ready" => "Ready to use in your projects",
+                    "missing" => "Installation is missing artifacts",
+                    "needs attention" => "Managed state needs attention",
+                    _ => "Health unknown",
+                },
+            }
         }
     } else {
-        render_status_line(
-            frame,
-            status_area,
-            theme::color(Token::TextMuted),
-            "Not installed",
-            "Press i to install this plugin",
-        );
-    }
+        DrawerStatus {
+            color: theme::color(Token::TextMuted),
+            headline: "Not installed",
+            subtitle: "Available from this marketplace",
+        }
+    };
+    render_drawer_footer(
+        frame,
+        status_area,
+        status,
+        &offers,
+        model.hovered_offer,
+        None,
+        hits,
+    );
 }
 
-/// Folds `text` to `width` the way the drawer's paragraph would, but
-/// *before* it is authored — so every line the drawer pushes is one drawn
-/// row, and a row index is a screen row.
-///
-/// The drawer renders through `Wrap`, and its two clickable rows (the
-/// marketplace name, the address under it) were anchored by counting
-/// authored lines. A description long enough to fold pushed the drawn rows
-/// down and left the targets sitting above them: the address read as a
-/// link and answered nothing. Wrapping the free text here keeps the two
-/// counts the same number by construction, with no measurement of what
-/// ratatui did afterwards.
-fn fold(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_owned()];
-    }
-    let mut rows: Vec<String> = Vec::new();
-    let mut row = String::new();
-    for word in text.split_whitespace() {
-        // A word wider than the row is broken across rows rather than
-        // left to overflow — the paragraph's own wrapper does the same,
-        // and a bare URL in a description is exactly that word.
-        let mut word = word;
-        while word.chars().count() > width {
-            if !row.is_empty() {
-                rows.push(std::mem::take(&mut row));
-            }
-            let split = word
-                .char_indices()
-                .nth(width)
-                .map_or(word.len(), |(index, _)| index);
-            let (head, tail) = word.split_at(split);
-            rows.push(head.to_owned());
-            word = tail;
-        }
-        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
-        if projected > width && !row.is_empty() {
-            rows.push(std::mem::take(&mut row));
-        }
-        if !row.is_empty() {
-            row.push(' ');
-        }
-        row.push_str(word);
-    }
-    if !row.is_empty() || rows.is_empty() {
-        rows.push(row);
-    }
-    rows
-}
+/// The order a reader meets a plugin's resources in: what they invoke
+/// first, what runs on its own after.
+const RESOURCE_ORDER: [CapabilityKind; 6] = [
+    CapabilityKind::AgentSkill,
+    CapabilityKind::Agent,
+    CapabilityKind::Hook,
+    CapabilityKind::Mcp,
+    CapabilityKind::Instruction,
+    CapabilityKind::Policy,
+];
 
-fn exposure_route_label(plan: &uze_application::ExposurePlan) -> &'static str {
-    match plan.route {
-        uze_application::CompatibilityRoute::Native => "native",
-        uze_application::CompatibilityRoute::Adaptable => "adapted",
-        uze_application::CompatibilityRoute::Degraded => "degraded",
-        uze_application::CompatibilityRoute::Unsupported => "unsupported",
+/// One row per kind the plugin declares — `Skills  init, worktree` —
+/// with the names folded under their own column, so a skill never reads
+/// as a hook because the two shared a comma.
+fn resource_lines(capabilities: &[PluginCapability], width: usize) -> Vec<Line<'static>> {
+    let groups: Vec<(&str, Vec<&str>)> = RESOURCE_ORDER
+        .iter()
+        .map(|kind| {
+            let names = capabilities
+                .iter()
+                .filter(|capability| capability.kind == *kind)
+                .map(|capability| capability.name.as_str())
+                .collect::<Vec<_>>();
+            (capability_label(*kind), names)
+        })
+        .filter(|(_, names)| !names.is_empty())
+        .collect();
+    if groups.is_empty() {
+        return vec![Line::from(Span::styled(
+            theme::glyph(Symbol::MarkUnsupported),
+            theme::fg(Token::TextDim),
+        ))];
     }
-}
-
-fn package_strategy(plan: &uze_application::PackageExposurePlan) -> &'static str {
-    match plan.route {
-        uze_application::CompatibilityRoute::Native => "native",
-        uze_application::CompatibilityRoute::Adaptable => "adapted",
-        uze_application::CompatibilityRoute::Degraded => "degraded",
-        uze_application::CompatibilityRoute::Unsupported => "unsupported",
+    let label_width = groups
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let mut lines = Vec::new();
+    for (label, names) in groups {
+        let rows = fold(&names.join(", "), width.saturating_sub(label_width));
+        for (index, row) in rows.into_iter().enumerate() {
+            let label = if index == 0 { label } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{label:<label_width$}"),
+                    theme::fg(Token::TextMuted),
+                ),
+                Span::styled(row, theme::fg(Token::TextPrimary)),
+            ]));
+        }
     }
+    lines
 }
 
 /// Attachment health for one plugin, derived from the doctor report every

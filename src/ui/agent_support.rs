@@ -328,7 +328,7 @@ fn clip(value: &str, max: usize) -> String {
     clipped
 }
 
-fn capability_label(kind: CapabilityKind) -> &'static str {
+pub(crate) fn capability_label(kind: CapabilityKind) -> &'static str {
     match kind {
         CapabilityKind::Instruction => "Instructions",
         CapabilityKind::AgentSkill => "Skills",

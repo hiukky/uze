@@ -4,12 +4,12 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::ui::hit::Hit;
 use crate::ui::theme::{self, Symbol, Token};
-use uze_application::application::PluginCapability;
+use uze_application::application::offers::ActionOffer;
 
 pub mod extensions;
 pub mod harnesses;
@@ -21,32 +21,55 @@ pub mod profiles;
 
 pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
 
-/// The design's `selectedPackage.resources` field is a single flat string
-/// ("README, CHANGELOG") — this mirrors that exactly: every capability's
-/// own logical/file name, comma-joined, in the order the manifest declared
-/// them. Not grouped by kind — the design doesn't, and a plugin rarely
-/// declares enough resources for that grouping to earn its own visual
-/// weight the way it would in a package-manager UI.
-pub(crate) fn resource_summary(capabilities: &[PluginCapability]) -> String {
-    if capabilities.is_empty() {
-        return theme::glyph(Symbol::MarkUnsupported);
-    }
-    capabilities
-        .iter()
-        .map(|c| c.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+/// Where a detail drawer's selected thing stands, in the words its footer
+/// prints: a coloured headline and a muted note beneath it.
+pub(crate) struct DrawerStatus<'a> {
+    pub color: Color,
+    pub headline: &'a str,
+    pub subtitle: &'a str,
 }
 
-/// The drawer's bottom status block: a `theme::color(Token::BorderDefault)`-colored top divider, then a
-/// colored dot + bold status text, then a muted note beneath — exactly the
-/// design's `border-top` + dot + text status footer, no card, no box.
-pub(crate) fn render_status_line(
+/// Rows [`render_drawer_footer`] needs: the divider and the two status
+/// lines, plus a gap and a row of buttons when anything can be done now.
+pub(crate) fn drawer_footer_height(offers: &[ActionOffer]) -> u16 {
+    if drawer_buttons(offers).is_empty() {
+        3
+    } else {
+        5
+    }
+}
+
+/// The offers a drawer draws as buttons: the available ones, what builds
+/// before what destroys. `Activate` is left out — it is what opened the
+/// drawer, and a button that opens what is already open does nothing.
+fn drawer_buttons(offers: &[ActionOffer]) -> Vec<uze_keys::Action> {
+    let mut buttons: Vec<uze_keys::Action> = offers
+        .iter()
+        .filter(|offer| offer.is_available() && offer.action != uze_keys::Action::Activate)
+        .map(|offer| offer.action)
+        .collect();
+    buttons.sort_by_key(|action| action.destructive());
+    buttons
+}
+
+/// Every detail drawer ends the same way: where the thing stands, then
+/// what can be done about it, as buttons.
+///
+/// The drawer is the one place a row's actions are performed with the
+/// pointer, so its buttons are the selected thing's offers — the available
+/// ones only: a button that cannot run is a caption pretending to be a
+/// control. The first thing that builds wears the accent, anything else
+/// is neutral, and what destroys comes last in the danger colour, so the
+/// weight of each is seen before it is clicked. `engaged` is an action
+/// already under way (a key being captured), drawn in the warning colour.
+pub(crate) fn render_drawer_footer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    color: Color,
-    headline: &str,
-    subtitle: &str,
+    status: DrawerStatus<'_>,
+    offers: &[ActionOffer],
+    hovered: Option<uze_keys::Action>,
+    engaged: Option<uze_keys::Action>,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let block = Block::default()
         .borders(Borders::TOP)
@@ -57,99 +80,111 @@ pub(crate) fn render_status_line(
         Line::from(vec![
             Span::styled(
                 format!("{} ", theme::glyph(Symbol::StatusSelected)),
-                Style::default().fg(color),
+                Style::default().fg(status.color),
             ),
             Span::styled(
-                headline.to_owned(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                status.headline.to_owned(),
+                Style::default()
+                    .fg(status.color)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(Span::styled(
-            subtitle.to_owned(),
+            status.subtitle.to_owned(),
             theme::fg(Token::TextMuted),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-}
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect::new(inner.x, inner.y, inner.width, inner.height.min(2)),
+    );
 
-/// Draws a row's "what can be done to this" affordance at its right edge,
-/// and registers it.
-///
-/// Every row carries one, muted until the row is the selected one. The
-/// point of it is that finding an action never requires knowing a letter —
-/// so it has to be visible before anyone has learned anything, which is
-/// exactly when a hover-only affordance is invisible.
-pub(crate) fn render_row_actions(
-    frame: &mut ratatui::Frame<'_>,
-    row: Rect,
-    index: usize,
-    selected: bool,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    let width = theme::width(Symbol::Menu).max(1);
-    if row.width <= width + 2 {
+    let row_y = inner.y + 3;
+    if row_y >= area.bottom() {
         return;
     }
-    let rect = Rect::new(row.x + row.width - width - 1, row.y, width + 1, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            theme::glyph(Symbol::Menu),
-            theme::fg(if selected {
-                Token::TextPrimary
-            } else {
-                Token::TextDim
-            }),
-        )),
-        rect,
-    );
-    hits.push((rect, Hit::RowActions(index)));
+    let mut x = inner.x;
+    for (index, action) in drawer_buttons(offers).into_iter().enumerate() {
+        let label = format!("  {}  ", action.label());
+        let width = label.chars().count() as u16;
+        if x + width > inner.right() {
+            break;
+        }
+        let hue = if engaged == Some(action) {
+            Token::StateWarning
+        } else if action.destructive() {
+            Token::StateDanger
+        } else if index == 0 {
+            Token::Accent
+        } else {
+            Token::TextSecondary
+        };
+        // Soft at rest, the full hue under the pointer: the step between
+        // the two is what says a button can be clicked. One under way
+        // stays strong, so the button that started it reads as the one
+        // that stops it.
+        let style = if hovered == Some(action) || engaged == Some(action) {
+            theme::on(Token::SurfaceBackground, hue)
+        } else {
+            Style::default()
+                .fg(theme::color(hue))
+                .bg(theme::softened(hue, Token::SurfaceRecessed))
+        };
+        let rect = Rect::new(x, row_y, width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(label, style.add_modifier(Modifier::BOLD))),
+            rect,
+        );
+        hits.push((rect, Hit::OfferedAction(action)));
+        x += width + 2;
+    }
 }
 
-/// A detail view's action bar: everything that can be done to the thing
-/// on screen, including what cannot be done and why.
+/// Folds `text` to `width` the way the drawer's paragraph would, but
+/// *before* it is authored — so every line the drawer pushes is one drawn
+/// row, and a row index is a screen row.
 ///
-/// This is the other half of the row menu, and the split between them is
-/// deliberate. A menu is a list of what can be done *now*, so an
-/// unavailable action would only be noise in it. A detail view is where
-/// someone asks why — so this is where "already up to date" is said,
-/// instead of a keystroke appearing to do nothing.
-pub(crate) fn render_offers(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    offers: &[uze_application::application::offers::ActionOffer],
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    for (index, offer) in offers.iter().enumerate() {
-        let y = area.y + index as u16;
-        if y >= area.bottom() {
-            return;
-        }
-        let row = Rect::new(area.x, y, area.width, 1);
-        let mut spans = vec![Span::styled(
-            offer.action.label(),
-            Style::default()
-                .fg(theme::color(if !offer.is_available() {
-                    Token::TextDim
-                } else if offer.action.destructive() {
-                    Token::StateDanger
-                } else {
-                    Token::TextPrimary
-                }))
-                .add_modifier(if offer.is_available() {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        )];
-        if let Some(reason) = offer.reason() {
-            spans.push(Span::styled(
-                format!("  {} {reason}", theme::glyph(Symbol::EmDash)),
-                theme::fg(Token::TextDim),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-        if offer.is_available() {
-            hits.push((row, Hit::OfferedAction(offer.action)));
-        }
+/// The drawer renders through `Wrap`, and its two clickable rows (the
+/// marketplace name, the address under it) were anchored by counting
+/// authored lines. A description long enough to fold pushed the drawn rows
+/// down and left the targets sitting above them: the address read as a
+/// link and answered nothing. Wrapping the free text here keeps the two
+/// counts the same number by construction, with no measurement of what
+/// ratatui did afterwards.
+pub(crate) fn fold(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
     }
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split_whitespace() {
+        // A word wider than the row is broken across rows rather than
+        // left to overflow — the paragraph's own wrapper does the same,
+        // and a bare URL in a description is exactly that word.
+        let mut word = word;
+        while word.chars().count() > width {
+            if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            let split = word
+                .char_indices()
+                .nth(width)
+                .map_or(word.len(), |(index, _)| index);
+            let (head, tail) = word.split_at(split);
+            rows.push(head.to_owned());
+            word = tail;
+        }
+        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
+        if projected > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+    }
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
+    }
+    rows
 }

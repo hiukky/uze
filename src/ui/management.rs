@@ -309,18 +309,13 @@ pub(crate) fn render(
         Route::Keys => view::keys::render_keys(frame, layout.content, model, hits),
     }
 
-    if let Some(menu) = &model.row_menu {
-        overlay::render_row_menu(frame, frame.area(), menu, hits);
-    }
-
     render_footer(frame, layout.footer, model);
 
     // Every arm below is a modal: drawn in the middle of the frame, and
     // the only thing on screen that answers until it is dealt with. The
     // scrim is what says so — it goes here rather than inside each arm
     // because what recedes is the screen underneath, which no dialog
-    // knows anything about. The row menu above is deliberately not one:
-    // it hangs off the row it is about, and the row has to stay readable.
+    // knows anything about.
     if !matches!(model.overlay, Overlay::None) {
         scrim::render(frame, frame.area());
     }
@@ -389,8 +384,8 @@ fn route_subtitle(route: Route) -> &'static str {
 /// open, so a step that needs a particular one is a step most readers meet
 /// as a row that does nothing when they click it. Asking a row what can be
 /// done to it and searching a list were here for exactly that reason and
-/// are not any more — both are offered where they apply, by the row's own
-/// `⋯` and by the search field.
+/// are not any more — both are offered where they apply, by the drawer's
+/// buttons and by the search field.
 pub(crate) const FIRST_STEPS: [uze_keys::Action; 5] = [
     uze_keys::Action::SwitchMode,
     uze_keys::Action::NextScreen,

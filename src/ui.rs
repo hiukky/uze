@@ -577,15 +577,6 @@ pub(crate) fn render_screen_header(
     )
 }
 
-fn route_style(route: &str) -> Style {
-    match route {
-        "native" => theme::fg(Token::StateSuccess),
-        "adapted" | "decomposed" => theme::fg(Token::Accent),
-        "degraded" => theme::fg(Token::StateWarning),
-        _ => theme::fg(Token::StateDanger),
-    }
-}
-
 // --- Row chrome ----------------------------------------------------------
 //
 // One column, one row at a time: what both sidebars and every extension

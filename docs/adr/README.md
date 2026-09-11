@@ -90,6 +90,7 @@ naming them, and the absorbed records are listed under
 - [045 — What uze can do is named once, and the screen only draws it](045-what-uze-can-do-is-named-once-and-the-screen-only-draws-it.md)
 - [046 — The design vocabulary is a leaf crate, resolved at load](046-the-design-vocabulary-is-a-leaf-crate-resolved-at-load.md)
 - [047 — The launch boundary owns session continuity](047-the-launch-boundary-owns-session-continuity.md)
+- [048 — An extension may write only what it was shown](048-an-extension-may-write-only-what-it-was-shown.md)
 
 ## Consolidated records
 
