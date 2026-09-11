@@ -96,6 +96,8 @@ fn focus_color(focused: bool) -> Color {
     }
 }
 
+const PREVIEW_BUTTON: &str = "  Preview  ";
+
 /// Columns of a preference row: the cursor, the axis name, then the value
 /// between its steppers — wide enough for the longest value
 /// (`workspace-write`), so the steppers stand in one column on every row.
@@ -162,7 +164,12 @@ fn render_profile_tree(
     frame.render_widget(block, area);
     let header = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(7)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(PREVIEW_BUTTON.len() as u16),
+            Constraint::Length(2),
+            Constraint::Length(5),
+        ])
         .split(Rect::new(
             inner.x,
             inner.y,
@@ -186,11 +193,33 @@ fn render_profile_tree(
         )),
         header[0],
     );
+    // Previewing is a way of looking at the screen rather than something
+    // done to the profile, so it sits with the screen's own controls; it
+    // is drawn as a button, engaged while the preview is open.
+    if model.selected_profile().is_some() {
+        let action = uze_keys::Action::PreviewProfile;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                PREVIEW_BUTTON,
+                super::button_style(
+                    if model.profile_preview_open {
+                        Token::StateWarning
+                    } else {
+                        Token::Accent
+                    },
+                    model.profile_preview_open || model.hovered_offer == Some(action),
+                    Token::SurfaceBackground,
+                ),
+            )),
+            header[1],
+        );
+        hits.push((header[1], Hit::OfferedAction(action)));
+    }
     frame.render_widget(
         Paragraph::new(Span::styled("+ new", theme::fg(Token::Accent))).alignment(Alignment::Right),
-        header[1],
+        header[3],
     );
-    hits.push((header[1], Hit::NewProfile));
+    hits.push((header[3], Hit::NewProfile));
     let subtitle = match (model.profile_preview_open, model.selected_profile()) {
         (true, Some(profile)) => preview_summary(model, &profile.id),
         _ => "Configure preferences and apply them across harnesses".to_owned(),
@@ -469,9 +498,7 @@ fn render_harnesses(
             },
             &offers,
             model.hovered_offer,
-            model
-                .profile_preview_open
-                .then_some(uze_keys::Action::PreviewProfile),
+            None,
             hits,
         );
     }
@@ -912,14 +939,13 @@ fn harness_detail(harness: &HarnessPreview, width: u16) -> Vec<Line<'static>> {
             );
         }
     };
-    let mut lines = vec![Line::from(vec![
+    let path = vec![Line::from(vec![
         Span::raw(" ".repeat(DETAIL_INDENT)),
         Span::styled(
             crate::ui::display_project_path(&plan.config_path),
             theme::fg(Token::TextMuted),
         ),
     ])];
-    lines.extend(caveats(&plan.axes, width));
     let key_width = plan
         .axes
         .iter()
@@ -932,7 +958,20 @@ fn harness_detail(harness: &HarnessPreview, width: u16) -> Vec<Line<'static>> {
         .min((width as usize).saturating_sub(DETAIL_INDENT + VERB_COLUMN) / 2);
     let mut keys: Vec<&KeyPlan> = plan.axes.iter().flat_map(|axis| &axis.keys).collect();
     keys.sort_by_key(|key| !Verb::of(key).changes());
-    lines.extend(keys.into_iter().map(|key| key_line(key, key_width)));
+    let settings: Vec<Line<'static>> = keys
+        .into_iter()
+        .map(|key| key_line(key, key_width))
+        .collect();
+    // Where the file is, what keeps an axis from being honoured, and what
+    // the file holds are three answers; a blank line keeps each its own.
+    let groups = [path, caveats(&plan.axes, width), settings];
+    let mut lines = Vec::new();
+    for group in groups.into_iter().filter(|group| !group.is_empty()) {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(group);
+    }
     lines
 }
 

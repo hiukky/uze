@@ -1353,10 +1353,23 @@ fn the_preview_shows_each_key_as_it_is_and_as_it_will_be() {
         row("would change").contains("1 setting in 1 harness"),
         "the preview leads with its answer"
     );
+    let header = row("+ new");
     assert!(
-        rows.iter()
-            .any(|row| row.contains("Apply") && row.contains("Preview") && row.contains("Delete")),
-        "previewing is one of the drawer's buttons: {rows:#?}"
+        header.contains("  Preview  "),
+        "previewing is a button beside new, not a drawer action: {header}"
+    );
+    let buttons = row("  Apply  ");
+    assert!(buttons.contains("Delete") && !buttons.contains("Preview"));
+    let preview_button = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::PreviewProfile))
+        .map(|(rect, _)| *rect)
+        .expect("the Preview button is a target");
+    model.hits = hits;
+    model.click(preview_button.x + 2, preview_button.y);
+    assert!(
+        !model.profile_preview_open,
+        "and clicking it again closes the preview"
     );
     assert!(
         rows.iter().any(|row| row.contains("Active, not in effect")),

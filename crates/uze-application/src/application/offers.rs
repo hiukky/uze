@@ -119,7 +119,6 @@ impl ProfileSummary {
         // by hand — being active is not the same as being in effect.
         vec![
             ActionOffer::available(Action::ApplyProfile),
-            ActionOffer::available(Action::PreviewProfile),
             ActionOffer::available(Action::DeleteProfile),
         ]
     }

@@ -63,6 +63,22 @@ fn drawer_buttons(offers: &[ActionOffer]) -> Vec<uze_keys::Action> {
 /// is neutral, and what destroys comes last in the danger colour, so the
 /// weight of each is seen before it is clicked. `engaged` is an action
 /// already under way (a key being captured), drawn in the warning colour.
+/// A button's look: soft at rest, the full hue under the pointer — the
+/// step between the two is what says it can be clicked. One under way
+/// stays `strong`, so the button that started it reads as the one that
+/// stops it. `ground` is the surface it sits on, which the soft tint is
+/// mixed against.
+pub(crate) fn button_style(hue: Token, strong: bool, ground: Token) -> Style {
+    let style = if strong {
+        theme::on(Token::SurfaceBackground, hue)
+    } else {
+        Style::default()
+            .fg(theme::color(hue))
+            .bg(theme::softened(hue, ground))
+    };
+    style.add_modifier(Modifier::BOLD)
+}
+
 pub(crate) fn render_drawer_footer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -120,22 +136,13 @@ pub(crate) fn render_drawer_footer(
         } else {
             Token::TextSecondary
         };
-        // Soft at rest, the full hue under the pointer: the step between
-        // the two is what says a button can be clicked. One under way
-        // stays strong, so the button that started it reads as the one
-        // that stops it.
-        let style = if hovered == Some(action) || engaged == Some(action) {
-            theme::on(Token::SurfaceBackground, hue)
-        } else {
-            Style::default()
-                .fg(theme::color(hue))
-                .bg(theme::softened(hue, Token::SurfaceRecessed))
-        };
-        let rect = Rect::new(x, row_y, width, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled(label, style.add_modifier(Modifier::BOLD))),
-            rect,
+        let style = button_style(
+            hue,
+            hovered == Some(action) || engaged == Some(action),
+            Token::SurfaceRecessed,
         );
+        let rect = Rect::new(x, row_y, width, 1);
+        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
         hits.push((rect, Hit::OfferedAction(action)));
         x += width + 2;
     }
