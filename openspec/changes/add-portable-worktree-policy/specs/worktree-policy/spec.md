@@ -67,6 +67,11 @@ concurrency, and a project MAY declare a cap.
 - **THEN** only the new task holds that checkout
 - **AND** each earlier task ends by what its own branch holds, and keeps that branch
 
+#### Scenario: A worktree the system did not create is not a slot
+- **WHEN** a harness or an operator creates a worktree outside the isolation directory — a harness's own isolation, started from inside an agent's checkout, included
+- **THEN** it is never adopted as a slot, offered to an agent, swept as idle or removed, and its branch is never pruned
+- **AND** nothing the system projects forbids it: work on another branch is the agent's to bring back to its own
+
 #### Scenario: A new checkout is created only when none is free
 - **WHEN** every existing checkout is occupied or parked
 - **THEN** a new checkout is created

@@ -35,7 +35,7 @@ MESSAGE_MARKER = "UZE_CONFORMANCE_REBASE"
 #: copy: this only has to contain the phrase the check looks for.
 DECLARATION = """## Concurrent work isolation
 
-- Every agent UZE launches works in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>`. If your working directory is inside `.worktrees/`, you are already isolated: do not create another worktree, and do not switch branches.
+- Every agent UZE launches works in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>`. If your working directory is inside `.worktrees/`, you are already isolated; do not switch branches.
 - Commit your work on your own branch, as you go. Never commit to, merge into, rebase, or reset the target branch: delivery is UZE's.
 - If UZE tells you a rebase is paused in your checkout, resolve the conflicts preserving the intent of your change, run `git rebase --continue`, run the project's checks, and end your turn.
 """
@@ -107,13 +107,7 @@ def _assert_in_slot(cfg, prov_ip, bindings):
             seen.get(MESSAGE_MARKER, False),
             "text typed into the pane is the agent's own turn",
         )
-        # The one thing this scene cannot yet ask: the synthetic provider
-        # answers with text, so nothing scripts the harness's own worktree
-        # primitive to see it decline. Declared, so the gap is reviewable.
-        check(
-            "isolation-no-top-level-worktree",
-            True,
-            "not scripted: the synthetic provider does not yet drive this "
-            "harness's own worktree primitive",
-            kind="adapt",
-        )
+        # Deliberately not asked: whether the harness declines to make a
+        # worktree of its own. That is the agent's business — UZE never
+        # adopts, sweeps or removes a worktree it did not create, which the
+        # deterministic suite proves without a harness.

@@ -473,8 +473,7 @@ impl WorktreePolicy {
              {naming}\
              - Every agent UZE launches works in a checkout of its own under \
              `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is inside \
-             `{directory}/`, you are already isolated: do not create another worktree, and do \
-             not switch branches.\n\
+             `{directory}/`, you are already isolated; do not switch branches.\n\
              - Commit your work on your own branch, as you go. Never commit to, merge into, \
              rebase, or reset the target branch{target}: delivery is UZE's — \
              {completion}.\n\
@@ -581,6 +580,10 @@ mod tests {
             text.contains("already isolated"),
             "the reader must be told where it already is: {text}"
         );
+        // Told where it is, never forbidden to isolate further: a worktree
+        // an agent makes for itself is its own business, and UZE never
+        // adopts or removes one it did not create.
+        assert!(!text.contains("another worktree"), "{text}");
     }
 
     #[test]

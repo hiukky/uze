@@ -1600,6 +1600,46 @@ mod tests {
         );
     }
 
+    /// A worktree UZE did not create is none of its business. A harness
+    /// isolating on its own — Claude Code keeps its worktrees under the
+    /// repository's `.claude/worktrees` — is never adopted as a slot, never
+    /// offered to an agent, never swept as idle, and its branch is never
+    /// pruned, however clean it is and however little it holds.
+    #[test]
+    fn a_worktree_uze_did_not_create_is_never_its_to_touch() {
+        let repository = repository("slots-foreign");
+        let primary = repository.root();
+        repository.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-agent-x",
+            ".claude/worktrees/agent-x",
+            "HEAD",
+        ]);
+        let foreign = primary.join(".claude/worktrees/agent-x");
+        let mut store = TaskStore::default();
+
+        let report = reconcile(primary, &mut store, TARGET);
+        assert!(report.adopted.is_empty(), "never adopted");
+        assert!(slots(primary, &store, &[]).is_empty(), "never a slot");
+
+        let (_, placed) = launch(&repository, &mut store, "next");
+        assert!(placed.created, "never offered to an agent");
+
+        let collected = collect(primary, &store, TARGET, Duration::ZERO, &[]);
+        assert!(foreign.is_dir(), "never swept as idle");
+        assert!(
+            !collected
+                .branches
+                .iter()
+                .any(|branch| branch == "worktree-agent-x"),
+            "its branch is never pruned"
+        );
+        assert!(branch_exists(primary, "worktree-agent-x"));
+    }
+
     #[test]
     fn the_isolation_directory_is_excluded_without_touching_the_primary_tree() {
         let repository = repository("slots-exclude");
