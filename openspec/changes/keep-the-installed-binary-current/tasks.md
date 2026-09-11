@@ -21,15 +21,16 @@
 
 ## 3. Both sidebars
 
-- [x] 3.1 `ReleaseNotice` in `src/ui.rs`: a heading, one row, a closing mark,
-  pinned under the first steps.
-- [x] 3.2 Workspace: the notice at the foot, `OpenReleaseNotes` opens the
+- [x] 3.1 `ReleaseNotice` in `src/ui.rs`: two rows — the version with its
+  closing mark, then what happened and what to do — drawn by both sidebars.
+- [x] 3.2 Workspace: the notice on the steps (or the history), `OpenReleaseNotes` opens the
   notes off the frame thread, `DismissRelease` acknowledges; the `pump`
   follows the notice's revision.
 - [x] 3.3 Management: the same, through `Hit`s and an `AcknowledgeRelease`
   intent.
 - [x] 3.4 The watch starts once per process in `ui::run`.
-- [x] 3.5 Render tests: the notice appears at the foot of both sidebars, its
+- [x] 3.5 Render tests: the notice sits above the steps in both sidebars, whole
+  at a real version's length with its mark on the version's row, its
   row and its mark are targets, and no notice draws nothing.
 
 ## 4. The CLI

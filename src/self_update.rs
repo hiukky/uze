@@ -66,17 +66,19 @@ impl Notice {
         }
     }
 
-    pub(crate) fn heading(&self) -> &'static str {
+    /// What happened, when the action alone does not say it. An update
+    /// waiting on a restart is the one whose action already does.
+    pub(crate) fn state(&self) -> Option<&'static str> {
         match self {
-            Self::Installed(_) => "update installed",
-            Self::Updated(_) => "updated",
-            Self::Available(_) => "update available",
+            Self::Installed(_) => None,
+            Self::Updated(_) => Some("updated"),
+            Self::Available(_) => Some("available"),
         }
     }
 
-    /// The one line under the heading, which is also what a click does:
-    /// every notice opens the release's own notes.
-    pub(crate) fn line(&self) -> &'static str {
+    /// What the reader can do about it. Every notice opens the release's
+    /// own notes when clicked; this is what the row says.
+    pub(crate) fn action(&self) -> &'static str {
         match self {
             Self::Installed(_) => "restart uze to use it",
             Self::Updated(_) | Self::Available(_) => "what's new",

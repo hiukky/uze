@@ -88,14 +88,25 @@ ledger (two commands a second apart start one check) and handed to a hidden
 Ctrl+C. What it finds is what the next command says — the trade `gh` and
 npm's notifier make.
 
-### The notice is a section, pinned under the first steps
+### The notice is two rows, sitting on the sections at the foot
 
-The first steps already established "chrome that belongs to uze sits at the
-foot of the sidebar, in the section vocabulary". The notice uses the same
-renderer, so it inherits the theme and the glyph set, with the closing mark
-riding on the caption exactly as the steps' own does. It is never folded:
-there is nothing under its header to fold, so the header's only target is the
-mark.
+It borrows a section row's layout — a marker column, the text, anything
+right-aligned kept off the divider — so it lines up with the first steps
+under it, but not a section's header: there is nothing under it to fold, and
+a chevron that folds nothing reads as a control that does nothing. Two
+earlier cuts were tried and dropped in review:
+
+- A section with the version in its caption. A caption is the first thing a
+  narrow column elides, and the closing mark riding at its end went with it —
+  at a real version's length, a notice nobody could put away.
+- A heading row above the version. Three rows read as a third thing to take
+  in, where the version and what to do about it are the whole of the news.
+
+So the version and its mark share the first row, and the second says what
+happened and what to do. What gives way on a narrow column is the text,
+never the mark or the arrow. It sits *on* whatever holds the foot — the
+steps, or the history once the steps are put away — rather than under them:
+news below two sections reads as the column's floor.
 
 ### Three notices, one acknowledgement
 

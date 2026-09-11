@@ -57,12 +57,13 @@ process. The new release SHALL first run at the next launch.
 
 ### Requirement: The workspace sidebars announce releases
 
-Both sidebars SHALL show, at their foot, a notice for an update that was
-installed and not yet running, for a release the updater installed that has
-not yet been acknowledged, or for a newer release this binary will not install
-itself. Activating the notice SHALL open that release's notes; dismissing it
-SHALL put away the notice for that release in every client and every later
-run.
+Both sidebars SHALL show, above the sections at their foot, a notice for an
+update that was installed and not yet running, for a release the updater
+installed that has not yet been acknowledged, or for a newer release this
+binary will not install itself. The notice SHALL name the version and SHALL
+keep its dismissal visible at any sidebar width. Activating the notice SHALL
+open that release's notes; dismissing it SHALL put away the notice for that
+release in every client and every later run.
 
 #### Scenario: Opening the notes
 

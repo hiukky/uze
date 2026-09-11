@@ -3108,10 +3108,10 @@ mod workspace_tests {
         }
     }
 
-    /// The release notice keeps the very foot of the column, with the
-    /// steps sitting on it, and both of its parts are targets.
+    /// The release notice sits on the sections holding the foot, not under
+    /// them, and every part of it is whole at a real version's length.
     #[test]
-    fn a_release_notice_keeps_the_foot_of_the_sidebar() {
+    fn a_release_notice_sits_on_the_sections_at_the_foot() {
         let mut model = session_with_timeline(&["feat: one"]);
         model.timeline_collapsed = true;
         let mut hits = Vec::new();
@@ -3124,40 +3124,34 @@ mod workspace_tests {
             "no release, no notice"
         );
 
-        model.release = Some(crate::self_update::Notice::Installed("9.9.9".to_owned()));
+        model.release = Some(crate::self_update::Notice::Installed(
+            "0.0.0-alpha.14".to_owned(),
+        ));
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
-        let (row, _) = hits
-            .iter()
-            .find(|(_, hit)| matches!(hit, WorkspaceHit::OpenReleaseNotes))
-            .expect("its row opens the notes");
         let (mark, _) = hits
             .iter()
             .find(|(_, hit)| matches!(hit, WorkspaceHit::DismissRelease))
             .expect("its mark puts it away");
-        let header = &rows[usize::from(mark.y)];
+        let y = usize::from(mark.y);
         assert!(
-            header.contains("update installed") && header.contains("v9.9.9"),
-            "{rows:?}"
+            rows[y].contains("v0.0.0-alpha.14")
+                && rows[y].contains(&theme::glyph(theme::Symbol::MarkClose)),
+            "the version, whole, with the mark on its row: {rows:?}"
         );
-        assert!(
-            rows[usize::from(row.y)].contains("restart uze to use it"),
-            "{rows:?}"
+        assert!(rows[y + 1].contains("restart uze to use it"), "{rows:?}");
+        assert_eq!(
+            hits.iter()
+                .filter(|(_, hit)| matches!(hit, WorkspaceHit::OpenReleaseNotes))
+                .count(),
+            2,
+            "two rows, and each opens the notes"
         );
         let steps = rows
             .iter()
             .position(|line| line.contains("first steps"))
             .expect("the steps are still there");
-        assert!(
-            steps < usize::from(mark.y),
-            "and sit on the notice: {rows:?}"
-        );
-        assert!(
-            rows[usize::from(row.y) + 1..]
-                .iter()
-                .all(|line| line.trim().is_empty() || line.trim() == "│"),
-            "nothing is drawn under it: {rows:?}"
-        );
+        assert!(y < steps, "and the notice sits on them: {rows:?}");
     }
 
     /// The header folds it, and it stays folded: a section that came back

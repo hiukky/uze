@@ -25,10 +25,11 @@ it placed, and that file is the only one ever replaced.
   started from; the next launch runs the new one.
 - A binary running from anywhere else is never replaced. It is told that a
   newer release exists.
-- Both sidebars of the terminal workspace carry a notice at their foot, in
-  the same section vocabulary as the first steps: the update that was
-  installed, the release now running, or the release available. Its row opens
-  that release's notes on GitHub; its mark puts it away.
+- Both sidebars of the terminal workspace carry a two-row notice sitting on
+  the sections at their foot: the version, with a mark that puts it away,
+  and what happened and what to do — *restart uze to use it*, *updated ·
+  what's new*, *available · what's new*. Either row opens that release's
+  notes on GitHub.
 - A CLI command mentions a release once, on stderr, after its own output. It
   never waits on the network: a stale answer is handed to a detached, hidden
   `uze self-update`.
