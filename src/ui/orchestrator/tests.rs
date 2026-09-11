@@ -990,7 +990,10 @@ mod workspace_tests {
         );
 
         let (rows, hits) = tab_strip(&model);
-        assert!(rows.iter().any(|row| row.contains("⇧3")), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("3 merge → main")),
+            "{rows:?}"
+        );
         assert!(
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
@@ -1103,45 +1106,46 @@ mod workspace_tests {
         };
 
         assert!(
-            ending(CompletionBehavior::Merge).contains("⇧3 merge → main"),
+            ending(CompletionBehavior::Merge).contains("3 merge → main"),
             "{}",
             ending(CompletionBehavior::Merge)
         );
         assert!(
-            ending(CompletionBehavior::Pr).contains("⇧3 pr → main"),
+            ending(CompletionBehavior::Pr).contains("3 pr → main"),
             "{}",
             ending(CompletionBehavior::Pr)
         );
         assert!(
-            ending(CompletionBehavior::Handoff).contains("⇧3 hand off"),
+            ending(CompletionBehavior::Handoff).contains("3 hand off"),
             "a completion that writes to nothing names no target: {}",
             ending(CompletionBehavior::Handoff)
         );
     }
 
-    /// One meaning, one mark, wherever the state is drawn.
+    /// Readiness is marked once, in the sidebar; the delivery button says
+    /// it in words — the count and where a press sends it.
     ///
-    /// The sidebar and the delivery button had drifted here: the sidebar
-    /// drew a task's readiness from one symbol and the button from
-    /// another, which showed as two marks for one state the moment a glyph
-    /// set gave them different glyphs. Asserted against the *vocabulary*
-    /// rather than a literal, since the glyph is whatever the set says.
-    ///
-    /// Only where the button reports the state. `GateFailed` marks `×` in
-    /// the sidebar and offers `retry` on the button, and those are
-    /// different things said to different ends — what happened, and what
-    /// you can do about it.
+    /// The two used to share a mark, and drifted into two marks for one
+    /// state the moment a glyph set drew them differently. The `nerd` set
+    /// then drew a pull-request icon in front of every button, including
+    /// the ones that merge or only hand off. Words cannot drift from the
+    /// sidebar, and cannot claim a request the press will not open.
     #[test]
-    fn a_ready_task_wears_the_same_mark_in_the_sidebar_and_on_its_button() {
+    fn a_ready_task_is_marked_in_the_sidebar_and_named_on_its_button() {
         let state = TaskStateView::Ready;
         let model = agent_with_task(state.clone(), 3);
         let (mark, _) = super::render::task_mark(&state).expect("ready is marked");
+        let sidebar = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            sidebar.iter().any(|row| row.contains(mark.trim())),
+            "{sidebar:#?}"
+        );
         let (rows, _) = tab_strip(&model);
         let strip = rows.join("\n");
+        assert!(strip.contains("3 merge → main"), "{strip}");
         assert!(
-            strip.contains(mark.trim()),
-            "the button does not wear the sidebar's mark: \
-             looking for {mark:?} in {strip}"
+            !strip.contains(mark.trim()),
+            "the button carries no mark: {strip}"
         );
     }
 
@@ -1156,14 +1160,20 @@ mod workspace_tests {
         }
         let (before, _) = tab_strip(&model);
         let before = before.join("\n");
-        assert!(before.contains("⇧4 pr → main"), "{before}");
+        assert!(before.contains("4 pr → main"), "{before}");
+        assert!(
+            !before.contains(&crate::ui::theme::glyph(
+                crate::ui::theme::Symbol::TaskReady
+            )),
+            "the button's words say what a press does; no mark in front of them: {before}"
+        );
 
         for task in model.tasks.values_mut().flatten() {
             task.published_request = Some(11);
         }
         let (after, _) = tab_strip(&model);
         let after = after.join("\n");
-        assert!(after.contains("⇧4 #11"), "{after}");
+        assert!(after.contains("4 #11"), "{after}");
         assert!(
             !after.contains("pr → main"),
             "a request that exists is not opened again: {after}"
@@ -1172,7 +1182,7 @@ mod workspace_tests {
 
     /// The count on the button is what pressing it would send, and a
     /// branch level with its request would send nothing. Counting commits
-    /// against the target instead left `⇧6 #20` standing on a request that
+    /// against the target instead left `6 #20` standing on a request that
     /// already carried all six — a merge's question asked of a sync.
     #[test]
     fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
@@ -1187,7 +1197,7 @@ mod workspace_tests {
         let synced = synced.join("\n");
         assert!(synced.contains("✓ #20"), "{synced}");
         assert!(
-            !synced.contains("⇧6"),
+            !synced.contains("6 #20"),
             "the target is still six commits away, and that is not this button's question: {synced}"
         );
         assert!(
@@ -1204,7 +1214,7 @@ mod workspace_tests {
         }
         let (behind_by_two, _) = tab_strip(&model);
         let behind_by_two = behind_by_two.join("\n");
-        assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
+        assert!(behind_by_two.contains("2 #20"), "{behind_by_two}");
     }
 
     /// The sidebar and the header answer the same question, so they had
@@ -2173,7 +2183,7 @@ mod workspace_tests {
         model.set_task_notice("t2", "other", "back to its agent".to_owned());
         let (rows, hits) = tab_strip(&model);
         assert!(rows[0].contains("other: back to its agent"), "{rows:?}");
-        assert!(rows[0].contains('⇧'), "{rows:?}");
+        assert!(rows[0].contains("3 merge → main"), "{rows:?}");
         assert!(
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
@@ -2236,7 +2246,12 @@ mod workspace_tests {
             "{name_row}"
         );
         let (rows, hits) = tab_strip(&model);
-        assert!(!rows.iter().any(|row| row.contains('⇧')), "{rows:?}");
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("merge →") || row.contains("pr →")),
+            "{rows:?}"
+        );
         assert!(
             !hits
                 .iter()

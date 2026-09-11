@@ -1396,7 +1396,7 @@ fn push_root_toggle(
 /// does *not* reuse `✓` — that is `AgentTabStatus::Completed`'s glyph one
 /// column to the left, and the same mark in the same accent meaning two
 /// different things is what made the second column read as an echo of the
-/// first. It wears the `⇧` of the delivery button it enables instead.
+/// first. It wears a mark of its own, `task.ready`, instead.
 /// [`render_status_catalog`] is this table's legend and must move with it.
 pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
     let (symbol, hue) = match state {
@@ -1840,22 +1840,16 @@ fn deliver_button(
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
+            // The count and the ending, no mark: the words already say
+            // what a press does, and an icon in front of them only made the
+            // button read as a badge.
             Some(unsynced) => (
-                format!(
-                    "{}{unsynced} {}",
-                    theme::glyph(Symbol::TaskReady),
-                    delivery_ending(task)
-                ),
+                format!("{unsynced} {}", delivery_ending(task)),
                 theme::color(Token::Accent),
                 true,
             ),
             None => (
-                format!(
-                    "{}{} {}",
-                    theme::glyph(Symbol::TaskReady),
-                    task.ahead,
-                    delivery_ending(task)
-                ),
+                format!("{} {}", task.ahead, delivery_ending(task)),
                 theme::color(Token::Accent),
                 true,
             ),
