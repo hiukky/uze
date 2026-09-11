@@ -90,6 +90,9 @@ pub enum DeliveryFailure {
     Overlap {
         files: Vec<PathBuf>,
     },
+    /// The target already carries the branch's work under commits of its
+    /// own — a squash or rebase merge made elsewhere.
+    AlreadyDelivered,
     NoRemote,
     Git(String),
 }
@@ -114,6 +117,7 @@ impl fmt::Display for DeliveryFailure {
                 "the primary checkout has uncommitted changes to {}",
                 join_paths(files)
             ),
+            Self::AlreadyDelivered => formatter.write_str("the target already carries this work"),
             Self::NoRemote => formatter.write_str("the repository has no `origin` remote"),
             Self::Git(reason) => formatter.write_str(reason),
         }
@@ -217,6 +221,12 @@ pub fn publication(primary: &Path, task: &Task) -> Option<Publication> {
 /// question per [`REQUEST_INTERVAL`] — and it stops for good the moment
 /// it is answered.
 pub fn observe_request(primary: &Path, task: &mut Task) {
+    let published = publication(primary, task);
+    // A number answers for the branch it was found on, and the task
+    // outlives both: an agent that delivered keeps working in the same
+    // checkout, often on a new branch, and a number cached for good went on
+    // naming the request it had already merged.
+    task.forget_request_unless_for(published.as_ref().map(|found| found.branch.as_str()));
     if task.published_request.is_some() {
         return;
     }
@@ -227,11 +237,12 @@ pub fn observe_request(primary: &Path, task: &mut Task) {
     if asked_recently {
         return;
     }
-    let Some(published) = publication(primary, task) else {
+    let Some(published) = published else {
         return;
     };
     task.request_asked_at_unix = Some(now);
     task.published_request = discover_request(primary, &published.tip);
+    task.request_branch = task.published_request.map(|_| published.branch);
 }
 
 fn effective_base(primary: &Path, task: &Task) -> String {
@@ -376,6 +387,13 @@ fn deliver_locked(
     let slot = slot_path(primary, task).ok_or(DeliveryFailure::NotReady(Readiness::Running))?;
     task.state = TaskState::Integrating;
     let tip = target_tip(primary, task, policy.completion)?;
+    // Merged elsewhere — squashed on the forge before the local target
+    // heard of it — the work is in the tip under commits of its own, and
+    // rebasing would replay it onto itself.
+    if checkout::is_integrated(primary, &tip, &task.branch) {
+        mark_delivered(primary, task);
+        return Err(DeliveryFailure::AlreadyDelivered);
+    }
     rebase_in_slot(primary, &slot, task, &tip)?;
     for step in policy.gate {
         let (passed, output) = run_shell_bounded(&slot, step, GATE_TIMEOUT);
@@ -439,6 +457,11 @@ pub fn refresh(primary: &Path, task: &mut Task) -> Result<bool, DeliveryFailure>
             task.base_commit = tip;
             return Ok(false);
         }
+        // The target already holds this work under commits of its own — a
+        // squash or rebase merge. Replaying it there conflicts with itself.
+        if checkout::is_integrated(primary, &tip, &task.branch) {
+            return Ok(false);
+        }
         rebase_in_slot(primary, &slot, task, &tip)?;
         Ok(true)
     })
@@ -491,7 +514,20 @@ fn rebase_in_slot(
         return Ok(());
     }
     let moved = commits_ahead(primary, &task.base_commit, tip);
-    match uze_git::write(slot, &["rebase", "--quiet", tip]) {
+    // Work delivered by a squash or rebase merge sits below `base_commit`
+    // on the branch, and in the target only under commits of its own:
+    // replayed, it conflicts with itself. Only what came after it is this
+    // task's to move.
+    let base = task.base_commit.clone();
+    let delivered_below = !base.is_empty()
+        && is_ancestor(primary, &base, &task.branch)
+        && !is_ancestor(primary, &base, tip);
+    let rebase = if delivered_below {
+        vec!["rebase", "--quiet", "--onto", tip, base.as_str()]
+    } else {
+        vec!["rebase", "--quiet", tip]
+    };
+    match uze_git::write(slot, &rebase) {
         Ok(output) if output.is_success() => {
             task.base_commit = tip.to_owned();
             Ok(())
@@ -544,6 +580,55 @@ pub fn paused_rebase(slot: &Path) -> Option<Vec<PathBuf>> {
         .map(|stdout| stdout.lines().map(PathBuf::from).collect())
         .unwrap_or_default();
     Some(files)
+}
+
+/// Ends a task whose work the target already carries, when nothing of the
+/// agent's is at stake. Returns whether it was ended.
+///
+/// A rebase paused in its checkout can only be replaying that work onto
+/// itself, and is abandoned: the branch ref does not move until a rebase
+/// finishes, so it still names every commit the agent made, and aborting
+/// puts the checkout back exactly where the agent left it. A checkout with
+/// changes of its own is never touched.
+///
+/// Only for a task that has something to settle — one parked, or with a
+/// rebase paused: a branch with no commits of its own reads as integrated
+/// too, and a live agent that has committed nothing yet is not done.
+pub fn settle_delivered(primary: &Path, task: &mut Task) -> bool {
+    if !checkout::branch_exists(primary, &task.branch)
+        || !checkout::is_integrated(primary, &task.target, &task.branch)
+    {
+        return false;
+    }
+    if let Some(slot) = slot_path(primary, task) {
+        if paused_rebase(&slot).is_some() && !abort_rebase(primary, &slot) {
+            return false;
+        }
+        if is_dirty(&slot) {
+            return false;
+        }
+    }
+    mark_delivered(primary, task);
+    true
+}
+
+/// Records a task's work as delivered by patch — a squash or rebase merge
+/// the target carries under commits of its own. The branch's tip becomes
+/// its base: everything up to it is in the target, so an agent that keeps
+/// committing on the same branch is measured, and moved, by what it adds.
+pub fn mark_delivered(primary: &Path, task: &mut Task) {
+    task.state = TaskState::Integrated;
+    let tip = checkout::tip_of(primary, &task.branch);
+    if !tip.is_empty() {
+        task.base_commit = tip;
+    }
+}
+
+fn abort_rebase(primary: &Path, slot: &Path) -> bool {
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
+        uze_git::write(slot, &["rebase", "--abort"]).is_ok_and(|output| output.is_success())
+    })
+    .unwrap_or(false)
 }
 
 /// The message written into the owning agent's pane when its task cannot be
@@ -731,9 +816,11 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
     };
     git(primary, &push).map_err(DeliveryFailure::Git)?;
     task.published_as = Some(name.clone());
+    task.forget_request_unless_for(Some(&name));
     if task.published_request.is_none() {
         task.published_request =
             discover_request(primary, &checkout::tip_of(primary, &task.branch));
+        task.request_branch = task.published_request.map(|_| name.clone());
     }
     match task.published_request {
         Some(request) => Ok(Delivered::Published {
@@ -1667,6 +1754,80 @@ mod tests {
         observe_request(primary, &mut task);
         assert_eq!(task.published_request, Some(9));
         assert_eq!(task.request_asked_at_unix, None, "nothing was asked");
+    }
+
+    /// A task outlives its first request: the agent that delivered keeps
+    /// working in the same checkout, on a branch of its own, and opens
+    /// another. A number cached for good went on naming the merged one.
+    #[test]
+    fn a_request_answers_for_the_branch_it_was_found_on() {
+        let (repository, _other) = published("landing-request-branch");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "first request");
+        agent_commits(&repository, &task, "a.rs", "");
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/pull/51/head"),
+        ]);
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(51));
+
+        // The agent moves to new work on a new branch — what evaluation
+        // reads off the checkout's HEAD and takes as the task's name.
+        repository.git_in(&slot, &["checkout", "-q", "-b", "feat/auto-update"]);
+        std::fs::write(slot.join("b.rs"), "").unwrap();
+        repository.git_in(&slot, &["add", "."]);
+        repository.git_in(&slot, &["commit", "-qm", "feat: auto-update"]);
+        task.take_name("feat/auto-update".to_owned());
+
+        observe_request(primary, &mut task);
+        assert_eq!(
+            task.published_request, None,
+            "the merged request is not this branch's"
+        );
+
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/pull/60/head"),
+        ]);
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(60), "the new branch's own");
+    }
+
+    /// A number recorded before the branch it answered for was kept
+    /// cannot say whose it is, so it is asked once more.
+    #[test]
+    fn a_request_recorded_without_its_branch_is_asked_again() {
+        let (repository, _other) = published("landing-request-unowned");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "old record");
+        agent_commits(&repository, &task, "a.rs", "");
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/pull/60/head"),
+        ]);
+        task.published_request = Some(51);
+        task.request_branch = None;
+
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(60));
+        assert_eq!(task.request_branch.as_deref(), Some(task.branch.as_str()));
     }
 
     #[test]

@@ -1515,6 +1515,47 @@ mod workspace_tests {
         );
     }
 
+    /// The window between a placement and the evaluation that lists its
+    /// task: the only task on record in the slot is the one before, and
+    /// reading it there named the new agent's tab after it for good.
+    #[test]
+    fn a_new_agent_never_takes_the_name_of_the_task_before_it_in_the_slot() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
+        let before = TaskView {
+            id: "before".into(),
+            ..task_in(
+                "/repo/.worktrees/ai",
+                "nerd font symbols",
+                TaskStateView::Integrated,
+                2,
+            )
+        };
+        model.tasks.insert(PathBuf::from("/repo"), vec![before]);
+        model.claim_slot(Path::new("/repo/.worktrees/ai"), "now");
+
+        assert!(
+            model.tab_task(tab).is_none(),
+            "the task placed here is not listed yet, and nothing stands in for it"
+        );
+
+        let now = TaskView {
+            id: "now".into(),
+            created_at_unix: 2,
+            ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
+        };
+        model.tasks.get_mut(Path::new("/repo")).unwrap().push(now);
+        model.settle_slot_claims();
+        assert_eq!(
+            model.tab_task(tab).map(|task| task.id.as_str()),
+            Some("now")
+        );
+        assert!(
+            model.slot_claims.is_empty(),
+            "the record answers from here on"
+        );
+    }
+
     /// The sidebar and the strip name the same agent the same way — the
     /// tab's own label, the one renaming edits — however its task is
     /// labelled. The strip used to prefer the task's label, so a renamed

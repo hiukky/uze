@@ -1,0 +1,105 @@
+journey: an agent's changes are read, and written, in its own checkout
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  Every agent's tab has a changes surface, and it answers for one checkout:
+  the tab's own. Git answers repository-wide from anywhere inside the
+  repository, and a view built on that once showed every sibling agent's
+  diff inside a tab that owns exactly one of them.
+
+  What the surface *shows* is screen text, which a journey only gates on.
+  What it *writes* is a fact on disk — so the claim is proven through the
+  one write the surface offers: a file deleted from the selected agent's
+  changes is gone from that agent's checkout, and from nowhere else.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 3
+
+scenes:
+  - scene: two agents, each with a change only its own checkout holds
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 1
+        expect_timeout: 90
+        pause: 1.5
+      - click: "│"
+        say: open the picker again
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Codex, which becomes the selected agent
+        in: pane
+        row_offset: 2
+        offset: 3
+        expect: agent 2
+        expect_timeout: 90
+        pause: 1.5
+      - shell: |
+          set -e
+          for slot in {project}/.worktrees/*/; do
+            name=$(basename "$slot")
+            printf 'pub fn mine() {}\n' > "$slot/src/mine_$name.rs"
+          done
+        say: each agent writes a file named after its own checkout
+    then:
+      - file: "{project}/.worktrees/*/src/mine_*.rs"
+        count: 2
+        about: two changes, one in each agent's checkout
+      - git: { in: "{project}", dirty: false }
+        about: and none in the project's own
+
+  - scene: deleting from the selected agent's changes touches its checkout alone
+    when:
+      - key: "C-g"
+        say: open the changes of the selected agent
+        expect: CHANGES
+        expect_timeout: 20
+      - key: "d"
+        say: ask to delete the change the surface selected
+        expect: confirm delete
+      - key: "y"
+        say: confirm
+        pause: 0.5
+      - wait: shell
+        until: test "$(ls {project}/.worktrees/*/src/mine_*.rs | wc -l)" -eq 1
+        timeout: 20
+        say: the deletion lands on disk
+    then:
+      - file: "{project}/.worktrees/*/src/mine_*.rs"
+        count: 1
+        about: exactly one change was deleted — the other agent's survives
+      - cmd:
+          run: |
+            python3 -c "
+            import glob, json, os
+            tasks = sorted((task for store in glob.glob('{uze_home}/state/tasks/*.json') for task in json.load(open(store))['tasks']), key=lambda task: task['created_at_unix'])
+            slot = tasks[-1]['checkout']
+            own = '{project}/.worktrees/%s/src/mine_%s.rs' % (slot, slot)
+            print('gone from the selected agent' if not os.path.exists(own) else 'still in ' + own)
+            "
+          stdout_contains: "gone from the selected agent"
+        about: the file that went is the one in the selected agent's own checkout
+      - git: { in: "{project}", dirty: false }
+        about: and the project's own checkout was never written

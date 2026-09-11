@@ -534,9 +534,26 @@ impl Workspace<'_> {
                 && landing::slot_path(&primary, task)
                     .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
             let revivable = ended_owner || parked_with_agent;
+            let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
             if task.state == TaskState::Integrating
-                || (!checkout::is_live(&task.state) && !revivable)
+                || (!checkout::is_live(&task.state) && !revivable && !parked_alone)
             {
+                continue;
+            }
+            // Parked is nobody's turn, but its work can still reach the
+            // target without it — a request opened before its agent left,
+            // merged on the forge. Left parked, it was listed as preserved
+            // work for good and its slot never went back to the pool.
+            if parked_alone {
+                landing::settle_delivered(&primary, task);
+                continue;
+            }
+            // A rebase paused on work the target already carries — what an
+            // earlier refresh left behind when it replayed a squashed
+            // branch onto its own squash — is nobody's to resolve.
+            let paused = landing::slot_path(&primary, task)
+                .is_some_and(|slot| landing::paused_rebase(&slot).is_some());
+            if paused && landing::settle_delivered(&primary, task) {
                 continue;
             }
             // The branch a task is on is a Git fact, and `task.branch` is
@@ -561,7 +578,23 @@ impl Workspace<'_> {
                 Readiness::Running => task.state = TaskState::Running,
                 Readiness::Uncommitted => task.state = TaskState::Uncommitted,
                 Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+                // A forge that squashes what it merges leaves none of the
+                // branch's commits in the target, so they still count as
+                // ahead; asked by patch instead, the work is delivered.
+                // Left `Ready`, the refresh below replayed it onto its own
+                // squash and paused mid-rebase on every file it touched.
+                Readiness::Ready { .. }
+                    if checkout::is_integrated(&primary, &task.target, &task.branch) =>
+                {
+                    landing::mark_delivered(&primary, task);
+                }
                 Readiness::Ready { base, .. } => {
+                    // Delivered, and now holding work the target lacks: the
+                    // agent kept going, and the request it had answered
+                    // for the work already merged, not for this.
+                    if task.state == TaskState::Integrated {
+                        task.forget_request();
+                    }
                     task.base_commit = base;
                     if task.state != TaskState::GateFailed {
                         task.state = TaskState::Ready;
@@ -1038,7 +1071,7 @@ impl TaskView {
                 .checkout
                 .as_ref()
                 .map(|checkout| checkout.as_str().to_owned()),
-            state: publication_state(&task.state, unsynced),
+            state: drawn_state(primary, task, unsynced),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: published.map(|published| published.branch),
@@ -1057,6 +1090,19 @@ impl TaskView {
 /// anything is still waiting to be handed over. Only where the completion
 /// publishes — `published` is `None` everywhere else, and the record's own
 /// state stands.
+fn drawn_state(primary: &Path, task: &Task, unsynced: Option<usize>) -> TaskStateView {
+    // Parked says only that nobody is there. A rebase paused in the
+    // checkout is what the operator will find, and "uncommitted changes"
+    // sent them looking for edits that were really conflict markers.
+    if task.state == TaskState::Parked
+        && let Some(files) =
+            landing::slot_path(primary, task).and_then(|slot| landing::paused_rebase(&slot))
+    {
+        return TaskStateView::Conflicted { files };
+    }
+    publication_state(&task.state, unsynced)
+}
+
 fn publication_state(state: &TaskState, unsynced: Option<usize>) -> TaskStateView {
     let view = TaskStateView::from(state);
     if view == TaskStateView::Ready && unsynced == Some(0) {
@@ -1541,6 +1587,263 @@ mod placement_tests {
             second.isolation,
             Isolation::Slot { reused: true, .. }
         ));
+    }
+
+    /// The record of the task that ran in a slot before can still read as
+    /// live. Asked about "the task in this checkout", it answered too: an
+    /// evaluation renamed it after the slot's new branch, so a task long
+    /// gone carried the new agent's name — and discarding it deleted the
+    /// new agent's branch.
+    #[test]
+    fn a_reused_slot_never_lends_its_branch_to_the_task_before() {
+        let repository = repository("place-hand-over");
+        let root = repository.root().to_path_buf();
+        let app = application("place-hand-over-home");
+        let first = app.workspace().place_new_agent(&root, &[]);
+        let before = slot(&first).clone();
+        let primary = root.canonicalize().unwrap();
+        let mut store = task::load(&app.home, &primary).unwrap();
+        store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Closed;
+        task::save(&app.home, &primary, &store).unwrap();
+        let second = app.workspace().place_new_agent(&root, &[]);
+        assert_eq!(second.cwd, first.cwd, "the freed slot is reused");
+        let mut store = task::load(&app.home, &primary).unwrap();
+        store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Running;
+        task::save(&app.home, &primary, &store).unwrap();
+
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&second.cwd));
+
+        let earlier = evaluation
+            .tasks
+            .iter()
+            .find(|task| task.id == before.as_str())
+            .unwrap();
+        assert_eq!(
+            earlier.branch,
+            format!("agent/{}", before.as_str()),
+            "it keeps the branch it had"
+        );
+        assert_eq!(earlier.checkout_id, None, "the slot is no longer its");
+        assert_eq!(earlier.state, TaskStateView::Closed);
+    }
+
+    /// A forge that squashes what it merges leaves none of the branch's
+    /// commits in the target, and a target that moved reads as one to
+    /// follow. Replaying the branch onto its own squash conflicts on every
+    /// file it touched twice, and left delivered work paused mid-rebase,
+    /// listed as preserved work nobody delivered.
+    #[test]
+    fn work_the_target_already_has_is_delivered_not_rebased() {
+        let repository = repository("evaluate-squashed");
+        let root = repository.root().to_path_buf();
+        let app = application("evaluate-squashed-home");
+        let placed = app.workspace().place_new_agent(&root, &[]);
+        let id = slot(&placed).as_str().to_owned();
+        let tip = squash_merged(&repository, &placed.cwd);
+
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&placed.cwd));
+
+        let task = evaluation.tasks.iter().find(|task| task.id == id).unwrap();
+        assert_eq!(task.state, TaskStateView::Integrated);
+        assert!(
+            evaluation.notices.is_empty(),
+            "nothing goes back to the agent"
+        );
+        assert_eq!(
+            repository.git_in(&placed.cwd, &["rev-parse", "HEAD"]),
+            tip,
+            "the branch stands where its agent left it"
+        );
+    }
+
+    /// Commits `feature.rs` twice in `checkout` and squash-merges the branch
+    /// into the target the way a forge's button does. Returns the branch's
+    /// tip: replaying its first commit onto the squash conflicts.
+    fn squash_merged(repository: &uze_testkit::git::Repository, checkout: &Path) -> String {
+        std::fs::write(checkout.join("feature.rs"), b"fn f() {}").unwrap();
+        repository.git_in(checkout, &["add", "."]);
+        repository.git_in(checkout, &["commit", "-qm", "the feature"]);
+        std::fs::write(checkout.join("feature.rs"), b"fn f() -> u8 { 1 }").unwrap();
+        repository.git_in(checkout, &["commit", "-qam", "and its fix"]);
+        repository.git(&["merge", "--squash", &repository.branch_of(checkout)]);
+        repository.git(&["commit", "-qm", "the feature (#7)"]);
+        repository.git_in(checkout, &["rev-parse", "HEAD"])
+    }
+
+    /// Records `state` for `task` the way an earlier session left it.
+    fn recorded(app: &UzeApplication, root: &Path, task: &TaskId, state: TaskState) {
+        let primary = root.canonicalize().unwrap();
+        let mut store = task::load(&app.home, &primary).unwrap();
+        store.get_mut(task).unwrap().state = state;
+        task::save(&app.home, &primary, &store).unwrap();
+    }
+
+    /// What the defect above left behind, met by the fixed code: a rebase
+    /// paused in the checkout, replaying work the target already carries.
+    /// Nothing of the agent's is at stake — the branch still names every
+    /// commit it made — so the rebase is abandoned and the task reads as
+    /// delivered, whether its agent is still there or it was parked.
+    #[test]
+    fn a_rebase_paused_on_delivered_work_is_abandoned() {
+        for parked in [false, true] {
+            let label = if parked { "stuck-parked" } else { "stuck-live" };
+            let repository = repository(label);
+            let root = repository.root().to_path_buf();
+            let app = application(&format!("{label}-home"));
+            let placed = app.workspace().place_new_agent(&root, &[]);
+            let id = slot(&placed).clone();
+            let tip = squash_merged(&repository, &placed.cwd);
+            assert!(
+                repository
+                    .try_git_in(&placed.cwd, &["rebase", "main"])
+                    .is_err(),
+                "replaying the branch onto its own squash conflicts"
+            );
+            let (state, occupied) = if parked {
+                (TaskState::Parked, Vec::new())
+            } else {
+                (
+                    TaskState::Conflicted {
+                        files: vec![PathBuf::from("feature.rs")],
+                    },
+                    vec![placed.cwd.clone()],
+                )
+            };
+            recorded(&app, &root, &id, state);
+
+            let evaluation = app.workspace().evaluate_tasks(&root, &occupied);
+
+            let task = evaluation
+                .tasks
+                .iter()
+                .find(|task| task.id == id.as_str())
+                .unwrap();
+            assert_eq!(task.state, TaskStateView::Integrated, "parked: {parked}");
+            assert!(
+                landing::paused_rebase(&placed.cwd).is_none(),
+                "the replay is abandoned (parked: {parked})"
+            );
+            assert_eq!(
+                repository.git_in(&placed.cwd, &["rev-parse", "HEAD"]),
+                tip,
+                "and the checkout is back where its agent left it (parked: {parked})"
+            );
+        }
+    }
+
+    /// Delivery asks the same question before it rebases: work the tip
+    /// already carries — squashed on the forge before this machine's target
+    /// heard of it — is refused as delivered, never replayed onto itself.
+    #[test]
+    fn delivering_work_the_target_already_has_rebases_nothing() {
+        let repository = repository("deliver-squashed");
+        let root = repository.root().to_path_buf();
+        let app = application("deliver-squashed-home");
+        let placed = app.workspace().place_new_agent(&root, &[]);
+        let id = slot(&placed).clone();
+        let tip = squash_merged(&repository, &placed.cwd);
+        recorded(&app, &root, &id, TaskState::Ready);
+
+        let report = app.workspace().deliver_task(&root, id.as_str()).unwrap();
+
+        assert!(
+            matches!(report.outcome, DeliveryOutcome::Refused(_)),
+            "{:?}",
+            report.outcome
+        );
+        assert_eq!(report.task.state, TaskStateView::Integrated);
+        assert!(landing::paused_rebase(&placed.cwd).is_none());
+        assert_eq!(repository.git_in(&placed.cwd, &["rev-parse", "HEAD"]), tip);
+    }
+
+    /// Parked says only that nobody is there. A checkout its agent left
+    /// mid-rebase holds a conflict, and reading it as "uncommitted changes"
+    /// sent the operator looking for edits.
+    #[test]
+    fn a_parked_checkout_paused_mid_rebase_reads_as_a_conflict() {
+        let repository = repository("parked-mid-rebase");
+        let root = repository.root().to_path_buf();
+        let app = application("parked-mid-rebase-home");
+        let placed = app.workspace().place_new_agent(&root, &[]);
+        let id = slot(&placed).clone();
+        std::fs::write(placed.cwd.join("feature.rs"), b"ours").unwrap();
+        repository.git_in(&placed.cwd, &["add", "."]);
+        repository.git_in(&placed.cwd, &["commit", "-qm", "ours"]);
+        repository.commit_file("feature.rs", "theirs");
+        assert!(
+            repository
+                .try_git_in(&placed.cwd, &["rebase", "main"])
+                .is_err()
+        );
+        recorded(&app, &root, &id, TaskState::Parked);
+
+        let task = app
+            .workspace()
+            .tasks(&root)
+            .into_iter()
+            .find(|task| task.id == id.as_str())
+            .unwrap();
+        assert_eq!(
+            task.state,
+            TaskStateView::Conflicted {
+                files: vec![PathBuf::from("feature.rs")]
+            }
+        );
+    }
+
+    /// A delivered task whose agent keeps going is new work, and the
+    /// request it had answered for what was already merged — shown on the
+    /// new work's button, it named a request nobody could still act on.
+    #[test]
+    fn work_after_a_delivery_forgets_the_delivered_request() {
+        let repository = repository("revived-request");
+        let root = repository.root().to_path_buf();
+        let app = application("revived-request-home");
+        let placed = app.workspace().place_new_agent(&root, &[]);
+        let id = slot(&placed).clone();
+        squash_merged(&repository, &placed.cwd);
+        let primary = root.canonicalize().unwrap();
+        let mut store = task::load(&app.home, &primary).unwrap();
+        let recorded = store.get_mut(&id).unwrap();
+        recorded.published_request = Some(51);
+        recorded.request_branch = Some(recorded.branch.clone());
+        task::save(&app.home, &primary, &store).unwrap();
+        let occupied = std::slice::from_ref(&placed.cwd);
+        let view = |evaluation: Evaluation| {
+            evaluation
+                .tasks
+                .into_iter()
+                .find(|task| task.id == id.as_str())
+                .unwrap()
+        };
+
+        let delivered = view(app.workspace().evaluate_tasks(&root, occupied));
+        assert_eq!(delivered.state, TaskStateView::Integrated);
+        assert_eq!(delivered.published_request, Some(51));
+
+        std::fs::write(placed.cwd.join("more.rs"), b"fn more() {}").unwrap();
+        repository.git_in(&placed.cwd, &["add", "."]);
+        repository.git_in(&placed.cwd, &["commit", "-qm", "more"]);
+        let continued = view(app.workspace().evaluate_tasks(&root, occupied));
+        assert_eq!(
+            continued.state,
+            TaskStateView::Ready,
+            "following the target moved the new work alone"
+        );
+        assert_eq!(
+            repository.git_in(&placed.cwd, &["rev-list", "--count", "main..HEAD"]),
+            "1",
+            "the squashed commits were not replayed onto their own squash"
+        );
+        assert_eq!(continued.ahead, 1, "one commit is what is left to deliver");
+        assert_eq!(
+            continued.published_request, None,
+            "the merged request is not the new work's"
+        );
     }
 
     /// The agent that delivered a task is still in its checkout until its

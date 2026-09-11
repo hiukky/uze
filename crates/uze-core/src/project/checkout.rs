@@ -20,6 +20,7 @@
 //! are the only ones offered.
 
 use std::{
+    collections::BTreeMap,
     fmt, fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
@@ -29,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     task::{Base, Task, TaskId, TaskState, TaskStore},
-    worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY},
+    worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY, label_of},
 };
 
 /// A clean slot nobody has used for this long may lose its directory.
@@ -373,6 +374,8 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             if task.state == TaskState::Integrated && !is_integrated(primary, target, &task.branch)
             {
                 task.state = TaskState::Running;
+                // The request was the delivered work's; this is new work.
+                task.forget_request();
                 report.revived.push(task.id.clone());
             }
             continue;
@@ -381,11 +384,14 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             || branch
                 .as_deref()
                 .is_some_and(|branch| !is_integrated(primary, target, branch));
-        let label = branch
-            .as_deref()
-            .and_then(|branch| branch.strip_prefix(BRANCH_PREFIX))
-            .unwrap_or(id.as_str())
-            .to_owned();
+        // A generated branch is labelled by the identifier it carries; one
+        // somebody named is labelled by that name, never by the slot's id.
+        let label = match branch.as_deref() {
+            Some(branch) => branch
+                .strip_prefix(BRANCH_PREFIX)
+                .map_or_else(|| label_of(branch), str::to_owned),
+            None => id.as_str().to_owned(),
+        };
         let mut task = Task::new(
             None,
             Base::Ref(target.to_owned()),
@@ -417,19 +423,65 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
         {
             continue;
         }
-        task.checkout = None;
-        // A delivery already recorded stays recorded: its branch has
-        // nothing of its own left precisely because the target has it all.
-        if branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch) {
-            task.state = TaskState::Parked;
-        } else if task.state != TaskState::Integrated {
-            task.state = TaskState::Closed;
-        }
+        end_without_checkout(primary, target, task);
         report.orphaned.push(task.id.clone());
+    }
+
+    // A slot outlives the tasks that ran in it, and each went on naming it.
+    // Only the newest stands there now; an earlier one still reading as
+    // live answered every question about "the task in this checkout" as
+    // well — an evaluation renamed it after the slot's current branch, so a
+    // task long gone carried the new agent's name, and discarding it would
+    // have deleted the new agent's branch.
+    let owners = newest_per_slot(store);
+    for task in &mut store.tasks {
+        let superseded = task
+            .checkout
+            .as_ref()
+            .is_some_and(|checkout| owners.get(checkout.as_str()) != Some(&task.id));
+        if superseded {
+            end_without_checkout(primary, target, task);
+        }
     }
 
     let _ = git(primary, &["worktree", "prune"]);
     report
+}
+
+/// Ends a task that no longer has a checkout of its own, by what its
+/// branch still holds.
+fn end_without_checkout(primary: &Path, target: &str, task: &mut Task) {
+    task.checkout = None;
+    // A delivery already recorded stays recorded: its branch has nothing
+    // of its own left precisely because the target has it all.
+    if branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch) {
+        task.state = TaskState::Parked;
+    } else if task.state != TaskState::Integrated {
+        task.state = TaskState::Closed;
+    }
+}
+
+/// The task standing in each slot: the newest to have been given it, the
+/// same rule `slot_state` reads occupancy by.
+fn newest_per_slot(store: &TaskStore) -> BTreeMap<String, TaskId> {
+    let mut newest: BTreeMap<String, &Task> = BTreeMap::new();
+    for task in &store.tasks {
+        let Some(checkout) = &task.checkout else {
+            continue;
+        };
+        newest
+            .entry(checkout.as_str().to_owned())
+            .and_modify(|held| {
+                if task.created_at_unix >= held.created_at_unix {
+                    *held = task;
+                }
+            })
+            .or_insert(task);
+    }
+    newest
+        .into_iter()
+        .map(|(slot, task)| (slot, task.id.clone()))
+        .collect()
 }
 
 /// What a collection removed, so a caller can say so.
@@ -713,6 +765,10 @@ fn every_commit_is_there(listing: &str) -> bool {
 /// patch identity is Git's to compute: its tree is the branch's, its parent
 /// the merge base, so it carries exactly what the branch adds and nothing
 /// of how it was written.
+///
+/// Its dates are pinned: evaluation asks this of every parked task on every
+/// pass, and a probe dated by the clock was a new object each time — loose
+/// objects piling up in the operator's repository until Git collected them.
 fn squashed_patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
     let Some(base) = read(root, &["merge-base", target, branch]) else {
         return false;
@@ -720,7 +776,7 @@ fn squashed_patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
     let Some(tree) = read(root, &["rev-parse", &format!("{branch}^{{tree}}")]) else {
         return false;
     };
-    let Ok(probe) = git(
+    let Some(probe) = uze_git::write_with_env(
         root,
         &[
             "-c",
@@ -734,7 +790,14 @@ fn squashed_patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
             "-m",
             "squash probe",
         ],
-    ) else {
+        &[
+            ("GIT_AUTHOR_DATE", "@0 +0000"),
+            ("GIT_COMMITTER_DATE", "@0 +0000"),
+        ],
+    )
+    .ok()
+    .and_then(|output| output.successful().ok())
+    .map(|stdout| stdout.trim().to_owned()) else {
         return false;
     };
     read(root, &["cherry", target, &probe]).is_some_and(|listing| every_commit_is_there(&listing))
@@ -1473,6 +1536,108 @@ mod tests {
             "clean and nothing ahead: free to reuse, and no delivery to claim"
         );
         assert_eq!(slots(primary, &store, &[])[0].state, SlotState::Free);
+    }
+
+    /// Adoption takes the branch as Git has it. A checkout found on a
+    /// branch somebody named keeps that name — final, like any chosen one —
+    /// and its label reads from it rather than from the slot's identifier.
+    #[test]
+    fn a_checkout_on_a_named_branch_is_adopted_under_its_name() {
+        let repository = repository("slots-legacy-named");
+        let primary = repository.root();
+        repository.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/keymap",
+            ".worktrees/k3y4ap",
+            "HEAD",
+        ]);
+        let mut store = TaskStore::default();
+        let report = reconcile(primary, &mut store, TARGET);
+        assert_eq!(report.adopted.len(), 1);
+        let adopted = store.get(&report.adopted[0]).unwrap();
+        assert_eq!(adopted.branch, "feat/keymap", "no branch is renamed");
+        assert!(adopted.is_named(), "a name nobody generated stays final");
+        assert_eq!(
+            adopted.label, "keymap",
+            "the label is the name, not the slot"
+        );
+        assert_eq!(adopted.checkout, Some(CheckoutId::adopted("k3y4ap")));
+    }
+
+    /// The squash probe is written only to be compared, and evaluation asks
+    /// the question of every parked task on every pass. Dated by the clock,
+    /// each answer left a new object behind; pinned, asking again writes
+    /// nothing the first question did not.
+    #[test]
+    fn asking_twice_whether_a_squash_landed_writes_nothing_new() {
+        let repository = repository("slots-squash-probe");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let (task, slot) = launch(&repository, &mut store, "probed");
+        // Two commits on one file, so no single commit's patch is in the
+        // target and only the squash probe can answer.
+        fs::write(slot.path.join("feature.rs"), b"fn f() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "the feature"]);
+        fs::write(slot.path.join("feature.rs"), b"fn f() -> u8 { 1 }").unwrap();
+        repository.git_in(&slot.path, &["commit", "-qam", "and its fix"]);
+        repository.git(&["merge", "--squash", &task.branch]);
+        repository.git(&["commit", "-qm", "the feature (#7)"]);
+        assert!(is_integrated(primary, TARGET, &task.branch));
+        let before = repository.git(&["count-objects"]);
+
+        // Past the clock's resolution: a probe dated by it would differ.
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(is_integrated(primary, TARGET, &task.branch));
+
+        assert_eq!(
+            repository.git(&["count-objects"]),
+            before,
+            "the second probe is the first one"
+        );
+    }
+
+    /// A worktree UZE did not create is none of its business. A harness
+    /// isolating on its own — Claude Code keeps its worktrees under the
+    /// repository's `.claude/worktrees` — is never adopted as a slot, never
+    /// offered to an agent, never swept as idle, and its branch is never
+    /// pruned, however clean it is and however little it holds.
+    #[test]
+    fn a_worktree_uze_did_not_create_is_never_its_to_touch() {
+        let repository = repository("slots-foreign");
+        let primary = repository.root();
+        repository.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-agent-x",
+            ".claude/worktrees/agent-x",
+            "HEAD",
+        ]);
+        let foreign = primary.join(".claude/worktrees/agent-x");
+        let mut store = TaskStore::default();
+
+        let report = reconcile(primary, &mut store, TARGET);
+        assert!(report.adopted.is_empty(), "never adopted");
+        assert!(slots(primary, &store, &[]).is_empty(), "never a slot");
+
+        let (_, placed) = launch(&repository, &mut store, "next");
+        assert!(placed.created, "never offered to an agent");
+
+        let collected = collect(primary, &store, TARGET, Duration::ZERO, &[]);
+        assert!(foreign.is_dir(), "never swept as idle");
+        assert!(
+            !collected
+                .branches
+                .iter()
+                .any(|branch| branch == "worktree-agent-x"),
+            "its branch is never pruned"
+        );
+        assert!(branch_exists(primary, "worktree-agent-x"));
     }
 
     #[test]

@@ -1017,6 +1017,15 @@ class Checker:
                     False,
                     f"expected {wanted['checkouts']} distinct checkouts, found {sorted(checkouts)}",
                 )
+        # A slot is reused, so several tasks pass through one checkout; only
+        # the one standing there may still name it. Two tasks naming the
+        # same checkout is how an ended one came to be asked about the
+        # new agent's branch — and renamed after it.
+        if wanted.get("one_task_per_checkout"):
+            holding = [task.get("checkout") for task in tasks if task.get("checkout")]
+            shared = sorted({slot for slot in holding if holding.count(slot) > 1})
+            if shared:
+                return False, f"more than one task names {shared}: {shape}"
         # The recorded name, read out of the task store UZE writes — a
         # machine fact, like every other check here. What the *screen* says
         # about a name belongs to `src/ui`'s own tests.
@@ -1310,6 +1319,20 @@ def validate(spec: dict, path: Path | None = None) -> list[str]:
                     f"{where}: {action} {step[action]!r} states no `expect` — a gesture "
                     "must say what proves it landed"
                 )
+            # A gate is a pattern, and one that cannot compile is found here
+            # rather than as a crash mid-run, one gesture into the journey.
+            gates = ["expect"] + (["until"] if step.get("wait") == "screen" else [])
+            for key in gates:
+                pattern = step.get(key)
+                if not isinstance(pattern, str):
+                    continue
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    problems.append(
+                        f"{where}: `{key}` {pattern!r} is not a pattern ({error}) — "
+                        "escape what it means literally"
+                    )
         for check in scene.get("then", []):
             if not any(name in check for name in VERBS):
                 problems.append(f"{where}: a check names no verb: {check!r}")
@@ -1567,6 +1590,13 @@ def run_one(args, path: Path) -> int:
             if failures:
                 break
             log()
+    except Exception as error:
+        # Anything but `Failed` is the runner breaking, not the product: it
+        # still has to reach the verdict as a failure. Left to propagate
+        # through `finally` alone, a gesture that crashed recorded `held`.
+        failures += 1
+        log(f"  {RED}✕ the runner failed: {error!r}{OFF}")
+        raise
     finally:
         record["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         record["seconds"] = round(time.monotonic() - began, 1)

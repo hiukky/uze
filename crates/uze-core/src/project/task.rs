@@ -152,6 +152,13 @@ pub struct Task {
     /// readiness fact, never announced by the agent that opened it.
     #[serde(default)]
     pub published_request: Option<u32>,
+    /// The branch `published_request` was found for. A number answers for
+    /// one branch, and the task outlives it: the agent that delivered keeps
+    /// working, often on a new branch with a request of its own. `None`
+    /// beside a number is a record older than this field, and is asked
+    /// again once.
+    #[serde(default)]
+    pub request_branch: Option<String>,
     /// When the remote was last asked whether a request exists for this
     /// branch, so the question is asked on a clock instead of on every
     /// evaluation: it is the one publication fact that costs a network
@@ -187,6 +194,22 @@ impl Task {
         self.branch = branch;
     }
 
+    /// Drops the request this task had, so the next evaluation asks the
+    /// remote afresh.
+    pub fn forget_request(&mut self) {
+        self.published_request = None;
+        self.request_branch = None;
+        self.request_asked_at_unix = None;
+    }
+
+    /// Drops the request unless it was found for `branch` — the name the
+    /// work is published under now, or `None` while it is not published.
+    pub fn forget_request_unless_for(&mut self, branch: Option<&str>) {
+        if self.published_request.is_some() && self.request_branch.as_deref() != branch {
+            self.forget_request();
+        }
+    }
+
     pub fn new(prompt: Option<&str>, base: Base, base_commit: String, target: String) -> Self {
         let id = TaskId::generate();
         let label = prompt
@@ -204,6 +227,7 @@ impl Task {
             state: TaskState::Running,
             published_as: None,
             published_request: None,
+            request_branch: None,
             request_asked_at_unix: None,
             created_at_unix: now_unix(),
         }

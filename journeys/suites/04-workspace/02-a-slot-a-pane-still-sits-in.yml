@@ -40,8 +40,11 @@ scenes:
         in: pane
         row_offset: 1
         offset: 3
-        expect: Claude Code v
-        expect_timeout: 45
+        # UZE's own drawing, not the stand-in's banner: a gate on a
+        # harness's first line of stdout is what timed this scene out on a
+        # loaded runner. That the agent's process started is a `then:`.
+        expect: agent 1
+        expect_timeout: 90
         pause: 1.5
       - click: "+"
         say: open a second tab in the agent's space
@@ -59,6 +62,8 @@ scenes:
       - tasks: { count: 1, states: [running] }
         about: one agent, one slot, one live task
       - capture: { name: occupied_slot, dirs: "{project}/.worktrees/*" }
+      - process: { matching: claude, cwd: "/.worktrees/", alive: true }
+        about: the agent's own process is running, in its own checkout
       - process: { matching: "bash", alive: true }
         about: and a shell of its own is running
 
@@ -102,10 +107,15 @@ scenes:
         in: pane
         row_offset: 2
         offset: 3
-        expect: Codex v
-        expect_timeout: 45
+        # The count, not the label: the closed agent freed its number, so
+        # this one is `agent 1` again, and the screen already says
+        # `0 agents` — `1 agent` cannot be a stale frame.
+        expect: 1 agent
+        expect_timeout: 90
         pause: 2.0
     then:
+      - process: { matching: codex, cwd: "/.worktrees/", alive: true }
+        about: the second agent's own process is running, in a checkout
       - tasks: { count: 2, any_state: running }
         about: a second task exists and is live
       - tasks: { checkouts: 2 }

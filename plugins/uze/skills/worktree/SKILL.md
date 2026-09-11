@@ -8,9 +8,9 @@ metadata:
 
 # UZE — working in an isolated checkout
 
-You do not decide whether to work in isolation, and you do not create your
-own top-level worktree. UZE places every agent it launches in a checkout of
-its own under `.worktrees/<id>`, on branch `agent/<id>`, before you start.
+You do not decide whether to work in isolation: UZE places every agent it
+launches in a checkout of its own under `.worktrees/<id>`, on branch
+`agent/<id>`, before you start.
 The primary checkout belongs to the operator. Read the "Concurrent work
 isolation" section of `AGENTS.md` — it states the layout and what happens
 to finished work.
@@ -27,8 +27,9 @@ git status --short
 ```
 
 If your working directory is inside `.worktrees/`, you are already isolated:
-work here, commit here, and do not create another worktree or switch
-branches. If you find yourself in the primary checkout, you were started by
+work here, commit here, and do not switch branches. A worktree you make for
+yourself is yours — UZE neither sees nor delivers it, so bring its work back
+onto your own branch. If you find yourself in the primary checkout, you were started by
 hand rather than by UZE; the operator's uncommitted work there is theirs —
 never stash, reset, clean, or move it.
 

@@ -210,5 +210,10 @@ scenes:
         about: the new agent took a slot that already existed
       - tasks: { checkouts: 3 }
         about: four tasks have passed through three slots
+      - tasks: { one_task_per_checkout: true }
+        about: |
+          the reused slot is the new task's alone — the one that ended there
+          no longer names it, so nothing asked about that checkout can
+          answer for the task before
       - git: { worktrees: 4 }
         about: Git registers no new worktree

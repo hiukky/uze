@@ -2083,6 +2083,11 @@ pub(super) fn render_preserved(
                 task.ahead,
                 if task.ahead == 1 { "" } else { "s" }
             ),
+            TaskStateView::Parked if task.ahead > 0 => format!(
+                "{} commit{} kept",
+                task.ahead,
+                if task.ahead == 1 { "" } else { "s" }
+            ),
             TaskStateView::Uncommitted | TaskStateView::Parked => "uncommitted changes".to_owned(),
             TaskStateView::Conflicted { files } => format!(
                 "conflict in {} file{}",
