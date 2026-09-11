@@ -328,12 +328,17 @@ impl TuiModel {
     }
 
     /// One screen along the sidebar, wrapping, wherever the focus was.
+    ///
+    /// Answers with whatever arriving asks for. A screen that reads its own
+    /// data on arrival is empty if it is reached this way and the ask is
+    /// dropped — and stays empty, because arriving is the only moment it
+    /// asks.
     fn step_route(&mut self, delta: isize) -> Intent {
         let count = ROUTES.len();
         let step = if delta > 0 { 1 } else { count - 1 };
-        self.set_route(ROUTES[(self.route.index() + step) % count]);
+        let entering = self.set_route(ROUTES[(self.route.index() + step) % count]);
         self.focus = Focus::Content;
-        Intent::None
+        entering
     }
 
     /// Where the selection goes, which depends on what the screen is a

@@ -3998,6 +3998,51 @@ fn opening_appearance_asks_for_the_lists_it_chooses_from() {
     );
 }
 
+/// Arriving is the only moment Appearance asks for its lists, so every way
+/// of arriving has to carry the ask. A gesture that dropped it left the
+/// screen showing its two headings and nothing under them — and leaving and
+/// coming back was no cure, because coming back was the gesture that dropped
+/// it.
+#[test]
+fn every_way_of_reaching_appearance_carries_the_ask() {
+    let steps = uze_keys::Action::NextScreen;
+    let landing = Route::Appearance.index();
+
+    let mut walked = TuiModel::default();
+    let mut asked = None;
+    for _ in 0..ROUTES.len() {
+        let intent = walked.act(steps);
+        if walked.route.index() == landing {
+            asked = Some(intent);
+            break;
+        }
+    }
+    assert_eq!(
+        asked,
+        Some(crate::ui::worker::Intent::LoadAppearance),
+        "walking the sidebar reached Appearance without asking for its lists"
+    );
+
+    let mut clicked = TuiModel::default();
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &clicked, &mut hits))
+        .unwrap();
+    clicked.hits = hits;
+    let (rect, _) = clicked
+        .hits
+        .iter()
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::Route(Route::Appearance))
+        .expect("Appearance is reachable from the sidebar")
+        .clone();
+    assert_eq!(
+        clicked.click(rect.x + 1, rect.y),
+        crate::ui::worker::Intent::LoadAppearance,
+        "clicking into Appearance reached it without asking for its lists"
+    );
+}
+
 #[test]
 fn clicking_a_glyph_set_chooses_it() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
