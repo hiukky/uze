@@ -238,6 +238,15 @@ the remote before an agent is placed.
 - **THEN** the task is read as integrated from the patch the target carries
 - **AND** its branch is not rebased, nothing is returned to its agent, and its checkout is left as the agent left it
 
+#### Scenario: Work after a delivery is moved alone
+- **WHEN** an agent keeps committing on a branch whose earlier work reached the target as a squash or a rebase merge, and the target moves
+- **THEN** only the commits made after the delivery are rebased onto the target
+- **AND** the task counts only those commits as what is left to deliver
+
+#### Scenario: A request number answers for its own branch
+- **WHEN** the branch a task is published under changes, or the task takes on new work after a delivery
+- **THEN** the request number recorded for the earlier branch or work is dropped, and the remote is asked again for the current one
+
 #### Scenario: A task mid-edit is not rebased under its agent
 - **WHEN** the target has moved while a live task's working tree is dirty
 - **THEN** the task is left as it is until its tree is clean and its pane quiet

@@ -586,9 +586,15 @@ impl Workspace<'_> {
                 Readiness::Ready { .. }
                     if checkout::is_integrated(&primary, &task.target, &task.branch) =>
                 {
-                    task.state = TaskState::Integrated;
+                    landing::mark_delivered(&primary, task);
                 }
                 Readiness::Ready { base, .. } => {
+                    // Delivered, and now holding work the target lacks: the
+                    // agent kept going, and the request it had answered
+                    // for the work already merged, not for this.
+                    if task.state == TaskState::Integrated {
+                        task.forget_request();
+                    }
                     task.base_commit = base;
                     if task.state != TaskState::GateFailed {
                         task.state = TaskState::Ready;
@@ -1786,6 +1792,57 @@ mod placement_tests {
             TaskStateView::Conflicted {
                 files: vec![PathBuf::from("feature.rs")]
             }
+        );
+    }
+
+    /// A delivered task whose agent keeps going is new work, and the
+    /// request it had answered for what was already merged — shown on the
+    /// new work's button, it named a request nobody could still act on.
+    #[test]
+    fn work_after_a_delivery_forgets_the_delivered_request() {
+        let repository = repository("revived-request");
+        let root = repository.root().to_path_buf();
+        let app = application("revived-request-home");
+        let placed = app.workspace().place_new_agent(&root, &[]);
+        let id = slot(&placed).clone();
+        squash_merged(&repository, &placed.cwd);
+        let primary = root.canonicalize().unwrap();
+        let mut store = task::load(&app.home, &primary).unwrap();
+        let recorded = store.get_mut(&id).unwrap();
+        recorded.published_request = Some(51);
+        recorded.request_branch = Some(recorded.branch.clone());
+        task::save(&app.home, &primary, &store).unwrap();
+        let occupied = std::slice::from_ref(&placed.cwd);
+        let view = |evaluation: Evaluation| {
+            evaluation
+                .tasks
+                .into_iter()
+                .find(|task| task.id == id.as_str())
+                .unwrap()
+        };
+
+        let delivered = view(app.workspace().evaluate_tasks(&root, occupied));
+        assert_eq!(delivered.state, TaskStateView::Integrated);
+        assert_eq!(delivered.published_request, Some(51));
+
+        std::fs::write(placed.cwd.join("more.rs"), b"fn more() {}").unwrap();
+        repository.git_in(&placed.cwd, &["add", "."]);
+        repository.git_in(&placed.cwd, &["commit", "-qm", "more"]);
+        let continued = view(app.workspace().evaluate_tasks(&root, occupied));
+        assert_eq!(
+            continued.state,
+            TaskStateView::Ready,
+            "following the target moved the new work alone"
+        );
+        assert_eq!(
+            repository.git_in(&placed.cwd, &["rev-list", "--count", "main..HEAD"]),
+            "1",
+            "the squashed commits were not replayed onto their own squash"
+        );
+        assert_eq!(continued.ahead, 1, "one commit is what is left to deliver");
+        assert_eq!(
+            continued.published_request, None,
+            "the merged request is not the new work's"
         );
     }
 

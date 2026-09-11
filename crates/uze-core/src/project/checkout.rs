@@ -374,6 +374,8 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             if task.state == TaskState::Integrated && !is_integrated(primary, target, &task.branch)
             {
                 task.state = TaskState::Running;
+                // The request was the delivered work's; this is new work.
+                task.forget_request();
                 report.revived.push(task.id.clone());
             }
             continue;
