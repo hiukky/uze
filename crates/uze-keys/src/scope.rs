@@ -57,8 +57,6 @@ pub enum Scope {
     Confirm,
     /// The theme picker.
     ThemePicker,
-    /// The action menu a row raises.
-    RowMenu,
 
     /// The workspace client, with nothing of uze's own open.
     Workspace,
@@ -108,7 +106,6 @@ impl Scope {
             | Scope::TextPrompt
             | Scope::Confirm
             | Scope::ThemePicker
-            | Scope::RowMenu
             | Scope::KeyCapture => Mode::Management,
             Scope::Workspace
             | Scope::Code
@@ -130,7 +127,6 @@ impl Scope {
                 self,
                 Scope::Confirm
                     | Scope::ThemePicker
-                    | Scope::RowMenu
                     | Scope::Code
                     | Scope::CodeEditing
                     | Scope::AgentPicker
@@ -170,7 +166,6 @@ impl Scope {
             Scope::TextPrompt => "text-prompt",
             Scope::Confirm => "confirm",
             Scope::ThemePicker => "theme-picker",
-            Scope::RowMenu => "row-menu",
             Scope::Workspace => "workspace",
             Scope::Code => "code",
             Scope::CodeEditing => "code-editing",
@@ -202,7 +197,6 @@ impl Scope {
             Scope::TextPrompt => "While typing an answer",
             Scope::Confirm => "While being asked",
             Scope::ThemePicker => "Appearance",
-            Scope::RowMenu => "A row's actions",
             Scope::Workspace => "Workspace",
             Scope::Code => "Code",
             Scope::CodeEditing => "Editing a file",
@@ -241,7 +235,6 @@ pub const ALL_SCOPES: &[Scope] = &[
     Scope::TextPrompt,
     Scope::Confirm,
     Scope::ThemePicker,
-    Scope::RowMenu,
     Scope::Workspace,
     Scope::Code,
     Scope::CodeEditing,

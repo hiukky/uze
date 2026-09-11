@@ -93,29 +93,27 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::OpenThemePicker,
         Control("the sidebar's quick strip"),
     );
-    put(
-        Action::OpenRowActions,
-        Control("a row's `⋯`, or right-clicking the row"),
-    );
     put(Action::ConfirmYes, Control("the dialog's own button"));
     put(Action::ConfirmNo, Control("the dialog's own button"));
+    put(Action::ChangeKey, Control("the drawer's buttons"));
+    put(Action::ResetKey, Control("the drawer's buttons"));
     put(Action::OpenGlossary, Index);
 
-    put(Action::InstallPlugin, Control("the row's actions"));
-    put(Action::UpdatePlugin, Control("the row's actions"));
-    put(Action::RemovePlugin, Control("the row's actions"));
+    put(Action::InstallPlugin, Control("the drawer's buttons"));
+    put(Action::UpdatePlugin, Control("the drawer's buttons"));
+    put(Action::RemovePlugin, Control("the drawer's buttons"));
     put(Action::AddMarketplace, Index);
     put(Action::InstallProjectEnvironment, Index);
     put(Action::ClearPromptHistory, Index);
-    put(Action::SetupHarness, Control("the row's actions"));
+    put(Action::SetupHarness, Control("the drawer's buttons"));
     put(Action::AnalyzeContext, Index);
     put(Action::ApplyContextPlan, Index);
     put(
         Action::NewProfile,
         Control("the Profiles screen's new button"),
     );
-    put(Action::DeleteProfile, Control("the row's actions"));
-    put(Action::ActivateProfile, Control("the row's actions"));
+    put(Action::DeleteProfile, Control("the drawer's buttons"));
+    put(Action::ActivateProfile, Control("the drawer's buttons"));
     put(
         Action::ToggleProfileHarness,
         Control("clicking the harness checkbox"),

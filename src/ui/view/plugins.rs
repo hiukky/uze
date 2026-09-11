@@ -32,7 +32,7 @@ use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{fold, render_status_line};
+use super::{DrawerStatus, drawer_footer_height, fold, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
@@ -253,13 +253,6 @@ pub(crate) fn render_plugins(
                                 list_area.width,
                             )),
                             rect,
-                        );
-                        super::render_row_actions(
-                            frame,
-                            rect,
-                            *position,
-                            *position == model.marketplace_selected,
-                            hits,
                         );
                         hits.push((rect, Hit::MarketplaceRow(*position)));
                     }
@@ -488,7 +481,8 @@ fn render_plugin_drawer(
 
     let sections_x = drawer.x + 2;
     let sections_width = drawer.width.saturating_sub(3);
-    let status_height = 3;
+    let offers = plugin.offers();
+    let status_height = drawer_footer_height(&offers);
     let body = Rect::new(
         sections_x,
         drawer.y + 1,
@@ -645,49 +639,50 @@ fn render_plugin_drawer(
     // resource names' continuation indent back to the label column.
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 
-    if plugin.installed {
+    // The buttons below say what can be done, so the note no longer names
+    // the key that does it.
+    let status = if plugin.installed {
         let qualified_id = model.marketplace_plugin_id(plugin);
-        let health = plugin_health(model.doctor.as_ref(), &qualified_id);
-        let subtitle = match health {
-            "ready" => "Ready to use in your projects",
-            "missing" => "Installation is missing artifacts",
-            "needs attention" => "Managed state needs attention",
-            _ => "Health unknown",
-        };
         if model.was_just_updated(&qualified_id) {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::Accent),
-                "Updated",
-                "Brought up to date automatically when uze started",
-            );
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Updated",
+                subtitle: "Brought up to date automatically when uze started",
+            }
         } else if plugin.update_available == Some(true) {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::StateWarning),
-                "Update available",
-                "Needs your confirmation — press u to apply it",
-            );
+            DrawerStatus {
+                color: theme::color(Token::StateWarning),
+                headline: "Update available",
+                subtitle: "Needs your confirmation to apply",
+            }
         } else {
-            render_status_line(
-                frame,
-                status_area,
-                theme::color(Token::Accent),
-                "Installed",
-                subtitle,
-            );
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Installed",
+                subtitle: match plugin_health(model.doctor.as_ref(), &qualified_id) {
+                    "ready" => "Ready to use in your projects",
+                    "missing" => "Installation is missing artifacts",
+                    "needs attention" => "Managed state needs attention",
+                    _ => "Health unknown",
+                },
+            }
         }
     } else {
-        render_status_line(
-            frame,
-            status_area,
-            theme::color(Token::TextMuted),
-            "Not installed",
-            "Press i to install this plugin",
-        );
-    }
+        DrawerStatus {
+            color: theme::color(Token::TextMuted),
+            headline: "Not installed",
+            subtitle: "Available from this marketplace",
+        }
+    };
+    render_drawer_footer(
+        frame,
+        status_area,
+        status,
+        &offers,
+        model.hovered_offer,
+        None,
+        hits,
+    );
 }
 
 /// The order a reader meets a plugin's resources in: what they invoke

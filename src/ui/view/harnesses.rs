@@ -19,6 +19,7 @@ use uze_application::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
+use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// A harness's state collapses onto exactly one of three buckets for this
@@ -71,6 +72,17 @@ impl HarnessStatus {
             Self::Installed => "Installed",
             Self::Configured => "Configured",
             Self::NeedsPath => "PATH shadowed",
+        }
+    }
+
+    /// The drawer footer's note under the label: what the state means for
+    /// the person reading it.
+    fn note(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "Not found on this machine",
+            Self::Installed => "Detected — set it up to receive plugins",
+            Self::Configured => "Ready to receive plugins",
+            Self::NeedsPath => "A real binary shadows uze's shim on PATH",
         }
     }
 
@@ -313,7 +325,6 @@ fn render_harness_card(
         )),
         Rect::new(inner.x, inner.y + 4, inner.width, 1),
     );
-    super::render_row_actions(frame, rect, index, selected, hits);
     hits.push((rect, Hit::HarnessRow(index)));
 }
 
@@ -350,11 +361,26 @@ fn render_harness_drawer(
             Hit::ResizePanel(ResizablePanel::HarnessDrawer),
         ),
     );
+    let offers = harness.offers();
+    let footer_height = drawer_footer_height(&offers);
     let inner = Rect::new(
         drawer.x + 2,
         drawer.y + 1,
-        drawer.width - 3,
-        drawer.height - 2,
+        drawer.width.saturating_sub(3),
+        drawer.height.saturating_sub(2 + footer_height),
+    );
+    render_drawer_footer(
+        frame,
+        Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
+        DrawerStatus {
+            color: status.color(),
+            headline: status.label(),
+            subtitle: status.note(),
+        },
+        &offers,
+        model.hovered_offer,
+        None,
+        hits,
     );
 
     let mut lines = vec![
@@ -375,13 +401,6 @@ fn render_harness_drawer(
                     .clone()
                     .unwrap_or_else(|| "unknown".to_owned()),
                 theme::fg(Token::TextTertiary),
-            ),
-        ]),
-        Line::from(vec![
-            label_span("Status", theme::fg(Token::TextMuted)),
-            Span::styled(
-                format!("{} {}", status.glyph(), status.label()),
-                Style::default().fg(status.color()),
             ),
         ]),
         Line::from(vec![

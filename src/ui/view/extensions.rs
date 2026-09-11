@@ -20,7 +20,7 @@ use ratatui::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
-use super::render_status_line;
+use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_extensions(
@@ -258,7 +258,8 @@ fn render_extension_drawer(
     // never overlap regardless of terminal height.
     let sections_x = drawer.x + 2;
     let sections_width = drawer.width.saturating_sub(3);
-    let status_height = 3;
+    let offers = uze_application::application::offers::extension_offers();
+    let status_height = drawer_footer_height(&offers);
     let body = Rect::new(
         sections_x,
         drawer.y + 1,
@@ -303,11 +304,17 @@ fn render_extension_drawer(
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 
-    render_status_line(
+    render_drawer_footer(
         frame,
         status,
-        theme::color(Token::Accent),
-        "Bundled",
-        "Ships with uze — always available",
+        DrawerStatus {
+            color: theme::color(Token::Accent),
+            headline: "Bundled",
+            subtitle: "Ships with uze — always available",
+        },
+        &offers,
+        model.hovered_offer,
+        None,
+        hits,
     );
 }

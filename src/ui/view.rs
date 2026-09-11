@@ -4,11 +4,12 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use crate::ui::hit::Hit;
 use crate::ui::theme::{self, Symbol, Token};
+use uze_application::application::offers::ActionOffer;
 
 pub mod extensions;
 pub mod harnesses;
@@ -20,15 +21,55 @@ pub mod profiles;
 
 pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
 
-/// The drawer's bottom status block: a `theme::color(Token::BorderDefault)`-colored top divider, then a
-/// colored dot + bold status text, then a muted note beneath — exactly the
-/// design's `border-top` + dot + text status footer, no card, no box.
-pub(crate) fn render_status_line(
+/// Where a detail drawer's selected thing stands, in the words its footer
+/// prints: a coloured headline and a muted note beneath it.
+pub(crate) struct DrawerStatus<'a> {
+    pub color: Color,
+    pub headline: &'a str,
+    pub subtitle: &'a str,
+}
+
+/// Rows [`render_drawer_footer`] needs: the divider and the two status
+/// lines, plus a gap and a row of buttons when anything can be done now.
+pub(crate) fn drawer_footer_height(offers: &[ActionOffer]) -> u16 {
+    if drawer_buttons(offers).is_empty() {
+        3
+    } else {
+        5
+    }
+}
+
+/// The offers a drawer draws as buttons: the available ones, what builds
+/// before what destroys. `Activate` is left out — it is what opened the
+/// drawer, and a button that opens what is already open does nothing.
+fn drawer_buttons(offers: &[ActionOffer]) -> Vec<uze_keys::Action> {
+    let mut buttons: Vec<uze_keys::Action> = offers
+        .iter()
+        .filter(|offer| offer.is_available() && offer.action != uze_keys::Action::Activate)
+        .map(|offer| offer.action)
+        .collect();
+    buttons.sort_by_key(|action| action.destructive());
+    buttons
+}
+
+/// Every detail drawer ends the same way: where the thing stands, then
+/// what can be done about it, as buttons.
+///
+/// The drawer is the one place a row's actions are performed with the
+/// pointer, so its buttons are the selected thing's offers — the available
+/// ones only: a button that cannot run is a caption pretending to be a
+/// control. The first thing that builds wears the accent, anything else
+/// is neutral, and what destroys comes last in the danger colour, so the
+/// weight of each is seen before it is clicked. `engaged` is an action
+/// already under way (a key being captured), drawn in the warning colour.
+pub(crate) fn render_drawer_footer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    color: Color,
-    headline: &str,
-    subtitle: &str,
+    status: DrawerStatus<'_>,
+    offers: &[ActionOffer],
+    hovered: Option<uze_keys::Action>,
+    engaged: Option<uze_keys::Action>,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let block = Block::default()
         .borders(Borders::TOP)
@@ -39,52 +80,64 @@ pub(crate) fn render_status_line(
         Line::from(vec![
             Span::styled(
                 format!("{} ", theme::glyph(Symbol::StatusSelected)),
-                Style::default().fg(color),
+                Style::default().fg(status.color),
             ),
             Span::styled(
-                headline.to_owned(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                status.headline.to_owned(),
+                Style::default()
+                    .fg(status.color)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(Span::styled(
-            subtitle.to_owned(),
+            status.subtitle.to_owned(),
             theme::fg(Token::TextMuted),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-}
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect::new(inner.x, inner.y, inner.width, inner.height.min(2)),
+    );
 
-/// Draws a row's "what can be done to this" affordance at its right edge,
-/// and registers it.
-///
-/// Every row carries one, muted until the row is the selected one. The
-/// point of it is that finding an action never requires knowing a letter —
-/// so it has to be visible before anyone has learned anything, which is
-/// exactly when a hover-only affordance is invisible.
-pub(crate) fn render_row_actions(
-    frame: &mut ratatui::Frame<'_>,
-    row: Rect,
-    index: usize,
-    selected: bool,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    let width = theme::width(Symbol::Menu).max(1);
-    if row.width <= width + 2 {
+    let row_y = inner.y + 3;
+    if row_y >= area.bottom() {
         return;
     }
-    let rect = Rect::new(row.x + row.width - width - 1, row.y, width + 1, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            theme::glyph(Symbol::Menu),
-            theme::fg(if selected {
-                Token::TextPrimary
-            } else {
-                Token::TextDim
-            }),
-        )),
-        rect,
-    );
-    hits.push((rect, Hit::RowActions(index)));
+    let mut x = inner.x;
+    for (index, action) in drawer_buttons(offers).into_iter().enumerate() {
+        let label = format!("  {}  ", action.label());
+        let width = label.chars().count() as u16;
+        if x + width > inner.right() {
+            break;
+        }
+        let hue = if engaged == Some(action) {
+            Token::StateWarning
+        } else if action.destructive() {
+            Token::StateDanger
+        } else if index == 0 {
+            Token::Accent
+        } else {
+            Token::TextSecondary
+        };
+        // Soft at rest, the full hue under the pointer: the step between
+        // the two is what says a button can be clicked. One under way
+        // stays strong, so the button that started it reads as the one
+        // that stops it.
+        let style = if hovered == Some(action) || engaged == Some(action) {
+            theme::on(Token::SurfaceBackground, hue)
+        } else {
+            Style::default()
+                .fg(theme::color(hue))
+                .bg(theme::softened(hue, Token::SurfaceRecessed))
+        };
+        let rect = Rect::new(x, row_y, width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(label, style.add_modifier(Modifier::BOLD))),
+            rect,
+        );
+        hits.push((rect, Hit::OfferedAction(action)));
+        x += width + 2;
+    }
 }
 
 /// Folds `text` to `width` the way the drawer's paragraph would, but

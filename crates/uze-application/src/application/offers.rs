@@ -1,20 +1,17 @@
 //! What can be done to a thing, decided once.
 //!
-//! A screen that acts on rows needs three surfaces to agree about the same
-//! question: the menu the row raises, the action bar in its detail view,
-//! and the index of everything. They agree because they read one list —
-//! this one — rather than each re-deriving it from the same fields and
-//! drifting.
+//! A screen that acts on rows needs its surfaces to agree about the same
+//! question: the buttons in its detail view, the index of everything, and
+//! the keyboard. They agree because they read one list — this one — rather
+//! than each re-deriving it from the same fields and drifting.
 //!
 //! It also settles where the decision lives. Whether a plugin can be
 //! updated is a fact about the plugin, not a rendering concern, and a
 //! presentation layer that filtered on `installed && update_available`
 //! itself was one refactor away from disagreeing with the CLI about it.
 //!
-//! An offer that is *not* available carries why. That is the whole fix for
-//! the silent no-op: an action that cannot run is absent from a menu (a
-//! menu is what you can do now) and present in a detail view with its
-//! reason (a detail view is where you learn why you cannot).
+//! An offer that is *not* available carries why, for a surface with room to
+//! say it; the detail view draws only what can be done now.
 
 use serde::Serialize;
 use uze_keys::Action;
@@ -143,6 +140,20 @@ pub fn extension_offers() -> Vec<ActionOffer> {
             Action::InstallPlugin,
             "extensions ship inside uze; there is nothing to install",
         ),
+    ]
+}
+
+/// What can be done to one line of the Keys screen. A free function for
+/// the same reason as [`extension_offers`]: the line is the keymap's, and
+/// all this needs to know about it is whether the operator changed it.
+pub fn key_offers(customised: bool) -> Vec<ActionOffer> {
+    vec![
+        ActionOffer::available(Action::ChangeKey),
+        if customised {
+            ActionOffer::available(Action::ResetKey)
+        } else {
+            ActionOffer::unavailable(Action::ResetKey, "already the key uze ships with")
+        },
     ]
 }
 

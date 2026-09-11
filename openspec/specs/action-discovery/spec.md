@@ -28,42 +28,35 @@ and why not, and whether performing it is destructive. Presentation SHALL
 NOT decide what is possible.
 
 #### Scenario: One list, every surface
-- **WHEN** the same entity's actions are shown in a row menu, in its detail
-  drawer, and in the index of all actions
-- **THEN** all three show the same set, because all three read the same
-  offers
+- **WHEN** the same entity's actions are shown in its detail drawer and in
+  the index of all actions
+- **THEN** both show the same set, because both read the same offers
 
-#### Scenario: An unavailable action is explained, never silent
-- **WHEN** an action cannot be performed on the selected entity, and other
-  actions can
-- **THEN** it is absent from the row menu and present in the detail view
-  with the reason, and no gesture appears to do nothing
+#### Scenario: Only what can be done now is a button
+- **WHEN** an action cannot be performed on the selected entity
+- **THEN** its detail view draws no button for it, and the status at the
+  foot of the view says where the entity stands
 
-#### Scenario: A row nothing can be done to still answers
-- **WHEN** nothing at all can be done to the selected entity
-- **THEN** asking for its actions still opens something, listing what
-  cannot be done and why, rather than opening nothing — which would read
-  exactly like the silent no-op this replaces
-
-#### Scenario: A destructive offer is never the first thing under the pointer
+#### Scenario: A destructive offer is drawn as one
 - **WHEN** offers are rendered for an entity
-- **THEN** a destructive one is not the default-highlighted entry, and
+- **THEN** a destructive one comes last, in the danger colour, and
   performing it still requires its confirmation
 
 ### Requirement: Actions are offered where the thing they act on is
-A screen that acts on rows SHALL offer that row's actions from the row
-itself and from its detail view. Discovering an action SHALL NOT require
+A screen that acts on rows SHALL offer the selected row's actions as
+buttons at the foot of its detail view, beneath the row's status — one
+place, the same on every screen. Discovering an action SHALL NOT require
 knowing a letter.
-
-#### Scenario: A row offers its own actions
-- **WHEN** a row's action affordance is used, or the row is right-clicked
-- **THEN** the actions available for that row are listed, navigable, and
-  confirmed by selection
 
 #### Scenario: A selected entity shows what can be done to it
 - **WHEN** an entity's detail view is open
-- **THEN** its actions are shown there as well, so a selection always
-  states its own possibilities
+- **THEN** what can be done to it now is a row of buttons at its foot, so a
+  selection always states its own possibilities
+
+#### Scenario: A button reads as one
+- **WHEN** the pointer rests on a button
+- **THEN** it turns from a soft tint of its colour to the full colour, so
+  what can be clicked answers the pointer before it is clicked
 
 #### Scenario: The whole flow works with the pointer alone
 - **WHEN** an operator installs, updates and removes a package using only

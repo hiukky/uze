@@ -14,9 +14,7 @@ use uze_keys::{Action, Resolution, Scope};
 
 use super::hit::Hit;
 use super::keys;
-use super::model::{
-    Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, RowMenu, TuiModel,
-};
+use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -46,9 +44,6 @@ impl TuiModel {
         }
         if self.filtering {
             scopes.push(Scope::Filter);
-        }
-        if self.row_menu.is_some() {
-            scopes.push(Scope::RowMenu);
         }
         match self.overlay {
             Overlay::None | Overlay::HarnessHelp => {}
@@ -104,7 +99,7 @@ impl TuiModel {
     /// One action, performed, and noted if it was a first step that landed.
     ///
     /// Every action this client performs passes through here, whichever way
-    /// it was reached — a key, a row's menu, the index, a button — so this
+    /// it was reached — a key, the index, a button — so this
     /// is the one place the first-steps list can learn what has been done
     /// without every call site remembering to tell it. It asks *after*, and
     /// asks for evidence: a screen where the gesture does nothing would
@@ -139,9 +134,6 @@ impl TuiModel {
     fn perform(&mut self, action: Action) -> Intent {
         if self.overlay != Overlay::None {
             return self.overlay_action(action);
-        }
-        if self.row_menu.is_some() {
-            return self.row_menu_action(action);
         }
         match action {
             Action::OpenActionIndex => {
@@ -199,6 +191,15 @@ impl TuiModel {
                 }
                 self.open_or_act()
             }
+            Action::ChangeKey => {
+                // A second press puts the screen back, which is the only
+                // way a pointer has of cancelling a capture it started.
+                self.keys_capture = !self.keys_capture;
+                self.keys_problem = None;
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Action::ResetKey => self.reset_selected_key(),
             Action::Dismiss => self.dismiss(),
             // Searching belongs to a screen with something to search. On
             // one without, the key says so rather than doing nothing: a
@@ -212,7 +213,6 @@ impl TuiModel {
                 }
                 Intent::None
             }
-            Action::OpenRowActions => self.open_row_actions(),
             Action::EraseBack => self.erase_character(),
             Action::NextValue => self.cycle_selected_preference(true),
             Action::PreviousValue => self.cycle_selected_preference(false),
@@ -321,104 +321,6 @@ impl TuiModel {
             // are simply not offered.
             _ => Intent::None,
         }
-    }
-
-    /// Raises the selected row's own actions. Only the available ones: a
-    /// menu is what can be done now.
-    pub(crate) fn open_row_actions(&mut self) -> Intent {
-        let all = self.selected_offers();
-        if all.is_empty() {
-            // Same reason as `StartFilter` above: the Overview and the Keys
-            // screen have no rows anything can be done *to*, and a gesture
-            // that opened nothing there read exactly like a broken key.
-            self.say("Nothing here to act on — pick a row on Plugins, Extensions, Integrations or Profiles");
-            return Intent::None;
-        }
-        let available: Vec<_> = all
-            .iter()
-            .filter(|offer| offer.is_available())
-            .cloned()
-            .collect();
-        // A menu is what can be done now — so normally it holds only the
-        // available offers. When there is nothing at all, it holds the
-        // unavailable ones instead, each with its reason: a gesture that
-        // opened nothing would read exactly like the silent no-op this
-        // mechanism replaced.
-        let offers = if available.is_empty() { all } else { available };
-        // A destructive entry is never the one the menu opens on — the
-        // same rule the workspace client's own menu follows. When every
-        // available action destroys something, nothing is highlighted at
-        // all and reaching one costs a deliberate step.
-        let selected = offers
-            .iter()
-            .position(|offer| offer.is_available() && !offer.action.destructive());
-        self.row_menu = Some(RowMenu {
-            offers,
-            selected,
-            anchor: self.selected_row_rect().unwrap_or_default(),
-        });
-        self.focus = Focus::Content;
-        Intent::None
-    }
-
-    fn row_menu_action(&mut self, action: Action) -> Intent {
-        match action {
-            Action::SelectNext => {
-                self.step_row_menu(1);
-                Intent::None
-            }
-            Action::SelectPrevious => {
-                self.step_row_menu(-1);
-                Intent::None
-            }
-            Action::Activate => {
-                let chosen = self.row_menu.take().and_then(|menu| {
-                    menu.selected
-                        .and_then(|index| menu.offers.get(index))
-                        .filter(|offer| offer.is_available())
-                        .map(|offer| offer.action)
-                });
-                match chosen {
-                    Some(action) => self.act(action),
-                    None => Intent::None,
-                }
-            }
-            // Anything else, dismissal included, closes without acting.
-            _ => {
-                self.row_menu = None;
-                Intent::None
-            }
-        }
-    }
-
-    /// Moves through a menu's *available* entries. An entry that only
-    /// explains why it cannot run is read, never landed on.
-    fn step_row_menu(&mut self, delta: isize) {
-        let Some(menu) = self.row_menu.as_mut() else {
-            return;
-        };
-        let reachable: Vec<usize> = menu
-            .offers
-            .iter()
-            .enumerate()
-            .filter(|(_, offer)| offer.is_available())
-            .map(|(index, _)| index)
-            .collect();
-        if reachable.is_empty() {
-            return;
-        }
-        let position = menu
-            .selected
-            .and_then(|selected| reachable.iter().position(|index| *index == selected));
-        menu.selected = Some(match position {
-            Some(position) => {
-                reachable[position
-                    .saturating_add_signed(delta)
-                    .min(reachable.len() - 1)]
-            }
-            None if delta > 0 => reachable[0],
-            None => reachable[reachable.len() - 1],
-        });
     }
 
     /// One screen along the sidebar, wrapping, wherever the focus was.
@@ -560,10 +462,6 @@ impl TuiModel {
     pub(crate) fn apply_mouse(&mut self, event: MouseEvent, total_width: u16) -> Intent {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(event.column, event.row),
-            // Right-click is the other way to ask a row what can be done
-            // to it — the gesture the workspace client already answers on
-            // its tabs and spaces.
-            MouseEventKind::Down(MouseButton::Right) => self.right_click(event.column, event.row),
             // The sidebar always starts at column 0 — the frame this TUI
             // draws into is always the full terminal — the same fact
             // `orchestrator::compute_layout`'s drag arm relies on via its
@@ -662,15 +560,10 @@ impl TuiModel {
                     _ => None,
                 };
                 self.source_link_hovered = matches!(hovered, Some(Hit::OpenLink(_)));
-                // A row menu's highlight follows the pointer, the way the
-                // workspace's agent picker and context menu do. Only
-                // available entries carry a hit, so hovering never lands
-                // on one that cannot run.
-                if let Some(Hit::RowMenuEntry(index)) = hovered
-                    && let Some(menu) = self.row_menu.as_mut()
-                {
-                    menu.selected = Some(index);
-                }
+                self.hovered_offer = match hovered {
+                    Some(Hit::OfferedAction(action)) => Some(action),
+                    _ => None,
+                };
                 Intent::None
             }
             _ => Intent::None,

@@ -10,9 +10,8 @@ use ratatui::{
 use uze_keys::Action;
 
 use super::hit::Hit;
-use super::model::{Focus, Overlay, RowMenu, TrustedRetry, TuiModel};
+use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
-use crate::ui::POPUP_H_PAD;
 use crate::ui::theme::{self, Symbol, Token};
 
 impl TuiModel {
@@ -1105,89 +1104,4 @@ fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> 
         .border_style(theme::fg(Token::BorderDefault))
         .style(theme::bg(Token::SurfaceBackground))
         .padding(Padding::new(1, 1, 1, 0))
-}
-
-/// The action menu a row raised: what can be done to that row, listed
-/// where the row is.
-///
-/// Anchored under the row, and pushed to the right so it never covers the
-/// name of the thing it is about. Only available offers are here — the
-/// menu is what can be done now — and a destructive one is drawn as such
-/// so the reader sees the weight of an entry before choosing it.
-///
-/// Labels only, sized like the workspace's own context menu: an action's
-/// name already says what it does, and a reason beside it tripled the
-/// popup's width to restate that.
-pub(crate) fn render_row_menu(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    menu: &RowMenu,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    const MIN_WIDTH: u16 = 14;
-    let content_width = menu
-        .offers
-        .iter()
-        .map(|offer| offer.action.label().chars().count())
-        .max()
-        .unwrap_or(0) as u16;
-    let width = (content_width + 2 * POPUP_H_PAD + 2).max(MIN_WIDTH);
-    let height = menu.offers.len() as u16 + 2;
-    if area.width < width || area.height < height {
-        return;
-    }
-    let anchor = menu.anchor;
-    let x = anchor
-        .right()
-        .saturating_sub(width)
-        .min(area.width.saturating_sub(width));
-    // Under the row it belongs to, or above it when there is no room —
-    // the popup is about that row, so it must never be far from it.
-    let below = anchor.y + 1;
-    let y = if below + height <= area.bottom() {
-        below
-    } else {
-        anchor.y.saturating_sub(height)
-    };
-    let rect = Rect::new(x, y, width, height);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::fg(Token::BorderDefault))
-            .style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
-        rect,
-    );
-    // The menu's own targets are prepended: `hit_at` answers with the
-    // first rect that contains the point, and the row it was raised from
-    // is still in the list underneath it.
-    let mut menu_hits: Vec<(Rect, Hit)> = Vec::new();
-    for (index, offer) in menu.offers.iter().enumerate() {
-        let row = Rect::new(rect.x + 1, rect.y + 1 + index as u16, rect.width - 2, 1);
-        let chosen = menu.selected == Some(index);
-        // The chosen entry is a filled bar, the same affordance the
-        // workspace's agent picker and context menu draw — a bold label
-        // alone was too quiet to follow the pointer by.
-        let style = if chosen {
-            theme::on(Token::SurfaceBackground, Token::Accent).add_modifier(Modifier::BOLD)
-        } else if !offer.is_available() {
-            theme::fg(Token::TextDim)
-        } else if offer.action.destructive() {
-            theme::fg(Token::StateDanger)
-        } else {
-            theme::fg(Token::TextInactive)
-        };
-        let label = format!(
-            "{:pad$}{}",
-            "",
-            offer.action.label(),
-            pad = POPUP_H_PAD as usize
-        );
-        let text = format!("{label:<width$}", width = row.width as usize);
-        frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
-        if offer.is_available() {
-            menu_hits.push((row, Hit::RowMenuEntry(index)));
-        }
-    }
-    hits.splice(0..0, menu_hits);
 }

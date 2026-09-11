@@ -1337,10 +1337,10 @@ loads.
 
 ### What can be done to a thing is answered once
 
-An entity's offers come from the application layer, and the row menu, the
-detail view and the index all read that one list. An unavailable action is
-absent from the menu and explained in the detail view — never a keystroke
-that appears to do nothing.
+An entity's offers come from the application layer, and the detail view's
+buttons and the index both read that one list. A detail view draws a button
+for what can be done now and for nothing else.
 
 > `uze-application::application::offers::tests::an_action_that_cannot_run_says_why_rather_than_doing_nothing`
-> `src/ui/tests.rs::the_menu_and_the_detail_view_read_one_list_of_offers`
+> `src/ui/tests.rs::every_drawer_draws_what_its_row_can_do_as_buttons`
+> `src/ui/tests.rs::the_drawer_offers_what_can_be_done_as_buttons`

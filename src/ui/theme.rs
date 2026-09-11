@@ -117,6 +117,29 @@ pub(crate) fn scrimmed(color: Color, absent: Token) -> Color {
     )
 }
 
+/// A token's colour, softened into the surface a control sits on.
+///
+/// What a button wears at rest: the hue of its meaning — accent, danger —
+/// held back most of the way toward the panel behind it, so a row of them
+/// reads as quiet controls rather than as alarms. The pointer brings the
+/// full token back, and that step from soft to strong is what says the
+/// thing under it can be clicked.
+pub(crate) fn softened(token: Token, into: Token) -> Color {
+    /// How much of the surface the resting colour keeps, in percent.
+    const TOWARD_SURFACE: u16 = 70;
+
+    let hue = uze_theme::active().color(token);
+    let surface = uze_theme::active().color(into);
+    let mix = |from: u8, to: u8| {
+        ((u16::from(from) * (100 - TOWARD_SURFACE) + u16::from(to) * TOWARD_SURFACE) / 100) as u8
+    };
+    Color::Rgb(
+        mix(hue.0, surface.0),
+        mix(hue.1, surface.1),
+        mix(hue.2, surface.2),
+    )
+}
+
 /// The channels behind a drawn colour — for the one operation that has to
 /// do arithmetic on one rather than pass it through.
 fn channels(color: Color, absent: Token) -> (u8, u8, u8) {
