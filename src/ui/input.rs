@@ -324,8 +324,7 @@ impl TuiModel {
     }
 
     /// Raises the selected row's own actions. Only the available ones: a
-    /// menu is what can be done now, and why something cannot be done
-    /// belongs in the detail view, which has room for the reason.
+    /// menu is what can be done now.
     pub(crate) fn open_row_actions(&mut self) -> Intent {
         let all = self.selected_offers();
         if all.is_empty() {
@@ -663,6 +662,15 @@ impl TuiModel {
                     _ => None,
                 };
                 self.source_link_hovered = matches!(hovered, Some(Hit::OpenLink(_)));
+                // A row menu's highlight follows the pointer, the way the
+                // workspace's agent picker and context menu do. Only
+                // available entries carry a hit, so hovering never lands
+                // on one that cannot run.
+                if let Some(Hit::RowMenuEntry(index)) = hovered
+                    && let Some(menu) = self.row_menu.as_mut()
+                {
+                    menu.selected = Some(index);
+                }
                 Intent::None
             }
             _ => Intent::None,

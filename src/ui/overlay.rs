@@ -12,6 +12,7 @@ use uze_keys::Action;
 use super::hit::Hit;
 use super::model::{Focus, Overlay, RowMenu, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
+use crate::ui::POPUP_H_PAD;
 use crate::ui::theme::{self, Symbol, Token};
 
 impl TuiModel {
@@ -1113,25 +1114,24 @@ fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> 
 /// name of the thing it is about. Only available offers are here — the
 /// menu is what can be done now — and a destructive one is drawn as such
 /// so the reader sees the weight of an entry before choosing it.
+///
+/// Labels only, sized like the workspace's own context menu: an action's
+/// name already says what it does, and a reason beside it tripled the
+/// popup's width to restate that.
 pub(crate) fn render_row_menu(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     menu: &RowMenu,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = menu
+    const MIN_WIDTH: u16 = 14;
+    let content_width = menu
         .offers
         .iter()
-        .map(|offer| {
-            offer.action.label().chars().count()
-                + offer
-                    .reason()
-                    .map_or(0, |reason| reason.chars().count() + 3)
-        })
+        .map(|offer| offer.action.label().chars().count())
         .max()
-        .unwrap_or(0)
-        .max(8) as u16
-        + 4;
+        .unwrap_or(0) as u16;
+    let width = (content_width + 2 * POPUP_H_PAD + 2).max(MIN_WIDTH);
     let height = menu.offers.len() as u16 + 2;
     if area.width < width || area.height < height {
         return;
@@ -1165,29 +1165,26 @@ pub(crate) fn render_row_menu(
     for (index, offer) in menu.offers.iter().enumerate() {
         let row = Rect::new(rect.x + 1, rect.y + 1 + index as u16, rect.width - 2, 1);
         let chosen = menu.selected == Some(index);
-        let colour = if !offer.is_available() {
-            Token::TextDim
+        // The chosen entry is a filled bar, the same affordance the
+        // workspace's agent picker and context menu draw — a bold label
+        // alone was too quiet to follow the pointer by.
+        let style = if chosen {
+            theme::on(Token::SurfaceBackground, Token::Accent).add_modifier(Modifier::BOLD)
+        } else if !offer.is_available() {
+            theme::fg(Token::TextDim)
         } else if offer.action.destructive() {
-            Token::StateDanger
-        } else if chosen {
-            Token::TextPrimary
+            theme::fg(Token::StateDanger)
         } else {
-            Token::TextMuted
+            theme::fg(Token::TextInactive)
         };
-        let mut style = theme::fg(colour);
-        if chosen {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-        let mut spans = vec![Span::styled(offer.action.label(), style)];
-        // An entry that is here only to explain itself says so on the
-        // line, rather than looking like one that did nothing.
-        if let Some(reason) = offer.reason() {
-            spans.push(Span::styled(
-                format!("  {} {reason}", theme::glyph(Symbol::EmDash)),
-                theme::fg(Token::TextDim),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+        let label = format!(
+            "{:pad$}{}",
+            "",
+            offer.action.label(),
+            pad = POPUP_H_PAD as usize
+        );
+        let text = format!("{label:<width$}", width = row.width as usize);
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
         if offer.is_available() {
             menu_hits.push((row, Hit::RowMenuEntry(index)));
         }

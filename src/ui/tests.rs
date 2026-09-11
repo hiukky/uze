@@ -3033,12 +3033,47 @@ fn a_row_offers_its_own_actions_and_performing_one_needs_no_letter() {
     );
 }
 
-/// The menu and the detail view read one list, so they cannot disagree
-/// about whether a plugin can be updated — which is what a presentation
-/// layer filtering on `installed && update_available` itself could not
-/// promise.
+/// A row menu's highlight follows the pointer, the way the workspace's
+/// agent picker does — otherwise it reads as a keyboard-only list.
 #[test]
-fn the_menu_and_the_detail_view_read_one_list_of_offers() {
+fn a_row_menu_highlight_follows_the_pointer() {
+    let mut model = model_with_plugins(&["one"]);
+    model.focus = Focus::Content;
+    model.act(uze_keys::Action::OpenRowActions);
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let (rect, index) = model
+        .hits
+        .iter()
+        .filter_map(|(rect, hit)| match hit {
+            Hit::RowMenuEntry(index) => Some((*rect, *index)),
+            _ => None,
+        })
+        .find(|(_, index)| model.row_menu.as_ref().unwrap().selected != Some(*index))
+        .expect("a second entry to move to");
+
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+    assert_eq!(model.row_menu.as_ref().unwrap().selected, Some(index));
+}
+
+/// The menu reads the entity's own list of offers, so it cannot disagree
+/// with the index about whether a plugin can be updated — which is what a
+/// presentation layer filtering on `installed && update_available` itself
+/// could not promise.
+#[test]
+fn the_menu_is_the_available_half_of_the_entitys_offers() {
     let mut model = model_with_plugins(&["one"]);
     model.focus = Focus::Content;
     let offers = model.selected_offers();
@@ -3060,35 +3095,66 @@ fn the_menu_and_the_detail_view_read_one_list_of_offers() {
     );
     assert!(
         offers.iter().any(|offer| !offer.is_available()),
-        "and the other half exists, with a reason the drawer prints"
+        "and the other half exists, left out of the menu"
     );
 }
 
-/// An action that cannot run used to do nothing at all when its key was
-/// pressed, which reads as broken. The drawer says why instead.
+/// The drawer describes the plugin; acting on it is the row menu's job.
+/// Its resources are grouped by kind, so a skill never reads as a hook
+/// because the two shared one comma-joined line.
 #[test]
-fn the_drawer_says_why_an_action_cannot_run() {
-    let mut model = model_with_plugins(&["one"]);
-    model.focus = Focus::Content;
-    model.marketplace_drawer_open = true;
+fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
+    use uze_application::CapabilityKind;
+    use uze_application::application::{MarketplacePluginDetail, PluginCapability};
+
+    let summary = MarketplacePluginSummary {
+        marketplace: "team".to_owned(),
+        name: "kit".to_owned(),
+        description: None,
+        keywords: Vec::new(),
+        installed: false,
+        update_available: None,
+        is_default: false,
+    };
+    let capability = |name: &str, kind| PluginCapability {
+        identity: name.to_owned(),
+        name: name.to_owned(),
+        kind,
+    };
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        marketplace_drawer_open: true,
+        marketplace_plugins: vec![summary.clone()],
+        marketplace_detail: Some(MarketplacePluginDetail {
+            summary,
+            capabilities: vec![
+                capability("review", CapabilityKind::AgentSkill),
+                capability("guard", CapabilityKind::Hook),
+                capability("plan", CapabilityKind::AgentSkill),
+            ],
+        }),
+        ..TuiModel::default()
+    };
+    model.marketplace_drawer_width = Some(52);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
+
+    let skills = rows
+        .iter()
+        .position(|row| row.contains("Skills") && row.contains("review, plan"))
+        .unwrap_or_else(|| panic!("skills on a row of their own: {rows:#?}"));
     assert!(
-        rows.iter().any(|row| row.contains("ACTIONS")),
-        "the drawer states what can be done: {rows:#?}"
+        rows[skills + 1].contains("Hooks") && rows[skills + 1].contains("guard"),
+        "hooks on the next: {rows:#?}"
     );
-    let reason = model
-        .selected_offers()
-        .into_iter()
-        .find_map(|offer| offer.reason().map(str::to_owned))
-        .expect("something is unavailable for an installed plugin");
     assert!(
-        rows.iter().any(|row| row.contains(&reason)),
-        "and why not, in words: looking for {reason:?} in {rows:#?}"
+        !rows.iter().any(|row| row.contains("ACTIONS")),
+        "no action list in the drawer: {rows:#?}"
     );
 }
 

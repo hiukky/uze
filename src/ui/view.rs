@@ -9,7 +9,6 @@ use ratatui::{
 
 use crate::ui::hit::Hit;
 use crate::ui::theme::{self, Symbol, Token};
-use uze_application::application::PluginCapability;
 
 pub mod extensions;
 pub mod harnesses;
@@ -20,23 +19,6 @@ pub mod plugins;
 pub mod profiles;
 
 pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
-
-/// The design's `selectedPackage.resources` field is a single flat string
-/// ("README, CHANGELOG") — this mirrors that exactly: every capability's
-/// own logical/file name, comma-joined, in the order the manifest declared
-/// them. Not grouped by kind — the design doesn't, and a plugin rarely
-/// declares enough resources for that grouping to earn its own visual
-/// weight the way it would in a package-manager UI.
-pub(crate) fn resource_summary(capabilities: &[PluginCapability]) -> String {
-    if capabilities.is_empty() {
-        return theme::glyph(Symbol::MarkUnsupported);
-    }
-    capabilities
-        .iter()
-        .map(|c| c.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
 
 /// The drawer's bottom status block: a `theme::color(Token::BorderDefault)`-colored top divider, then a
 /// colored dot + bold status text, then a muted note beneath — exactly the
@@ -105,51 +87,51 @@ pub(crate) fn render_row_actions(
     hits.push((rect, Hit::RowActions(index)));
 }
 
-/// A detail view's action bar: everything that can be done to the thing
-/// on screen, including what cannot be done and why.
+/// Folds `text` to `width` the way the drawer's paragraph would, but
+/// *before* it is authored — so every line the drawer pushes is one drawn
+/// row, and a row index is a screen row.
 ///
-/// This is the other half of the row menu, and the split between them is
-/// deliberate. A menu is a list of what can be done *now*, so an
-/// unavailable action would only be noise in it. A detail view is where
-/// someone asks why — so this is where "already up to date" is said,
-/// instead of a keystroke appearing to do nothing.
-pub(crate) fn render_offers(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    offers: &[uze_application::application::offers::ActionOffer],
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    for (index, offer) in offers.iter().enumerate() {
-        let y = area.y + index as u16;
-        if y >= area.bottom() {
-            return;
-        }
-        let row = Rect::new(area.x, y, area.width, 1);
-        let mut spans = vec![Span::styled(
-            offer.action.label(),
-            Style::default()
-                .fg(theme::color(if !offer.is_available() {
-                    Token::TextDim
-                } else if offer.action.destructive() {
-                    Token::StateDanger
-                } else {
-                    Token::TextPrimary
-                }))
-                .add_modifier(if offer.is_available() {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        )];
-        if let Some(reason) = offer.reason() {
-            spans.push(Span::styled(
-                format!("  {} {reason}", theme::glyph(Symbol::EmDash)),
-                theme::fg(Token::TextDim),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-        if offer.is_available() {
-            hits.push((row, Hit::OfferedAction(offer.action)));
-        }
+/// The drawer renders through `Wrap`, and its two clickable rows (the
+/// marketplace name, the address under it) were anchored by counting
+/// authored lines. A description long enough to fold pushed the drawn rows
+/// down and left the targets sitting above them: the address read as a
+/// link and answered nothing. Wrapping the free text here keeps the two
+/// counts the same number by construction, with no measurement of what
+/// ratatui did afterwards.
+pub(crate) fn fold(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
     }
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split_whitespace() {
+        // A word wider than the row is broken across rows rather than
+        // left to overflow — the paragraph's own wrapper does the same,
+        // and a bare URL in a description is exactly that word.
+        let mut word = word;
+        while word.chars().count() > width {
+            if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            let split = word
+                .char_indices()
+                .nth(width)
+                .map_or(word.len(), |(index, _)| index);
+            let (head, tail) = word.split_at(split);
+            rows.push(head.to_owned());
+            word = tail;
+        }
+        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
+        if projected > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+    }
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
+    }
+    rows
 }

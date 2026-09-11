@@ -21,6 +21,7 @@ use uze_keys::CaveatKind;
 use super::super::hit::Hit;
 use super::super::model::{KeyRow, ResizablePanel, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
+use super::fold;
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_keys(
@@ -388,27 +389,35 @@ fn render_drawer(
         drawer.width.saturating_sub(3),
         drawer.height.saturating_sub(2),
     );
-    let mut lines = vec![
-        Line::from(Span::styled("ACTION", theme::fg_bold(Token::TextMuted))),
-        Line::from(Span::styled(
-            row.action.label(),
-            Style::default()
-                .fg(theme::color(Token::TextBright))
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            row.action.description(),
-            theme::fg(Token::TextSecondary),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("WHERE", theme::fg_bold(Token::TextMuted))),
-        Line::from(Span::styled(
-            row.scope.heading().to_owned(),
-            theme::fg(Token::TextSecondary),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("KEY", theme::fg_bold(Token::TextMuted))),
-    ];
+    // Every line below is folded before it is authored, so a line is a
+    // drawn row and the buttons can sit directly under the key they
+    // change instead of being pinned to the drawer's floor, far from it.
+    let room = inner.width as usize;
+    let folded = |text: &str, style: Style| -> Vec<Line<'static>> {
+        fold(text, room)
+            .into_iter()
+            .map(|row| Line::from(Span::styled(row, style)))
+            .collect()
+    };
+    let heading =
+        |text: &'static str| Line::from(Span::styled(text, theme::fg_bold(Token::TextMuted)));
+
+    let mut lines = vec![heading("ACTION")];
+    lines.extend(folded(
+        &row.action.label(),
+        Style::default()
+            .fg(theme::color(Token::TextBright))
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(folded(
+        &row.action.description(),
+        theme::fg(Token::TextSecondary),
+    ));
+    lines.push(Line::from(""));
+    lines.push(heading("WHERE"));
+    lines.extend(folded(row.scope.heading(), theme::fg(Token::TextSecondary)));
+    lines.push(Line::from(""));
+    lines.push(heading("KEY"));
     match row.chord {
         Some(chord) => {
             lines.push(Line::from(vec![
@@ -423,90 +432,113 @@ fn render_drawer(
                 ),
             ]));
             if !model.keyboard.can_deliver(chord.tier()) {
-                lines.push(Line::from(Span::styled(
+                lines.extend(folded(
                     "this terminal cannot send it — it will never arrive",
                     theme::fg(Token::StateDanger),
-                )));
+                ));
             }
             for caveat in chord.caveats() {
                 let colour = match caveat.kind {
                     CaveatKind::HostClaims => Token::StateWarning,
                     CaveatKind::PaneLoses => Token::TextMuted,
                 };
-                lines.push(Line::from(Span::styled(
-                    caveat.note.to_owned(),
-                    theme::fg(colour),
-                )));
+                lines.extend(folded(caveat.note, theme::fg(colour)));
             }
         }
-        None => lines.push(Line::from(Span::styled(
+        None => lines.extend(folded(
             "no key — it is offered where it acts, and in the index",
             theme::fg(Token::TextDim),
-        ))),
+        )),
     }
     if row.custom() {
-        lines.push(Line::from(Span::styled(
-            match row.default_chord {
-                Some(chord) => format!("uze ships with {chord}"),
-                None => "uze ships with no key for this".to_owned(),
-            },
-            theme::fg(Token::TextDim),
-        )));
+        let shipped = match row.default_chord {
+            Some(chord) => format!("uze ships with {chord}"),
+            None => "uze ships with no key for this".to_owned(),
+        };
+        lines.extend(folded(&shipped, theme::fg(Token::TextDim)));
     }
+    let buttons_y = inner.y + lines.len() as u16 + 1;
+    frame.render_widget(Paragraph::new(lines), inner);
+    if buttons_y >= inner.bottom() {
+        return;
+    }
+    render_key_buttons(
+        frame,
+        Rect::new(inner.x, buttons_y, inner.width, 1),
+        model.keys_capture,
+        row.custom(),
+        hits,
+    );
+
+    let mut notes = Vec::new();
     if let Some(problem) = &model.keys_problem {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
+        notes.push(Line::from(Span::styled(
             problem.clone(),
             theme::fg(Token::StateDanger),
         )));
+        notes.push(Line::from(""));
     }
     if let Some(probe) = &model.keys_probe {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "THIS TERMINAL",
-            theme::fg_bold(Token::TextMuted),
-        )));
-        lines.push(Line::from(Span::styled(
+        notes.push(heading("THIS TERMINAL"));
+        notes.push(Line::from(Span::styled(
             probe.clone(),
             theme::fg(Token::TextSecondary),
         )));
     }
-    let body_height = inner.height.saturating_sub(3);
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: true }),
-        Rect::new(inner.x, inner.y, inner.width, body_height),
-    );
-
-    // The two things this screen is for, as targets rather than as keys —
-    // a screen about rebinding that could only be driven by the bindings
-    // it is rebinding would be a joke on itself.
-    let actions = Rect::new(inner.x, inner.y + body_height, inner.width, 3);
-    let rebind = Rect::new(actions.x, actions.y, actions.width, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            if model.keys_capture {
-                "press the key you want, or esc"
-            } else {
-                "change this key"
-            },
-            theme::fg_bold(if model.keys_capture {
-                Token::StateWarning
-            } else {
-                Token::Accent
-            }),
-        )),
-        rebind,
-    );
-    hits.push((rebind, Hit::CaptureKey));
-    if row.custom() {
-        let reset = Rect::new(actions.x, actions.y + 1, actions.width, 1);
+    let notes_y = buttons_y + 2;
+    if !notes.is_empty() && notes_y < inner.bottom() {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "put back what uze ships with",
-                theme::fg(Token::TextMuted),
-            )),
-            reset,
+            Paragraph::new(notes).wrap(Wrap { trim: true }),
+            Rect::new(inner.x, notes_y, inner.width, inner.bottom() - notes_y),
         );
-        hits.push((reset, Hit::ResetKey));
+    }
+}
+
+/// The two things this screen is for, as buttons rather than as keys — a
+/// screen about rebinding that could only be driven by the bindings it is
+/// rebinding would be a joke on itself. Filled like a dialog's buttons,
+/// because a bold word at the foot of a drawer read as a caption.
+fn render_key_buttons(
+    frame: &mut ratatui::Frame<'_>,
+    row: Rect,
+    capturing: bool,
+    custom: bool,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
+    let (label, hue) = if capturing {
+        ("  Press a key…  ", Token::StateWarning)
+    } else {
+        ("  Change key  ", Token::Accent)
+    };
+    let mut x = row.x;
+    let mut button = |x: u16, label: &str, style: Style, hit: Hit| -> u16 {
+        let width = (label.chars().count() as u16).min(row.right().saturating_sub(x));
+        if width == 0 {
+            return 0;
+        }
+        let rect = Rect::new(x, row.y, width, 1);
+        frame.render_widget(Paragraph::new(Span::styled(label.to_owned(), style)), rect);
+        hits.push((rect, hit));
+        width
+    };
+    x += button(
+        x,
+        label,
+        theme::on(Token::SurfaceBackground, hue).add_modifier(Modifier::BOLD),
+        Hit::CaptureKey,
+    );
+    if capturing {
+        let hint = Rect::new(x, row.y, row.right().saturating_sub(x), 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled("  esc cancels", theme::fg(Token::TextMuted))),
+            hint,
+        );
+    } else if custom {
+        button(
+            x + 2,
+            "  Reset  ",
+            theme::on(Token::TextPrimary, Token::SurfaceRaised),
+            Hit::ResetKey,
+        );
     }
 }

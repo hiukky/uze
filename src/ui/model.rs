@@ -1270,9 +1270,9 @@ impl TuiModel {
 
     /// What can be done to whatever is selected on this screen.
     ///
-    /// Read from the entity itself, never decided here: the row menu, the
-    /// detail view and the index all ask this, which is what keeps them
-    /// from disagreeing about whether a plugin can be updated.
+    /// Read from the entity itself, never decided here: the row menu and
+    /// the index both ask this, which is what keeps them from disagreeing
+    /// about whether a plugin can be updated.
     pub(crate) fn selected_offers(&self) -> Vec<ActionOffer> {
         match self.route {
             Route::Plugins => self
