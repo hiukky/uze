@@ -978,6 +978,7 @@ const SWATCHES: &[uze_theme::Token] = &[
 /// reason the theme picker reads its own: a JSON read and a directory
 /// listing, which is exactly the work `uze theme list` is budgeted for.
 fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
+    model.appearance_read = true;
     let Ok(application) = tui_application(home.clone()) else {
         return;
     };

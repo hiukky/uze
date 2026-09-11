@@ -549,6 +549,32 @@ fn the_next_run_opens_on_the_screen_the_last_one_left() {
     );
 }
 
+/// The management client reopens on the screen it was left on without
+/// passing through a route change — and Appearance, which reads its lists
+/// on arrival, used to open empty until it was clicked again.
+#[test]
+fn appearance_reopened_where_it_was_left_still_reads_its_lists() {
+    let layout = uze_application::ManagementLayout {
+        route: Some(Route::Appearance.id().to_owned()),
+        ..uze_application::ManagementLayout::default()
+    };
+    let mut model = TuiModel::recall(None, &layout);
+    assert_eq!(model.route, Route::Appearance);
+    assert_eq!(model.appearance_intent(), Intent::LoadAppearance);
+    model.appearance_read = true;
+    assert_eq!(
+        model.appearance_intent(),
+        Intent::None,
+        "read once, not every frame — an empty machine included"
+    );
+    model.set_route(Route::Overview);
+    assert_eq!(
+        model.appearance_intent(),
+        Intent::None,
+        "only that screen reads them"
+    );
+}
+
 #[test]
 fn a_route_action_key_works_from_the_sidebar_too() {
     let mut model = model_with_plugins(&["one"]);

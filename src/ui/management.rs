@@ -153,6 +153,7 @@ pub(crate) fn run_management(
         for missing in [
             model.drawer_inspect_intent(),
             model.profile_preview_intent(),
+            model.appearance_intent(),
         ] {
             if missing != Intent::None {
                 dispatch(missing, &home, &sender, &mut model);

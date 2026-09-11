@@ -420,6 +420,10 @@ pub(crate) struct TuiModel {
     /// from here resolved to nothing drawable and shows no swatches, which
     /// is the honest answer for a file with a typo in it.
     pub(crate) appearance_palettes: std::collections::BTreeMap<String, Vec<uze_theme::Rgb>>,
+    /// Whether the two lists have been read this visit — true even when a
+    /// read found nothing, so an empty machine is not asked again every
+    /// frame.
+    pub(crate) appearance_read: bool,
     pub(crate) keys_capture: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
@@ -589,6 +593,7 @@ impl Default for TuiModel {
             appearance_themes: Vec::new(),
             appearance_glyph_sets: Vec::new(),
             appearance_palettes: std::collections::BTreeMap::new(),
+            appearance_read: false,
             keys_capture: false,
             keys_problem: None,
             keys_probe: None,
@@ -1444,6 +1449,20 @@ impl TuiModel {
             harness_ids,
             epoch: self.profile_preview_epoch,
         })
+    }
+
+    /// The read the Appearance screen is missing, or `Intent::None`.
+    ///
+    /// Arriving asks for it (see [`Self::set_route`]), but arriving is not
+    /// the only way onto the screen: the management client reopens on the
+    /// screen it was left on, restored without passing through a route
+    /// change, and that screen used to stay empty until clicked again.
+    pub(crate) fn appearance_intent(&self) -> super::worker::Intent {
+        if self.route == Route::Appearance && !self.appearance_read {
+            super::worker::Intent::LoadAppearance
+        } else {
+            super::worker::Intent::None
+        }
     }
 
     /// The preview read the Profiles screen is missing right now, or
