@@ -625,13 +625,11 @@ The harness invokes a wrapper vendored in the delivered artifact, never the
 `uze` binary, and nothing in that artifact names the packager. The wrapper
 is a per-harness constant, owned alongside the entry that names it: written
 on attach, drift-checked on inspect, removed with the last entry. Where no
-wrapper template covers the platform the packager runtime carries the hook
-with the same contract, and the route is reported as adapted with its
-reason rather than claimed native.
+wrapper template covers the platform, nothing is attached at all (see
+below).
 
 > `tests/integrations/hooks.rs::the_generated_wrapper_is_owned_alongside_the_entry_it_serves`
 > `tests/integrations/hooks.rs::reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones`
-> `crates/uze-integrations/src/hooks.rs::a_platform_without_a_wrapper_template_falls_back_to_the_packager_runtime`
 > `crates/uze-integrations/src/hooks.rs::the_wrapper_is_one_byte_identical_file_per_harness`
 > `crates/uze-integrations/src/hooks.rs::a_wrapper_that_lost_its_executable_bit_is_drift_and_is_repaired`
 > `crates/uze-integrations/src/hooks.rs::the_last_detached_hook_entry_takes_the_shared_wrapper_with_it`
@@ -673,35 +671,44 @@ second `plugin` config entry) and regenerates from the receipt set.
 > `tests/integrations/hooks.rs::an_update_replaces_the_previous_version_of_the_samed_group`
 > `tests/integrations/hooks.rs::opencode_bridge_is_package_scoped_and_regenerates_across_groups`
 
-### Neither route ever silently weakens a safety hook
+### The generated wrapper never silently weakens a safety hook
 
 A handler answers with its exit code: `0` allows, `3` denies with the reason
 on stderr. A failure to start, a timeout, and any other exit are fail-open
 for observational hooks and fail-closed (a deny) for a declared
 deny/ask/transform effect; the first deny stops later handlers, whatever
 order the harness itself would have used. The wrapper's own dependency
-follows the same rule. A deny is translated into the harness's own blocking
-contract (its decision document plus exit 2 on the command-hook harnesses)
-— internal exit codes never leak outward, because any other non-zero exit is
-a non-blocking error there. The generated wrapper and the packager runtime
-answer identically for every fixture payload, including the command shapes
-the ABI allows — a `sh <script> --flag` invocation, a relative path —
+(`jq`) follows the same rule. A deny is translated into the harness's own
+blocking contract (its decision document plus exit 2 on the command-hook
+harnesses) — internal exit codes never leak outward, because any other
+non-zero exit is a non-blocking error there. This holds for every command
+shape the ABI allows: a `sh <script> --flag` invocation, a relative path,
 because a handler's `command` is a shell command line run from the package
-root on both. The same rule governs a failure *before* any handler runs: an
-unreadable payload, an unknown adapter, or state that will not load is
-resolved by the declared effect too, so `hook-exec` never exits 1 (which
-the command-hook harnesses read as an allow). Each handler is bounded by
-the timeout its own author declared, not by a fixed default.
+root. Each handler is bounded by the timeout its own author declared, not by
+a fixed default and not by the harness's backstop: past it the handler and
+everything it started are stopped, and the group's effect decides.
 
-> `crates/uze-core/src/capability/hook.rs::observation_fails_open_but_a_declared_deny_effect_fails_closed`
-> `crates/uze-core/src/capability/hook.rs::handlers_run_in_order_and_the_first_deny_stops_later_ones`
-> `crates/uze-core/src/capability/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
-> `crates/uze-integrations/src/hooks.rs::a_missing_wrapper_dependency_follows_the_groups_effect`
-> `crates/uze-integrations/src/hooks.rs::the_wrapper_and_the_reference_runtime_answer_alike`
-> `crates/uze-integrations/src/hooks.rs::adapters_render_native_decisions_and_block_exit_codes`
-> `tests/cli/hook_exec.rs::a_deny_group_blocks_when_the_payload_cannot_be_read`
-> `tests/cli/hook_exec.rs::an_observe_group_proceeds_when_the_payload_cannot_be_read`
-> `tests/cli/hook_exec.rs::a_handler_is_bounded_by_the_timeout_its_author_declared`
+What the wrapper answers for every recorded fixture — the native decision
+document, the exit status and the reason — is a golden per harness, taken
+from the in-binary runtime that used to be the second implementation of this
+contract, before it was removed (ADR-040, amended).
+
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::the_wrapper_answers_every_fixture_as_recorded`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_that_cannot_run_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_missing_wrapper_dependency_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_denial_is_relayed_in_each_harnesss_own_dialect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_is_stopped_at_the_deadline_its_author_declared`
+
+### A hook UZE cannot deliver is never half-delivered
+
+There is one implementation of the hook contract, and it is the generated
+wrapper. A platform or harness the template does not cover gets no native
+entry at all and is reported Unsupported with that reason — never an entry
+pointing at a second implementation, and never a Native verdict for a
+delivery that did not happen.
+
+> `crates/uze-integrations/src/hooks.rs::a_platform_without_a_wrapper_template_delivers_no_hook`
+> `crates/uze-integrations/src/hooks.rs::a_hook_that_cannot_be_delivered_is_reported_unsupported`
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
 
@@ -946,18 +953,16 @@ slots whose agent is long gone — inside a tab that owns exactly one of them.
 
 > `crates/uze-extensions/src/code/changes.rs::repository_tests::discovers_main_and_configured_linked_worktrees`
 
-### A replaced lock field is rejected, never silently dropped
+### An unknown lock field is rejected, never silently dropped
 
-A key `ProjectLock` does not understand is refused at every level, and a key
-it once carried is refused by name with where the declaration lives now.
-Tolerating an unknown one for forward compatibility buys nothing here: the
+A key `ProjectLock` does not understand is refused at every level.
+Tolerating one for forward compatibility buys nothing here: the
 `version` field already says whether this UZE can read the file, and a lock is
 regenerated rather than preserved. `WorktreePolicy` denies unknown fields for
 the opposite reason — everything a project may declare about isolation is
 already named there. Both halves say the same thing: a declared policy can
 never become no policy in silence.
 
-> `crates/uze-core/src/project/project_lock.rs::a_key_the_lock_no_longer_carries_is_rejected_rather_than_silently_dropped`
 > `crates/uze-core/src/project/project_lock.rs::a_key_this_uze_does_not_understand_is_refused`
 > `crates/uze-core/src/project/manifest.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
 

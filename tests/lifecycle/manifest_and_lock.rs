@@ -173,28 +173,6 @@ fn the_policy_in_force_is_what_the_manifest_says_and_it_reaches_the_projection()
 }
 
 #[test]
-fn a_lock_still_carrying_the_policy_is_refused_and_says_where_it_belongs() {
-    let (application, repository) = project("manifest-retired-key");
-    let root = repository.root().to_path_buf();
-    fs::write(
-        root.join("agents.lock"),
-        "version: 1\nworktrees:\n  completion: pr\n",
-    )
-    .unwrap();
-
-    let error = application
-        .project()
-        .environment(&root)
-        .expect_err("a lock carrying a declaration must be refused");
-    let message = error.to_string();
-    assert!(message.contains("worktrees"), "{message}");
-    assert!(
-        message.contains("agents.yaml"),
-        "the operator must be told where it lives now: {message}"
-    );
-}
-
-#[test]
 fn a_typo_in_the_manifest_is_named_rather_than_ignored() {
     let (application, repository) = project("manifest-typo");
     let root = repository.root().to_path_buf();

@@ -163,23 +163,12 @@ struct RawPackageRegistry {
 }
 
 /// One registry entry.
-///
-/// `source` is the historical field name, kept so a ledger written before
-/// provenance existed still loads: a bare JSON string deserializes as a local
-/// source (see `Provenance`'s deserializer). Reading a legacy entry never
-/// rewrites it, and every new write emits the current shape.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Registration {
-    #[serde(rename = "source")]
     provenance: Provenance,
     /// `None` means "no alias was ever chosen" — the local name defaults to
-    /// `id.plugin_name()`. A registration written before this field existed
-    /// deserializes as `None` here too (`#[serde(default)]`), which is
-    /// exactly the correct meaning for it: every pre-existing install was
-    /// implicitly active under its own bare plugin name, no migration
-    /// needed. `Some(alias)` is only ever written by an explicit `alias`
-    /// collision resolution at install time.
-    #[serde(default)]
+    /// `id.plugin_name()`. `Some(alias)` is only ever written by an explicit
+    /// `alias` collision resolution at install time.
     active_name: Option<String>,
 }
 
@@ -390,10 +379,6 @@ impl UzeStore {
                 .unwrap_or(id.plugin_name());
             (active == name).then_some(id)
         })
-    }
-
-    pub fn registration_count(&self) -> Result<usize> {
-        Ok(self.load_registry()?.packages.len())
     }
 
     /// Lists installed package identities in deterministic order. Package
@@ -780,7 +765,10 @@ mod tests {
         let state = serde_json::json!({
             "packages": {
                 "../../..": {
-                    "source": "local",
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/plugin" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/plugin" } }
+                    },
                     "active_name": ".."
                 }
             }
@@ -810,11 +798,17 @@ mod tests {
         let state = serde_json::json!({
             "packages": {
                 "../../escape@local": {
-                    "source": "local",
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/escape" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/escape" } }
+                    },
                     "active_name": "escape"
                 },
                 "flow@local": {
-                    "source": "local"
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/flow" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/flow" } }
+                    }
                 }
             }
         });

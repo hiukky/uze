@@ -194,9 +194,9 @@ fn exec_or_die(
     for (key, value) in &contribution.extra_env {
         command.env(key, value);
     }
-    // The harness inherits this launch's trace, and hands it on to the
-    // hooks it fires (`uze hook-exec` adopts it). Flushed here because
-    // `exec` never returns to drop anything.
+    // The harness inherits this launch's trace, and hands it on to every
+    // process it starts — a `uze` among them adopts it. Flushed here
+    // because `exec` never returns to drop anything.
     uze::telemetry::inject_into(&mut command);
     tracing::info!(executable = %executable.display(), "exec");
     telemetry.finish();

@@ -226,9 +226,10 @@ need to).
   (`conformance/harnesses/{antigravity,claude,codex,opencode}/`) in a
   disposable Docker environment — the real harness binary, a synthetic
   provider, zero Internet, zero tokens. Vendor-specific by design; never
-  linked into the deterministic suite. Single fixture source:
-  `tests/_fixtures`; per-harness synthetic seeds under
-  `conformance/harnesses/<vendor>/fixtures/`. Run with
+  linked into the deterministic suite. Three fixture trees, by owner: the
+  deterministic suites' inputs in `tests/_fixtures`; the Lab's own
+  marketplace in `conformance/_fixtures/marketplace/`; per-harness session
+  and provider state under `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
   `make lab-replay`. `conformance.yml` runs all four verticals (matrix) —
   its own workflow, on the paths that reach the Lab image plus nightly, so
@@ -454,7 +455,7 @@ properties):
   an experimental mechanism that projects `AGENTS.md` into a harness
   without writing into the project; it must never recursively invoke
   itself — this is a named, tested boundary
-  (`tests/runtime_shim_boundary.rs`).
+  (`tests/integrations/runtime_boundary.rs`).
 - **`command_performance.rs`** enforces that every CLI leaf command is
   classified as `Budgeted` (low-millisecond, cache-backed via
   `UzeApplication::detect_cached`) or `JustifiedSlow` with a stated reason;

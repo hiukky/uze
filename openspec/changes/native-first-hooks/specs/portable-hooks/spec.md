@@ -58,10 +58,22 @@ The system SHALL maintain one vocabulary of portable tool aliases in which each 
 - **THEN** for every alias the harness delivers, a real tool call of that alias reaches a handler that asserts the guaranteed `HOOK_*` values
 - **AND** an alias the harness cannot deliver is declared with a reason, never omitted
 
-### Requirement: The packager runtime remains the reference and the fallback
-The system SHALL keep the in-binary hook runtime (`uze hook-exec`) as the executable reference of the contract and as the delivery route where no wrapper template applies to the target platform or effect. Compatibility assessment SHALL report which route delivered each hook, and a hook delivered through the fallback SHALL carry the same context and decision contract.
+### Requirement: The wrapper is the only implementation of the contract
+The system SHALL carry no hook runtime of its own: the generated wrapper (and, on a harness without command hooks, the generated plugin that is the same runtime) SHALL be the only thing that runs an authored handler, and no packager binary SHALL appear on any delivered hook's execution path. Where no wrapper template applies to the target platform or harness, the hook SHALL be reported Unsupported with that reason and nothing SHALL be attached. The answer the wrapper gives for each recorded fixture — the native decision document, the exit status and the reason — SHALL be held as a golden per harness, so a changed answer is a reviewed change of contract.
 
-#### Scenario: Platform without a wrapper template falls back
-- **WHEN** a hook is delivered on a platform for which no wrapper template exists
-- **THEN** the native entry invokes the packager runtime with the same context and decision contract
-- **AND** the delivery is reported as the fallback route with the reason
+#### Scenario: Platform without a wrapper template delivers nothing
+- **WHEN** a hook is delivered on a platform or harness for which no wrapper template exists
+- **THEN** no native hook entry is written
+- **AND** the hook is reported Unsupported with the reason that no wrapper template covers this platform
+
+#### Scenario: Every recorded fixture answers as recorded
+- **WHEN** the generated wrapper is run against a recorded fixture payload for a harness
+- **THEN** its native decision document, exit status and reason are the recorded ones
+
+### Requirement: Each handler is bounded by the deadline its author declared
+The generated wrapper SHALL run each handler under the `timeout` its author declared in `hooks.json`, and SHALL stop a handler that exceeds it — together with the processes that handler started — before continuing. A handler stopped that way SHALL be a handler failure like any other, resolved by the group's declared effect and reported with a reason naming the deadline. The native entry's own group timeout SHALL remain the harness's backstop and SHALL be sized so it is never the bound that fires first.
+
+#### Scenario: A hanging handler in a deny group blocks at its deadline
+- **WHEN** a `deny` group's handler declares a 1s timeout and does not answer
+- **THEN** the intercepted tool is denied about a second later, with a reason naming the timeout
+- **AND** the same handler in an `observe` group lets the tool proceed and the timeout is reported

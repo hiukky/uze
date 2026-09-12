@@ -96,14 +96,11 @@ pub(crate) fn generated_identifier(kind: &[u8]) -> String {
         .collect()
 }
 
-/// Where a task's branch starts: a ref (normally the target), or another
-/// task's tip. The second variant is carried without behaviour today so
-/// stacking is never a migration.
+/// Where a task's branch starts: a ref, normally the target.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Base {
     Ref(String),
-    Task(TaskId),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,25 +150,19 @@ pub struct Task {
     /// remote at all, and what the remote holds — is read from the
     /// repository's remote-tracking refs, so a push somebody else made
     /// counts exactly as much as one UZE made.
-    #[serde(default)]
     pub published_as: Option<String>,
     /// The number of the request open on the forge for the published
     /// branch, once one was found. Read off the remote like every other
     /// readiness fact, never announced by the agent that opened it.
-    #[serde(default)]
     pub published_request: Option<u32>,
     /// The branch `published_request` was found for. A number answers for
     /// one branch, and the task outlives it: the agent that delivered keeps
-    /// working, often on a new branch with a request of its own. `None`
-    /// beside a number is a record older than this field, and is asked
-    /// again once.
-    #[serde(default)]
+    /// working, often on a new branch with a request of its own.
     pub request_branch: Option<String>,
     /// When the remote was last asked whether a request exists for this
     /// branch, so the question is asked on a clock instead of on every
     /// evaluation: it is the one publication fact that costs a network
     /// round trip, and it stops being asked the moment it is answered.
-    #[serde(default)]
     pub request_asked_at_unix: Option<u64>,
     pub created_at_unix: u64,
 }

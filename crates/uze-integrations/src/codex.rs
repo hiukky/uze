@@ -19,7 +19,6 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
-    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent, HookNativeOutput},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -258,7 +257,7 @@ impl CodexIntegration {
                 .clone()
                 .map(|name| self.skills_dir.join(name))
                 .unwrap_or_else(|| target.to_path_buf());
-            return Err(projection_conflict(
+            return Err(crate::shared::projection::conflict(
                 resource,
                 &entry,
                 target,
@@ -360,7 +359,7 @@ impl IntegrationPort for CodexIntegration {
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -548,14 +547,10 @@ impl IntegrationPort for CodexIntegration {
                     &self.uze_home,
                     self.id(),
                     config_file,
-                    event.ok_or_else(|| {
-                        UzeError::ExposureUnavailable(
-                            "Codex hook plan has no event to attach".to_owned(),
-                        )
-                    })?,
+                    *event,
                     entry_name,
                     expected,
-                    wrapper.as_deref().map(|path| ("codex", path)),
+                    Some(("codex", wrapper.as_path())),
                 )?;
                 Ok(Some(path))
             }
@@ -649,19 +644,13 @@ impl IntegrationPort for CodexIntegration {
                 wrapper,
                 ..
             } => {
-                // A ledger entry damaged or predating the event field must
-                // block inspection, never panic doctor/remove.
-                let Some(event) = *event else {
-                    return AttachmentInspection {
-                        state: AttachmentState::Blocked,
-                        reason: "hook receipt has no event; refusing to inspect".to_owned(),
-                    };
-                };
+                // A damaged ledger entry must block inspection, never
+                // panic doctor/remove.
                 hook_projection::inspect_event_entry(
                     config_file,
-                    event,
+                    *event,
                     expected,
-                    wrapper.as_deref().map(|path| ("codex", path)),
+                    Some(("codex", wrapper.as_path())),
                 )
             }
             ManagedArtifact::IntegrationOwned {
@@ -705,17 +694,11 @@ impl IntegrationPort for CodexIntegration {
                 wrapper,
                 ..
             } => {
-                let Some(event) = *event else {
-                    return Ok(AttachmentInspection {
-                        state: AttachmentState::Blocked,
-                        reason: "hook receipt has no event; refusing to detach".to_owned(),
-                    });
-                };
                 let detached = hook_projection::remove_event_entry(
                     config_file,
-                    event,
+                    *event,
                     expected,
-                    wrapper.as_deref().map(|path| ("codex", path)),
+                    Some(("codex", wrapper.as_path())),
                 )?;
                 hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "codex");
                 return Ok(detached);
@@ -738,7 +721,7 @@ impl IntegrationPort for CodexIntegration {
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
-                    self.cleanup_unused_skill_adaptation(target)?;
+                    self.cleanup_unused_wrapper(target)?;
                 }
                 return Ok(detached);
             }
@@ -775,35 +758,12 @@ impl CodexIntegration {
             &self.hook_capabilities(),
             self.hooks_config_path(),
             "codex",
-            self.id(),
             // Codex's hook entry carries a command string only, so the
             // wrapper invocation is rendered as one quoted shell line.
             false,
             false,
             "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned.",
         )
-    }
-}
-
-impl HookAdapterPort for CodexIntegration {
-    fn adapter_id(&self) -> &'static str {
-        IntegrationPort::id(self)
-    }
-
-    fn normalize_input(
-        &self,
-        native: &serde_json::Value,
-        event: HookEvent,
-    ) -> std::result::Result<HookCommandInput, String> {
-        hook_projection::codex_normalize_input(native, event)
-    }
-
-    fn render_output(
-        &self,
-        outcome: &HookDispatchOutcome,
-        event: HookEvent,
-    ) -> std::result::Result<HookNativeOutput, String> {
-        hook_projection::codex_render_output(outcome, event)
     }
 }
 
@@ -870,32 +830,4 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
         },
         evidence: rationale.to_owned(),
     }
-}
-
-/// Deterministic, pre-attach projection conflict: the shared
-/// `~/.agents/skills` entry this resource would reuse is already owned by
-/// another integration's artifact that cannot preserve this integration's
-/// invocation encoding (ADR-030 §25 — never degrade silently).
-fn projection_conflict(
-    resource: &Resource,
-    entry: &std::path::Path,
-    reused_target: &std::path::Path,
-    requirement: &str,
-    integration: &str,
-) -> UzeError {
-    let requested_target = resource
-        .capability
-        .path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| resource.capability.path.clone());
-    UzeError::ProjectionConflict(Box::new(uze_core::error::ProjectionConflictDetails {
-        entry: entry.to_path_buf(),
-        requested: format!("{} ({requirement})", resource.identity()),
-        requested_integration: integration.to_owned(),
-        requested_target,
-        existing: format!("{} ({requirement})", resource.identity()),
-        existing_integration: "shared-root owner".to_owned(),
-        existing_target: reused_target.to_path_buf(),
-    }))
 }

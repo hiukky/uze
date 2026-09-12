@@ -83,7 +83,7 @@ pub struct Resource {
     /// resolution has happened yet" — an integration's `exposure_plan` then
     /// falls back to its own first-choice `exposure_name_candidates` entry,
     /// which is correct for informational/preview calls that never attach
-    /// anything (`uze inspect`, tests, `assess_environment`).
+    /// anything (`uze inspect`, tests).
     pub resolved_exposure_name: Option<String>,
     /// The artifact target (e.g., shim directory path) from an existing
     /// receipt, when `resolved_exposure_name` is set via existing-receipt

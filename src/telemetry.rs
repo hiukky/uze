@@ -16,12 +16,12 @@
 //! With neither set, nothing subscribes and a span costs a branch.
 //!
 //! The trace crosses one process boundary: the runtime shim `exec`s a
-//! harness, and a hook that harness fires runs `uze hook-exec`. The shim
-//! puts its span's context into the child's environment as W3C
-//! `TRACEPARENT`, the harness passes its environment through, and
-//! `hook-exec` adopts it as its root's parent — so a hook is a child of
-//! the launch that caused it. Both halves are no-ops without the feature:
-//! there is no trace id to carry.
+//! harness, and the harness runs `uze` again — an agent inside it asking
+//! UZE something. The shim puts its span's context into the child's
+//! environment as W3C `TRACEPARENT`, the harness passes its environment
+//! through, and that `uze` adopts it as its root's parent, so the two are
+//! one trace. Both halves are no-ops without the feature: there is no
+//! trace id to carry.
 
 use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 
@@ -345,9 +345,9 @@ mod tests {
         );
     }
 
-    /// The handshake the shim and `hook-exec` perform, in one process: a
-    /// child `Command` gets the parent's `TRACEPARENT`, and a span that
-    /// adopts it belongs to the same trace.
+    /// The handshake the shim and a `uze` under it perform, in one
+    /// process: a child `Command` gets the parent's `TRACEPARENT`, and a
+    /// span that adopts it belongs to the same trace.
     #[cfg(feature = "telemetry")]
     #[test]
     fn the_trace_context_survives_the_environment_round_trip() {
@@ -388,7 +388,7 @@ mod tests {
                 env.set("TRACEPARENT", &traceparent);
                 parent.context().span().span_context().trace_id()
             };
-            let child = tracing::info_span!("hook-exec");
+            let child = tracing::info_span!("uze-under-the-shim");
             adopt_parent_from_env(&child);
             let _entered = child.enter();
             assert_eq!(

@@ -9,10 +9,10 @@ use crate::progress::Colorize;
 mod prompt;
 mod shim;
 
-use std::{collections::BTreeMap, io::IsTerminal, path::Path, path::PathBuf};
+use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
-use uze_application::{HookEffect, HookEvent, MAX_TIMEOUT_SECONDS, PlannedAction, Result, UzeHome};
+use uze_application::{PlannedAction, Result, UzeHome};
 use uze_application::{
     UzeApplication,
     application::{
@@ -106,36 +106,6 @@ enum Command {
     Agent {
         #[command(subcommand)]
         action: AgentAction,
-    },
-    /// Internal runtime dispatch: runs a package's hook commands for one
-    /// hook event (ADR-033). Harness integrations emit invocations of this
-    /// exact form into managed hook configuration; it is not for
-    /// interactive use and is hidden from help.
-    #[command(hide = true)]
-    HookExec {
-        /// Hook adapter id, as registered by the integration registry
-        #[arg(long)]
-        adapter: String,
-        /// ABI event name: pre_tool_use | post_tool_use | stop
-        #[arg(long)]
-        event: String,
-        /// Declared group effect: observe | allow | ask | deny | transform
-        #[arg(long)]
-        effect: String,
-        /// Canonical package root the handlers run in
-        #[arg(long)]
-        plugin_root: PathBuf,
-        /// Authored handler command, repeatable for sequential handlers
-        #[arg(long = "command", required = true)]
-        commands: Vec<String>,
-        /// The authored per-handler timeout in seconds, one per
-        /// `--command` in the same order. A handler no `--timeout`
-        /// names gets the manifest default.
-        #[arg(
-            long = "timeout",
-            value_parser = clap::value_parser!(u16).range(1..=i64::from(MAX_TIMEOUT_SECONDS))
-        )]
-        timeouts: Vec<u16>,
     },
     /// Internal: the release check a CLI command hands to a detached
     /// process of its own once the last answer has gone stale (see
@@ -356,10 +326,7 @@ struct ShorthandArgs {
 /// whole process: the same binary is the terminal server and the workspace
 /// client, both of which write to Unix sockets, and with the default
 /// disposition a peer hanging up would kill the server — and every pane it
-/// owns — instead of surfacing as the `EPIPE` the runtime handles. `hook-exec`
-/// keeps the runtime's disposition too: its stdout is the harness's pipe, and
-/// a death by signal there would read as a non-blocking error, which is to
-/// say an allow.
+/// owns — instead of surfacing as the `EPIPE` the runtime handles.
 #[cfg(unix)]
 fn die_quietly_on_a_closed_pipe() {
     // Safety: called once, before any thread is spawned and before anything
@@ -676,8 +643,8 @@ fn run(cli: Cli) -> Result<()> {
     };
     let _telemetry = uze::telemetry::init(sink);
     let span = uze::telemetry::command_span(&leaf_command_of(&argv), &argv);
-    // A `uze` started by a harness the shim launched — a hook it fired, or
-    // an agent running `uze` itself — continues the launch's trace.
+    // A `uze` started by a harness the shim launched — an agent running
+    // `uze` inside it — continues the launch's trace.
     uze::telemetry::adopt_parent_from_env(&span);
     let _entered = span.enter();
     let tells =
@@ -793,9 +760,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         uze::self_update::check_now(&home);
         return Ok(());
     }
-    if !matches!(command, Command::HookExec { .. }) {
-        die_quietly_on_a_closed_pipe();
-    }
+    die_quietly_on_a_closed_pipe();
     let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
@@ -901,28 +866,6 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         }
         Command::Setup { arguments } => run_setup_command(&app, &home, &arguments, verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
-        Command::HookExec {
-            adapter,
-            event,
-            effect,
-            plugin_root,
-            commands,
-            timeouts,
-        } => {
-            let code = run_hook_exec(
-                &home,
-                &adapter,
-                &event,
-                &effect,
-                &plugin_root,
-                commands,
-                timeouts,
-            );
-            // The exit code is part of the ABI: a denied outcome must read
-            // as a denial to targets that key off exit codes, and an error
-            // must not print a second `uze:` line into the harness's stderr.
-            std::process::exit(code);
-        }
         Command::Terminal { .. } => {
             unreachable!("terminal commands return before application setup")
         }
@@ -937,164 +880,8 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
 fn tells_about_releases(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Agent { .. }
-            | Command::HookExec { .. }
-            | Command::Terminal { .. }
-            | Command::SelfUpdate
+        Command::Agent { .. } | Command::Terminal { .. } | Command::SelfUpdate
     )
-}
-
-/// The `hook-exec` runtime wrapper (ADR-033): reads the harness's native
-/// hook payload from stdin, normalizes it through the adapter, runs the
-/// authored handlers sequentially against the portable ABI, and renders the
-/// aggregated decision back into the harness's own native contract — JSON
-/// stdout where the harness parses it, the reason on stderr where that is
-/// the fed-back channel, and the harness's own blocking exit code (2 on
-/// the command-hook harnesses) for a deny. Internal canonical exit codes
-/// (the handler-level deny exit `3`) never leak outward: on Claude/Codex
-/// any other non-zero exit is a *non-blocking* error ("logged and ignored,
-/// execution continues") — leaking it would turn a deny into a tool that
-/// still runs.
-fn run_hook_exec(
-    home: &UzeHome,
-    adapter_id: &str,
-    event_name: &str,
-    effect_name: &str,
-    plugin_root: &Path,
-    commands: Vec<String>,
-    timeouts: Vec<u16>,
-) -> i32 {
-    // The effect is read before anything else, because it decides how
-    // everything after it answers when it fails. An effect this build
-    // cannot read is taken as fail-closed: the command line was written by
-    // UZE's own projection, so an unreadable one is a defect here — and a
-    // defect must not be a way to disarm a deny hook.
-    let effect = HookEffect::parse_abi(effect_name).unwrap_or(HookEffect::Deny);
-    match dispatch_hook(
-        home,
-        adapter_id,
-        event_name,
-        effect_name,
-        plugin_root,
-        commands,
-        timeouts,
-    ) {
-        Ok(answer) => emit_hook_answer(&answer),
-        Err(error) => emit_hook_failure(home, adapter_id, event_name, effect, &error.to_string()),
-    }
-}
-
-/// The largest native payload `hook-exec` reads from a harness. The pipe is
-/// the harness's, not UZE's, and it is read on the critical path of every
-/// tool call — a payload past this is answered by the group's effect rather
-/// than by growing a buffer until the machine says no.
-const MAX_NATIVE_PAYLOAD_BYTES: u64 = 8 * 1024 * 1024;
-
-/// The exit code a blocking harness reads when not even the adapter could
-/// be resolved, so no native document can be rendered. Claude, Codex and
-/// Antigravity all document 2 as the block signal on tool use.
-const NATIVE_BLOCKING_EXIT: i32 = 2;
-
-fn dispatch_hook(
-    home: &UzeHome,
-    adapter_id: &str,
-    event_name: &str,
-    effect_name: &str,
-    plugin_root: &Path,
-    commands: Vec<String>,
-    timeouts: Vec<u16>,
-) -> Result<uze_application::HookNativeOutput> {
-    use std::io::Read;
-    use uze_application::UzeError;
-
-    let event = HookEvent::parse_abi(event_name)
-        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook event `{event_name}`")))?;
-    let effect = HookEffect::parse_abi(effect_name)
-        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook effect `{effect_name}`")))?;
-    let mut native = String::new();
-    std::io::stdin()
-        .take(MAX_NATIVE_PAYLOAD_BYTES)
-        .read_to_string(&mut native)
-        .map_err(|source| {
-            UzeError::HookDispatch(format!("cannot read the native payload: {source}"))
-        })?;
-    let native: serde_json::Value = serde_json::from_str(&native).map_err(|source| {
-        UzeError::HookDispatch(format!("the native hook payload is not JSON: {source}"))
-    })?;
-
-    // The two repeatable flags are one list: each `--command` takes the
-    // `--timeout` written beside it, and a command no timeout was given
-    // for gets the manifest default — the same thing an omitted `timeout`
-    // field means in `hooks.json`.
-    let handlers: Vec<(String, u16)> = commands
-        .into_iter()
-        .zip(
-            timeouts
-                .into_iter()
-                .chain(std::iter::repeat(uze_application::DEFAULT_TIMEOUT_SECONDS)),
-        )
-        .collect();
-    UzeApplication::from_env(home.clone())?.hooks().dispatch(
-        adapter_id,
-        event,
-        effect,
-        plugin_root,
-        handlers,
-        &native,
-    )
-}
-
-/// Writes one rendered answer out on the channels the harness reads, and
-/// returns the exit code that goes with it.
-fn emit_hook_answer(answer: &uze_application::HookNativeOutput) -> i32 {
-    use std::io::Write;
-
-    if let Some(bytes) = &answer.stdout {
-        let mut out = std::io::stdout();
-        if let Err(error) = out.write_all(bytes).and_then(|()| out.flush()) {
-            // The document is how a harness reads the decision, but the
-            // exit code carries it too: say what was lost and let the
-            // status stand rather than turning a denial into an error.
-            eprintln!("cannot render hook output: {error}");
-        }
-    }
-    if let Some(reason) = &answer.stderr {
-        eprintln!("{reason}");
-    }
-    answer.exit_code
-}
-
-/// What `hook-exec` answers when it never reached the handlers at all — an
-/// unreadable payload, an adapter it cannot resolve, state it cannot load.
-/// ADR-033's rule holds here exactly as it does for a handler that fails:
-/// a `deny`/`ask`/`transform` group blocks, an observational one proceeds.
-/// Nothing on this path exits 1 — on Claude, Codex and Antigravity a hook
-/// exiting 1 is a *non-blocking* error, which is to say an allow, so an
-/// error in UZE would silently disarm the guard the user declared.
-fn emit_hook_failure(
-    home: &UzeHome,
-    adapter_id: &str,
-    event_name: &str,
-    effect: HookEffect,
-    reason: &str,
-) -> i32 {
-    // An unparseable event is one of the reasons we are here; the
-    // rendering a blocked tool call needs is the pre-tool one.
-    let event = HookEvent::parse_abi(event_name).unwrap_or(HookEvent::PreToolUse);
-    match UzeApplication::from_env(home.clone())
-        .and_then(|app| app.hooks().blocked(adapter_id, event, effect, reason))
-    {
-        Ok(Some(answer)) => emit_hook_answer(&answer),
-        // An observational group: the failure is reported, the tool runs.
-        Ok(None) => {
-            eprintln!("{reason}");
-            0
-        }
-        Err(_) => {
-            eprintln!("{reason}");
-            NATIVE_BLOCKING_EXIT
-        }
-    }
 }
 
 fn run_setup_command(

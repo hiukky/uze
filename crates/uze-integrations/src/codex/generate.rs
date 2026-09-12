@@ -45,11 +45,7 @@ pub(super) const GENERATED_PLUGIN_KIND: &str = "marketplace-plugin-generated";
 /// under `$UZE_HOME/state/attachments/codex/generated/`, the same
 /// convention Claude's generated envelope uses, never under the Store.
 pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join("codex")
-        .join("generated")
+    crate::shared::path::attachment_root(uze_home, "codex").join("generated")
 }
 
 fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {

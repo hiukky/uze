@@ -11,10 +11,7 @@
 
 use std::path::Path;
 
-use uze_core::{
-    Result, home::UzeHome, hook::HookAdapterPort, integration::IntegrationPort,
-    preference::PreferencePort,
-};
+use uze_core::{Result, home::UzeHome, integration::IntegrationPort, preference::PreferencePort};
 
 use crate::{antigravity, claude, codex, opencode};
 
@@ -24,12 +21,6 @@ pub type RegistryParts = (Vec<Box<dyn IntegrationPort>>, Vec<Box<dyn PreferenceP
 /// The built-in integration set, in registration order.
 pub struct IntegrationRegistry {
     integrations: Vec<Box<dyn IntegrationPort>>,
-    /// The runtime hook adapters (`hook-exec`) for the harnesses that speak
-    /// a native hook command contract. OpenCode is deliberately absent: its
-    /// hook delivery is the generated bridge, which never shells out through
-    /// the dispatcher. Built from the same constructors as `integrations`,
-    /// so the adapter set cannot drift from the harness set.
-    hook_adapters: Vec<Box<dyn HookAdapterPort>>,
     /// Preference translation/apply for every registered harness — unlike
     /// hooks, all four opt in. Built from the same constructors as
     /// `integrations`, so the adapter set cannot drift from the harness set.
@@ -49,11 +40,6 @@ impl IntegrationRegistry {
                 Box::new(claude.clone()),
                 Box::new(codex.clone()),
                 Box::new(opencode_integration.clone()),
-                Box::new(antigravity_integration.clone()),
-            ],
-            hook_adapters: vec![
-                Box::new(claude.clone()),
-                Box::new(codex.clone()),
                 Box::new(antigravity_integration.clone()),
             ],
             preference_adapters: vec![
@@ -83,11 +69,6 @@ impl IntegrationRegistry {
                 Box::new(claude.clone()),
                 Box::new(codex.clone()),
                 Box::new(opencode_integration.clone()),
-                Box::new(antigravity_integration.clone()),
-            ],
-            hook_adapters: vec![
-                Box::new(claude.clone()),
-                Box::new(codex.clone()),
                 Box::new(antigravity_integration.clone()),
             ],
             preference_adapters: vec![
@@ -122,16 +103,6 @@ impl IntegrationRegistry {
 
     pub fn get(&self, id: &str) -> Option<&dyn IntegrationPort> {
         self.iter().find(|integration| integration.id() == id)
-    }
-
-    /// The runtime hook adapter (`hook-exec`) for an adapter id — the
-    /// vocabulary `hook-exec --adapter` accepts, resolved without any layer
-    /// above the integration registry naming a harness.
-    pub fn hook_adapter(&self, id: &str) -> Option<&dyn HookAdapterPort> {
-        self.hook_adapters
-            .iter()
-            .map(Box::as_ref)
-            .find(|adapter| adapter.adapter_id() == id)
     }
 
     /// Resolves a requested harness name against the registered set: an id

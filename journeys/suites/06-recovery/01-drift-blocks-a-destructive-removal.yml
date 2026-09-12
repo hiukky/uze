@@ -74,14 +74,17 @@ scenes:
   - scene: removal refuses, and refuses completely
     when:
       - shell: "{uze} plugin remove flow"
+        check: false
         say: ask UZE to remove the package the artifact belongs to
     then:
       - cmd:
           run: "{uze} plugin remove flow"
+          exit: 1
           stdout_contains: Removal blocked
         about: UZE says it will not, and why
       - cmd:
           run: "{uze} plugin remove flow"
+          exit: 1
           stdout_contains: BlockedByDrift
         about: naming drift as the reason rather than failing vaguely
       - link: "{home}/.agents/skills/flow:commit"
@@ -100,15 +103,13 @@ scenes:
         exists: true
         about: with the package still installed, rather than half-gone
 
-  - scene: what the refusal does not do, stated rather than glossed over
+  - scene: a refusal is one a script can read
     then:
       - cmd:
           run: "{uze} plugin remove flow"
-          exit: 0
+          exit: 1
         about: |
-          a blocked removal exits 0 — a characterization, not an endorsement.
-          The report on screen is honest and complete, but a script that runs
-          `uze plugin remove x && …` is told the removal happened. Nothing in
-          the code states this either way, so it is recorded here rather than
-          changed: an exit status is a contract, and this one deserves a
-          decision rather than a patch from whoever noticed it.
+          the report on screen is honest and complete, and the exit status
+          says the same thing: a script that runs `uze plugin remove x && …`
+          is not told the removal happened. The status is a contract — the
+          same one `uze setup` keeps for a step that did not complete.

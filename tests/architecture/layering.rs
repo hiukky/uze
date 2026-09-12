@@ -482,9 +482,15 @@ fn every_source_file_a_crate_carries_is_one_it_compiles() {
             {
                 continue;
             }
-            if !declared.contains(&format!("mod {stem};"))
-                && !declared.contains(&format!("mod {stem} {{"))
-            {
+            // Only a declaration at the top level of a file compiles a
+            // sibling: `mod x;` nested inside an inline `mod tests { .. }`
+            // names `tests/x.rs`, which is a different file entirely.
+            let declaration = format!("mod {stem};");
+            let inline = format!("mod {stem} {{");
+            if !declared.lines().any(|line| {
+                !line.starts_with([' ', '\t'])
+                    && (line.trim_end().ends_with(&declaration) || line.contains(&inline))
+            }) {
                 orphans.push(format!(
                     "  {}",
                     path.strip_prefix(&root)

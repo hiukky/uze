@@ -32,8 +32,11 @@ binary is removed.
   `transform` is only valid on `PreToolUse`, and is not deliverable today
   (see [Known limitations](#known-limitations)).
 - **Handlers**: only `type: command`. `timeout` is seconds, bounded to
-  1..300, default 30. `command` may use the `${PLUGIN_ROOT}` placeholder;
-  UZE resolves it at generation time and also exports `PLUGIN_ROOT`.
+  1..300, default 30, and it is the handler's real deadline: the wrapper
+  runs each handler under it and stops one that exceeds it (see
+  [Handler contract](#handler-contract)). `command` may use the
+  `${PLUGIN_ROOT}` placeholder; UZE resolves it at generation time and also
+  exports `PLUGIN_ROOT`.
 - **`id`** is optional; absent ids are derived deterministically from
   event and group order (`pre_tool_use-0`, `stop-1`, …).
 
@@ -73,6 +76,17 @@ A handler failure is **fail-open** for `observe`/`allow` (the tool proceeds
 and the failure is reported) and **fail-closed** for `deny`/`ask` (the tool
 is denied and the reason names the failure). A safety hook that cannot be
 evaluated is never weakened into a no-op.
+
+**Each handler is bounded by its own declared `timeout`.** Past it the
+handler is stopped — `TERM`, then `KILL` a second later — along with every
+process it started, and the group's effect decides, exactly as for any other
+failure (`handler timed out after Ns: …`). There is no portable `timeout(1)`
+(macOS ships none) and no job control in a script, so the wrapper does this
+with a cancellable sleeper and a `ps` read, and it collects the handler's
+stderr in a file under `$TMPDIR` rather than through a pipe — anything the
+handler started inherits a pipe, and one that outlived the deadline would
+hold the harness there long past it. A handler that exits `124` of its own
+accord reads as a timeout, the same ambiguity `timeout(1)` carries.
 
 ```sh
 #!/bin/sh
@@ -126,6 +140,26 @@ and depends on `sh` and `jq`. Claude, Codex and Antigravity each keep one
 copy under `$UZE_HOME/state/attachments/<harness>/hooks/exec` — a shared
 vendor config file has no plugin root to resolve against, so every entry
 names the wrapper by absolute path.
+
+A native entry runs it as:
+
+```
+<wrapper> <plugin-root> <event> <effect> <seconds>:<handler> [<seconds>:<handler>…]
+```
+
+One argument per handler, carrying its author's deadline beside its command
+— so what will run, and for how long, is readable in the harness's own
+configuration. The entry's own `timeout` key is the *harness's* backstop and
+is sized (`sum(handler + 1) + 1`) so it can never be the bound that fires
+first.
+
+**Nothing else implements this contract.** There is no UZE binary on the
+execution path and no second route: a platform the `sh` template does not
+cover delivers no hook at all and says so (see
+[Known limitations](#known-limitations)). The wrapper's answer for every
+fixture — decision document, exit status, reason — is recorded per harness
+in `crates/uze-integrations/tests/goldens/hooks/`, so a change to what a
+harness is told is a reviewed diff.
 
 Compatibility is semantic, per event and effect. A `Stop` hook is never
 represented as a tool callback: on OpenCode it is Degraded with the reason
@@ -185,18 +219,12 @@ stated) · **—** = not expressible.
   package yet (plugin `requirements` is its own change); `uze doctor`
   reports it missing, and until it is installed a `deny` group denies while
   an `observe` group proceeds and reports.
-- **The `sh` wrapper does not enforce the per-handler `timeout` yet.** The
-  declared value is validated, shown at trust time, and honoured by the
-  OpenCode bridge and by the packager-runtime fallback route — but the
-  generated `sh` wrapper, which is the route Claude, Codex and Antigravity
-  take on Unix, waits for a handler indefinitely. The only bound there is
-  the group `timeout` in the native entry, which is the *harness's* backstop
-  and not enforced by a harness that ignores it. A hanging handler in a
-  `deny` group therefore stalls the tool call for the harness's budget
-  rather than the author's.
-- **Windows has no wrapper template.** A PowerShell wrapper is future work;
-  until then hooks there take the packager-runtime fallback route, which
-  speaks the same contract but keeps working only while `uze` is installed.
+- **Windows has no wrapper template, so Windows has no hooks.** A PowerShell
+  wrapper is future work; until it exists a hook there is reported
+  Unsupported with that reason and nothing is attached. There is no second
+  route to fall back to, by design: an entry running something other than
+  the wrapper would be a second implementation of the contract, and the
+  first thing two implementations do is disagree.
 - **Antigravity ran delivered hooks only in a signed-in session through
   1.1.24.** Its hook entries load and list correctly in either mode
   (`hooks_manager: loaded N named hooks`), but the executor reads

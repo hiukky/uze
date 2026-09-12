@@ -31,12 +31,12 @@
   - Kept declared unsupported: task 6.3's measurement is not in yet. `transform` also leaves OpenCode's effect set — the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group now degrades on every harness rather than attaching as an observation.
 - [x] 4.3 Golden test for the generated plugin and a runtime test under Bun with a fake plugin context (port `.labs/native-hooks/exercise-opencode.ts`)
 
-## 5. Routing, fallback and diagnostics
+## 5. Routing and diagnostics
 
-- [x] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `adapted` (fallback `uze hook-exec` with the reason: platform without template, `transform`), `unsupported`
-  - `transform` is not one of the fallback's reasons: the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group degrades rather than routing anywhere (its own change lifts this).
-- [x] 5.2 Fallback route: on platforms without a template, the native entry invokes `uze hook-exec` with the new contract; test that both routes satisfy the same fixtures
-- [x] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing, and hooks delivered through the fallback
+- [x] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `unsupported` (no template for this platform, `transform`, or a semantic the harness cannot preserve)
+  - `transform` is not a delivery reason: the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group degrades rather than routing anywhere (its own change lifts this).
+- [x] 5.2 A platform without a template attaches nothing and reports Unsupported with the reason (superseded 8.2: this was the fallback route until the runtime was removed)
+- [x] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing
 - [x] 5.4 Re-projection: installing/updating a package with hooks replaces the previous `hook-exec` entries (receipt-owned) with the wrapper form; test that a foreign entry beside them is untouched
 
 ## 6. Conformance Lab
@@ -62,3 +62,13 @@
   - Left unchecked deliberately: `.labs/native-hooks` lives outside this worktree and is git-ignored, so it is not this change's to delete. Its exercises are reproduced by `hooks::wrapper_tests` and `hooks::opencode_runtime_tests`, and its compatibility matrix now lives in `docs/capabilities/portable-hooks.md`, so removing the directory is a one-line follow-up for whoever owns that scratch space.
 - [x] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
   - Green on 2026-09-02: `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast` 410 passed / 0 failed across 15 targets; `openspec validate --all --strict` 26/26; `ruff format --check` 57 files formatted and `ruff check` clean; `python3 -m unittest discover -s conformance/tests` 50/50.
+
+## 8. Remove the in-binary runtime (2026-09-12)
+
+The wrapper answered every recorded fixture exactly as the Rust adapters did, on all three command-hook harnesses. That made the runtime a second implementation of a contract that already had one, and a second implementation is a second answer waiting to diverge.
+
+- [x] 8.1 Record the oracle before deleting it: every fixture's answer (native decision document, exit status, reason) per harness in `crates/uze-integrations/tests/goldens/hooks/wrapper-answers.json`, asserted by `the_wrapper_answers_every_fixture_as_recorded`; the table was generated after a pass proving the wrapper and the Rust adapters agree on every pre-tool fixture, and the equivalence test was deleted with them
+- [x] 8.2 A platform with no wrapper template delivers no hook: `hook_delivery` returns nothing, the exposure plan is Unsupported with the reason, and the route is never Native — `a_platform_without_a_wrapper_template_delivers_no_hook`, `a_hook_that_cannot_be_delivered_is_reported_unsupported`
+- [x] 8.3 The per-handler deadline moves into the wrapper: `<seconds>:<command>` per handler in the native entry, a cancellable sleeper for the bound, `TERM` then `KILL` to the handler and everything it started (no `timeout(1)` on macOS, no job control in a script), and the group's effect decides — `a_handler_is_stopped_at_the_deadline_its_author_declared`, plus two recorded fixtures. The OpenCode plugin reports its own timeout the same way. The native group timeout becomes `sum(handler + 1) + 1` so the harness's backstop never fires first
+- [x] 8.4 Remove `uze hook-exec` (`Command::HookExec`, `run_hook_exec`/`dispatch_hook`/`emit_hook_*`, its performance classification and `tests/cli/hook_exec.rs`), the `Hooks` application service, `HookAdapterPort` and its three implementations, the registry's adapter slice, `dispatch_handlers`/`run_handler`/`unevaluated`/`HookDispatchOutcome`/`HookNativeOutput`/`HookCommandInput`/`HookTool`/`HookContext`/`HookDecision`, and `UzeError::HookDispatch`
+- [x] 8.5 Rewrite every sentence that said `hook-exec`: ADR-040 (amended, still Accepted), this change's proposal/design/spec, `docs/capabilities/portable-hooks.md`, `docs/architecture/invariants.md`, `docs/observability.md`, `docs/versioning.md`, the integrations README and the per-harness evidence strings

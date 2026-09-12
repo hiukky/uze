@@ -149,8 +149,8 @@ The terminal workspace checks when it opens and every hour it stays open,
 on a thread of its own. A CLI command never touches the network: when the
 last answer is more than an hour old it hands the check to a detached
 `uze self-update` and exits, and what that finds is what the next command
-mentions — once per release, on stderr, and never after `uze agent`,
-`hook-exec` or `terminal`, whose reader is not a person at a prompt.
+mentions — once per release, on stderr, and never after `uze agent` or
+`terminal`, whose reader is not a person at a prompt.
 
 "Latest" is where `releases/latest` redirects, the same answer the
 installer resolves. The archive is verified against `SHASUMS256.txt` the

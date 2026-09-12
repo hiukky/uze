@@ -30,6 +30,19 @@ fn temporary_home(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
+/// Counts registry entries by reading `packages.json` itself, so the Store's
+/// own bookkeeping is never the witness for its own claim.
+fn registered(home: &UzeHome) -> usize {
+    let Ok(text) = fs::read_to_string(home.registry_path()) else {
+        return 0;
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .expect("the registry is valid JSON")["packages"]
+        .as_object()
+        .expect("the registry carries a packages map")
+        .len()
+}
+
 #[test]
 fn uze_home_derives_every_owned_path_from_one_root() {
     let root = temporary_home("paths");
@@ -68,7 +81,7 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
     let second = install(&store, package_fixture()).unwrap();
 
     assert_eq!(first.id, second.id);
-    assert_eq!(store.registration_count().unwrap(), 1);
+    assert_eq!(registered(&home), 1);
     assert_eq!(first.root, home.plugin_dir(&first.id));
     assert!(first.manifest.is_file());
     assert!(home.registry_path().is_file());
@@ -118,7 +131,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
                 && requested == "uze-agent-skill-conformance@beta"
     ));
     // The refused install must not have written anything.
-    assert_eq!(store.registration_count().unwrap(), 1);
+    assert_eq!(registered(&home), 1);
 
     // Resolved with an explicit alias, `beta`'s copy installs and coexists —
     // its own bytes, its own registration, active under the chosen name.
@@ -140,7 +153,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
         from_beta.root,
         root.join("store/plugins/beta/uze-agent-skill-conformance")
     );
-    assert_eq!(store.registration_count().unwrap(), 2);
+    assert_eq!(registered(&home), 2);
     assert_eq!(
         store
             .find_by_active_name("uze-agent-skill-conformance")
@@ -169,7 +182,7 @@ fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
             .is_err()
     );
     assert!(!home.plugins_dir().join("not/a-marketplace").exists());
-    assert_eq!(store.registration_count().unwrap(), 0);
+    assert_eq!(registered(&home), 0);
 }
 
 #[test]

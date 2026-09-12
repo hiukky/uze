@@ -256,7 +256,6 @@ pub struct SetupResult {
 #[derive(Clone, Debug, Serialize)]
 pub struct RuntimeShimSetup {
     pub shim_path: PathBuf,
-    pub resolved_executable: PathBuf,
     /// Set only when this call actually wrote a change into a detected
     /// shell rc file (`shell_path::ensure_path_line`) — the file that was
     /// touched. A marked, reversible block; see `shell_path` for the exact

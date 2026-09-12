@@ -12,7 +12,11 @@
 //! classification at the time) but a REAL_SHARED_CONTRACT, so this module
 //! is that contract's one home.
 //!
-//! Deliberately narrow: this is the shared VALIDATION predicate only, not
+//! Beside it live the other path facts every integration states the same
+//! way: where a harness's generated artifacts are staged, and the removal
+//! of a wrapper nothing references any more.
+//!
+//! Deliberately narrow: the validation predicate is a predicate only, not
 //! a universal path parser. What counts as a declared path field at all
 //! (`skills: [...]` vs `skills: "..."`, one array entry vs one whole
 //! directory, an inline object vs an external file reference) stays
@@ -22,6 +26,8 @@
 //! structural surface rather than a declared path never call this module.
 
 use std::path::{Component, Path, PathBuf};
+
+use uze_core::{Result, UzeError, home::UzeHome};
 
 /// Normalizes one manifest-declared, package-relative path string.
 ///
@@ -49,6 +55,75 @@ pub(crate) fn normalize_declared_relative_path(raw: &str) -> Option<PathBuf> {
         .components()
         .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
         .then(|| PathBuf::from(trimmed))
+}
+
+/// Removes the directory `artifact` was staged in, when detaching `artifact`
+/// left it empty — never climbing past `root`.
+///
+/// Every integration stages a generated artifact two levels deep,
+/// `<root>/<package>/<capability>`, so detaching a package's last capability
+/// used to leave the package's own directory behind: empty, covered by no
+/// receipt, and accumulating one per removed plugin per harness. It is UZE's
+/// own state rather than anything a harness reads, which is why it went
+/// unnoticed — and why it is worth removing, since "every managed artifact is
+/// tracked by a receipt" is either true or it is not.
+///
+/// `remove_dir` is the guard as much as the action: it refuses a directory
+/// that still holds another of the package's capabilities, so no check for
+/// siblings is needed and none can go stale.
+pub fn prune_empty_package_dir(artifact: &Path, root: &Path) {
+    let Some(parent) = artifact.parent() else {
+        return;
+    };
+    if parent == root || !parent.starts_with(root) {
+        return;
+    }
+    let _ = std::fs::remove_dir(parent);
+}
+
+/// Everything UZE stages for one harness sits under this root; each kind
+/// of generated artifact is a directory inside it (`skills`, `plugins`,
+/// `generated`). One shape named in one place, so a caller says which kind
+/// it means instead of relying on which sibling module a same-named
+/// helper came from.
+pub(crate) fn attachment_root(uze_home: &UzeHome, vendor: &str) -> PathBuf {
+    uze_home.state_dir().join("attachments").join(vendor)
+}
+
+/// Removes a generated wrapper directory once nothing in `skills_dir`
+/// links to it any more, then prunes the package directory it leaves
+/// empty. Only ever touches UZE-owned directories under `managed_root`.
+///
+/// `is_uze_wrapper` is the harness's own proof that `target` really is the
+/// artifact it generated — the one thing that differs between harnesses
+/// here, since only Claude's shim carries a plugin manifest beside its
+/// `SKILL.md`.
+pub(crate) fn cleanup_unused_wrapper(
+    target: &Path,
+    managed_root: &Path,
+    skills_dir: &Path,
+    prune_root: &Path,
+    is_uze_wrapper: &dyn Fn(&Path) -> bool,
+) -> Result<()> {
+    if !target.starts_with(managed_root) || !target.is_dir() {
+        return Ok(());
+    }
+    let referenced = std::fs::read_dir(skills_dir)
+        .map_err(|source| UzeError::Read {
+            path: skills_dir.to_path_buf(),
+            source,
+        })?
+        .filter_map(std::result::Result::ok)
+        .any(|entry| std::fs::read_link(entry.path()).ok().as_deref() == Some(target));
+    if referenced || !is_uze_wrapper(target) {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(target).map_err(|source| UzeError::Write {
+        path: target.to_path_buf(),
+        source,
+    })?;
+    prune_empty_package_dir(target, prune_root);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -172,28 +247,4 @@ mod normalize_declared_relative_path_tests {
              normalized away, not preserved, except as the very first component of a path"
         );
     }
-}
-
-/// Removes the directory `artifact` was staged in, when detaching `artifact`
-/// left it empty — never climbing past `root`.
-///
-/// Every integration stages a generated artifact two levels deep,
-/// `<root>/<package>/<capability>`, so detaching a package's last capability
-/// used to leave the package's own directory behind: empty, covered by no
-/// receipt, and accumulating one per removed plugin per harness. It is UZE's
-/// own state rather than anything a harness reads, which is why it went
-/// unnoticed — and why it is worth removing, since "every managed artifact is
-/// tracked by a receipt" is either true or it is not.
-///
-/// `remove_dir` is the guard as much as the action: it refuses a directory
-/// that still holds another of the package's capabilities, so no check for
-/// siblings is needed and none can go stale.
-pub fn prune_empty_package_dir(artifact: &Path, root: &Path) {
-    let Some(parent) = artifact.parent() else {
-        return;
-    };
-    if parent == root || !parent.starts_with(root) {
-        return;
-    }
-    let _ = std::fs::remove_dir(parent);
 }

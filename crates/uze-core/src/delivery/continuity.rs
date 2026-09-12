@@ -180,9 +180,15 @@ pub fn refresh(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) ->
     conversation::save(home, &owner.primary, &record).is_ok()
 }
 
-/// Records a conversation an authoritative source named for `cwd` — a hook
-/// dispatch carrying the harness's own identifier, which needs no
-/// observation and no guessing at all.
+/// Records a conversation an authoritative source named for `cwd` — a
+/// harness stating its own identifier, which needs no observation and no
+/// guessing at all.
+///
+/// Nothing calls this today: the one authoritative source UZE had was the
+/// hook dispatch it ran itself, and hooks now run a generated wrapper with
+/// no UZE on the path (ADR-040, amended). Kept because the channel is the
+/// harness's to offer, not UZE's to invent — [`refresh`] above is the
+/// observing route, and it is the one in use.
 pub fn record_observed(
     home: &UzeHome,
     cwd: &Path,

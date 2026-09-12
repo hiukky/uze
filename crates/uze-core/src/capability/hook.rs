@@ -1,11 +1,15 @@
-//! Vendor-neutral portable Hook manifest and command ABI (ADR-033).
+//! Vendor-neutral portable Hook manifest and command ABI (ADR-033,
+//! ADR-040): what a package may declare, what a handler is promised, and
+//! how a group's semantics are assessed against one harness's capabilities.
+//!
+//! Nothing here runs a hook. The generated wrapper an integration vendors
+//! beside the delivery is the only implementation of the ABI — the harness
+//! runs that, never UZE — so this module owns the vocabulary and the
+//! assessment, and the wrapper owns the execution.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    process::{Command, Stdio},
-    thread,
-    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,17 +17,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, UzeError},
     router::CompatibilityRoute,
-    subprocess::{read_bounded, wait_with_timeout, with_process_group},
 };
 
 pub const HOOKS_FILE_NAME: &str = "hooks.json";
 pub const DEFAULT_TIMEOUT_SECONDS: u16 = 30;
 pub const MAX_TIMEOUT_SECONDS: u16 = 300;
-/// A denying handler's reason is read from its stderr; the cap keeps a
-/// runaway handler from filling memory. Its stdout carries nothing — the
-/// contract has no output channel — so nothing bounds it.
-pub const MAX_HANDLER_STDERR_BYTES: usize = 64 * 1024;
-
 /// The system program a generated shell wrapper needs to read the harness's
 /// payload. Named here so a diagnostic can check for it without knowing how
 /// any particular wrapper is written.
@@ -32,7 +30,8 @@ pub const WRAPPER_DEPENDENCY: &str = "jq";
 /// The handler's decision channel is its exit code: `0` allows, this one
 /// denies with the reason on stderr, and every other code (or a timeout, or
 /// a handler that cannot start) is a failure whose outcome follows the
-/// group's declared effect — see [`dispatch_handlers`].
+/// group's declared effect. The generated wrapper is the one implementation
+/// of that rule, and reads this constant rather than spelling it again.
 pub const DENY_EXIT_CODE: i32 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -48,17 +47,6 @@ impl HookEvent {
             Self::PreToolUse => "pre_tool_use",
             Self::PostToolUse => "post_tool_use",
             Self::Stop => "stop",
-        }
-    }
-
-    /// Inverse of [`Self::abi_name`], used by the runtime dispatcher to
-    /// parse its `--event` argument without naming a harness.
-    pub fn parse_abi(name: &str) -> Option<Self> {
-        match name {
-            "pre_tool_use" => Some(Self::PreToolUse),
-            "post_tool_use" => Some(Self::PostToolUse),
-            "stop" => Some(Self::Stop),
-            _ => None,
         }
     }
 }
@@ -82,19 +70,6 @@ impl HookEffect {
             Self::Ask => "ask",
             Self::Deny => "deny",
             Self::Transform => "transform",
-        }
-    }
-
-    /// Inverse of [`Self::abi_name`], used by the runtime dispatcher to
-    /// parse its `--effect` argument.
-    pub fn parse_abi(name: &str) -> Option<Self> {
-        match name {
-            "observe" => Some(Self::Observe),
-            "allow" => Some(Self::Allow),
-            "ask" => Some(Self::Ask),
-            "deny" => Some(Self::Deny),
-            "transform" => Some(Self::Transform),
-            _ => None,
         }
     }
 }
@@ -308,82 +283,6 @@ impl HarnessToolVocabulary {
     }
 }
 
-/// The hook context one handler is run with. Not a wire format: it is the
-/// set of `HOOK_*` environment variables the handler reads (see
-/// [`HookCommandInput::environment`]). An adapter fills it from its own
-/// harness's payload.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HookCommandInput {
-    /// The delivering harness's stable id, verbatim in `HOOK_HARNESS`.
-    pub harness: String,
-    pub event: String,
-    pub tool: Option<HookTool>,
-    pub input: serde_json::Value,
-    pub context: HookContext,
-}
-
-impl HookCommandInput {
-    /// The `HOOK_*` environment a handler receives. `PLUGIN_ROOT` is added
-    /// by the runner, which is the only party that knows the package root.
-    pub fn environment(&self) -> Vec<(String, String)> {
-        let mut variables = vec![
-            ("HOOK_HARNESS".to_owned(), self.harness.clone()),
-            ("HOOK_EVENT".to_owned(), self.event.clone()),
-            (
-                "HOOK_TOOL".to_owned(),
-                self.tool
-                    .as_ref()
-                    .and_then(|tool| tool.portable.clone())
-                    .unwrap_or_default(),
-            ),
-            (
-                "HOOK_TOOL_NATIVE".to_owned(),
-                self.tool
-                    .as_ref()
-                    .map(|tool| tool.native.clone())
-                    .unwrap_or_default(),
-            ),
-            (
-                "HOOK_CWD".to_owned(),
-                self.context.cwd.clone().unwrap_or_default(),
-            ),
-            (
-                "HOOK_INPUT".to_owned(),
-                serde_json::to_string(&self.input).unwrap_or_else(|_| "{}".to_owned()),
-            ),
-        ];
-        for (field, value) in self.tool.iter().flat_map(|tool| tool.fields.iter()) {
-            variables.push((hook_field_variable(field), value.clone()));
-        }
-        variables
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HookTool {
-    pub portable: Option<String>,
-    pub native: String,
-    /// The matched alias's portable fields, already read from this
-    /// harness's own native input field names. Empty for a `native:` tool
-    /// and for a tool the harness's vocabulary does not bind.
-    #[serde(default)]
-    pub fields: BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HookContext {
-    pub cwd: Option<String>,
-    pub session_id: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HookDecision {
-    Allow,
-    Ask,
-    Deny,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HookCompatibility {
     pub route: CompatibilityRoute,
@@ -546,264 +445,6 @@ fn invalid<T>(path: &Path, reason: &str) -> Result<T> {
     })
 }
 
-// ============================================================================
-// Runtime dispatch (ADR-033 §ABI)
-// ============================================================================
-
-/// The normalized result of running one hook group's command handlers in
-/// manifest order. `decision` is `None` for a pure observation.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HookDispatchOutcome {
-    pub decision: Option<HookDecision>,
-    pub reason: Option<String>,
-    /// Non-null when at least one handler could not run to completion
-    /// (launch failure, timeout, an unexpected exit code) — the
-    /// failure reason, preserved for diagnostics even when the declared
-    /// effect forced a fail-closed decision.
-    pub failure: Option<String>,
-}
-
-/// How the runtime wrapper answers one harness: the hook may render
-/// vendor-native JSON on stdout, a reason on stderr (the channel Claude and
-/// Codex feed back to the model on a blocked tool), and — crucially — the
-/// harness's own blocking exit code. Internal canonical decisions
-/// (e.g. the handler-level deny exit) never leak outward; each adapter
-/// translates them into the native contract of its own harness.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HookNativeOutput {
-    pub stdout: Option<Vec<u8>>,
-    pub stderr: Option<String>,
-    pub exit_code: i32,
-}
-
-/// The outcome of a group that could not be evaluated. Failure semantics
-/// depend on the declared effect: an observational hook fails open (its
-/// purpose is diagnostic), so `None` — report it and let the operation
-/// proceed; a declared `deny`/`ask`/`transform` effect fails closed, so the
-/// intercepted operation cannot proceed on an unverifiable verdict
-/// (ADR-033). Written once because both places that can fail answer with
-/// it: a handler that did not run to completion, and a wrapper that never
-/// reached the handlers at all.
-pub fn unevaluated(effect: HookEffect, failure: &str) -> Option<HookDispatchOutcome> {
-    let hook_name = match effect {
-        HookEffect::Deny => "the deny hook",
-        HookEffect::Ask => "the ask hook",
-        HookEffect::Transform => "the transform hook",
-        HookEffect::Observe | HookEffect::Allow => return None,
-    };
-    Some(HookDispatchOutcome {
-        decision: Some(HookDecision::Deny),
-        reason: Some(format!("{hook_name} could not be evaluated: {failure}")),
-        failure: Some(failure.to_owned()),
-    })
-}
-
-/// Per-handler result, consumed by `dispatch_handlers`' aggregation.
-struct HandlerResult {
-    decision: Option<HookDecision>,
-    reason: Option<String>,
-    failure: Option<String>,
-}
-
-/// Runs one group's handlers sequentially and aggregates their decisions.
-///
-/// Contract: every handler receives the hook context as `HOOK_*`
-/// environment variables and answers with its exit code — `0` allows, `3`
-/// denies with the reason on stderr. Handlers run in manifest order and the
-/// first denial stops the rest. A handler that cannot start, exits with any
-/// other code, or exceeds its timeout is a *failure*: fail-open for
-/// observational (`Observe`/`Allow`) groups, fail-closed (a denial) for a
-/// declared `Deny`/`Ask`/`Transform` pre-tool effect — a safety hook is
-/// never silently weakened into a no-op observation.
-pub fn dispatch_handlers(
-    hook: &PortableHook,
-    input: &HookCommandInput,
-    package_root: &Path,
-) -> Result<HookDispatchOutcome> {
-    let mut outcome = HookDispatchOutcome::default();
-    for handler in &hook.handlers {
-        let result = run_handler(handler, input, package_root, hook.effect)?;
-        if let Some(failure) = &result.failure {
-            outcome.failure = Some(failure.clone());
-        }
-        if result.decision == Some(HookDecision::Deny) {
-            outcome.decision = Some(HookDecision::Deny);
-            outcome.reason = result.reason;
-            return Ok(outcome);
-        }
-    }
-    Ok(outcome)
-}
-
-/// Expands the canonical `${PLUGIN_ROOT}` placeholder to the package root,
-/// so an authored command stays portable while the emitted projection can
-/// pin the concrete store path. The variable is also injected as the
-/// `PLUGIN_ROOT` environment variable for shell-level expansion.
-fn expand_plugin_root(command: &str, package_root: &Path) -> String {
-    command.replace("${PLUGIN_ROOT}", &package_root.to_string_lossy())
-}
-
-fn run_handler(
-    handler: &CommandHook,
-    input: &HookCommandInput,
-    package_root: &Path,
-    effect: HookEffect,
-) -> Result<HandlerResult> {
-    let command = expand_plugin_root(&handler.command, package_root);
-    let span = tracing::info_span!(
-        "hook.handler",
-        command = %command,
-        effect = ?effect,
-        exit = tracing::field::Empty
-    );
-    let _entered = span.enter();
-    // The system shell is resolved without relying on `PATH`: other
-    // components mutate `PATH` under their own guards, and a hook payload
-    // must never be undeliverable just because a sibling test or a shim
-    // reordered the environment. `/bin/sh` is the POSIX system shell on
-    // every supported Unix; `sh` remains the PATH fallback.
-    let shell = if cfg!(windows) {
-        "cmd"
-    } else if Path::new("/bin/sh").exists() {
-        "/bin/sh"
-    } else {
-        "sh"
-    };
-    let mut invocation = Command::new(shell);
-    if cfg!(windows) {
-        invocation.arg("/C").arg(&command);
-    } else {
-        invocation.arg("-c").arg(&command);
-    }
-    for (name, value) in input.environment() {
-        invocation.env(name, value);
-    }
-    let mut child = with_process_group(invocation)
-        .stdin(Stdio::null())
-        // A handler's stdout is not a channel: the runner's own stdout is
-        // the harness's decision surface, so anything the handler prints
-        // there must never reach it.
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .current_dir(package_root)
-        .env("PLUGIN_ROOT", package_root)
-        .spawn()
-        .map_err(|source| UzeError::Process {
-            program: command.clone(),
-            source,
-        })?;
-
-    let stderr = child.stderr.take().expect("hook stderr was piped");
-    // The reader runs on a thread so a chatty handler cannot block on a
-    // full pipe while the wait loop is polling; `read_bounded` caps it.
-    let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_HANDLER_STDERR_BYTES));
-
-    let (status, timed_out) =
-        wait_with_timeout(&mut child, Duration::from_secs(u64::from(handler.timeout))).map_err(
-            |source| UzeError::Process {
-                program: command.clone(),
-                source,
-            },
-        )?;
-    let stderr = if timed_out {
-        // The handler was killed past its deadline; a descendant may still
-        // hold the pipe open, so joining the reader could hang for the
-        // descendant's whole lifetime. The timeout verdict already decided
-        // the outcome — detach the reader and discard its output.
-        drop(stderr_reader);
-        String::new()
-    } else {
-        let (bytes, _) = stderr_reader.join().unwrap_or_default();
-        String::from_utf8_lossy(&bytes).trim().to_owned()
-    };
-
-    span.record("exit", status.code().unwrap_or(-1));
-    let mut decision = None;
-    let mut reason = None;
-    let failure = if timed_out {
-        Some(format!("`{command}` timed out after {}s", handler.timeout))
-    } else {
-        match status.code() {
-            Some(0) => None,
-            Some(DENY_EXIT_CODE) => {
-                decision = Some(HookDecision::Deny);
-                reason = Some(if stderr.is_empty() {
-                    format!("`{command}` denied the operation")
-                } else {
-                    stderr.clone()
-                });
-                None
-            }
-            // A script without the executable bit: distinguish it from a
-            // generic failure so the author gets an actionable diagnostic
-            // (the canonical manifest runs commands through the shell, so
-            // `chmod +x` or an explicit `sh` prefix fixes it).
-            Some(126) => Some(format!(
-                "`{command}` is not executable (exit 126); chmod +x the script or invoke it as `sh {command}`"
-            )),
-            Some(code) => Some(format!(
-                "`{command}` exited with code {code}{}",
-                if stderr.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {stderr}")
-                }
-            )),
-            None => Some(format!("`{command}` was terminated by a signal")),
-        }
-    };
-
-    if let Some(failure) = &failure
-        && let Some(blocked) = unevaluated(effect, failure)
-    {
-        decision = blocked.decision;
-        reason = blocked.reason;
-    }
-
-    Ok(HandlerResult {
-        decision,
-        reason,
-        failure,
-    })
-}
-
-/// A hook adapter translates one harness's native hook payload into the
-/// portable hook context, and the aggregated outcome back into that
-/// harness's own decision contract (ADR-033). The Core defines the
-/// contract; each integration owns its vendor mapping table. `hook-exec`
-/// resolves adapters through the integration registry by id, so no layer
-/// above the integrations ever names a harness.
-pub trait HookAdapterPort: Send + Sync {
-    /// The adapter's stable identity — matches the owning integration's
-    /// `IntegrationPort::id`, so `hook-exec` resolves one adapter per
-    /// harness through the registry. Named distinctly from `id()` to avoid
-    /// method ambiguity on types implementing both traits.
-    fn adapter_id(&self) -> &'static str;
-
-    /// Normalizes the harness's native hook payload (read from the wrapper
-    /// command's stdin) into the portable ABI input every authored handler
-    /// speaks. Fails fast on a payload shape the adapter does not
-    /// understand; the wrapper turns that into a fail-open/closed decision
-    /// per the group's declared effect.
-    fn normalize_input(
-        &self,
-        native: &serde_json::Value,
-        event: HookEvent,
-    ) -> std::result::Result<HookCommandInput, String>;
-
-    /// Renders the aggregated outcome back into the harness's native
-    /// contract: stdout JSON, a stderr reason (the channel native hooks
-    /// feed back on a blocked tool), and the harness's own blocking exit
-    /// code — `0` for allow/observe, the native block code (2 on
-    /// Claude/Codex/Antigravity tool use) for a deny. `None` stdout when
-    /// the harness treats an empty stdout as allow/observe.
-    fn render_output(
-        &self,
-        outcome: &HookDispatchOutcome,
-        event: HookEvent,
-    ) -> std::result::Result<HookNativeOutput, String>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,34 +500,6 @@ mod tests {
     }
 
     #[test]
-    fn the_hook_context_becomes_the_handlers_environment() {
-        let input = HookCommandInput {
-            harness: "fake-harness".to_owned(),
-            event: "pre_tool_use".to_owned(),
-            tool: Some(HookTool {
-                portable: Some("shell".to_owned()),
-                native: "RunShell".to_owned(),
-                fields: [("command".to_owned(), "cat .env".to_owned())]
-                    .into_iter()
-                    .collect(),
-            }),
-            input: serde_json::json!({"cmd": "cat .env"}),
-            context: HookContext {
-                cwd: Some("/repo".to_owned()),
-                session_id: None,
-            },
-        };
-        let environment: BTreeMap<String, String> = input.environment().into_iter().collect();
-        assert_eq!(environment["HOOK_HARNESS"], "fake-harness");
-        assert_eq!(environment["HOOK_EVENT"], "pre_tool_use");
-        assert_eq!(environment["HOOK_TOOL"], "shell");
-        assert_eq!(environment["HOOK_TOOL_NATIVE"], "RunShell");
-        assert_eq!(environment["HOOK_CWD"], "/repo");
-        assert_eq!(environment["HOOK_INPUT"], r#"{"cmd":"cat .env"}"#);
-        assert_eq!(environment["HOOK_COMMAND"], "cat .env");
-    }
-
-    #[test]
     fn compatibility_does_not_equate_stop_with_a_tool_callback() {
         let hook = PortableHook {
             id: "review-stop".into(),
@@ -937,248 +550,5 @@ mod tests {
         };
         let compatibility = assess(&hook, &HookCapabilities::default(), false);
         assert_eq!(compatibility.route, CompatibilityRoute::Unsupported);
-    }
-}
-
-/// End-to-end dispatcher behavior against real `sh` scripts: the `HOOK_*`
-/// environment, the exit-code decision, per-handler timeouts, and the
-/// fail-open/fail-closed effect semantics.
-#[cfg(all(test, unix))]
-mod dispatch_tests {
-    use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
-
-    fn script(root: &Path, name: &str, body: &str) -> String {
-        fs::create_dir_all(root).unwrap();
-        let path = root.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path.to_string_lossy().into_owned()
-    }
-
-    fn input() -> HookCommandInput {
-        HookCommandInput {
-            harness: "fake-harness".to_owned(),
-            event: "pre_tool_use".to_owned(),
-            tool: Some(HookTool {
-                portable: Some("shell".to_owned()),
-                native: "RunShell".to_owned(),
-                fields: [("command".to_owned(), "ls".to_owned())]
-                    .into_iter()
-                    .collect(),
-            }),
-            input: serde_json::json!({"command": "ls"}),
-            context: HookContext {
-                cwd: Some("/tmp".to_owned()),
-                session_id: None,
-            },
-        }
-    }
-
-    fn hook(commands: Vec<&str>, effect: HookEffect) -> PortableHook {
-        PortableHook {
-            id: "dispatch".into(),
-            event: HookEvent::PreToolUse,
-            matchers: Vec::new(),
-            handlers: commands
-                .into_iter()
-                .map(|command| CommandHook {
-                    handler_type: CommandHandlerType::Command,
-                    command: command.to_owned(),
-                    timeout: DEFAULT_TIMEOUT_SECONDS,
-                })
-                .collect(),
-            effect,
-            order: 0,
-        }
-    }
-
-    // The dispatch tests must not depend on `PATH`: a sibling test suite
-    // mutates the process-global `PATH` (serialized only against itself),
-    // so every handler body below uses shell builtins or `/bin/` paths.
-
-    #[test]
-    fn exit_zero_is_an_allowance() {
-        let root = uze_testkit::temp::scratch("observe");
-        let script = script(&root, "observe.sh", ":");
-        let outcome =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(outcome.decision, None);
-        assert_eq!(outcome.failure, None);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn the_handler_reads_the_context_from_its_environment() {
-        let root = uze_testkit::temp::scratch("env");
-        let probe = script(
-            &root,
-            "probe.sh",
-            "printf '%s|%s|%s|%s|%s|%s' \"$HOOK_HARNESS\" \"$HOOK_EVENT\" \"$HOOK_TOOL\" \
-             \"$HOOK_TOOL_NATIVE\" \"$HOOK_COMMAND\" \"$HOOK_INPUT\" \
-             > \"${PLUGIN_ROOT}/seen.txt\"",
-        );
-        let outcome =
-            dispatch_handlers(&hook(vec![&probe], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(outcome.decision, None);
-        assert_eq!(
-            fs::read_to_string(root.join("seen.txt")).unwrap(),
-            r#"fake-harness|pre_tool_use|shell|RunShell|ls|{"command":"ls"}"#,
-            "the handler must never have to parse a harness payload"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn a_handlers_stdout_never_reaches_the_decision_surface() {
-        let root = uze_testkit::temp::scratch("stdout");
-        let chatty = script(&root, "chatty.sh", "echo '{\"decision\":\"deny\"}'");
-        let outcome =
-            dispatch_handlers(&hook(vec![&chatty], HookEffect::Deny), &input(), &root).unwrap();
-        assert_eq!(
-            outcome.decision, None,
-            "stdout is not a channel: only the exit code decides"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn the_deny_exit_carries_its_reason_from_stderr() {
-        let root = uze_testkit::temp::scratch("deny-exit");
-        let script = script(
-            &root,
-            "deny.sh",
-            "echo 'blocked by protect-env' >&2; exit 3",
-        );
-        let outcome =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
-        assert_eq!(outcome.decision, Some(HookDecision::Deny));
-        assert_eq!(outcome.reason.as_deref(), Some("blocked by protect-env"));
-        assert_eq!(
-            outcome.failure, None,
-            "a denial is a decision, not a failure"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn handlers_run_in_order_and_the_first_deny_stops_later_ones() {
-        let root = uze_testkit::temp::scratch("order");
-        let order_file = root.join("order.txt");
-        let first = script(
-            &root,
-            "first.sh",
-            &format!("echo first >> \"{}\"", order_file.display()),
-        );
-        let deny = script(
-            &root,
-            "deny.sh",
-            &format!("echo deny >> \"{}\"; exit 3", order_file.display()),
-        );
-        let second = script(
-            &root,
-            "second.sh",
-            &format!("echo second >> \"{}\"", order_file.display()),
-        );
-        let hook = PortableHook {
-            handlers: [first, deny, second]
-                .into_iter()
-                .map(|command| CommandHook {
-                    handler_type: CommandHandlerType::Command,
-                    command,
-                    timeout: 30,
-                })
-                .collect(),
-            ..hook(vec![], HookEffect::Observe)
-        };
-        let outcome = dispatch_handlers(&hook, &input(), &root).unwrap();
-        assert_eq!(outcome.decision, Some(HookDecision::Deny));
-        let order = fs::read_to_string(&order_file).unwrap();
-        assert_eq!(order, "first\ndeny\n", "the third handler must not run");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn observation_fails_open_but_a_declared_deny_effect_fails_closed() {
-        let root = uze_testkit::temp::scratch("fail");
-        let script = script(&root, "fail.sh", "exit 7");
-        let observed =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(
-            observed.decision, None,
-            "observational hook failure stays open"
-        );
-        assert!(observed.failure.unwrap().contains("code 7"));
-        let denied =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
-        assert_eq!(denied.decision, Some(HookDecision::Deny));
-        assert!(
-            denied.reason.unwrap().contains("code 7"),
-            "the fail-closed reason must carry the underlying failure"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn a_handler_that_cannot_start_denies_for_a_deny_group() {
-        let root = uze_testkit::temp::scratch("absent");
-        fs::create_dir_all(&root).unwrap();
-        let missing = root.join("absent.sh").to_string_lossy().into_owned();
-        let denied =
-            dispatch_handlers(&hook(vec![&missing], HookEffect::Deny), &input(), &root).unwrap();
-        assert_eq!(denied.decision, Some(HookDecision::Deny));
-        let observed =
-            dispatch_handlers(&hook(vec![&missing], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(observed.decision, None);
-        assert!(observed.failure.is_some());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn timeout_terminates_a_hung_handler_and_fails_closed_for_deny() {
-        let root = uze_testkit::temp::scratch("timeout");
-        let script = script(&root, "spin.sh", "while :; do :; done");
-        let hook = PortableHook {
-            handlers: vec![CommandHook {
-                handler_type: CommandHandlerType::Command,
-                command: script,
-                timeout: 1,
-            }],
-            ..hook(vec![], HookEffect::Deny)
-        };
-        let started = Instant::now();
-        let outcome = dispatch_handlers(&hook, &input(), &root).unwrap();
-        assert!(
-            started.elapsed() < Duration::from_secs(4),
-            "handler must be killed at its timeout"
-        );
-        assert_eq!(outcome.decision, Some(HookDecision::Deny));
-        assert!(outcome.reason.unwrap().contains("timed out after 1s"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn plugin_root_is_injected_as_env_and_as_a_command_placeholder() {
-        let root = uze_testkit::temp::scratch("root");
-        fs::create_dir_all(&root).unwrap();
-        let probe = root.join("probe.sh");
-        fs::write(
-            &probe,
-            "printf '%s' \"$PLUGIN_ROOT\" > \"$PLUGIN_ROOT/seen.txt\"\n",
-        )
-        .unwrap();
-        fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
-        let outcome = dispatch_handlers(
-            &hook(vec!["${PLUGIN_ROOT}/probe.sh"], HookEffect::Observe),
-            &input(),
-            &root,
-        )
-        .unwrap();
-        assert_eq!(outcome.decision, None);
-        assert_eq!(
-            fs::read_to_string(root.join("seen.txt")).unwrap(),
-            root.to_string_lossy()
-        );
-        let _ = fs::remove_dir_all(root);
     }
 }

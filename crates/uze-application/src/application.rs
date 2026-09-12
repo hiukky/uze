@@ -742,7 +742,6 @@ impl UzeApplication {
 
         Ok(Some(RuntimeShimSetup {
             shim_path,
-            resolved_executable: resolved,
             rc_file_updated,
             path_hint,
         }))
@@ -834,74 +833,6 @@ impl UzeApplication {
             })
             .collect()
     }
-
-    /// Delivers packages which were installed before an explicit setup made
-    /// this integration available. This repeats the same package-first plan
-    /// as `add`, scoped to one integration, and ledger keys make it
-    /// idempotent without inventing a sync subsystem.
-
-    /// Attaches one already-stored `package` to `integration`: a package-level
-    /// native delivery when the integration offers one, then per-resource
-    /// attachment for whatever it doesn't cover. Idempotent via the ledger's
-    /// receipt keys. Shared by `attach_stored_packages_to` (every package) and
-    /// `ensure_default_plugins` (only the default marketplace plugins).
-    ///
-    /// When a package gains a native envelope, previously decomposed
-    /// capability receipts that are now covered by `provided` are migrated
-    /// safely: only `Matched` receipts are detached, `Drifted`/`Conflict`/
-    /// `Blocked` block migration per ADR-009.
-
-    /// Applies the approved lifecycle contract: reconcile, plan, detach only
-    /// matched receipts, re-reconcile, forget resolved ledger records, then
-    /// delete UZE-owned package bytes.
-
-    /// Removal without taking the lock; see `install_materialized`.
-
-    /// Deterministic environment diagnostics. Attachment facts are always
-    /// obtained through the same receipt reconciliation used by removal.
-
-    /// A short, project-scoped health summary — the single high-level
-    /// question most callers actually want answered: "is everything UZE
-    /// touches, here, in order?"
-    ///
-    /// Deliberately **not** a merge with `doctor`: `doctor` has no
-    /// `project_root` concept at all and never will — it answers "is my
-    /// UZE *installation* healthy," global, independent of any project.
-    /// `status` answers "is *this project's* context healthy," and is
-    /// built almost entirely by composing `context_inspect` (already
-    /// read-only) with the Store's own package count. It duplicates no
-    /// health logic doctor already owns; a genuine installation problem
-    /// (corrupt ledger, missing executable) stays doctor's to report.
-
-    /// Resolves `resource`'s physical exposure name for `integration`,
-    /// immediately before an attach call — the one place a naming decision
-    /// happens. Returns a clone of `resource` with `resolved_exposure_name`
-    /// set; `resource` itself is never mutated.
-    ///
-    /// "Existing receipt wins": if a receipt for this exact
-    /// `resource.identity()` already exists for this integration — on any
-    /// naming scheme, including the legacy `uze-<package>-<skill>` shape —
-    /// its already-recorded physical name is reused verbatim. No naming
-    /// policy ever recomputes, moves, or renames an already-attached
-    /// resource; this is what makes re-add/setup idempotent and legacy
-    /// installs safe without any migration step.
-    ///
-    /// The same reuse extends to a *different* integration's receipt for
-    /// this identical resource when the two integrations report the same
-    /// `shared_agent_skill_root` (OpenCode and Codex all read
-    /// `~/.agents/skills`): reusing that name means the second integration's
-    /// attach writes the very same symlink rather than a second one next to
-    /// it, so a directory one harness scans in full never ends up listing
-    /// the identical skill twice.
-    ///
-    /// Only for a brand new resource with no reusable receipt anywhere does
-    /// this ask the integration for ordered candidates
-    /// (`exposure_name_candidates`) and pick the first one not already
-    /// claimed — by this integration, or by another integration sharing its
-    /// skill root. This resolves purely from the ledger — no filesystem
-    /// access — so it can never itself decide a foreign-artifact conflict;
-    /// `attach`'s own structural check (unchanged) remains the last word on
-    /// that.
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
         // A plugin is addressable by its active local name (ADR-038) first —

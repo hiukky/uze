@@ -2902,9 +2902,8 @@ impl WorkspaceModel {
     /// clock. Unbound, the row says the checkout is gone and never offers
     /// the way back in.
     ///
-    /// The path stays as a fallback for a task recorded before slots were
-    /// named. Slots are reused, so several tasks can carry the same one:
-    /// the newest is the one standing there now.
+    /// Slots are reused, so several tasks can carry the same one: the
+    /// newest is the one standing there now.
     ///
     /// A placement names the task it put in a slot before any evaluation
     /// lists that task, and in that window the newest task on record is the
@@ -2924,14 +2923,7 @@ impl WorkspaceModel {
         }
         tasks
             .iter()
-            .filter(|task| match task.checkout_id.as_deref() {
-                Some(slot) => slot == checkout.name,
-                None => task
-                    .checkout
-                    .as_deref()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name == checkout.name),
-            })
+            .filter(|task| task.checkout_id.as_deref() == Some(checkout.name))
             .max_by_key(|task| task.created_at_unix)
     }
 

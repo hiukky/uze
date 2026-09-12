@@ -32,8 +32,6 @@ use crate::{
 /// exposed by this runtime.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("terminal runtime is only available on Unix in this release")]
-    UnsupportedPlatform,
     #[error("terminal runtime protocol error: {0}")]
     Protocol(String),
     #[error("terminal runtime I/O error: {0}")]
@@ -641,10 +639,9 @@ fn read_pid(pid_path: &Path) -> Option<libc::pid_t> {
 }
 
 /// The `PROTOCOL_VERSION` the server holding this pid file was compiled
-/// with, from the file's second line — `None` for a pid file written
-/// before this line existed, or one that's missing/unreadable/corrupt.
-/// `None` is silence, not an answer: what [`attach`] makes of it is
-/// [`Compatibility::Unrecorded`]'s business.
+/// with, from the file's second line — `None` for a pid file that is
+/// missing, unreadable or corrupt. `None` is silence, not an answer: what
+/// [`attach`] makes of it is [`Compatibility::Unrecorded`]'s business.
 fn server_protocol_version(pid_path: &Path) -> Option<u16> {
     let text = fs::read_to_string(pid_path).ok()?;
     text.lines().nth(1)?.trim().parse().ok()
@@ -664,11 +661,10 @@ enum Compatibility {
     Known,
     /// It recorded a different one: alive, and not worth connecting to.
     Mismatched,
-    /// It records nothing — missing, unreadable, or written before the
-    /// version line existed. Silence is not evidence of a mismatch: a
-    /// runtime directory that fell back to `/tmp` can lose its pid file to
-    /// the distro's own cleaner while the server it named is still
-    /// serving, and reading that as a mismatch unlinks a live session's
+    /// It records nothing — missing or unreadable. Silence is not evidence
+    /// of a mismatch: a runtime directory that fell back to `/tmp` can lose
+    /// its pid file to the distro's own cleaner while the server it named is
+    /// still serving, and reading that as a mismatch unlinks a live session's
     /// socket and strands its panes behind a server nothing can reach.
     Unrecorded,
 }

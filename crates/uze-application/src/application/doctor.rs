@@ -630,19 +630,11 @@ impl UzeApplication {
 }
 
 /// What a person needs to know about how a hook actually reaches its
-/// harness. A hook the packager runtime carries keeps working only while
-/// UZE is installed at that path; a generated wrapper keeps working without
-/// UZE but needs its own system dependency present.
+/// harness: the generated wrapper keeps working without UZE, but it needs
+/// its own system dependency present.
 fn hook_delivery_note(mechanism: &ExposureMechanism) -> Option<String> {
     let ExposureMechanism::ManagedHookConfig { wrapper, .. } = mechanism else {
         return None;
-    };
-    let Some(wrapper) = wrapper else {
-        return Some(
-            "delivered through the UZE runtime (no wrapper template for this platform); the hook \
-             stops working if UZE is moved or removed"
-                .to_owned(),
-        );
     };
     let dependency = uze_core::hook::WRAPPER_DEPENDENCY;
     (!uze_core::subprocess::program_on_path(dependency)).then(|| {
@@ -657,23 +649,19 @@ fn hook_delivery_note(mechanism: &ExposureMechanism) -> Option<String> {
 mod delivery_note_tests {
     use super::*;
 
-    fn managed(wrapper: Option<&str>) -> ExposureMechanism {
+    fn managed(wrapper: &str) -> ExposureMechanism {
         ExposureMechanism::ManagedHookConfig {
             config_file: std::path::PathBuf::from("/config/settings.json"),
             entry_name: "demo:protect".to_owned(),
-            event: None,
+            event: uze_core::hook::HookEvent::PreToolUse,
             expected: "{}".to_owned(),
-            wrapper: wrapper.map(std::path::PathBuf::from),
+            wrapper: std::path::PathBuf::from(wrapper),
         }
     }
 
     #[test]
     fn doctor_names_the_route_and_the_dependency_a_delivered_hook_depends_on() {
-        let fallback = hook_delivery_note(&managed(None)).expect("the fallback route is reported");
-        assert!(fallback.contains("no wrapper template"));
-        assert!(fallback.contains("moved or removed"));
-
-        let note = hook_delivery_note(&managed(Some("/state/hooks/exec")));
+        let note = hook_delivery_note(&managed("/state/hooks/exec"));
         if uze_core::subprocess::program_on_path(uze_core::hook::WRAPPER_DEPENDENCY) {
             assert_eq!(note, None, "a native delivery with its dependency is quiet");
         } else {
