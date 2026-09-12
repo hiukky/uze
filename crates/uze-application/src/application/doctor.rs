@@ -120,10 +120,16 @@ impl Health<'_> {
                     .iter()
                     .filter_map(package_store_inconsistency)
                     .collect::<Vec<_>>();
-                let health = if inconsistencies.is_empty() {
-                    StoreHealth::Ready
-                } else {
+                let health = if !inconsistencies.is_empty() {
                     StoreHealth::Blocked(inconsistencies.join("; "))
+                } else {
+                    match self.0.store.quarantined_registrations() {
+                        Ok(quarantined) if !quarantined.is_empty() => {
+                            StoreHealth::Quarantined(quarantined_sentences(&quarantined))
+                        }
+                        Ok(_) => StoreHealth::Ready,
+                        Err(error) => StoreHealth::Blocked(error.to_string()),
+                    }
                 };
                 (
                     health,
@@ -419,6 +425,68 @@ mod tests {
         )
     }
 
+    /// The published alpha wrote `provenance` as `"source"`, and one such
+    /// entry used to fail the whole registry parse — `doctor` then said
+    /// `Blocked("failed to parse JSON in …")`, a serde error with no remedy,
+    /// while `plugin list`, `plugin remove` and `install` all died too. The
+    /// readable packages now survive, and the entry that does not is named
+    /// with what to do about it.
+    #[test]
+    fn doctor_names_an_unreadable_registration_and_its_remedy() {
+        let base = uze_testkit::temp::scratch("doctor-quarantine");
+        let home = UzeHome::at(base.join("home"));
+        let inspected = Arc::new(AtomicUsize::new(0));
+        let app = app_with_counter(&home, &inspected, AttachmentState::Matched);
+        write_plugin(&base, "flow");
+        app.plugins()
+            .add(
+                PackageSource::Local {
+                    path: base.join("flow"),
+                },
+                &AlwaysTrust,
+            )
+            .unwrap();
+
+        let mut registry: serde_json::Value =
+            serde_json::from_slice(&fs::read(home.registry_path()).unwrap()).unwrap();
+        registry["packages"]["old@local"] = serde_json::json!({
+            "source": {
+                "requested": { "LOCAL": { "path": "/tmp/old" } },
+                "resolved": { "LOCAL": { "path": "/tmp/old" } }
+            },
+            "active_name": null
+        });
+        fs::write(home.registry_path(), registry.to_string()).unwrap();
+
+        let report = app.health().report();
+
+        let StoreHealth::Quarantined(entries) = &report.store else {
+            panic!(
+                "an unreadable entry must be a named state, got {:?}",
+                report.store
+            );
+        };
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].starts_with("old@local: "), "{}", entries[0]);
+        assert!(
+            entries[0].contains(uze_core::store::QuarantinedRegistration::REMEDY),
+            "the report must carry the way out: {}",
+            entries[0]
+        );
+        assert!(
+            report
+                .plugins
+                .iter()
+                .any(|plugin| plugin.id == "flow@local"),
+            "the readable package must survive its unreadable sibling"
+        );
+        assert!(
+            !format!("{}", report.store).contains("Quarantined("),
+            "the rendered state must be a sentence, not a Debug dump"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn matched_inspection_is_cached_across_instances() {
         let base = uze_testkit::temp::scratch("fast-vs-deep");
@@ -627,6 +695,26 @@ impl UzeApplication {
         }
         false
     }
+}
+
+/// One sentence per unreadable registration, each carrying the remedy.
+///
+/// A registration this UZE cannot read is why a package the operator
+/// installed is suddenly absent from `plugin list` — the one thing `doctor`
+/// must not leave them to guess at, and the reason this is reported as a
+/// named state rather than as the serde error that produced it.
+fn quarantined_sentences(entries: &[uze_core::store::QuarantinedRegistration]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}: {} — {}",
+                entry.id,
+                entry.reason,
+                uze_core::store::QuarantinedRegistration::REMEDY
+            )
+        })
+        .collect()
 }
 
 /// What a person needs to know about how a hook actually reaches its

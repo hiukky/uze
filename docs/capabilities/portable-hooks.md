@@ -34,7 +34,11 @@ binary is removed.
 - **Handlers**: only `type: command`. `timeout` is seconds, bounded to
   1..300, default 30, and it is the handler's real deadline: the wrapper
   runs each handler under it and stops one that exceeds it (see
-  [Handler contract](#handler-contract)). `command` may use the
+  [Handler contract](#handler-contract)). A *group* is bounded too: the sum
+  of its handlers' deadlines (plus the second between `TERM` and `KILL`, and
+  one to render the answer) may not exceed 300s either, because that sum is
+  what the harness's own backstop has to outlast — a manifest whose group
+  can outlive the backstop is refused, naming the sum. `command` may use the
   `${PLUGIN_ROOT}` placeholder; UZE resolves it at generation time and also
   exports `PLUGIN_ROOT`.
 - **`id`** is optional; absent ids are derived deterministically from
@@ -72,10 +76,23 @@ exit code. It never parses a harness payload and never writes harness JSON.
 | `3` | deny — the reason is read from stderr, and no later handler runs |
 | anything else, a failure to start, or a timeout | a handler failure, resolved by the group's effect |
 
+Only the first 4096 bytes of a handler's stderr become the reason; a handler
+that writes megabytes is still a decision, not a document the harness has to
+parse.
+
 A handler failure is **fail-open** for `observe`/`allow` (the tool proceeds
-and the failure is reported) and **fail-closed** for `deny`/`ask` (the tool
-is denied and the reason names the failure). A safety hook that cannot be
-evaluated is never weakened into a no-op.
+and the failure is reported) and **fail-closed** for `deny`/`ask`/`transform`
+(the tool is denied and the reason names the failure). A safety hook that
+cannot be evaluated is never weakened into a no-op — and neither is a rewrite
+that never happened.
+
+The same rule covers everything that can go wrong before a handler is even
+reached: a payload the wrapper cannot parse and a package root that is gone
+are both failures resolved by the group's effect. Neither is ever treated as
+"nothing matched": an unreadable payload would leave every `HOOK_*` variable
+empty, and a missing root would run the handlers from whatever directory the
+harness happened to be in — the user's own checkout, whose same-named script
+is not the author's.
 
 **Each handler is bounded by its own declared `timeout`.** Past it the
 handler is stopped — `TERM`, then `KILL` a second later — along with every
@@ -151,7 +168,10 @@ One argument per handler, carrying its author's deadline beside its command
 — so what will run, and for how long, is readable in the harness's own
 configuration. The entry's own `timeout` key is the *harness's* backstop and
 is sized (`sum(handler + 1) + 1`) so it can never be the bound that fires
-first.
+first — which is also why a manifest whose group needs more than 300s is
+refused rather than clamped: a hook the harness kills is read as
+non-blocking, so a clamped backstop would turn a `deny` group into an
+allowance.
 
 **Nothing else implements this contract.** There is no UZE binary on the
 execution path and no second route: a platform the `sh` template does not
@@ -213,8 +233,10 @@ stated) · **—** = not expressible.
 
 - **`transform` is not deliverable.** Rewriting the tool input needs a
   channel for the handler to answer on, which an exit code is not. A
-  `transform` group degrades on every harness — stated, never silently
-  attached — until its own change defines that channel.
+  `transform` group is degraded on every harness — stated, never a silent
+  claim — until its own change defines that channel. Delivered degraded, it
+  is fail-closed like `deny`/`ask`: a rewrite that did not happen must not
+  let the original input through as if it had.
 - **`jq` is the shell wrapper's dependency.** It is not declarable by a
   package yet (plugin `requirements` is its own change); `uze doctor`
   reports it missing, and until it is installed a `deny` group denies while

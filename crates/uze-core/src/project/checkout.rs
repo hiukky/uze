@@ -230,17 +230,20 @@ fn take(
 
 fn reuse(slot: &Slot, branch: &str, start: Start<'_>) -> Result<Acquired, AcquireError> {
     let root = &slot.path;
-    let tip = match start {
+    match start {
         Start::Branching { base_tip } => {
-            git(root, &["switch", "--quiet", "-c", branch, "--", base_tip])?;
-            base_tip
+            git(root, &["switch", "--quiet", "-c", branch, "--", base_tip])?
         }
-        Start::Existing => {
-            git(root, &["switch", "--quiet", "--", branch])?;
-            branch
-        }
+        Start::Existing => git(root, &["switch", "--quiet", "--", branch])?,
     };
-    git(root, &["reset", "--quiet", "--hard", tip])?;
+    // `HEAD`, not the tip spelled out again: the switch above has just put
+    // HEAD on it, and `git reset` is the one destructive command with no
+    // option terminator at all — `--` means pathspec ("Cannot do hard reset
+    // with paths"), and `--end-of-options` is refused outright ("must come
+    // before non-option arguments", git 2.43). A literal that can never be
+    // read as an option is the only spelling left that cannot be steered by
+    // a ref name.
+    git(root, &["reset", "--quiet", "--hard", "HEAD"])?;
     // Without `-x` on purpose: ignored artifacts are what make the slot
     // worth keeping.
     git(root, &["clean", "--quiet", "-fd"])?;

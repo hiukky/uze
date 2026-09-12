@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use alacritty_terminal::{
@@ -66,7 +66,7 @@ pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, Runt
             Compatibility::Known if pid_file_names_a_server(&endpoint.pid) => {}
             _ => match probe_server(&endpoint) {
                 Probe::Speaks { pid } => heal_pid_file(&endpoint, pid),
-                Probe::Foreign => replace_incompatible_server(&endpoint)?,
+                Probe::Foreign { peer } => replace_incompatible_server(&endpoint, peer)?,
             },
         }
     }
@@ -177,11 +177,21 @@ pub fn serve(root: PathBuf) -> Result<(), RuntimeError> {
     spawn_status_ticker(Arc::clone(&state));
     spawn_endpoint_watch(Arc::clone(&state));
 
-    accept_connections(listener, Arc::clone(&state))?;
+    let accepted = accept_connections(listener, Arc::clone(&state));
     state.stop_panes();
-    let _ = fs::remove_file(&endpoint.socket);
-    let _ = fs::remove_file(&endpoint.pid);
-    Ok(())
+    {
+        // Under the same flag [`spawn_endpoint_watch`] holds while it
+        // decides whether to rebind, so this clears an endpoint the watch
+        // cannot then put back — and the watch, if it is mid-rebind,
+        // finishes before the clearing rather than after it. Set here too
+        // because `accept_connections` can also return on an accept error,
+        // with nobody having asked the server to stop.
+        let mut stopped = state.stopped.lock().expect("stop state poisoned");
+        *stopped = true;
+        let _ = fs::remove_file(&endpoint.socket);
+        let _ = fs::remove_file(&endpoint.pid);
+    }
+    accepted
 }
 
 /// Binds the endpoint and records who is behind it. The socket is created
@@ -387,15 +397,46 @@ impl WorkspaceLock {
             .truncate(false)
             .write(true)
             .open(&path)?;
-        // SAFETY: `file` owns the descriptor for the whole call, and the
-        // lock it takes is released by the kernel when this process exits.
-        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if taken != 0 {
-            return Err(RuntimeError::Protocol(
-                "another uze terminal server is already serving this workspace".into(),
-            ));
+        loop {
+            // SAFETY: `file` owns the descriptor for the whole call, and the
+            // lock it takes is released by the kernel when this process exits.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Self { _file: file });
+            }
+            let refusal = io::Error::last_os_error();
+            match classify_lock_refusal(refusal.raw_os_error()) {
+                LockRefusal::Interrupted => continue,
+                LockRefusal::Contended => {
+                    return Err(RuntimeError::Protocol(
+                        "another uze terminal server is already serving this workspace".into(),
+                    ));
+                }
+                LockRefusal::Unsupported => return Err(RuntimeError::Io(refusal)),
+            }
         }
-        Ok(Self { _file: file })
+    }
+}
+
+/// Why `flock` said no.
+///
+/// Only one of its answers means another server holds the workspace. A
+/// signal arriving mid-call is not an answer at all, and a filesystem that
+/// cannot lock — `ENOLCK`, and the `EOPNOTSUPP`/`ENOSYS` some NFS, FUSE and
+/// 9p mounts give — is a different failure entirely: reading either as
+/// contention told the person to go and stop a server that does not exist,
+/// permanently, with no command that could clear it.
+enum LockRefusal {
+    Interrupted,
+    Contended,
+    Unsupported,
+}
+
+fn classify_lock_refusal(errno: Option<i32>) -> LockRefusal {
+    match errno {
+        Some(libc::EINTR) => LockRefusal::Interrupted,
+        // The same number on Linux, two names elsewhere; both mean held.
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => LockRefusal::Contended,
+        _ => LockRefusal::Unsupported,
     }
 }
 
@@ -622,20 +663,44 @@ fn runs_uze(pid: libc::pid_t) -> bool {
 }
 
 /// Whether the process table corroborates a pid file's claim that `pid` is
-/// a server. On a platform [`process_probe`] cannot answer for, the file is
-/// all there is and stands as it always did.
+/// a server. Where nothing can corroborate it — a platform
+/// [`process_probe`] cannot answer for, or Linux with `/proc` unmounted —
+/// the answer is no, not "take the file's word for it": the only thing this
+/// gates is signalling a process, and declining to signal loses nothing,
+/// because unlinking the endpoint files is the whole recovery there anyway.
 fn corroborated_as_server(pid: libc::pid_t) -> bool {
-    !platform_reads_processes() || runs_uze(pid)
+    platform_reads_processes() && runs_uze(pid)
 }
 
+/// Whether the pid file's claim is good enough to skip the probe in
+/// [`attach`] — a different question from [`corroborated_as_server`]'s, and
+/// deliberately the more forgiving of the two. Being wrong here costs one
+/// probe; being wrong there costs a process. So where the process table
+/// cannot answer, the file stands, exactly as it did before there was a
+/// process table to ask — reading "cannot say" as "not a server" would send
+/// every attach down the replace path and unlink the endpoint of a server
+/// that is alive and serving.
 fn pid_file_names_a_server(pid_path: &Path) -> bool {
-    read_pid(pid_path).is_some_and(corroborated_as_server)
+    read_pid(pid_path).is_some_and(|pid| !platform_reads_processes() || runs_uze(pid))
 }
 
-/// A pid file's first line — see [`write_pid_file`].
+/// A pid file's first line — see [`write_pid_file`] — and only where it
+/// names one process.
+///
+/// `libc::pid_t` is signed, so `-1` parses, and `kill(-1, …)` is not a
+/// process: it is every process the user owns. UZE never writes such a
+/// file, but this one is read from a world a `/tmp` cleaner, a crash and a
+/// text editor all reach, and the number in it goes straight to
+/// [`libc::kill`]. `0` is the caller's own process group, refused for the
+/// same reason.
 fn read_pid(pid_path: &Path) -> Option<libc::pid_t> {
     let text = fs::read_to_string(pid_path).ok()?;
-    text.lines().next()?.trim().parse().ok()
+    text.lines()
+        .next()?
+        .trim()
+        .parse::<libc::pid_t>()
+        .ok()
+        .filter(|pid| *pid > 0)
 }
 
 /// The `PROTOCOL_VERSION` the server holding this pid file was compiled
@@ -685,31 +750,41 @@ enum Probe {
     /// cheaply, since a server built to another framing may never answer
     /// the handshake that would ask it (see [`attach`]).
     Speaks { pid: u32 },
-    /// Another build, another program, or nobody at all.
-    Foreign,
+    /// Another build, another program, or nobody at all — carrying whoever
+    /// the kernel says is actually behind the socket, when anyone is. That
+    /// pid is the one piece of evidence a pid file cannot forge and a
+    /// recycled pid cannot survive, so [`replace_incompatible_server`]
+    /// takes its kill decision from it rather than from the file.
+    Foreign { peer: Option<u32> },
 }
 
 fn probe_server(endpoint: &Endpoint) -> Probe {
-    match listener_running_this_executable(&endpoint.socket) {
+    let peer = listening_peer(&endpoint.socket);
+    match peer.filter(|pid| runs_this_executable(*pid)) {
         Some(pid) => Probe::Speaks { pid },
-        None => Probe::Foreign,
+        None => Probe::Foreign { peer },
     }
 }
 
-/// The pid listening on `socket`, given only when that process runs the
-/// same executable image as this one. The kernel stamps the peer's
-/// credentials onto the connection, so the pid is the listener's own and
-/// not something a connection could claim; the image it is running then
-/// stops resolving to this path once the binary is replaced underneath a
-/// live server (a `cargo install --force` mid-session).
-///
-/// Both readings come from [`process_probe`], so the rule is written once
-/// and every platform that can answer it runs the same one.
-fn listener_running_this_executable(socket: &Path) -> Option<u32> {
+/// The pid listening on `socket`. The kernel stamps the peer's credentials
+/// onto the connection, so this is the listener's own and not something a
+/// connection could claim. `None` when nobody answers, or when the
+/// platform cannot say.
+fn listening_peer(socket: &Path) -> Option<u32> {
     let stream = UnixStream::connect(socket).ok()?;
-    let pid = process_probe::peer_pid(&stream)?;
-    let mine = env::current_exe().ok()?;
-    (process_probe::executable_of(pid)? == mine).then_some(pid)
+    process_probe::peer_pid(&stream)
+}
+
+/// Whether `pid` runs the same executable image as this process — and so
+/// was compiled with this `PROTOCOL_VERSION`. The image stops resolving to
+/// this path once the binary is replaced underneath a live server (a
+/// `cargo install --force` mid-session), which is exactly the state a
+/// server being replaced is in.
+fn runs_this_executable(pid: u32) -> bool {
+    let Some(mine) = env::current_exe().ok() else {
+        return false;
+    };
+    process_probe::executable_of(pid).is_some_and(|image| image == mine)
 }
 
 /// Records what the probe established, so the next attach reads the answer
@@ -726,14 +801,22 @@ fn heal_pid_file(endpoint: &Endpoint, pid: u32) {
 /// cooperative `SIGTERM` first — its own persisted-workspace snapshot (see
 /// `persist`) is what lets the fresh server restore the same tabs — with
 /// `SIGKILL` only as a last resort if it doesn't exit promptly.
-fn replace_incompatible_server(endpoint: &Endpoint) -> Result<(), RuntimeError> {
-    // Only a process the kernel says is running `uze` is signalled. The pid
-    // in this file may name anything by now (see [`runs_uze`]), and what
-    // follows is fatal to whatever it names — an editor, a build, another
-    // agent — on an upgrade path a person takes deliberately. Where the
-    // claim cannot be corroborated, clearing the endpoint files below is
-    // the whole recovery: the next connect then lands on a fresh server.
-    if let Some(pid) = read_pid(&endpoint.pid).filter(|pid| corroborated_as_server(*pid)) {
+fn replace_incompatible_server(endpoint: &Endpoint, peer: Option<u32>) -> Result<(), RuntimeError> {
+    // Two independent witnesses have to name the same process before it is
+    // signalled, because what follows is fatal to whatever that pid names —
+    // an editor, a build, another agent — on an upgrade path a person takes
+    // deliberately. `peer` is the kernel's own answer to "who is behind
+    // this socket", which nothing can forge and a recycled pid cannot
+    // survive; the pid file is a claim that outlives its writer (see
+    // [`runs_uze`]), and `uze` is not a distinguishing name — a second
+    // server under a second `UZE_HOME`, or an in-flight `uze install`, is
+    // one too. Where the two do not agree, or where nobody is listening at
+    // all, clearing the endpoint files below is the whole recovery: the
+    // next connect then lands on a fresh server.
+    let named_by_both = peer
+        .and_then(|peer| libc::pid_t::try_from(peer).ok())
+        .filter(|peer| read_pid(&endpoint.pid) == Some(*peer));
+    if let Some(pid) = named_by_both.filter(|pid| corroborated_as_server(*pid)) {
         let is_alive = || unsafe { libc::kill(pid, 0) == 0 };
         unsafe { libc::kill(pid, libc::SIGTERM) };
         for _ in 0..40 {
@@ -971,21 +1054,35 @@ impl Server {
             Err(_) => return,
         };
         let (events, receiver) = mpsc::channel();
-        let mut writer = stream;
-        thread::spawn(move || {
-            while let Ok(event) = receiver.recv() {
-                if write_message(&mut writer, &event).is_err() {
-                    break;
-                }
-            }
-        });
+        thread::spawn(move || forward_events(stream, &receiver));
 
-        // A deadline on the handshake only — see [`HANDSHAKE_DEADLINE`].
-        // Best-effort: a platform that will not take one leaves the read
-        // blocking, which is where it was before.
-        let _ = reader_stream.set_read_timeout(Some(HANDSHAKE_DEADLINE));
-        let mut reader = BufReader::new(reader_stream);
-        let attached = match read_message::<_, ClientRequest>(&mut reader) {
+        // A deadline on the handshake only — see [`HANDSHAKE_DEADLINE`] —
+        // and a frame limit sized for what a handshake actually says rather
+        // than for the largest repaint this wire ever carries: nothing has
+        // vouched for this peer yet.
+        let mut reader = BufReader::new(Handshake::new(reader_stream, HANDSHAKE_DEADLINE));
+        let first = read_message_within::<_, ClientRequest>(&mut reader, MAX_HANDSHAKE_FRAME);
+        let attached = match first {
+            // Stopping needs no client and no session, and a server whose
+            // pid file or corroboration has gone is one only this can
+            // reach: the workspace lock makes a survivor refuse every
+            // replacement, so `uze terminal stop` failing to be heard left
+            // no way back in but a manual `kill`.
+            Ok(Some(ClientRequest::Stop)) => {
+                // Answered on the socket rather than through the writer
+                // thread: the acknowledgement has to be on the wire before
+                // the accept loop is woken, or the process can exit out
+                // from under a frame still sitting in a channel. Nothing
+                // else is ever sent on this connection — no client was
+                // registered — so there is nothing for this to interleave
+                // with.
+                let answered = write_message(reader.get_mut().socket(), &ClientEvent::Stopped);
+                if let Err(error) = answered {
+                    tracing::warn!(%error, "could not acknowledge a stop request");
+                }
+                self.shut_down();
+                return;
+            }
             Ok(Some(ClientRequest::Attach {
                 version,
                 columns,
@@ -1041,7 +1138,7 @@ impl Server {
         };
         // Attached, so silence is a person reading rather than a peer
         // holding threads it never intends to use.
-        let _ = reader.get_ref().set_read_timeout(None);
+        reader.get_mut().attached();
 
         while let Ok(Some(request)) = read_message::<_, ClientRequest>(&mut reader) {
             // A keystroke is a request too, and there are thousands: debug
@@ -1246,10 +1343,8 @@ impl Server {
                     }
                 }
                 ClientRequest::Stop => {
-                    *self.stopped.lock().expect("stop state poisoned") = true;
-                    self.stop_panes();
                     let _ = events.send(ClientEvent::Stopped);
-                    let _ = UnixStream::connect(&self.endpoint.socket);
+                    self.shut_down();
                     break;
                 }
                 ClientRequest::Attach { .. } => {}
@@ -1490,14 +1585,33 @@ impl Server {
             });
     }
 
+    /// Repaints every pane on every attached client, as one frame per pane.
+    ///
+    /// One frame carrying them all is what [`MAX_FRAME`] does *not* bound:
+    /// the cap is tied to a repaint of the largest single pane a client may
+    /// ask for, so three panes at [`MAX_PANE_DIMENSION`] — a size
+    /// `within_pane_bounds` permits, and one that is persisted across
+    /// restarts — made the frame unsendable and every attached client sit
+    /// frozen on live-looking chrome. Per pane, that cap is the real bound
+    /// again.
+    ///
+    /// The `Snapshot` goes out first with no panes on it: it is what tells
+    /// a client to forget the panes it has, and the repaints that follow
+    /// are what give it the new ones. They are ordinary `Damage` frames
+    /// naming every cell, which is what a client already applies to a pane
+    /// it has never heard of (and what a resize already sends), so no
+    /// client has to learn anything to read this.
     fn broadcast_snapshot(&self) {
         let session = self.session.lock().expect("session poisoned").clone();
-        let panes: Vec<PaneSnapshot> = self
+        // The runtimes, not their grids: a repaint is built and handed on
+        // one pane at a time, so the largest thing alive at once stays one
+        // pane's worth rather than the whole workspace's.
+        let panes: Vec<Arc<PaneRuntime>> = self
             .panes
             .lock()
             .expect("panes poisoned")
             .values()
-            .map(|pane| pane.snapshot_and_remember())
+            .cloned()
             .collect();
         self.clients
             .lock()
@@ -1507,16 +1621,38 @@ impl Server {
                     .events
                     .send(ClientEvent::Snapshot {
                         session: view_for(&session, &client.selection),
-                        panes: panes.clone(),
+                        panes: Vec::new(),
                     })
                     .is_ok()
             });
+        for pane in panes {
+            let repaint = whole_pane(pane.snapshot_and_remember());
+            self.clients
+                .lock()
+                .expect("clients poisoned")
+                .retain(|client| {
+                    client
+                        .events
+                        .send(ClientEvent::Damage(repaint.clone()))
+                        .is_ok()
+                });
+        }
     }
 
     fn stop_panes(&self) {
         for pane in self.panes.lock().expect("panes poisoned").values() {
             pane.stop();
         }
+    }
+
+    /// Takes the server down: no new work, no live panes, and one
+    /// connection of its own so [`accept_connections`] wakes from `accept`
+    /// and reads the flag instead of blocking until somebody happens to
+    /// attach.
+    fn shut_down(&self) {
+        *self.stopped.lock().expect("stop state poisoned") = true;
+        self.stop_panes();
+        let _ = UnixStream::connect(&self.endpoint.socket);
     }
 }
 
@@ -1598,12 +1734,21 @@ fn socket_identity(path: &Path) -> Option<(u64, u64)> {
 /// Reclaiming rather than yielding is safe *because* of that lock. This
 /// process holds it, so anything now sitting at the path is not another
 /// server of this workspace.
+///
+/// The stop flag is held across the whole check-and-rebind, not merely
+/// read at the top. Reading it and then rebinding races the teardown at
+/// the end of [`serve`]: a shutdown landing between the two leaves a server
+/// on its way out rebinding a socket nothing will ever remove, and an
+/// endpoint pointing at a dead pid. `serve` takes the same lock before it
+/// clears the endpoint, which makes "rebound, then cleared" and "stopped,
+/// so never rebound" the only two orderings there are.
 fn spawn_endpoint_watch(server: Arc<Server>) {
     thread::spawn(move || {
         let mut bound = socket_identity(&server.endpoint.socket);
         loop {
             thread::sleep(STATUS_PROBE_INTERVAL);
-            if *server.stopped.lock().expect("stop state poisoned") {
+            let stopped = server.stopped.lock().expect("stop state poisoned");
+            if *stopped {
                 break;
             }
             if socket_identity(&server.endpoint.socket) == bound {
@@ -1973,6 +2118,50 @@ fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, 
     (row, column, cell)
 }
 
+/// Writes one client's events onto its socket until there are no more, or
+/// until one of them cannot be written.
+///
+/// A frame that will not go out ends the connection rather than the writer
+/// alone. Dropping only this thread's dup of the socket leaves the reader
+/// half open, so the peer sees no EOF: its `Attach` succeeded, nothing
+/// follows, and it sits on chrome that still looks live while the events it
+/// will never read pile up in a channel nobody drains. Shutting both
+/// halves is what makes the failure arrive where a client can act on it —
+/// as the disconnect it actually is.
+fn forward_events(mut socket: UnixStream, events: &mpsc::Receiver<ClientEvent>) {
+    while let Ok(event) = events.recv() {
+        if let Err(error) = write_message(&mut socket, &event) {
+            tracing::warn!(%error, "dropping a terminal client an event could not reach");
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+            return;
+        }
+    }
+}
+
+/// A pane's whole grid said as damage — every cell "changed" — which is
+/// how [`Server::broadcast_snapshot`] repaints one pane in one frame. The
+/// same thing a resize already sends, and the shape the frame limit is
+/// measured against (`a_full_repaint_of_the_largest_pane_fits_in_one_frame`
+/// weighs a damage cell, the widest of the two).
+fn whole_pane(snapshot: PaneSnapshot) -> PaneDamage {
+    let columns = snapshot.columns;
+    PaneDamage {
+        pane: snapshot.pane,
+        columns,
+        rows: snapshot.rows,
+        cursor: snapshot.cursor,
+        alternate_screen: snapshot.alternate_screen,
+        mouse: snapshot.mouse,
+        bracketed_paste: snapshot.bracketed_paste,
+        changed: snapshot
+            .cells
+            .into_iter()
+            .enumerate()
+            .map(|(index, cell)| cell_coordinates(index, columns, cell))
+            .collect(),
+    }
+}
+
 fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
     let content = terminal.renderable_content();
     let columns = terminal.grid().columns() as u16;
@@ -2101,6 +2290,68 @@ const MAX_FRAME: u32 = 64 * 1024 * 1024;
 /// held forever; once attached, silence is ordinary — a person is reading.
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 
+/// The largest first frame a peer may send.
+///
+/// [`MAX_FRAME`] is sized for the largest *repaint* this wire carries, and
+/// a repaint is a thing the server sends to a client it already knows. The
+/// first frame is the opposite: nobody has vouched for the peer, and the
+/// only two things it may legitimately say — `Attach`, naming a workspace
+/// and a root, or `Stop` — are hundreds of bytes. Bounding it here rather
+/// than at 64 MiB is the difference between a stranger reserving a path
+/// and a stranger reserving memory.
+const MAX_HANDSHAKE_FRAME: u32 = 64 * 1024;
+
+/// Bounds the whole handshake, rather than each read that makes it up.
+///
+/// `SO_RCVTIMEO` restarts on every successful read, so a peer dribbling one
+/// byte just inside the timeout holds a reader thread, a writer thread and
+/// whatever it has allocated for as long as it likes — which is precisely
+/// what [`HANDSHAKE_DEADLINE`] exists to prevent. One deadline over the
+/// whole exchange is what that actually takes. [`Handshake::attached`]
+/// disarms it once the peer has said who it is.
+struct Handshake {
+    socket: UnixStream,
+    deadline: Option<Instant>,
+}
+
+impl Handshake {
+    fn new(socket: UnixStream, within: Duration) -> Self {
+        Self {
+            socket,
+            deadline: Some(Instant::now() + within),
+        }
+    }
+
+    fn socket(&mut self) -> &mut UnixStream {
+        &mut self.socket
+    }
+
+    /// Silence is a person reading from here on, not a peer holding
+    /// threads it never intends to use.
+    fn attached(&mut self) {
+        self.deadline = None;
+        let _ = self.socket.set_read_timeout(None);
+    }
+}
+
+impl Read for Handshake {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if let Some(deadline) = self.deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the peer never said who it is",
+                ));
+            }
+            // Best-effort: a platform that will not take one leaves the
+            // read blocking, which is where it was before.
+            let _ = self.socket.set_read_timeout(Some(remaining));
+        }
+        self.socket.read(buffer)
+    }
+}
+
 /// Length-prefixed bincode, not newline-delimited JSON: a `PaneSnapshot`
 /// carries one `RenderCell` per grid cell, and JSON's per-field text
 /// encoding of that (a `Snapshot`/`Damage` this size fires on every PTY
@@ -2116,13 +2367,22 @@ fn write_message<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<()
     let len = u32::try_from(bytes.len())
         .ok()
         .filter(|len| *len <= MAX_FRAME)
-        .ok_or_else(|| oversized_frame(bytes.len() as u64))?;
+        .ok_or_else(|| oversized_frame(bytes.len() as u64, MAX_FRAME))?;
     writer.write_all(&len.to_le_bytes())?;
     writer.write_all(&bytes)?;
     writer.flush()?;
     Ok(())
 }
 fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Option<T>, RuntimeError> {
+    read_message_within(reader, MAX_FRAME)
+}
+
+/// The same read held to a smaller bound than the wire's own — see
+/// [`MAX_HANDSHAKE_FRAME`].
+fn read_message_within<R: Read, T: DeserializeOwned>(
+    reader: &mut R,
+    limit: u32,
+) -> Result<Option<T>, RuntimeError> {
     let mut len_bytes = [0u8; 4];
     match reader.read_exact(&mut len_bytes) {
         Ok(()) => {}
@@ -2134,8 +2394,8 @@ fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Option<T
     // thing a peer says and the protocol version lives *inside* the frame
     // it describes, so nothing has vouched for the peer yet — and the
     // allocation is whatever the four bytes claim, up to 4 GiB.
-    if len > MAX_FRAME {
-        return Err(oversized_frame(u64::from(len)));
+    if len > limit {
+        return Err(oversized_frame(u64::from(len), limit));
     }
     let mut buffer = vec![0u8; len as usize];
     reader.read_exact(&mut buffer)?;
@@ -2144,9 +2404,9 @@ fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Option<T
         .map_err(|error| RuntimeError::Protocol(error.to_string()))
 }
 
-fn oversized_frame(len: u64) -> RuntimeError {
+fn oversized_frame(len: u64, limit: u32) -> RuntimeError {
     RuntimeError::Protocol(format!(
-        "frame of {len} bytes exceeds the {MAX_FRAME}-byte limit"
+        "frame of {len} bytes exceeds the {limit}-byte limit"
     ))
 }
 
@@ -2167,11 +2427,11 @@ mod tests {
     use super::{
         Compatibility, Endpoint, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneRuntime,
         PersistedSpace, PersistedTab, PersistedWorkspace, Probe, ReplySink, RuntimeError,
-        Selection, Server, WorkspaceLock, heal_pid_file, identity_of, persisted_state_path,
-        probe_server, read_event, read_message, recorded_compatibility,
-        relaunch_command_for_process, replace_incompatible_server, runtime_process_is_alive,
-        send_request, server_protocol_version, snapshot, view_for, workspace_lock_path,
-        write_atomically, write_message, write_pid_file,
+        Selection, Server, WorkspaceLock, corroborated_as_server, heal_pid_file, identity_of,
+        persisted_state_path, platform_reads_processes, probe_server, read_event, read_message,
+        recorded_compatibility, relaunch_command_for_process, replace_incompatible_server,
+        runtime_process_is_alive, send_request, server_protocol_version, snapshot, view_for,
+        workspace_lock_path, write_atomically, write_message, write_pid_file,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -2433,7 +2693,10 @@ mod tests {
         };
         std::fs::write(&endpoint.socket, b"placeholder").unwrap();
 
-        assert!(matches!(probe_server(&endpoint), Probe::Foreign));
+        assert!(
+            matches!(probe_server(&endpoint), Probe::Foreign { peer: None }),
+            "with nobody listening there is no peer to name, and so nobody to signal"
+        );
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -2443,10 +2706,11 @@ mod tests {
     /// both endpoint files, so the caller's next connect lands on a fresh
     /// server instead of the one it just gave up on.
     ///
-    /// The victim is a copy of `sleep` named `uze`, because that is the
-    /// proof `replace_incompatible_server` now demands before signalling
-    /// anything — see the sibling test for what the same file naming an
-    /// ordinary process does.
+    /// The victim is a copy of `sleep` named `uze`, and the probe's peer
+    /// pid names it too: those are the two independent witnesses
+    /// `replace_incompatible_server` now demands before signalling anything
+    /// — see the sibling tests for what a pid file naming an ordinary
+    /// process does, and for what happens when the two disagree.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn replace_incompatible_server_kills_the_old_owner_and_clears_its_files() {
@@ -2466,12 +2730,24 @@ mod tests {
         // No version line: the exact shape `replace_incompatible_server` is
         // meant to react to.
         std::fs::write(&pid_path, pid.to_string()).unwrap();
+        // The replace signals only a pid the process table corroborates, so
+        // a probe that cannot read the child is a different failure from a
+        // signal that did not land — and says which one in its own words.
+        assert!(
+            corroborated_as_server(pid as libc::pid_t),
+            "the process table must corroborate the copied `uze` (pid {pid}): \
+             executable_of = {:?}, platform reads processes = {}",
+            crate::process_probe::executable_of(pid),
+            platform_reads_processes()
+        );
 
         let endpoint = Endpoint {
             socket: socket.clone(),
             pid: pid_path.clone(),
         };
-        replace_incompatible_server(&endpoint).unwrap();
+        // The peer the probe would have learned from `SO_PEERCRED`, which
+        // here agrees with the file.
+        replace_incompatible_server(&endpoint, Some(pid)).unwrap();
 
         // `child` makes this test process the signaled child's parent, so
         // (unlike the real server, which has no such relationship to the
@@ -3248,13 +3524,29 @@ mod tests {
     /// its own. `0xffffffff` asks for 4 GiB.
     #[test]
     fn a_length_prefix_past_the_frame_limit_is_refused_before_it_is_allocated() {
-        let mut wire: &[u8] = &[0xff, 0xff, 0xff, 0xff];
+        for refused in [u32::MAX, MAX_FRAME + 1] {
+            let mut wire: &[u8] = &refused.to_le_bytes();
+            assert!(
+                matches!(
+                    read_message::<_, crate::ClientRequest>(&mut wire),
+                    Err(RuntimeError::Protocol(_))
+                ),
+                "a {refused}-byte frame must be refused, not allocated"
+            );
+        }
+        // And the limit itself is a size the wire accepts, not one it
+        // refuses: a cap that fired one byte early would disconnect a
+        // client at the moment it resized. Truncated after the prefix, so
+        // what this proves is that the read got past the bound and went
+        // looking for the bytes.
+        let mut wire: &[u8] = &MAX_FRAME.to_le_bytes();
         assert!(
             matches!(
                 read_message::<_, crate::ClientRequest>(&mut wire),
-                Err(RuntimeError::Protocol(_))
+                Err(RuntimeError::Io(error))
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof
             ),
-            "a frame nobody could have meant must be refused, not allocated"
+            "a frame of exactly the limit is one the wire allows"
         );
     }
 
@@ -3262,18 +3554,33 @@ mod tests {
     /// about what is sendable — and nothing half-written reaches the wire.
     #[test]
     fn a_frame_past_the_limit_is_never_written_either() {
-        let mut wire = Vec::new();
-        let oversized = crate::ClientRequest::Input {
+        let framed = |payload: usize| crate::ClientRequest::Input {
             pane: PaneId(1),
-            bytes: vec![0u8; MAX_FRAME as usize + 1],
+            bytes: vec![0u8; payload],
         };
+        let overhead = bincode::serialized_size(&framed(0)).unwrap() as usize;
+
+        let mut wire = Vec::new();
         assert!(matches!(
-            write_message(&mut wire, &oversized),
+            write_message(&mut wire, &framed(MAX_FRAME as usize + 1 - overhead)),
             Err(RuntimeError::Protocol(_))
         ));
         assert!(
             wire.is_empty(),
             "nothing may reach the wire that the other side would refuse"
+        );
+
+        // Exactly the limit is sendable, and the reader accepts it: the two
+        // sides agree on the boundary itself, not merely on numbers well
+        // past it.
+        write_message(&mut wire, &framed(MAX_FRAME as usize - overhead)).unwrap();
+        assert_eq!(wire.len(), MAX_FRAME as usize + 4, "prefix plus the frame");
+        let mut sent: &[u8] = &wire;
+        assert!(
+            read_message::<_, crate::ClientRequest>(&mut sent)
+                .unwrap()
+                .is_some(),
+            "a frame of exactly the limit round-trips"
         );
     }
 
@@ -3356,6 +3663,11 @@ mod tests {
             std::thread::spawn(move || server.handle_client(client))
         };
         let mut writer = driver.try_clone().unwrap();
+        // So a server that stops answering fails this test instead of
+        // hanging it.
+        driver
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
         let mut reader = std::io::BufReader::new(driver);
         send_request(
             &mut writer,
@@ -3378,9 +3690,16 @@ mod tests {
         )
         .unwrap();
 
+        // Attaching repaints every pane first (see
+        // [`Server::broadcast_snapshot`]), so the event this test is about
+        // is the one that reports a size the pane did not start at.
         let resized = loop {
             match read_event(&mut reader).expect("the server must still be speaking") {
-                Some(crate::ClientEvent::Damage(damage)) if damage.pane == pane => break damage,
+                Some(crate::ClientEvent::Damage(damage))
+                    if damage.pane == pane && (damage.columns, damage.rows) != (80, 24) =>
+                {
+                    break damage;
+                }
                 Some(_) => {}
                 None => panic!("the server hung up rather than bounding the resize"),
             }
@@ -3543,7 +3862,9 @@ mod tests {
             .unwrap();
         std::fs::write(&endpoint.pid, bystander.id().to_string()).unwrap();
 
-        replace_incompatible_server(&endpoint).unwrap();
+        // Both witnesses name it, and it is still not a server: `sleep` is
+        // not `uze`, which is the reading the process table settles.
+        replace_incompatible_server(&endpoint, Some(bystander.id())).unwrap();
 
         assert!(
             bystander.try_wait().unwrap().is_none(),
@@ -3687,7 +4008,14 @@ mod tests {
         env.set("UZE_HOME", &scratch);
 
         let held = WorkspaceLock::acquire().expect("the first claim is granted");
-        assert!(WorkspaceLock::acquire().is_err(), "and it is exclusive");
+        match WorkspaceLock::acquire() {
+            Err(RuntimeError::Protocol(refusal)) => assert!(
+                refusal.contains("already serving this workspace"),
+                "contention has to name the server that holds it, not an errno: {refusal}"
+            ),
+            Err(other) => panic!("a held claim must read as contention, not as {other}"),
+            Ok(_) => panic!("a held claim must not be granted twice"),
+        }
         drop(held);
         WorkspaceLock::acquire().expect("released with its holder");
 
@@ -3712,5 +4040,403 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// [`MAX_FRAME`] bounds a repaint of *one* pane at
+    /// [`MAX_PANE_DIMENSION`]. A snapshot carrying every pane in a single
+    /// frame is therefore bounded by nothing a client cannot exceed: three
+    /// panes at a size `within_pane_bounds` permits — and that a restart
+    /// restores — made the frame unsendable, and every attached client sat
+    /// frozen on chrome that still looked live.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn every_pane_reaches_a_client_when_one_frame_could_not_have_carried_them_all() {
+        let scratch = uze_testkit::temp::socket_scratch("bigsnap");
+        let uze_home = scratch.join("home");
+        let runtime_dir = scratch.join("runtime");
+        let roots: Vec<PathBuf> = (0..3)
+            .map(|index| scratch.join(format!("p{index}")))
+            .collect();
+        for directory in [&uze_home, &runtime_dir].into_iter().chain(roots.iter()) {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+
+        let endpoint = Endpoint::global().unwrap();
+        let (server, _damage) = Server::new(roots[0].clone(), endpoint).unwrap();
+        let server = Arc::new(server);
+        for root in &roots[1..] {
+            server.ensure_space(root).expect("a space per root");
+        }
+
+        // Filled through the pane's own parser, so what the client is sent
+        // is a real grid and not a hand-built one. The character is
+        // four bytes of UTF-8 — the widest a cell can carry, and what makes
+        // three of these panes exceed one frame rather than merely approach
+        // it.
+        let widest = '\u{1d54f}';
+        let mut painted = Vec::new();
+        for row in 0..MAX_PANE_DIMENSION {
+            if row > 0 {
+                painted.extend_from_slice(b"\r\n");
+            }
+            for _ in 0..MAX_PANE_DIMENSION {
+                let mut encoded = [0u8; 4];
+                painted.extend_from_slice(widest.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+        let pane_ids: Vec<PaneId> = server
+            .panes
+            .lock()
+            .expect("panes poisoned")
+            .keys()
+            .copied()
+            .collect();
+        assert_eq!(pane_ids.len(), 3, "one pane per space");
+        for pane in &pane_ids {
+            server.resize_pane(*pane, MAX_PANE_DIMENSION, MAX_PANE_DIMENSION);
+        }
+        for runtime in server.panes.lock().expect("panes poisoned").values() {
+            let mut parser: Processor = Processor::new();
+            parser.advance(
+                &mut *runtime.terminal.lock().expect("terminal poisoned"),
+                &painted,
+            );
+        }
+
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        driver
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                workspace: WorkspaceId("bigsnap".into()),
+                columns: 0,
+                rows: 0,
+                root: None,
+            },
+        )
+        .unwrap();
+
+        let mut repainted = std::collections::BTreeSet::new();
+        while repainted.len() < pane_ids.len() {
+            match read_event(&mut reader)
+                .expect("every pane has to reach the client, one frame at a time")
+            {
+                Some(crate::ClientEvent::Damage(damage)) => {
+                    assert_eq!(
+                        (damage.columns, damage.rows),
+                        (MAX_PANE_DIMENSION, MAX_PANE_DIMENSION)
+                    );
+                    assert_eq!(
+                        damage.changed.len(),
+                        usize::from(MAX_PANE_DIMENSION) * usize::from(MAX_PANE_DIMENSION),
+                        "a repaint names every cell"
+                    );
+                    assert_eq!(
+                        damage.changed[0].2.character, widest,
+                        "the cells arrive as the pane actually holds them"
+                    );
+                    repainted.insert(damage.pane);
+                }
+                Some(_) => {}
+                None => panic!("the server hung up instead of repainting every pane"),
+            }
+        }
+        assert_eq!(
+            repainted,
+            pane_ids
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        drop(writer);
+        drop(reader);
+        let _ = serving.join();
+        server.stop_panes();
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A frame that will not go out has to end the connection, not just
+    /// the thread that tried to write it. Dropping only the writer's dup
+    /// leaves the peer's read half open: no EOF, no error, and a client
+    /// sitting on chrome that still looks live while events it will never
+    /// see pile up behind it.
+    #[test]
+    fn a_client_an_event_cannot_reach_is_disconnected_rather_than_frozen() {
+        let (peer, socket) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (events, receiver) = std::sync::mpsc::channel();
+        let writing = std::thread::spawn(move || super::forward_events(socket, &receiver));
+
+        events
+            .send(crate::ClientEvent::Error {
+                message: "x".repeat(MAX_FRAME as usize + 1),
+            })
+            .unwrap();
+
+        let mut read = peer;
+        read.set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            std::io::Read::read(&mut read, &mut byte).unwrap(),
+            0,
+            "the peer must see EOF, which is what runs its disconnected path"
+        );
+        drop(events);
+        writing.join().unwrap();
+    }
+
+    /// `uze terminal stop` is the documented way out of a server that has
+    /// to go — and, since the workspace lock makes a survivor refuse every
+    /// replacement, the only one short of a manual `kill`. It has to be
+    /// heard by a server no client has ever attached to, which is where it
+    /// was being dropped: `Stop` as a first frame fell through to "not an
+    /// `Attach`" and the connection was closed without an answer.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn stop_is_heard_as_a_first_frame_by_a_server_nobody_attached_to() {
+        let scratch = uze_testkit::temp::socket_scratch("stopfirst");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+
+        let endpoint = Endpoint::global().unwrap();
+        let (served, serving) = std::sync::mpsc::channel();
+        let serve_root = project.clone();
+        std::thread::spawn(move || {
+            let _ = served.send(super::serve(serve_root));
+        });
+
+        let mut ready = false;
+        for _ in 0..200 {
+            if std::os::unix::net::UnixStream::connect(&endpoint.socket).is_ok() {
+                ready = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(ready, "the server must be listening before it is stopped");
+
+        super::stop(&project).expect("a running server must acknowledge stop");
+        serving
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the stopped server must leave its accept loop")
+            .expect("and leave it cleanly");
+        assert!(
+            !endpoint.socket.exists() && !endpoint.pid.exists(),
+            "a stopped server clears the endpoint it was reached at"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `flock` says no for reasons that are not contention, and reading
+    /// them all as contention told the person to go and stop a server that
+    /// does not exist — permanently, on an `$UZE_HOME` that happens to sit
+    /// on NFS, FUSE or a 9p mount, with no command that could clear it.
+    #[test]
+    fn only_a_held_lock_reads_as_another_server() {
+        assert!(matches!(
+            super::classify_lock_refusal(Some(libc::EWOULDBLOCK)),
+            super::LockRefusal::Contended
+        ));
+        assert!(matches!(
+            super::classify_lock_refusal(Some(libc::EINTR)),
+            super::LockRefusal::Interrupted
+        ));
+        for unsupported in [libc::ENOLCK, libc::EOPNOTSUPP, libc::ENOSYS, libc::EBADF] {
+            assert!(
+                matches!(
+                    super::classify_lock_refusal(Some(unsupported)),
+                    super::LockRefusal::Unsupported
+                ),
+                "errno {unsupported} is a filesystem that cannot lock, not a server that holds one"
+            );
+        }
+    }
+
+    /// The number in a pid file goes straight to [`libc::kill`], and
+    /// `libc::pid_t` is signed: `-1` is not a process, it is every process
+    /// the user owns. UZE never writes such a file, but it reads one from a
+    /// world a `/tmp` cleaner, a crash and a text editor all reach.
+    #[test]
+    fn a_pid_file_that_does_not_name_one_process_names_none() {
+        let scratch = uze_testkit::temp::scratch("terminal-pid-negative");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let pid_path = scratch.join("test.pid");
+
+        for refused in ["-1", "0", "-4192325", "not-a-pid", ""] {
+            std::fs::write(&pid_path, refused).unwrap();
+            assert_eq!(
+                super::read_pid(&pid_path),
+                None,
+                "{refused:?} must never reach kill(2)"
+            );
+        }
+        std::fs::write(&pid_path, "4192325\n11").unwrap();
+        assert_eq!(super::read_pid(&pid_path), Some(4192325));
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Corroboration gates one thing only: signalling a process. Where
+    /// nothing can corroborate — a platform [`process_probe`] cannot answer
+    /// for, or Linux with `/proc` unmounted — declining to signal loses
+    /// nothing, because clearing the endpoint files is the whole recovery
+    /// there. Taking the file's word for it instead is how a pid file could
+    /// have aimed a `SIGKILL`.
+    #[test]
+    fn nothing_is_signalled_where_nothing_can_corroborate_it() {
+        assert_eq!(
+            corroborated_as_server(std::process::id() as libc::pid_t),
+            platform_reads_processes() && super::runs_uze(std::process::id() as libc::pid_t),
+            "corroboration is the process table's answer, never the absence of one"
+        );
+        if !platform_reads_processes() {
+            assert!(
+                !corroborated_as_server(std::process::id() as libc::pid_t),
+                "a platform that cannot read processes corroborates nothing"
+            );
+        }
+    }
+
+    /// `SO_PEERCRED` names the process actually behind the socket, and the
+    /// kernel stamps it — a pid file cannot forge it and a recycled pid
+    /// cannot survive it. A file naming somebody else than the peer is the
+    /// recycled-pid case itself, and `uze` is not a distinguishing name: a
+    /// second server under a second `$UZE_HOME`, or an in-flight
+    /// `uze install`, is one too.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_pid_file_that_disagrees_with_the_peer_gets_nobody_signalled() {
+        let scratch = uze_testkit::temp::scratch("terminal-replace-disagree");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let endpoint = Endpoint {
+            socket: scratch.join("test.sock"),
+            pid: scratch.join("test.pid"),
+        };
+        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
+
+        let server_binary = scratch.join("uze");
+        std::fs::copy("/bin/sleep", &server_binary).unwrap();
+        let mut named = std::process::Command::new(&server_binary)
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(&endpoint.pid, named.id().to_string()).unwrap();
+
+        // Everything the old rule asked for is true of the file — it names
+        // a live process the table corroborates as `uze`. The peer is
+        // somebody else, and that is the whole difference.
+        assert!(corroborated_as_server(named.id() as libc::pid_t));
+        replace_incompatible_server(&endpoint, Some(named.id() + 1)).unwrap();
+        assert!(
+            named.try_wait().unwrap().is_none(),
+            "a pid file the socket's own peer contradicts must not get anything killed"
+        );
+
+        // And with no peer at all — a socket nobody listens on — there is
+        // nothing to agree with, so there is nothing to signal either.
+        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
+        replace_incompatible_server(&endpoint, None).unwrap();
+        assert!(named.try_wait().unwrap().is_none());
+        assert!(!endpoint.socket.exists(), "the endpoint is still cleared");
+        assert!(!endpoint.pid.exists());
+
+        let _ = named.kill();
+        let _ = named.wait();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `SO_RCVTIMEO` restarts on every successful read, so a deadline
+    /// spelled with it alone is no deadline at all: a peer dribbling a byte
+    /// just inside it holds a reader thread, a writer thread and whatever
+    /// it has allocated for as long as it likes — the very thing
+    /// [`HANDSHAKE_DEADLINE`] says it prevents.
+    #[test]
+    fn a_dribbling_peer_runs_out_of_handshake_rather_than_restarting_it() {
+        let (peer, socket) = std::os::unix::net::UnixStream::pair().unwrap();
+        let dribbling = std::thread::spawn(move || {
+            let mut peer = peer;
+            for _ in 0..40 {
+                if std::io::Write::write_all(&mut peer, &[0u8]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(60));
+            }
+        });
+
+        let began = std::time::Instant::now();
+        let mut reader =
+            std::io::BufReader::new(super::Handshake::new(socket, Duration::from_millis(150)));
+        let refused = super::read_message_within::<_, crate::ClientRequest>(
+            &mut reader,
+            super::MAX_HANDSHAKE_FRAME,
+        );
+        let waited = began.elapsed();
+
+        assert!(
+            refused.is_err(),
+            "a peer that never finishes saying who it is has to be let go"
+        );
+        assert!(
+            waited < Duration::from_secs(2),
+            "the deadline bounds the whole handshake, not each read of it (waited {waited:?})"
+        );
+        drop(reader);
+        let _ = dribbling.join();
+    }
+
+    /// The first frame is the one nothing has vouched for, and the only
+    /// two things it may say are hundreds of bytes. Sizing it by the
+    /// largest repaint this wire ever carries let a stranger reserve
+    /// 64 MiB by writing four bytes.
+    #[test]
+    fn a_first_frame_is_bounded_by_what_a_handshake_says_not_by_a_repaint() {
+        const { assert!(super::MAX_HANDSHAKE_FRAME < MAX_FRAME) };
+        let mut wire: &[u8] = &(super::MAX_HANDSHAKE_FRAME + 1).to_le_bytes();
+        assert!(
+            matches!(
+                super::read_message_within::<_, crate::ClientRequest>(
+                    &mut wire,
+                    super::MAX_HANDSHAKE_FRAME
+                ),
+                Err(RuntimeError::Protocol(_))
+            ),
+            "a handshake frame past the handshake's own bound is refused"
+        );
+
+        let attach = bincode::serialize(&crate::ClientRequest::Attach {
+            version: crate::PROTOCOL_VERSION,
+            workspace: WorkspaceId("a-workspace".into()),
+            columns: 200,
+            rows: 50,
+            root: Some(PathBuf::from("/some/ordinary/project/path")),
+        })
+        .unwrap();
+        assert!(
+            attach.len() < super::MAX_HANDSHAKE_FRAME as usize,
+            "and the bound still has to fit what a handshake actually says"
+        );
     }
 }

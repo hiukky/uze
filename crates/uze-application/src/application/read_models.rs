@@ -292,7 +292,31 @@ pub enum RemovePluginReport {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StoreHealth {
     Ready,
+    /// Registrations `packages.json` carries that this UZE cannot read —
+    /// one sentence each, already carrying its remedy. The Store still
+    /// works: every readable package is installed, listed and removable.
+    /// These entries simply answer to nothing until they are cleared, and
+    /// saying so is what keeps a package that quietly vanished from looking
+    /// like a package that was never installed.
+    Quarantined(Vec<String>),
     Blocked(String),
+}
+
+impl std::fmt::Display for StoreHealth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreHealth::Ready => formatter.write_str("ready"),
+            StoreHealth::Quarantined(entries) => {
+                write!(
+                    formatter,
+                    "ready, with {} registration(s) that could not be read\n    {}",
+                    entries.len(),
+                    entries.join("\n    ")
+                )
+            }
+            StoreHealth::Blocked(reason) => write!(formatter, "blocked: {reason}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

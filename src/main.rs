@@ -2405,7 +2405,7 @@ fn render_doctor(report: &DoctorReport) -> String {
     text.push_str(&progress::report_section("UZE Home"));
     text.push_str(&format!("  {}\n\n", report.uze_home.display()));
     text.push_str(&progress::report_section("Store"));
-    text.push_str(&format!("  {:?}\n\n", report.store));
+    text.push_str(&format!("  {}\n\n", report.store));
     text.push_str(&progress::report_section("Plugins"));
     text.push_str(&format!("  {} installed\n\n", report.plugins.len()));
     text.push_str(&progress::report_section("Harnesses"));
@@ -2492,7 +2492,7 @@ fn render_doctor(report: &DoctorReport) -> String {
     if !report.maintenance.outcomes.is_empty() {
         text.push_str("\nMaintenance\n");
         for outcome in &report.maintenance.outcomes {
-            text.push_str(&format!("  {:?}\n", outcome));
+            text.push_str(&format!("  {outcome}\n"));
         }
     }
     text

@@ -2328,7 +2328,16 @@ impl Attach<'_> {
                 }
             }
             if resolution.reports.is_empty() {
-                self.model.set_notice("nothing ready".to_owned());
+                // "Nothing ready" answers the gesture that offered every
+                // ready task and found none. A press on *one* task that
+                // came back with nothing means something else entirely —
+                // the record is gone, or the document holding it could not
+                // be read — and said as "nothing ready" it told the
+                // operator the task in front of them is not there.
+                self.model.set_notice(match &resolution.reserved {
+                    Some(_) => "the task could not be delivered".to_owned(),
+                    None => "nothing ready".to_owned(),
+                });
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);

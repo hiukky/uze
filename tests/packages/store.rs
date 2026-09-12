@@ -336,3 +336,86 @@ fn store_preserves_plugin_symlinks_and_executable_permissions() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+/// An install interrupted between the copy and the registration leaves a
+/// plugin directory nothing in `packages.json` names. `create_dir` refused
+/// it forever after, and the refusal was a dead end: `remove` answers only
+/// to registered ids, so there was no command that could clear it. The next
+/// attempt now clears the debris and succeeds.
+#[test]
+fn an_install_interrupted_mid_copy_never_blocks_the_next_attempt() {
+    let root = temporary_home("store-partial-install");
+    let home = UzeHome::at(root.join("uze"));
+    let store = UzeStore::new(home.clone());
+    let source = package_fixture();
+
+    // The state an interrupted install leaves: a partial directory where
+    // the package's bytes go, and no registration for it.
+    let installed = install(&store, &source).unwrap();
+    let plugin_dir = installed.root.clone();
+    fs::write(home.registry_path(), r#"{"packages":{}}"#).unwrap();
+    for entry in fs::read_dir(&plugin_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_name().unwrap() != "plugin.json" {
+            let _ = fs::remove_file(&path).or_else(|_| fs::remove_dir_all(&path));
+        }
+    }
+    fs::write(plugin_dir.join("half-written"), "truncated").unwrap();
+    assert_eq!(
+        registered(&home),
+        0,
+        "the interrupted install registered nothing"
+    );
+
+    let reinstalled = install(&store, &source).expect("a second attempt must not be refused");
+
+    assert_eq!(reinstalled.root, plugin_dir);
+    assert_eq!(registered(&home), 1);
+    assert!(
+        !plugin_dir.join("half-written").exists(),
+        "the partial tree survived into the reinstalled package"
+    );
+    assert!(
+        plugin_dir.join("skills").exists(),
+        "the package was not copied in full"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The mirror: an ingest that fails after the bytes are copied leaves the
+/// Store as it found it, so the failure is one the operator can simply
+/// retry rather than the state the test above describes.
+#[cfg(unix)]
+#[test]
+fn a_failed_ingest_leaves_no_directory_behind() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root writes into a read-only directory anyway
+    }
+    let root = temporary_home("store-failed-ingest");
+    let home = UzeHome::at(root.join("uze"));
+    let store = UzeStore::new(home.clone());
+    home.ensure_layout().unwrap();
+    // The registry cannot be written, so the ingest fails at its last step —
+    // after `copy_tree` has already landed the package's bytes.
+    fs::set_permissions(home.state_dir(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let outcome = install(&store, package_fixture());
+
+    fs::set_permissions(home.state_dir(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        outcome.is_err(),
+        "an unregistrable package must not be reported as installed"
+    );
+    assert!(
+        !home
+            .plugins_dir()
+            .join("local")
+            .join("uze-agent-skill-conformance")
+            .exists(),
+        "a failed ingest left a directory the next attempt would trip over"
+    );
+    assert_eq!(registered(&home), 0);
+    fs::remove_dir_all(root).unwrap();
+}

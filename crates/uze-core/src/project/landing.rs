@@ -209,8 +209,27 @@ pub fn publication(primary: &Path, task: &Task) -> Option<Publication> {
         })
 }
 
+/// What the remote said about a task's request, ready to be written down
+/// by [`adopt_request`].
+///
+/// The two halves are separate because only one of them touches the
+/// document: the asking is a `git ls-remote`, the one question in an
+/// evaluation that leaves the machine, and the evaluation pass holds
+/// every task it is about to write while it runs. Asked inside that
+/// lock, one slow remote made every delivery and every placement in the
+/// project wait for it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestObservation {
+    /// The branch the remote publishes the work under, when it has one.
+    published: Option<String>,
+    /// When the remote was asked — `None` when it was not asked at all.
+    asked_at_unix: Option<u64>,
+    /// The request found for the published branch, when one was.
+    request: Option<u32>,
+}
+
 /// Asks the remote whether a request is open for this task's published
-/// branch, and records the number when one is.
+/// branch, writing nothing.
 ///
 /// Called on the evaluation pass rather than only from [`publish`],
 /// because the request is not always UZE's doing: an agent told to push
@@ -220,29 +239,56 @@ pub fn publication(primary: &Path, task: &Task) -> Option<Publication> {
 /// trip stays rare — a published branch, no number yet, and at most one
 /// question per [`REQUEST_INTERVAL`] — and it stops for good the moment
 /// it is answered.
-pub fn observe_request(primary: &Path, task: &mut Task) {
+pub fn observe_request(primary: &Path, task: &Task) -> RequestObservation {
     let published = publication(primary, task);
+    let branch = published.as_ref().map(|found| found.branch.clone());
+    let unasked = RequestObservation {
+        published: branch.clone(),
+        asked_at_unix: None,
+        request: None,
+    };
     // A number answers for the branch it was found on, and the task
     // outlives both: an agent that delivered keeps working in the same
     // checkout, often on a new branch, and a number cached for good went on
-    // naming the request it had already merged.
-    task.forget_request_unless_for(published.as_ref().map(|found| found.branch.as_str()));
+    // naming the request it had already merged. Such a number is dropped by
+    // `adopt_request`, which is what makes this the moment to ask again —
+    // and what makes the clock below irrelevant to it, since the answer it
+    // records was about another branch.
+    let stale = task.published_request.is_some() && task.request_branch != branch;
+    if task.published_request.is_some() && !stale {
+        return unasked;
+    }
+    let now = crate::task::now_unix();
+    let asked_recently = !stale
+        && task
+            .request_asked_at_unix
+            .is_some_and(|asked| now.saturating_sub(asked) < REQUEST_INTERVAL.as_secs());
+    if asked_recently {
+        return unasked;
+    }
+    let Some(published) = published else {
+        return unasked;
+    };
+    RequestObservation {
+        published: Some(published.branch),
+        asked_at_unix: Some(now),
+        request: discover_request(primary, &published.tip),
+    }
+}
+
+/// Writes down what [`observe_request`] learned. The caller holds the
+/// tasks document for this and for nothing else the question needed.
+pub fn adopt_request(task: &mut Task, observed: &RequestObservation) {
+    task.forget_request_unless_for(observed.published.as_deref());
     if task.published_request.is_some() {
         return;
     }
-    let now = crate::task::now_unix();
-    let asked_recently = task
-        .request_asked_at_unix
-        .is_some_and(|asked| now.saturating_sub(asked) < REQUEST_INTERVAL.as_secs());
-    if asked_recently {
-        return;
-    }
-    let Some(published) = published else {
+    let Some(asked_at) = observed.asked_at_unix else {
         return;
     };
-    task.request_asked_at_unix = Some(now);
-    task.published_request = discover_request(primary, &published.tip);
-    task.request_branch = task.published_request.map(|_| published.branch);
+    task.request_asked_at_unix = Some(asked_at);
+    task.published_request = observed.request;
+    task.request_branch = observed.request.and_then(|_| observed.published.clone());
 }
 
 fn effective_base(primary: &Path, task: &Task) -> String {
@@ -992,6 +1038,15 @@ mod tests {
 
     fn repository(label: &str) -> Repository {
         Repository::new(label)
+    }
+
+    /// Asking the remote and writing the answer down, as one step. The
+    /// evaluation pass runs the two apart — the question outside the
+    /// tasks document's lock, the answer inside it — and these tests are
+    /// about what the pair decides, not about where each half runs.
+    fn observe_and_adopt(primary: &Path, task: &mut Task) {
+        let observed = observe_request(primary, task);
+        adopt_request(task, &observed);
     }
 
     /// A task launched in a slot of its own, the way the application does it.
@@ -1788,7 +1843,7 @@ mod tests {
         let mut task = launch(&repository, &mut store, "agent request");
         agent_commits(&repository, &task, "a.rs", "");
 
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(
             task.published_request, None,
             "an unpublished branch is never asked about"
@@ -1808,7 +1863,7 @@ mod tests {
             &format!("{tip}:refs/merge-requests/7/head"),
         ]);
 
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(7));
         assert!(task.request_asked_at_unix.is_some());
     }
@@ -1825,7 +1880,7 @@ mod tests {
         let slot = slot_path(primary, &task).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
 
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, None, "no request is open");
         let asked = task.request_asked_at_unix.expect("the remote was asked");
 
@@ -1837,18 +1892,18 @@ mod tests {
             REMOTE,
             &format!("{tip}:refs/pull/9/head"),
         ]);
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, None);
         assert_eq!(task.request_asked_at_unix, Some(asked));
 
         task.request_asked_at_unix = Some(asked - REQUEST_INTERVAL.as_secs());
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(9));
 
         // Answered, and never asked again: the number does not change.
         repository.git(&["push", "--quiet", REMOTE, ":refs/pull/9/head"]);
         task.request_asked_at_unix = None;
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(9));
         assert_eq!(task.request_asked_at_unix, None, "nothing was asked");
     }
@@ -1872,7 +1927,7 @@ mod tests {
             REMOTE,
             &format!("{tip}:refs/pull/51/head"),
         ]);
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(51));
 
         // The agent moves to new work on a new branch — what evaluation
@@ -1883,7 +1938,7 @@ mod tests {
         repository.git_in(&slot, &["commit", "-qm", "feat: auto-update"]);
         task.take_name("feat/auto-update".to_owned());
 
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(
             task.published_request, None,
             "the merged request is not this branch's"
@@ -1897,7 +1952,7 @@ mod tests {
             REMOTE,
             &format!("{tip}:refs/pull/60/head"),
         ]);
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(60), "the new branch's own");
     }
 
@@ -1922,7 +1977,7 @@ mod tests {
         task.published_request = Some(51);
         task.request_branch = None;
 
-        observe_request(primary, &mut task);
+        observe_and_adopt(primary, &mut task);
         assert_eq!(task.published_request, Some(60));
         assert_eq!(task.request_branch.as_deref(), Some(task.branch.as_str()));
     }

@@ -553,6 +553,7 @@ impl Workspace<'_> {
         };
         let target = target_of(&primary, &policy);
         let mut notices = Vec::new();
+        let mut ask_the_remote: Vec<Task> = Vec::new();
         let vocabulary = policy.branch.clone();
         let names_work = vocabulary.names_work();
         let completion = policy.completion;
@@ -673,8 +674,13 @@ impl Workspace<'_> {
                 // publish a branch the forge already had a request open for.
                 // Only where a request is what completion means — a project
                 // that merges or hands off never asks the remote anything.
+                //
+                // Asked after the pass, with the document unlocked: it is a
+                // `git ls-remote` per task, and inside the lock one slow
+                // remote made every delivery and every placement in the
+                // project wait behind the whole pass.
                 if completion == CompletionBehavior::Pr {
-                    landing::observe_request(&primary, task);
+                    ask_the_remote.push(task.clone());
                 }
                 // Following a moved target costs a clean task nothing and a
                 // dirty one its work in progress, which `refresh` refuses.
@@ -698,16 +704,69 @@ impl Workspace<'_> {
             }
             Ok(task_views(&primary, store, completion))
         });
-        match evaluated {
-            Ok(tasks) => Evaluation {
-                tasks,
-                notices,
-                unreadable: None,
-            },
-            Err(error) => Evaluation {
-                unreadable: Some(error.to_string()),
-                ..Evaluation::default()
-            },
+        let tasks = match evaluated {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                return Evaluation {
+                    unreadable: Some(error.to_string()),
+                    ..Evaluation::default()
+                };
+            }
+        };
+        let mut evaluation = Evaluation {
+            tasks,
+            notices,
+            unreadable: None,
+        };
+        self.adopt_observed_requests(&primary, completion, &ask_the_remote, &mut evaluation);
+        evaluation
+    }
+
+    /// Asks the remote about each task's request with the document
+    /// unlocked, then takes the lock once to write the answers down and
+    /// re-read the views, so a request discovered here is in the answer
+    /// this pass gives rather than in the next one's.
+    fn adopt_observed_requests(
+        &self,
+        primary: &Path,
+        completion: CompletionBehavior,
+        asked: &[Task],
+        evaluation: &mut Evaluation,
+    ) {
+        let observed: Vec<(&Task, landing::RequestObservation)> = asked
+            .iter()
+            .map(|task| (task, landing::observe_request(primary, task)))
+            .collect();
+        if observed.is_empty() {
+            return;
+        }
+        let adopted = task::locked(&self.0.home, primary, |store| {
+            for (asked, observation) in &observed {
+                // Only onto the record the question was asked about.
+                // Anything that moved it since — a delivery that pushed
+                // the branch and found the request itself — knows more
+                // about this than an answer taken before it ran.
+                if let Some(record) = task_mut(store, asked.id.as_str())
+                    && record.branch == asked.branch
+                    && record.published_as == asked.published_as
+                    && record.published_request == asked.published_request
+                    && record.request_branch == asked.request_branch
+                    && record.request_asked_at_unix == asked.request_asked_at_unix
+                {
+                    landing::adopt_request(record, observation);
+                }
+            }
+            Ok(task_views(primary, store, completion))
+        });
+        match adopted {
+            Ok(tasks) => evaluation.tasks = tasks,
+            // The pass itself stands — its states were written, and the
+            // views already say them. What is lost is a request number the
+            // next pass asks for again, which is not worth a notice in an
+            // agent's pane, the only channel an evaluation has.
+            Err(error) => {
+                tracing::warn!(%error, "the remote's answer about open requests was not recorded")
+            }
         }
     }
 
@@ -716,46 +775,132 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.deliver_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id))]
     pub fn deliver_task(&self, cwd: &Path, task_id: &str) -> Option<DeliveryReport> {
         let (primary, policy) = self.repository_context(cwd)?;
-        let mut delivered = None;
-        let recorded = task::locked(&self.0.home, &primary, |store| {
-            delivered = deliver_one(&primary, &policy, store, task_id);
-            Ok(())
-        });
-        let mut report = delivered?;
-        if let Err(error) = recorded {
-            report.warnings.push(unrecorded_delivery(&error));
-        }
-        Some(report)
+        self.deliver_claimed(&primary, &policy, task_id)
     }
 
     /// Delivers every ready task, oldest first; the second sees the first.
     #[tracing::instrument(name = "workspace.deliver_ready", skip_all, fields(cwd = %cwd.display()))]
     pub fn deliver_ready(&self, cwd: &Path) -> Vec<DeliveryReport> {
-        let Some((primary, policy)) = self.repository_context(cwd) else {
+        let Some(repository) = self.repository(cwd) else {
             return Vec::new();
         };
-        let mut reports = Vec::new();
-        let recorded = task::locked(&self.0.home, &primary, |store| {
-            let mut ready: Vec<(u64, String)> = store
-                .tasks
-                .iter()
-                .filter(|task| task.state == TaskState::Ready)
-                .map(|task| (task.created_at_unix, task.id.as_str().to_owned()))
-                .collect();
-            ready.sort();
-            reports = ready
-                .into_iter()
-                .filter_map(|(_, id)| deliver_one(&primary, &policy, store, &id))
-                .collect();
-            Ok(())
+        let mut ready: Vec<(u64, String)> = repository
+            .store
+            .tasks
+            .iter()
+            .filter(|task| task.state == TaskState::Ready)
+            .map(|task| (task.created_at_unix, task.id.as_str().to_owned()))
+            .collect();
+        ready.sort();
+        // One claim per task, in order, so the second is claimed against
+        // what the first wrote: the listing is only a listing, and the
+        // document decides under the lock each delivery takes for itself.
+        ready
+            .into_iter()
+            .filter_map(|(_, id)| {
+                self.deliver_claimed(&repository.primary, &repository.policy, &id)
+            })
+            .collect()
+    }
+
+    /// Delivers one recorded task, holding the tasks document only to
+    /// claim the task and to write down what happened to it.
+    ///
+    /// The gate a project declares has half an hour, and the `git fetch`
+    /// and `git push` around it are bounded by nothing at all. Held for
+    /// that, the document's lock made every other mutation in the project
+    /// — another delivery, a placement, the evaluation behind a pane
+    /// going quiet — wait the full two minutes and then fail, and the
+    /// press that waited came back as "nothing ready".
+    ///
+    /// So the lock is taken to mark the task [`TaskState::Integrating`]
+    /// and released. That state is what tells the rest of the client the
+    /// task is spoken for: an evaluation skips it, and so does the release
+    /// of abandoned tasks — both already did, because a delivery has
+    /// always owned its task while it ran. It is retaken at the end, and
+    /// the outcome is written onto the record only while it is still the
+    /// one that was claimed.
+    ///
+    /// A process that dies between the two leaves the record
+    /// `Integrating`, which is the state every pass reads as "a delivery
+    /// owns this" — the delivery it names is gone, and the operator's way
+    /// out is the one they already have for a task nothing is doing:
+    /// finish it, or discard it.
+    fn deliver_claimed(
+        &self,
+        primary: &Path,
+        policy: &WorktreePolicy,
+        task_id: &str,
+    ) -> Option<DeliveryReport> {
+        let claimed = task::locked(&self.0.home, primary, |store| {
+            Ok(task_mut(store, task_id).map(|record| {
+                let claimed = record.clone();
+                record.state = TaskState::Integrating;
+                claimed
+            }))
         });
-        if let Err(error) = recorded {
-            let warning = unrecorded_delivery(&error);
-            for report in &mut reports {
-                report.warnings.push(warning.clone());
+        let mut task = match claimed {
+            Ok(claimed) => claimed?,
+            // Nothing was delivered and nothing was written — said as a
+            // report rather than as `None`, which the client renders as
+            // "nothing ready": the operator who waited on a busy document
+            // would be told the task they can see is not there.
+            Err(error) => {
+                return self.unclaimed_delivery(primary, policy, task_id, &error);
             }
+        };
+        let outcome = deliver_one(primary, policy, &mut task);
+        let mut report = DeliveryReport {
+            task: TaskView::from_task(primary, &task, policy.completion),
+            outcome,
+            warnings: Vec::new(),
+        };
+        let recorded = task::locked(&self.0.home, primary, |store| {
+            let Some(record) = task_mut(store, task_id) else {
+                return Ok(Recorded::Superseded);
+            };
+            // Only the record this delivery claimed. The operator can
+            // finish or discard a task while its gate runs, and what they
+            // decided about it is newer than this.
+            if record.state != TaskState::Integrating {
+                return Ok(Recorded::Superseded);
+            }
+            *record = task;
+            Ok(Recorded::Applied)
+        });
+        match recorded {
+            Ok(Recorded::Applied) => {}
+            Ok(Recorded::Superseded) => report.warnings.push(superseded_delivery()),
+            Err(error) => report.warnings.push(unrecorded_delivery(&error)),
         }
-        reports
+        Some(report)
+    }
+
+    /// The report for a delivery that never started: the task as the
+    /// document last had it, and the reason in place of an outcome.
+    ///
+    /// The view is read without the lock, which is exactly what the lock
+    /// is not for — there is nothing to write here, and the document is
+    /// replaced atomically, so a reader sees one version or the other.
+    /// `None` only where there is genuinely nothing to report about: no
+    /// document, or no such task in it.
+    fn unclaimed_delivery(
+        &self,
+        primary: &Path,
+        policy: &WorktreePolicy,
+        task_id: &str,
+        error: &UzeError,
+    ) -> Option<DeliveryReport> {
+        let store = task::load(&self.0.home, primary).ok()?;
+        let task = store
+            .tasks
+            .iter()
+            .find(|task| task.id.as_str() == task_id)?;
+        Some(DeliveryReport {
+            task: TaskView::from_task(primary, task, policy.completion),
+            outcome: DeliveryOutcome::Refused(format!("the delivery could not start: {error}")),
+            warnings: Vec::new(),
+        })
     }
 
     /// One pass of "who is actually sitting in which slot", across every
@@ -958,25 +1103,33 @@ fn unrecorded_delivery(error: &UzeError) -> String {
     format!("the delivery could not be recorded: {error}")
 }
 
-/// Delivers one recorded task the way `policy` says, in `store`.
+/// The same, for a task somebody decided about while it was being
+/// delivered. Their decision stands; the delivery still happened.
+fn superseded_delivery() -> String {
+    "the task changed while it was being delivered, so the delivery is not recorded on it"
+        .to_owned()
+}
+
+/// Whether a delivery's outcome reached the record it was claimed from.
+enum Recorded {
+    Applied,
+    Superseded,
+}
+
+/// Delivers one claimed task the way `policy` says, updating `task` to
+/// say what happened.
 ///
-/// Takes the document rather than a repository handle: the whole
-/// read-modify-write belongs inside [`task::locked`], and Git's own write
-/// lock — which `landing::deliver` takes — is the inner of the two.
-fn deliver_one(
-    primary: &Path,
-    policy: &WorktreePolicy,
-    store: &mut TaskStore,
-    task_id: &str,
-) -> Option<DeliveryReport> {
+/// Takes the record rather than the document: this is the unbounded half
+/// — the project's gate, then a fetch, a push or a merge — and it runs
+/// with the tasks document unlocked, under Git's own write lock alone.
+fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> DeliveryOutcome {
     let completion = policy.completion;
     let gate = policy.gate.clone();
     let policy = landing::Policy {
         completion,
         gate: &gate,
     };
-    let task = task_mut(store, task_id)?;
-    let outcome = match landing::deliver(primary, task, &policy) {
+    match landing::deliver(primary, task, &policy) {
         Ok(Delivered::Handoff) => DeliveryOutcome::Handoff,
         Ok(Delivered::Merged { .. }) => DeliveryOutcome::Merged,
         Ok(Delivered::Published { branch, request }) => {
@@ -1006,12 +1159,7 @@ fn deliver_one(
             })
         }
         Err(other) => DeliveryOutcome::Refused(other.to_string()),
-    };
-    Some(DeliveryReport {
-        task: TaskView::from_task(primary, task, completion),
-        outcome,
-        warnings: Vec::new(),
-    })
+    }
 }
 
 /// The task currently answering for each occupied slot, by id.
@@ -2423,7 +2571,17 @@ mod task_service_tests {
             "origin",
             &format!("{}:refs/pull/12/head", tip.trim()),
         ]);
-        app.workspace().evaluate_tasks(&root, &[]);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(
+            evaluation
+                .tasks
+                .iter()
+                .find(|task| task.id == id)
+                .and_then(|task| task.published_request),
+            Some(12),
+            "the pass that asked the remote is the pass that answers with it, \
+             though it asks with the document unlocked"
+        );
 
         let synced = view_of(&app, &root, &id);
         assert_eq!(synced.published_as.as_deref(), Some(synced.branch.as_str()));
@@ -2636,22 +2794,78 @@ mod task_service_tests {
         std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    /// A delivery that landed and could not be written down says so. The
-    /// branch is pushed or merged either way, and the next evaluation will
-    /// read the task exactly as it was and offer the delivery again — which
-    /// the operator can only avoid if they were told.
+    /// A delivery that could not even claim its task is refused, and the
+    /// refusal names the reason.
+    ///
+    /// Claiming is the first write a delivery makes, and a delivery that
+    /// cannot be written down is one whose outcome nothing will ever
+    /// record — so it does not happen at all, rather than merging work
+    /// nothing on the machine remembers. Said as a report, never as
+    /// silence: an answer with no report in it is what the client renders
+    /// as "nothing ready", and the operator is looking at the task.
     #[cfg(unix)]
     #[test]
-    fn a_delivery_that_could_not_be_recorded_says_so() {
-        let repository = repository("svc-unrecorded-delivery");
+    fn a_delivery_that_could_not_claim_its_task_says_why() {
+        let repository = repository("svc-unclaimed-delivery");
         declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
-        let app = application("svc-unrecorded-delivery-home");
+        let app = application("svc-unclaimed-delivery-home");
         let (id, slot) = launched(&app, &root);
         agent_commits(&repository, &slot, "work.rs", "");
         app.workspace().evaluate_tasks(&root, &[]);
 
         let directory = refuse_writes(&app, &root);
+        let report = app
+            .workspace()
+            .deliver_task(&root, &id)
+            .expect("a refusal is still an answer about this task");
+        allow_writes(&directory);
+
+        let DeliveryOutcome::Refused(reason) = &report.outcome else {
+            panic!("a delivery that never started was reported as one: {report:?}");
+        };
+        assert!(reason.contains("could not start"), "{reason}");
+        assert_eq!(report.task.id, id, "and says which task it is about");
+        assert!(
+            !root.join("work.rs").is_file(),
+            "nothing was delivered into the target"
+        );
+        assert_eq!(
+            state_of(&app, &root, &id),
+            TaskStateView::Ready,
+            "and the task is exactly as deliverable as it was"
+        );
+    }
+
+    /// A delivery that landed and could not be written down says so. The
+    /// branch is pushed or merged either way, and the operator can only
+    /// know that the record does not say so if they were told.
+    ///
+    /// The document is made unwritable *by the gate*, so the failure lands
+    /// between the claim and the record — the one window where a delivery
+    /// can happen and go unrecorded now that claiming is a write of its
+    /// own.
+    #[cfg(unix)]
+    #[test]
+    fn a_delivery_that_could_not_be_recorded_says_so() {
+        let repository = repository("svc-unrecorded-delivery");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unrecorded-delivery-home");
+        let directory = task::store_path(&app.home, &root.canonicalize().unwrap())
+            .parent()
+            .expect("the document has a directory")
+            .to_path_buf();
+        declare(
+            &repository,
+            &format!(
+                "  completion: merge\n  gate: chmod 555 {}\n",
+                directory.display()
+            ),
+        );
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+
         let report = app
             .workspace()
             .deliver_task(&root, &id)
@@ -2667,10 +2881,121 @@ mod task_service_tests {
             "{:?}",
             report.warnings
         );
+        assert!(root.join("work.rs").is_file(), "the work really did land");
         assert_eq!(
             state_of(&app, &root, &id),
-            TaskStateView::Ready,
-            "and the document really did keep the state the warning is about"
+            TaskStateView::Integrating,
+            "and the record is where the claim left it — the delivery that \
+             owns it is the one that could not write"
+        );
+    }
+
+    /// The document is free while a delivery's gate runs.
+    ///
+    /// A gate has half an hour and the Git around it has no bound at all.
+    /// Held for that, the tasks document made every other mutation in the
+    /// project wait two minutes and then fail — and a second delivery
+    /// pressed meanwhile came back as "nothing ready".
+    #[test]
+    fn a_gate_that_runs_long_does_not_hold_the_tasks_document() {
+        let repository = repository("svc-slow-gate");
+        declare(&repository, "  completion: merge\n  gate: sleep 3\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-slow-gate-home");
+        let home = app.home.clone();
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let deliverer = {
+            let (home, root, id) = (home.clone(), root.clone(), id.clone());
+            std::thread::spawn(move || {
+                UzeApplication::new(home, Vec::new())
+                    .workspace()
+                    .deliver_task(&root, &id)
+                    .expect("the task is deliverable")
+            })
+        };
+
+        // The claim is what says the delivery started: the record is
+        // `Integrating` and the document is back.
+        let spawned = std::time::Instant::now();
+        let claimed = loop {
+            let store = task::load(&home, &root).expect("the document is readable");
+            if store.tasks[0].state == TaskState::Integrating {
+                break std::time::Instant::now();
+            }
+            assert!(
+                spawned.elapsed() < std::time::Duration::from_secs(10),
+                "the delivery never claimed its task"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        task::locked(&home, &root, |_| Ok(())).expect("the document is free while the gate runs");
+        // The gate is three seconds from about the moment the claim was
+        // seen, so taking the document inside two proves it was taken
+        // while the gate was still running.
+        assert!(
+            claimed.elapsed() < std::time::Duration::from_secs(2),
+            "another mutation waited {:?} on a gate that had not finished",
+            claimed.elapsed()
+        );
+
+        let report = deliverer.join().unwrap();
+        assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+    }
+
+    /// What a delivery that never answered leaves behind, and what every
+    /// other pass does with it.
+    ///
+    /// `Integrating` means "a delivery owns this task": the evaluation
+    /// skips it, the release of abandoned tasks skips it, and no surface
+    /// offers to deliver it. A process killed between the claim and the
+    /// record leaves exactly that record, and this is what it costs —
+    /// nothing is lost and nothing is delivered twice, and the way out is
+    /// the one the operator already has for a task nobody is working on.
+    #[test]
+    fn a_task_a_delivery_claimed_and_never_answered_for_is_left_alone() {
+        let repository = repository("svc-abandoned-claim");
+        declare(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-abandoned-claim-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        task::locked(&app.home, &root, |store| {
+            task_mut(store, &id).expect("the task is recorded").state = TaskState::Integrating;
+            Ok(())
+        })
+        .unwrap();
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(
+            evaluation
+                .tasks
+                .iter()
+                .find(|task| task.id == id)
+                .map(|task| task.state.clone()),
+            Some(TaskStateView::Integrating),
+            "an evaluation neither revives it nor writes over it"
+        );
+        assert!(
+            app.workspace()
+                .release_abandoned_tasks(&root, &[])
+                .is_empty(),
+            "and no pane in its checkout does not make it abandoned"
+        );
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrating);
+        assert!(!TaskStateView::Integrating.is_deliverable());
+        assert_eq!(
+            TaskStateView::Integrating.undeliverable_reason(),
+            Some("already delivering"),
+            "which is what the operator is told if they press it"
+        );
+        assert!(
+            app.workspace().deliver_ready(&root).is_empty(),
+            "and delivering everything ready passes it by"
         );
     }
 
@@ -2915,7 +3240,9 @@ mod naming_tests {
         repository.git_in(&checkout, &["commit", "-qm", "feat: work"]);
         repository.git_in(&checkout, &["branch", "--move", "feat/renamed-by-hand"]);
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().expect("a task was evaluated");
         assert_eq!(
@@ -2981,7 +3308,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().unwrap();
         assert_eq!(task.branch, "feat/answer-ping-with-pong");
@@ -3010,7 +3339,9 @@ mod derived_naming_tests {
             .unwrap();
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert_eq!(evaluation.tasks.last().unwrap().branch, "fix/chosen-first");
         assert_eq!(
@@ -3028,7 +3359,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation
@@ -3050,7 +3383,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation
@@ -3072,7 +3407,9 @@ mod derived_naming_tests {
         commits(&repository, &checkout, "feat(api): answer ping with pong");
         std::fs::write(checkout.join("later.rs"), "in progress").unwrap();
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().unwrap();
         assert_eq!(task.state, TaskStateView::Uncommitted);
@@ -3089,7 +3426,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation

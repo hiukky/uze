@@ -4,7 +4,8 @@
 # payload and never write harness JSON: the context arrives as HOOK_*
 # environment and the decision leaves as an exit code: 0 allows, while
 # 3 denies and the reason is read from stderr. Anything else
-# is a failure that follows the group's effect.
+# is a failure that follows the group's effect. Only the first 4096
+# bytes of a handler's stderr become the reason a harness is handed.
 #
 #   usage: exec <plugin-root> <event> <effect> <seconds>:<handler>...
 #     event    pre_tool_use | post_tool_use | stop
@@ -32,8 +33,10 @@ allow_native() {
   [ "$HOOK_EVENT" = stop ] && printf '{}'
 }
 
-# fail-closed effects: a guard that cannot be evaluated denies
-closed() { [ "$effect" = deny ] || [ "$effect" = ask ]; }
+# fail-closed effects: a guard that cannot be evaluated denies. `transform`
+# is one of them — a rewrite that did not happen must not let the original
+# through as if it had.
+closed() { case $effect in deny|ask|transform) return 0 ;; *) return 1 ;; esac; }
 fail() { closed && deny_native "$1"; printf '%s\n' "$1" >&2; allow_native; exit 0; }
 
 # jq escapes the reason once it is available; before that (its own absence
@@ -52,6 +55,12 @@ JQ=${HOOK_JQ:-jq}
 command -v "$JQ" >/dev/null 2>&1 || fail "hooks/exec: jq is not installed"
 JQ_READY=1
 payload=$(cat)
+# A payload jq cannot read leaves every extraction below empty, and a guard
+# written the documented way (`case "$HOOK_COMMAND" in ...`) then sees
+# nothing and allows. The context is the whole basis of the decision, so a
+# payload that does not parse is a failure like any other.
+printf '%s' "$payload" | "$JQ" -e . >/dev/null 2>&1 \
+  || fail "hooks/exec: the harness payload is not JSON"
 HOOK_TOOL_NATIVE=$(printf '%s' "$payload" | "$JQ" -r '.tool_name // empty')
 HOOK_CWD=$(printf '%s' "$payload" | "$JQ" -r '.cwd // empty')
 HOOK_INPUT=$(printf '%s' "$payload" | "$JQ" -c '.tool_input // {}')
@@ -109,10 +118,16 @@ guarded() {
     sh -c "$2" </dev/null >/dev/null 2>"$reasons" &
     child=$!
     (
-      napper=
-      trap '[ -n "$napper" ] && kill "$napper" 2>/dev/null; exit 0' TERM
+      napper= fired=
+      # The parent cancels this watchdog by TERMing it the moment the
+      # handler answers — but the handler answering *because* the sweep
+      # below reached it is the one case where that TERM must be ignored,
+      # or `exit 0` cuts the escalation short and a child that ignored
+      # TERM outlives the hook.
+      trap '[ -n "$fired" ] || { [ -n "$napper" ] && kill "$napper" 2>/dev/null; exit 0; }' TERM
       sleep "$1" & napper=$!
       wait "$napper" 2>/dev/null
+      fired=1
       doomed=$(family "$child")
       for one in $doomed; do kill -TERM "$one" 2>/dev/null; done
       sleep 1                                     # then the ones that stayed
@@ -132,7 +147,10 @@ guarded() {
 # A handler is a shell command line, run from the package root: the same
 # contract the canonical manifest documents, so `sh scripts/check --strict`
 # means here exactly what it means when a person types it.
-cd "$PLUGIN_ROOT" 2>/dev/null || :
+# A root that is gone is not a directory to fall back from: the handlers
+# are relative to the package, so the harness's own working directory would
+# run the *project's* same-named script instead of the author's.
+cd "$PLUGIN_ROOT" 2>/dev/null || fail "hooks/exec: the package root is gone: $PLUGIN_ROOT"
 for entry in "$@"; do
   seconds=${entry%%:*}
   handler=${entry#*:}
@@ -141,7 +159,7 @@ for entry in "$@"; do
   esac
   guarded "$seconds" "$handler"; status=$?
   [ "$status" = 0 ] && continue                   # allowed; on to the next
-  reason=$(cat "$reasons" 2>/dev/null)
+  reason=$(head -c 4096 "$reasons" 2>/dev/null)
   case $status in
     3) deny_native "${reason:-$handler denied the operation}" ;;
     124) fail "handler timed out after ${seconds}s: $handler" ;;

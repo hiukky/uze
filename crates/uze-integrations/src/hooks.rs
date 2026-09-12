@@ -461,17 +461,12 @@ pub(crate) fn group_entry(
 /// the grouped and the flat event forms are built from.
 ///
 /// The native timeout is a backstop for the whole group, and it must never
-/// be the bound that fires first: each handler can take its own deadline
-/// plus the second the wrapper waits between `TERM` and `KILL`, so the sum
-/// of those (with one more second for the final render) bounds the
-/// wrapper's own activity, capped at the canonical 300s maximum.
+/// be the bound that fires first: `uze_core::hook::group_timeout_bound` is
+/// what the wrapper can spend, and `parse_manifest` refuses a group whose
+/// bound exceeds the canonical 300s maximum — so the clamp below is the
+/// cast's guard, never a truncation of a manifest UZE accepted.
 fn handler_entry(hook: &PortableHook, invocation: &HookInvocation) -> serde_json::Value {
-    let timeout: u16 = hook
-        .handlers
-        .iter()
-        .map(|handler| u32::from(handler.timeout) + 1)
-        .sum::<u32>()
-        .saturating_add(1)
+    let timeout: u16 = uze_core::hook::group_timeout_bound(&hook.handlers)
         .min(u32::from(uze_core::hook::MAX_TIMEOUT_SECONDS)) as u16;
     let mut invoked = serde_json::Map::new();
     invoked.insert("type".to_owned(), serde_json::json!("command"));
@@ -815,6 +810,10 @@ fn wrapper_field_variables(target: &str) -> Vec<String> {
 ///
 /// Nothing in this file names the packager: the contract is the file, and
 /// any tool that can write it can deliver a portable hook.
+///
+/// The ABI's "bounded output" lives here too: the wrapper is the only route
+/// left, so the bound the removed in-binary runtime carried has to be the
+/// one [`HANDLER_REASON_LIMIT`] states.
 pub(crate) fn wrapper_source(target: &str) -> Option<String> {
     let dialect = wrapper_dialect(target)?;
     let fields = wrapper_field_variables(target);
@@ -826,6 +825,7 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
     let field_exports = fields.join(" ");
     let aliases = wrapper_alias_table(target);
     let deny_exit_code = uze_core::hook::DENY_EXIT_CODE;
+    let reason_limit = HANDLER_REASON_LIMIT;
     let WrapperDialect {
         harness,
         tool_filter,
@@ -842,7 +842,8 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
 # payload and never write harness JSON: the context arrives as HOOK_*
 # environment and the decision leaves as an exit code: 0 allows, while
 # {deny_exit_code} denies and the reason is read from stderr. Anything else
-# is a failure that follows the group's effect.
+# is a failure that follows the group's effect. Only the first {reason_limit}
+# bytes of a handler's stderr become the reason a harness is handed.
 #
 #   usage: exec <plugin-root> <event> <effect> <seconds>:<handler>...
 #     event    pre_tool_use | post_tool_use | stop
@@ -870,8 +871,10 @@ allow_native() {{
   {allow_document}
 }}
 
-# fail-closed effects: a guard that cannot be evaluated denies
-closed() {{ [ "$effect" = deny ] || [ "$effect" = ask ]; }}
+# fail-closed effects: a guard that cannot be evaluated denies. `transform`
+# is one of them — a rewrite that did not happen must not let the original
+# through as if it had.
+closed() {{ case $effect in deny|ask|transform) return 0 ;; *) return 1 ;; esac; }}
 fail() {{ closed && deny_native "$1"; printf '%s\n' "$1" >&2; allow_native; exit 0; }}
 
 # jq escapes the reason once it is available; before that (its own absence
@@ -890,6 +893,12 @@ JQ=${{HOOK_JQ:-jq}}
 command -v "$JQ" >/dev/null 2>&1 || fail "hooks/exec: jq is not installed"
 JQ_READY=1
 payload=$(cat)
+# A payload jq cannot read leaves every extraction below empty, and a guard
+# written the documented way (`case "$HOOK_COMMAND" in ...`) then sees
+# nothing and allows. The context is the whole basis of the decision, so a
+# payload that does not parse is a failure like any other.
+printf '%s' "$payload" | "$JQ" -e . >/dev/null 2>&1 \
+  || fail "hooks/exec: the harness payload is not JSON"
 HOOK_TOOL_NATIVE=$(printf '%s' "$payload" | "$JQ" -r '{tool_filter}')
 HOOK_CWD=$(printf '%s' "$payload" | "$JQ" -r '{cwd_filter}')
 HOOK_INPUT=$(printf '%s' "$payload" | "$JQ" -c '{input_filter}')
@@ -940,10 +949,16 @@ guarded() {{
     sh -c "$2" </dev/null >/dev/null 2>"$reasons" &
     child=$!
     (
-      napper=
-      trap '[ -n "$napper" ] && kill "$napper" 2>/dev/null; exit 0' TERM
+      napper= fired=
+      # The parent cancels this watchdog by TERMing it the moment the
+      # handler answers — but the handler answering *because* the sweep
+      # below reached it is the one case where that TERM must be ignored,
+      # or `exit 0` cuts the escalation short and a child that ignored
+      # TERM outlives the hook.
+      trap '[ -n "$fired" ] || {{ [ -n "$napper" ] && kill "$napper" 2>/dev/null; exit 0; }}' TERM
       sleep "$1" & napper=$!
       wait "$napper" 2>/dev/null
+      fired=1
       doomed=$(family "$child")
       for one in $doomed; do kill -TERM "$one" 2>/dev/null; done
       sleep 1                                     # then the ones that stayed
@@ -963,7 +978,10 @@ guarded() {{
 # A handler is a shell command line, run from the package root: the same
 # contract the canonical manifest documents, so `sh scripts/check --strict`
 # means here exactly what it means when a person types it.
-cd "$PLUGIN_ROOT" 2>/dev/null || :
+# A root that is gone is not a directory to fall back from: the handlers
+# are relative to the package, so the harness's own working directory would
+# run the *project's* same-named script instead of the author's.
+cd "$PLUGIN_ROOT" 2>/dev/null || fail "hooks/exec: the package root is gone: $PLUGIN_ROOT"
 for entry in "$@"; do
   seconds=${{entry%%:*}}
   handler=${{entry#*:}}
@@ -972,7 +990,7 @@ for entry in "$@"; do
   esac
   guarded "$seconds" "$handler"; status=$?
   [ "$status" = 0 ] && continue                   # allowed; on to the next
-  reason=$(cat "$reasons" 2>/dev/null)
+  reason=$(head -c {reason_limit} "$reasons" 2>/dev/null)
   case $status in
     {deny_exit_code}) deny_native "${{reason:-$handler denied the operation}}" ;;
     124) fail "handler timed out after ${{seconds}}s: $handler" ;;
@@ -988,6 +1006,13 @@ exit 0
 /// The name of the wrapper inside its delivered artifact. `hooks/exec` on
 /// every harness: one path an author or reviewer can look for.
 pub(crate) const WRAPPER_RELATIVE_PATH: &str = "hooks/exec";
+
+/// How much of a handler's stderr becomes the reason a harness is handed.
+/// "Bounded output" is part of the hook ABI (ADR-033), and the generated
+/// wrapper and the OpenCode bridge are the two places that can still hold
+/// it: without a bound a handler writing megabytes turns into a decision
+/// document that big, which the harness then has to parse.
+pub(crate) const HANDLER_REASON_LIMIT: usize = 4096;
 
 /// Where a harness whose hooks are merged into a shared config file keeps
 /// its wrapper: one file per harness under UZE's own state, never in the
@@ -1070,11 +1095,16 @@ fn make_executable(path: &Path) -> Result<()> {
 /// receipt being detached, and during `uze remove` each of its siblings, is
 /// still listed there while its entry is already gone from the config.
 pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: &str) {
-    let still_used = uze_core::state::receipts(uze_home, None).is_ok_and(|ledger| {
-        ledger.iter().any(|(_, receipt)| {
+    // A ledger that cannot be read has not said the wrapper is unused; it
+    // has said nothing. Deleting on that answer is a destructive mutation
+    // authorized by an unreadable ledger, which is exactly what receipts
+    // exist to refuse.
+    let still_used = match uze_core::state::receipts(uze_home, None) {
+        Ok(ledger) => ledger.iter().any(|(_, receipt)| {
             receipt.integration == integration_id && entry_is_attached(receipt, target)
-        })
-    });
+        }),
+        Err(_) => true,
+    };
     if still_used {
         return;
     }
@@ -1094,13 +1124,20 @@ pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, tar
 /// name, the other command-hook harnesses by event — and every receipt
 /// records its event either way, so the shape cannot be read off the
 /// receipt.
+///
+/// The question is "does anything still run this wrapper", not "is this
+/// entry exactly as UZE wrote it": only an entry that is *absent* has
+/// stopped running it. An unreadable config, drift, a hand-edited entry —
+/// each of those still fires the wrapper, and an event-array config reports
+/// an edited entry as absent, so the wrapper's own path in the file is the
+/// last word.
 fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt, target: &str) -> bool {
     let uze_core::integration::ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         event,
         expected,
-        ..
+        wrapper,
     } = &receipt.artifact
     else {
         return false;
@@ -1110,7 +1147,11 @@ fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt, target:
     } else {
         inspect_event_entry(config_file, *event, expected, None)
     };
-    inspection.state == AttachmentState::Matched
+    if inspection.state != AttachmentState::Missing {
+        return true;
+    }
+    fs::read_to_string(config_file)
+        .is_ok_and(|config| config.contains(&wrapper.display().to_string()))
 }
 
 /// The native command an entry runs: the wrapper, the package root, the
@@ -1554,6 +1595,7 @@ pub(crate) fn opencode_bridge(
         .expect("generated groups serialize");
     let aliases = bridge_alias_table();
     let deny_exit_code = uze_core::hook::DENY_EXIT_CODE;
+    let reason_limit = HANDLER_REASON_LIMIT;
     format!(
         r#"// Generated from hooks.json — do not edit; regenerate instead.
 // OpenCode V2 (opencode.ai/v2/docs/build/plugins) has no hooks.json: the
@@ -1612,7 +1654,9 @@ async function handler(command, timeout, env) {{
   const timer = setTimeout(() => {{ expired = true; proc.kill(); }}, timeout * 1000);
   let stderr = "";
   try {{
-    stderr = (await new Response(proc.stderr).text()).trim();
+    // Bounded like the sh wrapper's: the reason is a sentence for a person,
+    // not a transcript, and an unbounded one becomes the harness's document.
+    stderr = (await new Response(proc.stderr).text()).slice(0, {reason_limit}).trim();
   }} finally {{
     clearTimeout(timer);
   }}
@@ -2106,6 +2150,40 @@ mod tests {
             entry.get("matcher").is_none(),
             "no matcher key for a match-all group"
         );
+    }
+
+    /// The harness's own timeout is a backstop, and a backstop that fires
+    /// first defeats the purpose: a hook the harness kills is read as
+    /// non-blocking, so a `deny` group would be allowed through. The bound
+    /// therefore has to cover everything the wrapper can spend — and
+    /// `parse_manifest` is what keeps a manifest from asking for more than
+    /// the maximum, since clamping here would silently reintroduce the
+    /// problem.
+    #[test]
+    fn the_native_timeout_outlasts_everything_the_wrapper_can_spend() {
+        let manifest = serde_json::json!({
+            "hooks": {"PreToolUse": [{
+                "id": "protect-env",
+                "hooks": (1..=9).map(|_| serde_json::json!({
+                    "type": "command", "command": "check", "timeout": 30
+                })).collect::<Vec<_>>(),
+            }]}
+        })
+        .to_string();
+        let hooks =
+            uze_core::hook::parse_manifest(Path::new("hooks.json"), manifest.as_bytes()).unwrap();
+        let entry = group_entry("claude", &hooks[0], &invocation(&hooks[0]));
+        let native = entry["hooks"][0]["timeout"].as_u64().unwrap();
+        let spent: u64 = hooks[0]
+            .handlers
+            .iter()
+            .map(|handler| u64::from(handler.timeout) + 1)
+            .sum();
+        assert!(
+            native > spent,
+            "the native backstop ({native}s) must outlast the wrapper's own worst case ({spent}s)"
+        );
+        assert!(u64::from(uze_core::hook::MAX_TIMEOUT_SECONDS) >= native);
     }
 
     /// The vendor's own docs split the two shapes: a tool event is grouped
@@ -2631,6 +2709,89 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
+
+    /// A ledger that cannot be read has not answered "nothing uses it"; it
+    /// has not answered at all. Deleting a wrapper live entries still run
+    /// leaves every one of them exiting 127 — which every harness reads as
+    /// non-blocking.
+    #[test]
+    fn an_unreadable_ledger_keeps_the_shared_wrapper() {
+        let root = uze_testkit::temp::scratch("hooks-prune-ledger");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("hooks.json");
+        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
+        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+
+        let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_named_entry(&config, "pkg@market:protect-env", &entry).unwrap();
+        uze_core::state::record_receipt(
+            &home,
+            "pkg@market:protect-env".to_owned(),
+            hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper),
+        )
+        .unwrap();
+
+        let ledger = home.state_dir().join("attachments.json");
+        assert!(ledger.exists(), "the receipt was recorded where it is read");
+        fs::write(&ledger, b"{ this is not json").unwrap();
+
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            wrapper.exists(),
+            "an unreadable ledger blocks the destructive step, it does not authorize it"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// "Still used" is about what runs the wrapper, not about what matches
+    /// the receipt. A hand-edited entry is drift — the harness still fires
+    /// it, and on an event-array config it reads as *absent*, so the
+    /// wrapper's own path in the file is what settles it.
+    #[test]
+    fn an_entry_that_drifted_still_counts_as_using_the_wrapper() {
+        let root = uze_testkit::temp::scratch("hooks-prune-drift");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("settings.json");
+        let wrapper = shared_wrapper_path(&home, "claude");
+        materialize_wrapper(&wrapper, &wrapper_source("claude").unwrap()).unwrap();
+
+        let entry = group_entry(
+            "claude",
+            &hook(),
+            &HookInvocation::Exec {
+                command: wrapper.display().to_string(),
+                args: wrapper_arguments(&hook(), Path::new("/pkg"), &hook().handlers),
+            },
+        );
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
+        let mut receipt = hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper);
+        receipt.integration = "claude".to_owned();
+        uze_core::state::record_receipt(&home, "pkg@market:protect-env".to_owned(), receipt)
+            .unwrap();
+
+        // The user edits the timeout: the entry no longer matches the
+        // receipt, and still runs the wrapper on every tool call.
+        let mut document: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        document["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = serde_json::json!(99);
+        fs::write(&config, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        assert_eq!(
+            inspect_event_entry(&config, HookEvent::PreToolUse, &expected, None).state,
+            AttachmentState::Missing,
+            "content identity reports an edited entry as absent — the reason this needs a second look"
+        );
+
+        prune_shared_wrapper(&home, "claude", "claude");
+        assert!(
+            wrapper.exists(),
+            "a wrapper a live entry still names is never removed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 /// The generated wrapper against real `sh`: the same cases the reference
@@ -2723,6 +2884,22 @@ mod wrapper_tests {
         stderr: String,
     }
 
+    /// One execution of the wrapper. The package root and the directory the
+    /// harness happens to be in are separate because a stale entry is
+    /// exactly the case where they differ.
+    struct Run<'a> {
+        target: &'a str,
+        /// Where the wrapper itself is written.
+        wrapper_root: &'a Path,
+        /// The root the group's entry names — the wrapper's first argument.
+        package_root: &'a Path,
+        /// The harness's own working directory, when it matters.
+        cwd: Option<&'a Path>,
+        hook: &'a PortableHook,
+        payload: &'a str,
+        jq: Option<&'a str>,
+    }
+
     /// Runs the generated wrapper exactly as the harness does: the payload
     /// on stdin, the group's own arguments on the command line.
     fn run_wrapper(
@@ -2732,10 +2909,34 @@ mod wrapper_tests {
         payload: &str,
         jq: Option<&str>,
     ) -> Answer {
-        let wrapper = root.join("hooks").join("exec");
+        run(Run {
+            target,
+            wrapper_root: root,
+            package_root: root,
+            cwd: None,
+            hook,
+            payload,
+            jq,
+        })
+    }
+
+    fn run(execution: Run<'_>) -> Answer {
+        let Run {
+            target,
+            wrapper_root,
+            package_root,
+            cwd,
+            hook,
+            payload,
+            jq,
+        } = execution;
+        let wrapper = wrapper_root.join("hooks").join("exec");
         materialize_wrapper(&wrapper, &wrapper_source(target).unwrap()).unwrap();
         let mut command = Command::new(&wrapper);
-        command.args(wrapper_arguments(hook, root, &hook.handlers));
+        command.args(wrapper_arguments(hook, package_root, &hook.handlers));
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         if let Some(jq) = jq {
             command.env("HOOK_JQ", jq);
         }
@@ -3010,6 +3211,162 @@ mod wrapper_tests {
         }
     }
 
+    /// A payload the wrapper cannot read leaves every `HOOK_*` variable
+    /// empty, and a guard written the documented way (`case "$HOOK_COMMAND"
+    /// in *"rm -rf"*)`) then sees nothing and allows. The context is the
+    /// whole basis of the decision, so an unreadable payload is a failure
+    /// like any other and the group's effect decides.
+    #[test]
+    fn a_payload_that_does_not_parse_follows_the_groups_effect() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-payload-{target}"));
+            let truncated = r#"{"tool_name":"Bash","tool_input":{"command":"cat .env""#;
+            let closed = group(HookEffect::Deny, &["guard"]);
+            let answer = run_wrapper(target, &root, &closed, truncated, None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group blocks a payload it cannot read"
+            );
+            assert!(
+                answer.stderr.contains("the harness payload is not JSON"),
+                "{target}: the reason names what went wrong: {}",
+                answer.stderr
+            );
+
+            let open = group(HookEffect::Observe, &["guard"]);
+            let answer = run_wrapper(target, &root, &open, truncated, None);
+            assert_eq!(answer.exit, 0, "{target}: an observe group proceeds");
+            assert!(answer.stderr.contains("the harness payload is not JSON"));
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// A handler is a command line relative to the package root — the
+    /// documented shape, and two recorded fixtures use it. A root that is
+    /// gone must therefore stop the hook, not leave the handlers running
+    /// from wherever the harness happened to be: that directory is the
+    /// user's own checkout, whose content ADR-041 keeps off UZE's
+    /// execution path.
+    #[test]
+    fn a_package_root_that_is_gone_never_runs_the_checkouts_own_script() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-root-{target}"));
+            let checkout = uze_testkit::temp::scratch(&format!("wrapper-checkout-{target}"));
+            fs::create_dir_all(checkout.join("scripts")).unwrap();
+            write_script(
+                &checkout.join("scripts").join("guard"),
+                "touch \"$PWD/ran-the-projects-script\"\nexit 0",
+            );
+            let gone = root.join("gone");
+            let closed = group(HookEffect::Deny, &["scripts/guard"]);
+            let answer = run(Run {
+                target,
+                wrapper_root: &root,
+                package_root: &gone,
+                cwd: Some(&checkout),
+                hook: &closed,
+                payload: &payload(target, "ls"),
+                jq: None,
+            });
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group whose package is gone blocks"
+            );
+            assert!(
+                answer.stderr.contains("the package root is gone"),
+                "{target}: the reason names the missing root: {}",
+                answer.stderr
+            );
+            assert!(
+                !checkout.join("ran-the-projects-script").exists(),
+                "{target}: the checkout's same-named script must never run"
+            );
+            let _ = fs::remove_dir_all(checkout);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// ADR-033's fail-closed set is deny, ask **and** transform: a rewrite
+    /// that did not happen must not let the original input through as if it
+    /// had. `transform` degrades rather than being dropped, so the wrapper
+    /// is the only thing that can hold this.
+    #[test]
+    fn a_transform_group_fails_closed_like_a_deny() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-transform-{target}"));
+            let hook = group(HookEffect::Transform, &["absent"]);
+            let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a handler that cannot run denies for a transform group"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// "Bounded output" is part of the ABI and the wrapper is the only
+    /// place left that can hold it: without the bound, a handler that
+    /// writes megabytes to stderr hands the harness a decision document
+    /// that big to parse.
+    #[test]
+    fn the_reason_a_harness_is_handed_is_bounded() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-reason-{target}"));
+            write_script(
+                &root.join("scripts").join("loud"),
+                "head -c 1000000 /dev/zero | tr '\\0' 'x' >&2\nexit 3",
+            );
+            let hook = group(HookEffect::Deny, &["loud"]);
+            let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: the denial stands"
+            );
+            assert!(
+                answer.stdout.len() < HANDLER_REASON_LIMIT * 2,
+                "{target}: the decision document carries a bounded reason, not {} bytes",
+                answer.stdout.len()
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// The deadline's second pass is the one that matters: a handler (or a
+    /// child of one) that ignores `TERM` is what `KILL` is for, and the
+    /// parent cancelling the watchdog the moment the handler dies must not
+    /// cancel that pass with it. One leaked process per timed-out tool call
+    /// is what this costs when it is wrong.
+    #[test]
+    fn a_handler_that_ignores_term_does_not_outlive_its_deadline() {
+        let target = "claude";
+        let root = package("wrapper-escalation");
+        // `trap '' TERM` is SIG_IGN, which survives the `exec`: the
+        // grandchild is a `sleep` that cannot be TERMed, only killed.
+        write_script(
+            &root.join("scripts").join("stubborn"),
+            "trap '' TERM\nsh -c 'trap \"\" TERM; exec sleep 30' &\n\
+             printf '%s' \"$!\" > \"$PLUGIN_ROOT/grandchild.pid\"\nsleep 30",
+        );
+        let hook = group_at(HookEvent::PreToolUse, HookEffect::Deny, &["stubborn"], 1);
+        let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+        assert_eq!(answer.exit, block_exit(target), "the deadline blocks");
+        let grandchild = fs::read_to_string(root.join("grandchild.pid")).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let alive = Command::new("ps")
+            .args(["-p", grandchild.trim(), "-o", "pid="])
+            .output()
+            .expect("ps reports whether the grandchild is still running");
+        assert!(
+            String::from_utf8_lossy(&alive.stdout).trim().is_empty(),
+            "a grandchild that ignored TERM is killed, not left behind: pid {grandchild}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// A `stop` payload carries no tool at all, and the wrapper has to
     /// leave the handler seeing that rather than a stale or invented one.
     #[test]
@@ -3047,12 +3404,23 @@ mod wrapper_tests {
         /// The shell command the payload carries. `None` is a `stop`
         /// payload, which carries no tool.
         command: Option<&'static str>,
+        /// Whether the payload is one the wrapper cannot read. The context
+        /// is the whole basis of a decision, so what happens to a payload
+        /// that does not parse is part of the contract.
+        malformed_payload: bool,
+        /// Whether the group's entry names a package root that is gone — a
+        /// stale entry for a package removed, renamed, or a moved `~/.uze`.
+        missing_root: bool,
         /// Whether the recorded stderr is the wrapper's own words all the
         /// way. A handler that never started is reported with the system
         /// shell's diagnostic appended, and that wording is the platform's,
         /// so only the head of the line is recorded.
         wrapper_owns_the_whole_reason: bool,
     }
+
+    /// A payload no harness would send — truncated mid-object, the shape a
+    /// crashed writer or a wrong-dialect entry produces.
+    const MALFORMED_PAYLOAD: &str = r#"{"tool_name":"Bash","tool_input":{"command":"cat .env""#;
 
     /// Every fixture, in the order the recorded table holds them.
     fn fixtures() -> Vec<Fixture> {
@@ -3062,6 +3430,8 @@ mod wrapper_tests {
             handlers,
             timeout: 10,
             command,
+            malformed_payload: false,
+            missing_root: false,
             wrapper_owns_the_whole_reason: true,
         };
         let pre = HookEvent::PreToolUse;
@@ -3115,6 +3485,31 @@ mod wrapper_tests {
                 timeout: 1,
                 ..case(pre, HookEffect::Observe, &["stall"], Some("ls"))
             },
+            // The three shapes the wrapper has to answer for without ever
+            // reaching the author's handlers: a payload it cannot read, a
+            // package root that is gone, and an effect whose rewrite never
+            // happened. Each follows the group's effect, so each is
+            // recorded both ways round.
+            Fixture {
+                malformed_payload: true,
+                ..case(pre, HookEffect::Deny, &["guard"], Some("cat .env"))
+            },
+            Fixture {
+                malformed_payload: true,
+                ..case(pre, HookEffect::Observe, &["guard"], Some("cat .env"))
+            },
+            Fixture {
+                missing_root: true,
+                ..case(pre, HookEffect::Deny, &["scripts/guard"], Some("ls"))
+            },
+            Fixture {
+                missing_root: true,
+                ..case(pre, HookEffect::Observe, &["scripts/guard"], Some("ls"))
+            },
+            Fixture {
+                wrapper_owns_the_whole_reason: false,
+                ..case(pre, HookEffect::Transform, &["absent"], Some("ls"))
+            },
         ]
     }
 
@@ -3133,11 +3528,28 @@ mod wrapper_tests {
             fixture.handlers,
             fixture.timeout,
         );
-        let raw = match fixture.command {
-            Some(command) => payload(target, command),
-            None => stop_payload(target),
+        let raw = if fixture.malformed_payload {
+            MALFORMED_PAYLOAD.to_owned()
+        } else {
+            match fixture.command {
+                Some(command) => payload(target, command),
+                None => stop_payload(target),
+            }
         };
-        let answer = run_wrapper(target, &root, &hook, &raw, None);
+        let package_root = if fixture.missing_root {
+            root.join("gone")
+        } else {
+            root.clone()
+        };
+        let answer = run(Run {
+            target,
+            wrapper_root: &root,
+            package_root: &package_root,
+            cwd: None,
+            hook: &hook,
+            payload: &raw,
+            jq: None,
+        });
         let portable = |text: &str| {
             text.trim()
                 .replace(&root.display().to_string(), "${PLUGIN_ROOT}")
@@ -3158,6 +3570,12 @@ mod wrapper_tests {
             serde_json::json!(fixture.handlers.to_vec()),
         );
         case.insert("command".to_owned(), serde_json::json!(fixture.command));
+        if fixture.malformed_payload {
+            case.insert("payload".to_owned(), serde_json::json!("malformed"));
+        }
+        if fixture.missing_root {
+            case.insert("package_root".to_owned(), serde_json::json!("missing"));
+        }
         case.insert("exit".to_owned(), serde_json::json!(answer.exit));
         let document = if stdout.is_empty() {
             serde_json::Value::Null

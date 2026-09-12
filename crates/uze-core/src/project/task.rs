@@ -372,6 +372,14 @@ const MUTATION_RETRY: Duration = Duration::from_millis(20);
 /// Keep what runs inside to the read-modify-write and the Git it needs —
 /// a project's `setup` command, or anything else unbounded, belongs
 /// outside.
+///
+/// Unbounded is the word, not slow: a project's gate has half an hour and
+/// the `git fetch` and `git push` a delivery makes have no bound at all.
+/// Both of the passes that run one — placing an agent, delivering a task
+/// — take this twice around it rather than once through it: once to write
+/// down what they are about to do, once to write down what happened. The
+/// state they write in between (`Integrating`, for a delivery) is what
+/// every other pass reads to leave the task alone while it runs.
 pub fn locked<T>(
     home: &UzeHome,
     project_root: &Path,

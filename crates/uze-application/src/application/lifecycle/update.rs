@@ -85,17 +85,32 @@ impl Plugins<'_> {
             Ok(report) => report,
             Err(failure) => {
                 let restored = self.reinstate(&installed, &superseded, requested_active_name);
-                let _ = fs::remove_dir_all(&superseded);
-                return Err(UzeError::LifecycleBlocked(match restored {
-                    Ok(()) => format!(
-                        "`{id}` could not be updated: {failure}\nThe installed revision was put \
-                         back; nothing on this machine changed."
-                    ),
+                let message = match restored {
+                    Ok(()) => {
+                        let _ = fs::remove_dir_all(&superseded);
+                        format!(
+                            "`{id}` could not be updated: {failure}\nThe installed revision was \
+                             put back; nothing on this machine changed."
+                        )
+                    }
+                    // The copy kept aside is now the only one of this
+                    // revision on the machine, so it stays: swept with the
+                    // rest it would leave a message telling the operator to
+                    // install something nothing on the machine still has.
+                    // The directory is named too, because a reinstall that
+                    // found bytes already there is what the failure most
+                    // likely was, and it refuses again until they are gone.
                     Err(restore_failure) => format!(
                         "`{id}` could not be updated: {failure}\nPutting the installed revision \
-                         back also failed: {restore_failure}\nInstall it again to restore it."
+                         back also failed: {restore_failure}\nIts bytes are kept at {superseded}. \
+                         Remove {plugin_dir} if it is still there, then `uze plugin install \
+                         {qualified}` to restore it.",
+                        qualified = installed.id.as_str(),
+                        superseded = superseded.display(),
+                        plugin_dir = self.0.home.plugin_dir(&installed.id).display(),
                     ),
-                }));
+                };
+                return Err(UzeError::LifecycleBlocked(message));
             }
         };
         let _ = fs::remove_dir_all(&superseded);
@@ -113,6 +128,14 @@ impl Plugins<'_> {
     /// Installing is what restoring is: the removal detached every harness
     /// artifact, so re-registering the bytes alone would leave the plugin
     /// listed and reaching nothing.
+    ///
+    /// Which makes it only as recoverable as an install: what it recovers
+    /// from is most often an install that failed part-way and left the
+    /// plugin's directory behind, which the Store clears — no registration
+    /// claims that id — before writing the bytes back into it. Where even
+    /// that fails, the restore fails too, and the caller keeps the
+    /// superseded copy and says where it is rather than telling the
+    /// operator to install a revision the machine no longer has.
     fn reinstate(
         &self,
         installed: &uze_core::StoredPackage,

@@ -152,14 +152,38 @@ struct PackageRegistry {
     packages: BTreeMap<PackageId, Registration>,
 }
 
-/// The on-disk shape of `packages.json`, read with plain `String` keys so
-/// `load_registry` can validate each id independently — see its doc comment
-/// for why deserializing straight into `PackageRegistry` (keyed by the
-/// strict `PackageId`) is the wrong tool here: one bad key would fail the
+/// The on-disk shape of `packages.json`, read with plain `String` keys and
+/// undecided values so `load_registry` can validate each entry
+/// independently — see its doc comment for why deserializing straight into
+/// `PackageRegistry` (keyed by the strict `PackageId`, valued by the strict
+/// `Registration`) is the wrong tool here: one bad entry would fail the
 /// whole map instead of just that entry.
 #[derive(Deserialize)]
 struct RawPackageRegistry {
-    packages: BTreeMap<String, Registration>,
+    packages: BTreeMap<String, serde_json::Value>,
+}
+
+/// A `packages.json` entry this UZE cannot read, and why.
+///
+/// Quarantined rather than fatal: the registry is a ledger of independent
+/// registrations, and the entries that *do* read are still the truth about
+/// the packages they name. A quarantined entry answers to nothing — it is
+/// not listed, not resolvable, not removable — and the next `save_registry`
+/// drops it, which is exactly what the remedy asks for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuarantinedRegistration {
+    pub id: String,
+    pub reason: String,
+}
+
+impl QuarantinedRegistration {
+    /// What to do about it. The one shape this has been seen in is an entry
+    /// written by an older UZE whose field names have since changed, and the
+    /// way out of that is the same for every other shape: the registry is
+    /// rebuilt from what is installed, so losing an entry costs a re-register
+    /// and nothing else.
+    pub const REMEDY: &'static str =
+        "written by an older UZE; remove it and run `uze install` to re-register";
 }
 
 /// One registry entry.
@@ -301,26 +325,48 @@ impl UzeStore {
                 .to_path_buf(),
             source: source_error,
         })?;
+        // Nothing in the registry claims this id — the checks above returned
+        // for every id that does — so a directory already sitting here is
+        // debris from an install that was interrupted between the copy and
+        // the registration. Clearing it is what keeps `create_dir` from
+        // refusing this id forever; leaving it was a dead end with no
+        // command to escape it, since `remove` answers only to registered
+        // ids.
+        if destination.exists() {
+            fs::remove_dir_all(&destination).map_err(|source_error| UzeError::Write {
+                path: destination.clone(),
+                source: source_error,
+            })?;
+        }
         fs::create_dir(&destination).map_err(|source_error| UzeError::Write {
             path: destination.clone(),
             source: source_error,
         })?;
-        copy_tree(source, &destination)?;
 
         // The importer has already performed external-manifest safety checks.
         // Keeping this value live makes that boundary explicit and prevents an
         // accidental installation of an empty, non-Agent-Plugin directory.
         let _ = imported;
-        registry.packages.insert(
-            id.clone(),
-            Registration {
-                provenance: package.provenance().clone(),
-                active_name: active_name
-                    .filter(|alias| *alias != name)
-                    .map(str::to_owned),
-            },
-        );
-        self.save_registry(&registry)?;
+        let ingested = (|| {
+            copy_tree(source, &destination)?;
+            registry.packages.insert(
+                id.clone(),
+                Registration {
+                    provenance: package.provenance().clone(),
+                    active_name: active_name
+                        .filter(|alias| *alias != name)
+                        .map(str::to_owned),
+                },
+            );
+            self.save_registry(&registry)
+        })();
+        if let Err(error) = ingested {
+            // A half-copied, unregistered tree is debris the next attempt
+            // would have to clear anyway; clearing it here is what makes a
+            // failed install leave the Store as it found it.
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error);
+        }
         self.package(&id)
     }
 
@@ -451,22 +497,41 @@ impl UzeStore {
         self.save_registry(&registry)
     }
 
-    /// `packages.json` is a ledger of independent registrations, so one
-    /// entry whose key fails `PackageId`'s validation (tampered, corrupted,
-    /// or hand-edited) must not make every *other*, still-valid package
-    /// unreachable through `list`/`remove`/`doctor`. Deserializing the whole
-    /// map through `PackageId`'s strict `Deserialize` would do exactly that
-    /// — one bad key fails the entire parse — so this reads keys as plain
-    /// `String` first and validates each independently, dropping only the
-    /// ones that fail. A dropped id can never be looked up or acted on by
-    /// any valid id anyway, so dropping it is equivalent to quarantining it,
-    /// never to trusting it.
+    /// The entries of `packages.json` this UZE cannot read, each with the
+    /// reason and [`QuarantinedRegistration::REMEDY`] — what `doctor` reports
+    /// instead of leaving the operator to guess why a package vanished.
+    pub fn quarantined_registrations(&self) -> Result<Vec<QuarantinedRegistration>> {
+        Ok(self.read_registry()?.1)
+    }
+
     fn load_registry(&self) -> Result<PackageRegistry> {
+        Ok(self.read_registry()?.0)
+    }
+
+    /// `packages.json` is a ledger of independent registrations, so one
+    /// unreadable entry — a key that fails `PackageId`'s validation, or a
+    /// value whose fields this UZE no longer knows (an install by an older
+    /// UZE, a hand edit, corruption) — must not make every *other*,
+    /// still-valid package unreachable through `list`/`remove`/`doctor`.
+    /// Deserializing the whole map through the strict types would do exactly
+    /// that: one bad entry fails the entire parse. So keys are read as plain
+    /// `String` and values left undecided, then each is validated on its own
+    /// and the failures are quarantined rather than trusted — they answer to
+    /// nothing, and the next save drops them.
+    ///
+    /// What is *not* tolerated is a file that is not JSON at all, or one
+    /// whose top level is not a registry: there are no independent entries
+    /// to salvage, and silently reading it as empty would invite the next
+    /// mutation to overwrite it.
+    fn read_registry(&self) -> Result<(PackageRegistry, Vec<QuarantinedRegistration>)> {
         let path = self.home.registry_path();
         if !path.exists() {
-            return Ok(PackageRegistry {
-                packages: BTreeMap::new(),
-            });
+            return Ok((
+                PackageRegistry {
+                    packages: BTreeMap::new(),
+                },
+                Vec::new(),
+            ));
         }
         let bytes = fs::read(&path).map_err(|source| UzeError::Read {
             path: path.clone(),
@@ -474,13 +539,27 @@ impl UzeStore {
         })?;
         let raw: RawPackageRegistry =
             serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
-        let packages = raw
-            .packages
-            .into_iter()
-            .filter(|(key, _)| is_valid_qualified_id(key))
-            .map(|(key, registration)| (PackageId(key), registration))
-            .collect();
-        Ok(PackageRegistry { packages })
+        let mut packages = BTreeMap::new();
+        let mut quarantined = Vec::new();
+        for (key, value) in raw.packages {
+            if !is_valid_qualified_id(&key) {
+                quarantined.push(QuarantinedRegistration {
+                    id: key,
+                    reason: "not a valid marketplace-qualified package id".to_owned(),
+                });
+                continue;
+            }
+            match serde_json::from_value::<Registration>(value) {
+                Ok(registration) => {
+                    packages.insert(PackageId(key), registration);
+                }
+                Err(source) => quarantined.push(QuarantinedRegistration {
+                    id: key,
+                    reason: source.to_string(),
+                }),
+            }
+        }
+        Ok((PackageRegistry { packages }, quarantined))
     }
 
     fn save_registry(&self, registry: &PackageRegistry) -> Result<()> {
@@ -827,6 +906,62 @@ mod tests {
                 .unwrap()
             ],
             "the valid entry must still load even though its sibling is quarantined"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The published alpha spelled `provenance` as `"source"`. One such
+    /// entry used to fail the whole file, so `status`, `plugin list`,
+    /// `plugin remove` and `install` all died on a machine that had ever
+    /// installed one — with no way out, since the commands that would clear
+    /// it were the ones that could not run. The entry is now quarantined
+    /// like an unreadable key, and named with what to do about it.
+    #[test]
+    fn an_entry_written_by_an_older_uze_is_quarantined_and_named() {
+        let root = uze_testkit::temp::scratch("registry-older-uze");
+        let home = UzeHome::at(&root);
+        let store = UzeStore::new(home.clone());
+        home.ensure_layout().unwrap();
+        let state = serde_json::json!({
+            "packages": {
+                "old@local": {
+                    "source": {
+                        "requested": { "LOCAL": { "path": "/tmp/old" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/old" } }
+                    },
+                    "active_name": null
+                },
+                "flow@local": {
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/flow" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/flow" } }
+                    }
+                }
+            }
+        });
+        fs::write(home.registry_path(), state.to_string()).unwrap();
+
+        let ids = store
+            .package_ids()
+            .expect("an entry an older UZE wrote must not fail the whole registry load");
+        assert_eq!(
+            ids.iter().map(PackageId::as_str).collect::<Vec<_>>(),
+            vec!["flow@local"],
+            "the readable entry must survive its unreadable sibling"
+        );
+
+        let quarantined = store.quarantined_registrations().unwrap();
+        assert_eq!(
+            quarantined
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>(),
+            vec!["old@local"]
+        );
+        assert!(
+            quarantined[0].reason.contains("provenance"),
+            "the reason must name the field that could not be read: {}",
+            quarantined[0].reason
         );
         let _ = fs::remove_dir_all(root);
     }

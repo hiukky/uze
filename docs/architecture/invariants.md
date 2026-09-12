@@ -227,6 +227,30 @@ Provenance reaches the Store as an opaque value it stores and compares through
 
 > `tests/integrations/vendor_neutral.rs::the_store_contains_no_source_mechanism_semantics`
 
+### One unreadable registration never takes the registry with it
+
+`packages.json` is a ledger of independent registrations, so an entry this
+UZE cannot read — a key that is not a valid qualified id, or a value whose
+fields an older UZE spelled differently — is quarantined, never fatal. The
+readable entries stay listable, resolvable and removable; the quarantined one
+answers to nothing and the next save drops it. `doctor` reports it as a named
+state carrying its remedy, not as the serde error that produced it.
+
+> `crates/uze-core/src/package/store.rs::tests::an_entry_written_by_an_older_uze_is_quarantined_and_named`
+> `crates/uze-core/src/package/store.rs::tests::load_registry_quarantines_a_tampered_entry_without_losing_valid_ones`
+> `crates/uze-application/src/application/doctor.rs::tests::doctor_names_an_unreadable_registration_and_its_remedy`
+
+### An interrupted install never blocks the next one
+
+An install that dies between the copy and the registration leaves a plugin
+directory nothing in the registry names. Reaching the copy means nothing
+claims that id, so the debris is cleared and the second attempt succeeds —
+and an ingest that fails part-way removes what it wrote, because `remove`
+answers only to registered ids and could not have cleaned up after it.
+
+> `tests/packages/store.rs::an_install_interrupted_mid_copy_never_blocks_the_next_attempt`
+> `tests/packages/store.rs::a_failed_ingest_leaves_no_directory_behind`
+
 ### Remote mutable references resolve to immutable Git commits
 
 A branch, a tag and an unspecified reference all persist as a commit SHA. The
@@ -285,6 +309,17 @@ a digest.
 > `crates/uze-core/src/digest.rs::tests::a_directory_symlink_pointing_at_the_tree_itself_does_not_recurse`
 > and `tests/packages/containment.rs::a_symlinked_directory_pointing_at_its_own_ancestor_does_not_hang_discovery`
 
+A link is read, though, never merely skipped: it contributes its name and the
+path it points at, so a marketplace cannot add, remove or repoint an
+in-package symlink — which containment explicitly permits when relative —
+behind an unchanged `integrity`. Its target is framed by a content length no
+file can have, so a tree without symlinks digests to exactly the stream it
+always did.
+
+> `crates/uze-core/src/digest.rs::tests::adding_or_repointing_a_symlink_changes_the_digest`
+> `crates/uze-core/src/digest.rs::tests::a_symlink_does_not_digest_as_a_file_holding_its_target`
+> `crates/uze-core/src/digest.rs::tests::a_tree_without_symlinks_digests_to_its_recorded_value`
+
 ### Remote executable capabilities cross an explicit consent boundary
 
 A remote package declaring an MCP `command` requires explicit consent before
@@ -317,6 +352,35 @@ configuration from nothing but explicit flags. Capability inspection parses
 declarations; it invokes nothing.
 
 > `tests/packages/acquisition.rs::submodules_are_not_recursed_into`
+
+### One machine mutation at a time, and never two
+
+The machine mutation guard is an `flock` on a permanent `state/mutation.lock`,
+the same primitive `project::task` uses for its document. Nothing is unlinked
+and no liveness is judged, so there is no window in which two acquirers both
+declare a holder dead and both take the lock — the failure that let two
+concurrent `uze install` runs rewrite the Store, the ledger and every harness
+config at once. A holder killed outright releases it, because the kernel
+closes its descriptors however it dies; the pid in the file names who is
+blocking and decides nothing.
+
+> `crates/uze-core/src/delivery/persistence.rs::tests::two_acquirers_racing_on_a_stale_lock_never_both_win`
+> `crates/uze-core/src/delivery/persistence.rs::tests::a_holder_killed_outright_releases_the_lock`
+> `crates/uze-core/src/delivery/persistence.rs::tests::a_lock_file_nobody_holds_is_not_a_lock`
+
+### A bounded report keeps the evidence, and says what it dropped
+
+A gate or `setup` step is capped per stream, and what is kept is the **tail**:
+every runner writes its progress noise first and what failed last, so a
+head-kept cap reported 64 KiB of "Compiling …" and none of the failure. What
+fell off the front is counted and announced, and a stream that could not be
+read at all says so rather than being reported as empty — a descendant
+holding the pipe open is swept once before the reader is given up on.
+
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_failing_gate_reports_the_failure_and_not_the_progress_noise`
+> `crates/uze-core/src/machine/subprocess.rs::tests::read_bounded_keeps_the_end_of_a_long_stream`
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_step_whose_pipe_a_survivor_holds_open_is_still_reported`
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_stream_that_could_not_be_read_says_so`
 
 ### Cache is not required for correctness
 
@@ -521,7 +585,8 @@ vanish while its slot stayed taken. Every mutation now runs inside
 That lock is the **outer** one: everything under it speaks to Git, and Git
 serializes itself under `uze_git`'s repository write lock. Nothing unbounded
 belongs inside it — a placement runs the project's `setup` after the lock is
-released.
+released, and a delivery runs the project's gate and its pushes between two
+takes of it.
 
 A mutation that could not be written is never reported as having happened:
 a delivery carries the reason in `DeliveryReport::warnings`, and a placement
@@ -532,6 +597,33 @@ whose task could not be recorded gives the slot back and answers
 > `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_evaluation_that_overlaps_a_delivery_does_not_erase_it`
 > `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_delivery_that_could_not_be_recorded_says_so`
 > `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_placement_that_could_not_be_recorded_gives_the_slot_back`
+
+### A delivery holds the document to claim its task and to record it, never while it works
+
+A delivery runs the project's gate — thirty minutes, by its own bound —
+and then a fetch, a push or a merge, none of which the document knows
+anything about. Held across all of it, one delivery froze every other
+mutation of every other task in the project for the full two-minute
+timeout, and `flock` names no holder, so the failure could not even say
+who. So the document is taken to mark the task `Integrating` and released,
+and taken again to write the outcome onto the record only while it is
+still the one that was claimed. `Integrating` is what the other passes
+already read as "a delivery owns this": the evaluation skips it and so
+does the release of abandoned tasks, so a pass that overlaps a delivery
+neither reports the task as ready nor writes back the state it read before
+the delivery began. The same rule covers the evaluation's one question
+that leaves the machine — the `git ls-remote` behind an open request is
+asked with the document unlocked and adopted under it, onto the record it
+was asked about.
+
+A delivery that could not claim its task answers with a report naming the
+reason, never with nothing: an empty answer is what the client renders as
+"nothing ready", which is the one thing a press on a visible, ready task
+does not mean.
+
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_gate_that_runs_long_does_not_hold_the_tasks_document`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_delivery_that_could_not_claim_its_task_says_why`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_task_a_delivery_claimed_and_never_answered_for_is_left_alone`
 
 ---
 
@@ -624,7 +716,9 @@ a degraded or unsupported route states the exact loss.
 The harness invokes a wrapper vendored in the delivered artifact, never the
 `uze` binary, and nothing in that artifact names the packager. The wrapper
 is a per-harness constant, owned alongside the entry that names it: written
-on attach, drift-checked on inspect, removed with the last entry. Where no
+on attach, drift-checked on inspect, removed with the last entry — and only
+once nothing is left that runs it, which an unreadable ledger and a
+hand-edited entry both count as. Where no
 wrapper template covers the platform, nothing is attached at all (see
 below).
 
@@ -633,6 +727,9 @@ below).
 > `crates/uze-integrations/src/hooks.rs::the_wrapper_is_one_byte_identical_file_per_harness`
 > `crates/uze-integrations/src/hooks.rs::a_wrapper_that_lost_its_executable_bit_is_drift_and_is_repaired`
 > `crates/uze-integrations/src/hooks.rs::the_last_detached_hook_entry_takes_the_shared_wrapper_with_it`
+> `crates/uze-integrations/src/hooks.rs::an_unreadable_ledger_keeps_the_shared_wrapper`
+> `crates/uze-integrations/src/hooks.rs::an_entry_that_drifted_still_counts_as_using_the_wrapper`
+> `tests/integrations/hooks.rs::an_unreadable_ledger_leaves_the_shared_wrapper_where_it_is`
 
 ### One vocabulary drives matchers, wrappers and handlers
 
@@ -686,7 +783,18 @@ shape the ABI allows: a `sh <script> --flag` invocation, a relative path,
 because a handler's `command` is a shell command line run from the package
 root. Each handler is bounded by the timeout its own author declared, not by
 a fixed default and not by the harness's backstop: past it the handler and
-everything it started are stopped, and the group's effect decides.
+everything it started are stopped — `TERM`, then `KILL` a second later, the
+second pass reaching what ignored the first — and the group's effect decides.
+
+The same rule covers everything that decides *before* a handler runs. A
+harness payload the wrapper cannot parse and a package root that is gone are
+both failures resolved by the group's effect, never a quiet allowance: an
+unreadable payload would leave every `HOOK_*` variable empty, so a guard
+written the documented way would see nothing and allow, and a missing root
+would run the author's relative commands from whatever directory the harness
+happened to be in — the user's own checkout. The reason a harness is handed
+is bounded, so a handler that writes megabytes to stderr is still a decision
+and not a document the harness has to parse.
 
 What the wrapper answers for every recorded fixture — the native decision
 document, the exit status and the reason — is a golden per harness, taken
@@ -698,6 +806,23 @@ contract, before it was removed (ADR-040, amended).
 > `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_missing_wrapper_dependency_follows_the_groups_effect`
 > `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_denial_is_relayed_in_each_harnesss_own_dialect`
 > `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_is_stopped_at_the_deadline_its_author_declared`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_that_ignores_term_does_not_outlive_its_deadline`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_payload_that_does_not_parse_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_package_root_that_is_gone_never_runs_the_checkouts_own_script`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_transform_group_fails_closed_like_a_deny`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::the_reason_a_harness_is_handed_is_bounded`
+
+### The harness's own hook timeout is a backstop, never the first bound
+
+A native entry's `timeout` is sized to outlast everything the wrapper can
+spend on that group — each handler's declared deadline, the second between
+`TERM` and `KILL`, and one to render the answer. A group that could outlast
+it is refused at the manifest, naming the sum, rather than clamped: a hook
+the harness kills is read as non-blocking, so a clamped backstop would turn
+a `deny` group into an allowance.
+
+> `crates/uze-core/src/capability/hook.rs::rejects_a_group_whose_handlers_can_outlast_the_harnesss_own_backstop`
+> `crates/uze-integrations/src/hooks.rs::the_native_timeout_outlasts_everything_the_wrapper_can_spend`
 
 ### A hook UZE cannot deliver is never half-delivered
 
@@ -1027,23 +1152,55 @@ sendable; the bound is derived from the largest thing the protocol
 legitimately carries — a full repaint of the largest pane it allows. Pane
 dimensions are bounded at the edge that receives them and again where a
 pane is created, because `Term::resize` allocates a cell per position and
-clamps nothing of its own.
+clamps nothing of its own. Nothing the server sends may be larger than that
+one pane, so a whole-workspace repaint goes out one frame per pane rather
+than one frame carrying them all. The *first* frame from a peer nothing has
+vouched for is held to a smaller bound still — what a handshake actually
+says — and to one deadline over the whole handshake rather than one per
+read, which `SO_RCVTIMEO` alone cannot express.
 
 > `crates/uze-terminal/src/runtime.rs::a_length_prefix_past_the_frame_limit_is_refused_before_it_is_allocated`
+> `crates/uze-terminal/src/runtime.rs::a_frame_past_the_limit_is_never_written_either`
 > `crates/uze-terminal/src/runtime.rs::a_full_repaint_of_the_largest_pane_fits_in_one_frame`
+> `crates/uze-terminal/src/runtime.rs::every_pane_reaches_a_client_when_one_frame_could_not_have_carried_them_all`
+> `crates/uze-terminal/src/runtime.rs::a_first_frame_is_bounded_by_what_a_handshake_says_not_by_a_repaint`
+> `crates/uze-terminal/src/runtime.rs::a_dribbling_peer_runs_out_of_handshake_rather_than_restarting_it`
 > `crates/uze-terminal/src/runtime.rs::a_resize_to_the_largest_number_on_the_wire_leaves_the_server_answering`
+
+### A client is told the runtime went away, never left looking at it
+
+A frame that cannot be written ends the connection — both halves — rather
+than only the thread that tried to write it, so the peer reads EOF and runs
+its disconnected path instead of sitting on chrome that still looks live
+while events it will never see pile up behind it. And `stop` is heard as a
+first frame, by a server no client has ever attached to: since the
+workspace claim makes a survivor refuse every replacement, that request is
+the only way back in short of a manual `kill`.
+
+> `crates/uze-terminal/src/runtime.rs::a_client_an_event_cannot_reach_is_disconnected_rather_than_frozen`
+> `crates/uze-terminal/src/runtime.rs::stop_is_heard_as_a_first_frame_by_a_server_nobody_attached_to`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_terminal_runtime_that_went_away_is_said_rather_than_waited_on`
 
 ### A pid file is a claim; the process table is the fact
 
 Nothing is signalled, and no endpoint is trusted, on a pid file's word
-alone: the file outlives the process it names, and pids are recycled. A pid
-is signalled only where the kernel says it runs `uze`, and a process
-without an executable image — a crashed server nobody reaped — is not alive
-however addressable it remains. The directory the endpoint lives in is
-proved to be this user's own, unreachable by anyone else, and not a
-symlink, before a socket carrying every pane's contents is put in it.
+alone: the file outlives the process it names, and pids are recycled. Two
+independent witnesses have to name the same process before it is signalled
+— the pid the kernel stamps on the socket's own connection (`SO_PEERCRED`),
+which nothing can forge, and the pid file — and the kernel has to say that
+process runs `uze`. Where nothing can corroborate that, nothing is
+signalled at all; clearing the endpoint files is the whole recovery there.
+A file that does not name exactly one process names none: `libc::pid_t` is
+signed, and `kill(-1, …)` is every process the user owns. A process without
+an executable image — a crashed server nobody reaped — is not alive however
+addressable it remains. The directory the endpoint lives in is proved to be
+this user's own, unreachable by anyone else, and not a symlink, before a
+socket carrying every pane's contents is put in it.
 
 > `crates/uze-terminal/src/runtime.rs::replace_incompatible_server_leaves_a_process_that_is_not_a_server_running`
+> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_disagrees_with_the_peer_gets_nobody_signalled`
+> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_does_not_name_one_process_names_none`
+> `crates/uze-terminal/src/runtime.rs::nothing_is_signalled_where_nothing_can_corroborate_it`
 > `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_does_not_count_as_alive`
 > `crates/uze-terminal/src/runtime.rs::a_runtime_directory_that_is_not_ours_to_own_is_stepped_over`
 
@@ -1054,10 +1211,15 @@ it exists, taken beside the workspace under `$UZE_HOME` rather than in the
 runtime directory a `/tmp` cleaner can take away. A second server refuses to
 restore a workspace another live one holds, so an endpoint that vanishes
 under a running server can never turn one set of agents into two — and the
-server that holds it puts itself back at the endpoint instead.
+server that holds it puts itself back at the endpoint instead, under the
+same flag the shutdown takes, so the two orderings are the only two there
+are. Only a lock another process actually holds reads as contention: a
+filesystem that cannot lock at all surfaces as the I/O failure it is,
+rather than as a server to go and stop that does not exist.
 
 > `crates/uze-terminal/src/runtime.rs::a_second_server_refuses_to_restore_a_workspace_another_one_holds`
 > `crates/uze-terminal/src/runtime.rs::a_workspace_claim_is_exclusive_and_released_with_its_holder`
+> `crates/uze-terminal/src/runtime.rs::only_a_held_lock_reads_as_another_server`
 
 ### A pane's identity is its own
 

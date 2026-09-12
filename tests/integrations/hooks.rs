@@ -398,6 +398,42 @@ fn the_generated_wrapper_is_owned_alongside_the_entry_it_serves() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// The prune that follows a detach asks the receipt ledger who else runs
+/// the shared wrapper. A ledger it cannot read has not answered "nobody" —
+/// and deleting the wrapper on that silence leaves every live entry exiting
+/// 127, which every harness reads as non-blocking. An unreadable ledger
+/// blocks the destructive half of the detach; the entry itself, whose own
+/// content identity is readable, still goes.
+#[test]
+fn an_unreadable_ledger_leaves_the_shared_wrapper_where_it_is() {
+    let (root, resources) = hook_package("claude-wrapper-ledger", deny_group());
+    let protect = hook_resource(&resources, "protect-env");
+    let home = UzeHome::at(root.join("uze"));
+    let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
+
+    let receipt = claude
+        .attach_receipt(protect)
+        .expect("attach succeeds")
+        .expect("attach produces a receipt");
+    let ManagedArtifact::HookConfigEntry { wrapper, .. } = &receipt.artifact else {
+        panic!("a natively delivered hook receipt owns its wrapper");
+    };
+    let ledger = home.state_dir().join("attachments.json");
+    fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    fs::write(&ledger, b"{ this ledger cannot be read").unwrap();
+
+    assert_eq!(
+        claude.detach_receipt(&receipt).unwrap().state,
+        AttachmentState::Missing,
+        "the entry's own content identity is readable, so the entry still detaches"
+    );
+    assert!(
+        wrapper.is_file(),
+        "a wrapper nothing could prove unused is kept"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn claude_removal_cleans_an_entry_when_the_shared_file_is_left_empty() {
     let (root, resources) = hook_package("claude-cleanup", deny_group());

@@ -149,9 +149,10 @@ fn capture_with_timeout<S: AsRef<OsStr>>(
 /// Appends a truncation notice when `read_bounded` hit `VENDOR_OUTPUT_CAP`,
 /// so a cap hit is visible to whatever later stringifies the output (error
 /// messages, `--version` parsing) instead of silently presenting truncated
-/// output as complete.
-fn mark_if_truncated((mut bytes, overflow): (Vec<u8>, bool)) -> Vec<u8> {
-    if overflow {
+/// output as complete. `read_bounded` keeps the tail, so what the notice
+/// counts is what fell off the front.
+fn mark_if_truncated((mut bytes, dropped): (Vec<u8>, usize)) -> Vec<u8> {
+    if dropped > 0 {
         bytes.extend_from_slice(
             format!("\n...[output truncated at {VENDOR_OUTPUT_CAP} bytes]").as_bytes(),
         );

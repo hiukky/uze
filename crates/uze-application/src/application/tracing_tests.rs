@@ -9,11 +9,15 @@ use tracing_subscriber::{Layer, layer::Context, layer::SubscriberExt, registry::
 
 use super::*;
 
+/// A span as this records it: its name, and its parent's name when it had
+/// one.
+type Span = (String, Option<String>);
+
 /// Every span opened while the subscriber was current: its name, and its
 /// parent's name when it had one.
 #[derive(Clone, Default)]
 struct Recorded {
-    spans: Arc<Mutex<Vec<(String, Option<String>)>>>,
+    spans: Arc<Mutex<Vec<Span>>>,
     errors: Arc<Mutex<Vec<String>>>,
 }
 

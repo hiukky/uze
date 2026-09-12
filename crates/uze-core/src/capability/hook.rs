@@ -360,6 +360,21 @@ fn effect_name(effect: HookEffect) -> &'static str {
     }
 }
 
+/// The longest a group's wrapper can be busy: every handler's own deadline
+/// plus the second the wrapper waits between `TERM` and `KILL`, and one more
+/// to render the answer. A harness's native group timeout is a backstop and
+/// must never be the bound that fires first — a hook the harness kills is
+/// read as non-blocking, so a `deny` group would fail open. Capping the
+/// backstop cannot fix that; refusing the manifest can, which is why
+/// [`parse_manifest`] does.
+pub fn group_timeout_bound(handlers: &[CommandHook]) -> u32 {
+    handlers
+        .iter()
+        .map(|handler| u32::from(handler.timeout) + 1)
+        .sum::<u32>()
+        .saturating_add(1)
+}
+
 /// Parses and validates one package/project `hooks.json`. The returned order
 /// is deterministic: semantic event order then source group order.
 pub fn parse_manifest(path: &Path, bytes: &[u8]) -> Result<Vec<PortableHook>> {
@@ -425,6 +440,16 @@ pub fn parse_manifest(path: &Path, bytes: &[u8]) -> Result<Vec<PortableHook>> {
                     );
                 }
             }
+            let group_seconds = group_timeout_bound(&group.hooks);
+            if group_seconds > u32::from(MAX_TIMEOUT_SECONDS) {
+                return invalid(
+                    path,
+                    &format!(
+                        "hook `{id}` can take {group_seconds}s across its handlers, past the \
+                         {MAX_TIMEOUT_SECONDS}s a group may take; shorten a timeout or split the group"
+                    ),
+                );
+            }
             hooks.push(PortableHook {
                 id,
                 event,
@@ -482,6 +507,36 @@ mod tests {
             parse_manifest(Path::new("hooks.json"), bytes),
             Err(UzeError::InvalidHookManifest { .. })
         ));
+    }
+
+    /// Each handler's own timeout is in range and the count is not bounded,
+    /// so ten default handlers ask for 311s of a 300s backstop. Clamping the
+    /// backstop is not an answer: the harness's timeout would then fire
+    /// first, and a hook a harness kills is read as non-blocking — a `deny`
+    /// group would be allowed through. The manifest is refused instead.
+    #[test]
+    fn rejects_a_group_whose_handlers_can_outlast_the_harnesss_own_backstop() {
+        let handlers = |count: usize| {
+            let one = r#"{"type":"command","command":"ok"}"#;
+            format!(
+                r#"{{"hooks":{{"PreToolUse":[{{"id":"long","hooks":[{}]}}]}}}}"#,
+                vec![one; count].join(",")
+            )
+        };
+        let refused = parse_manifest(Path::new("hooks.json"), handlers(10).as_bytes());
+        let Err(UzeError::InvalidHookManifest { reason, .. }) = refused else {
+            panic!("a group needing more than {MAX_TIMEOUT_SECONDS}s must be refused");
+        };
+        assert!(
+            reason.contains("311s"),
+            "the reason names the sum the author has to bring down: {reason}"
+        );
+        let group = parse_manifest(Path::new("hooks.json"), handlers(9).as_bytes()).unwrap();
+        assert_eq!(
+            group_timeout_bound(&group[0].handlers),
+            280,
+            "nine default handlers still fit under the maximum"
+        );
     }
 
     #[test]

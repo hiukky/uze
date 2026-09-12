@@ -27,10 +27,14 @@ or `unsupported` with a reason and produced artifacts.
 - **AND** UZE SHALL NOT claim that a session or tool callback is a native Stop hook
 
 ### Requirement: Command hooks use one portable ABI
-The system SHALL normalize command-hook input to JSON stdin and parse an
-optional JSON stdout decision. It SHALL support observation, allow, deny,
-ask, and safe input replacement where the target supports them; it SHALL
-document and diagnose any target that cannot preserve an effect.
+The system SHALL hand a command handler the normalized hook context as
+`HOOK_*` environment and SHALL read its decision from its exit code: `0`
+allows, the canonical deny exit denies with the reason on stderr, and any
+other status is a handler failure resolved by the group's effect. The reason
+read back SHALL be bounded, and each handler SHALL be bounded by its declared
+timeout. It SHALL support observation, allow, deny, ask, and safe input
+replacement where the target supports them; it SHALL document and diagnose
+any target that cannot preserve an effect.
 
 #### Scenario: First deny wins in deterministic order
 - **WHEN** multiple matching pre-tool command handlers are declared

@@ -9,7 +9,7 @@
 
 - [x] 2.1 Change `uze hook-exec` dispatch to the new contract: `HOOK_*` environment (`HOOK_HARNESS`, `HOOK_EVENT`, `HOOK_TOOL`, `HOOK_TOOL_NATIVE`, `HOOK_CWD`, `HOOK_INPUT`, `PLUGIN_ROOT`, alias fields) instead of stdin JSON; exit code decision (`0` allow, `3` deny + stderr reason, other = failure by effect) instead of stdout JSON; sequential order and first-deny-wins unchanged
 - [x] 2.2 Update the ABI types/docs in `uze-core::hook` (`HookCommandInput` becomes the environment set; the decision parser becomes an exit-code mapper) and remove the 64 KiB stdout cap that no longer applies
-- [x] 2.3 Rewrite handler fixtures to the new contract: `tests/_fixtures/canonical/hook-plugin/scripts/*`, `conformance/_fixtures/marketplace/plugins/hook-plugin` and `hook-order-plugin` scripts, `playground/` example if any
+- [x] 2.3 Rewrite handler fixtures to the new contract: `conformance/_fixtures/marketplace/plugins/hook-plugin` and `hook-order-plugin` scripts, `playground/` example if any (`tests/_fixtures/canonical/hook-plugin` was deleted with the in-binary runtime; the wrapper's recorded answers carry that proof now)
   - `hook-plugin`'s second handler (`mark`) no longer relays a marker: the exit-code contract gives an allowed handler no channel to speak on. First-deny-wins keeps its Lab proof in `hook-order-plugin` (first handler denies, second handler's reason must never appear) and gains a deterministic one in the wrapper's golden tests.
 - [x] 2.4 Unit tests for the reference runtime: each harness dialect in → `HOOK_*` set as expected; exit 3 → native deny (exit 2 + JSON on Claude/Codex, `decision: deny` on AGY); handler failure → deny for `deny`/`ask`, proceed for `observe`/`allow`
 
