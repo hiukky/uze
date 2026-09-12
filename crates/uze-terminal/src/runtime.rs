@@ -2730,16 +2730,23 @@ mod tests {
         // No version line: the exact shape `replace_incompatible_server` is
         // meant to react to.
         std::fs::write(&pid_path, pid.to_string()).unwrap();
-        // The replace signals only a pid the process table corroborates, so
-        // a probe that cannot read the child is a different failure from a
-        // signal that did not land — and says which one in its own words.
-        assert!(
-            corroborated_as_server(pid as libc::pid_t),
-            "the process table must corroborate the copied `uze` (pid {pid}): \
-             executable_of = {:?}, platform reads processes = {}",
-            crate::process_probe::executable_of(pid),
-            platform_reads_processes()
-        );
+        // The replace signals only a pid the process table corroborates —
+        // and `spawn` returns before the child's image has necessarily been
+        // swapped for the copied binary: on a GitHub runner the probe read
+        // this test's own executable for the child's pid a moment after
+        // the spawn. A server being replaced has been running for ages, so
+        // production never sees that window; the test waits it out.
+        let exec_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !corroborated_as_server(pid as libc::pid_t) {
+            assert!(
+                std::time::Instant::now() < exec_deadline,
+                "the process table must corroborate the copied `uze` (pid {pid}): \
+                 executable_of = {:?}, platform reads processes = {}",
+                crate::process_probe::executable_of(pid),
+                platform_reads_processes()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
 
         let endpoint = Endpoint {
             socket: socket.clone(),
