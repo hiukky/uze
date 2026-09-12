@@ -1396,26 +1396,26 @@ mod workspace_tests {
             "and the operator is told something is running"
         );
 
-        driven
-            .attach
-            .answers
-            .mutations
-            .send(MutationResolution {
-                cwd: PathBuf::from("/repo/.worktrees/old"),
-                task: "t2".to_owned(),
-                label: "yesterday".to_owned(),
-                mutation: super::TaskMutation::Discard,
-                outcome: Ok(()),
-            })
-            .unwrap();
-        driven.pump();
-
-        assert!(
-            driven.attach.model.task_mutation_pending.is_empty(),
-            "the answer gives the task back"
-        );
+        // The keystroke started a real thread against a checkout that does
+        // not exist; its answer is the ending this test waits for, rather
+        // than one sent alongside it — two answers on one channel arrive
+        // in whichever order the scheduler picks, and the last one drawn
+        // is the notice.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !driven.attach.model.task_mutation_pending.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the mutation thread must answer, whatever it found"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            driven.pump();
+        }
         let notice = driven.attach.model.notice.as_ref().expect("an ending");
-        assert!(notice.text.contains("discarded"), "{}", notice.text);
+        assert!(
+            notice.text.contains("t2") || notice.text.contains("yesterday"),
+            "the ending names the task it was about: {}",
+            notice.text
+        );
     }
 
     /// A background read whose work panicked still answers.
