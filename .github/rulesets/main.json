@@ -44,37 +44,7 @@
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           {
-            "context": "Format"
-          },
-          {
-            "context": "Clippy"
-          },
-          {
-            "context": "Test"
-          },
-          {
-            "context": "Audit"
-          },
-          {
-            "context": "Licences"
-          },
-          {
-            "context": "MSRV"
-          },
-          {
-            "context": "Web"
-          },
-          {
-            "context": "Secrets"
-          },
-          {
-            "context": "Installer"
-          },
-          {
-            "context": "Python"
-          },
-          {
-            "context": "Coverage"
+            "context": "Gate"
           }
         ]
       }

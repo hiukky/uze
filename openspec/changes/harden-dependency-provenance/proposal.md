@@ -17,8 +17,11 @@ condition met.
 - **Dependency guidance in `AGENTS.md`** — a provenance tier list, what to
   refuse outright, and what to check and write down before adding a crate.
   Applies to agents and people equally.
-- **`noyalib` → a maintained YAML serde crate** — tracked as task 9.5 of
-  `project-agent-environment`, not duplicated here.
+- **`noyalib` stays, under a written exception** — the crate this change
+  started from. Re-evaluated on evidence in `project-agent-environment`
+  9.2/9.5/9.7, kept, and the exception the refuse rule demands is now
+  written in `design.md` with what would remove it. Its containment is one
+  module, `manifest/edit.rs`.
 - **`syntect` off Oniguruma** — the default `default-onig` feature
   compiles Oniguruma from C, which is the dependency `release.yml:206`
   already carries a musl-toolchain workaround for. `default-fancy`

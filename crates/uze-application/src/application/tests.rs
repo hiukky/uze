@@ -581,6 +581,181 @@ pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A detected harness whose preparation fails on one chosen call.
+///
+/// Which call is the point: an update prepares twice — once on its own,
+/// before anything is removed, and once from inside the install that
+/// replaces the package — and the two failures have entirely different
+/// consequences.
+struct PreparationRefusedOnce {
+    calls: Arc<AtomicUsize>,
+    refuse_at: Arc<AtomicUsize>,
+}
+
+impl IntegrationPort for PreparationRefusedOnce {
+    fn id(&self) -> &'static str {
+        "refusing"
+    }
+
+    fn capabilities(&self) -> HarnessCapabilities {
+        HarnessCapabilities::default()
+    }
+
+    fn detect(&self) -> HarnessDetection {
+        HarnessDetection {
+            present: true,
+            version: None,
+        }
+    }
+
+    fn install(&self, _home: &UzeHome, _detection: &HarnessDetection) -> Result<()> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call == self.refuse_at.load(Ordering::SeqCst) {
+            return Err(UzeError::ProvisioningIncomplete(
+                "the vendor configuration is read-only".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Adaptable,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "test does not attach".to_owned(),
+            },
+            evidence: "test".to_owned(),
+        }
+    }
+}
+
+fn install_conformance_fixture(app: &UzeApplication, marketplace: &str) {
+    let acquired =
+        uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+    app.plugins()
+        .install_materialized_from_marketplace(
+            acquired,
+            marketplace,
+            &uze_core::trust::AlwaysTrust,
+            &[],
+            false,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )
+        .unwrap();
+}
+
+/// The removal is what makes an update destructive, so everything that
+/// can refuse without needing the removed state has to refuse before it.
+/// Preparing a harness is such a thing, and it used to run afterwards: a
+/// read-only vendor configuration took a Git-sourced plugin off the
+/// machine with nothing left that could heal it.
+#[test]
+pub(crate) fn an_update_a_harness_refuses_removes_nothing() {
+    let root = uze_testkit::temp::scratch("update-refused-early");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse_at = Arc::new(AtomicUsize::new(usize::MAX));
+    let app = UzeApplication::new(
+        UzeHome::at(&root),
+        vec![Box::new(PreparationRefusedOnce {
+            calls: calls.clone(),
+            refuse_at: refuse_at.clone(),
+        })],
+    );
+    install_conformance_fixture(&app, "alpha");
+
+    // The update's own preparation pass, before anything is detached.
+    refuse_at.store(calls.load(Ordering::SeqCst), Ordering::SeqCst);
+    let failure = app
+        .plugins()
+        .update("uze-agent-skill-conformance", &uze_core::trust::AlwaysTrust)
+        .expect_err("the harness refused to be prepared");
+    assert!(
+        matches!(failure, UzeError::ProvisioningIncomplete(_)),
+        "{failure}"
+    );
+
+    let installed = app
+        .package_by_name("uze-agent-skill-conformance")
+        .expect("the package was never removed");
+    assert!(
+        installed.manifest.is_file(),
+        "and its bytes are still there"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Not everything can be asked before the removal — the ingest itself and
+/// the environment the new revision composes cannot. When one of those
+/// fails the previous revision goes back: its bytes, its registration and
+/// its attachments, reported as blocked rather than as an update.
+#[test]
+pub(crate) fn an_update_that_fails_after_the_removal_puts_the_revision_back() {
+    let root = uze_testkit::temp::scratch("update-restored");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse_at = Arc::new(AtomicUsize::new(usize::MAX));
+    let app = UzeApplication::new(
+        UzeHome::at(&root),
+        vec![Box::new(PreparationRefusedOnce {
+            calls: calls.clone(),
+            refuse_at: refuse_at.clone(),
+        })],
+    );
+    install_conformance_fixture(&app, "alpha");
+
+    // The pass *inside* the install, which runs once the package is gone.
+    refuse_at.store(calls.load(Ordering::SeqCst) + 1, Ordering::SeqCst);
+    let failure = app
+        .plugins()
+        .update("uze-agent-skill-conformance", &uze_core::trust::AlwaysTrust)
+        .expect_err("the install failed after the removal");
+    let UzeError::LifecycleBlocked(reason) = &failure else {
+        panic!("expected a blocked lifecycle, got {failure:?}");
+    };
+    assert!(reason.contains("was put back"), "{reason}");
+
+    let restored = app
+        .package_by_name("uze-agent-skill-conformance")
+        .expect("the previous revision is installed again");
+    assert_eq!(restored.id.as_str(), "uze-agent-skill-conformance@alpha");
+    assert!(restored.manifest.is_file(), "bytes and all");
+    assert!(
+        !app.home.state_dir().join("superseded").exists(),
+        "and nothing is left aside"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// "Installed at least one Store entry" is a fact about the Store. Every
+/// failure used to answer `true` on the grounds that the bytes are written
+/// before a harness is spoken to, which is only true of the failures that
+/// come after the ingest — trust, preparation and the ingest itself all
+/// refuse before a byte is written, and the answer was then an install
+/// that never happened.
+#[test]
+pub(crate) fn a_default_plugin_that_was_not_installed_is_not_reported_as_installed() {
+    let root = uze_testkit::temp::scratch("bootstrap-refused");
+    let app = UzeApplication::new(
+        UzeHome::at(&root),
+        vec![Box::new(PreparationRefusedOnce {
+            calls: Arc::new(AtomicUsize::new(0)),
+            refuse_at: Arc::new(AtomicUsize::new(0)),
+        })],
+    );
+
+    let installed = app
+        .ensure_default_plugin_installed(bootstrap::DEFAULT_PLUGIN_IDS[0])
+        .expect("a refused harness is a warning, not an aborted bootstrap");
+
+    assert!(!installed, "nothing was installed, and it says so");
+    assert!(
+        app.store.package_ids().unwrap().is_empty(),
+        "and the Store agrees"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
     let root = uze_testkit::temp::scratch("doctor");

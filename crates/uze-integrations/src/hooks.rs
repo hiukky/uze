@@ -425,8 +425,8 @@ pub(crate) fn shell_quote(fragment: &str) -> String {
 /// every native entry: the harness runs this one command, which hands the
 /// native payload to the adapter and runs the author's handlers against the
 /// portable ABI. Absolute executable path pins the wrapper regardless of
-/// the harness's own `PATH`; per-handler timeouts and the first-deny-wins
-/// rule live inside the runner.
+/// the harness's own `PATH`; each handler's authored timeout rides beside
+/// its command, and the first-deny-wins rule lives inside the runner.
 pub(crate) fn dispatcher_command(
     executable: &Path,
     adapter_id: &str,
@@ -448,6 +448,7 @@ pub(crate) fn dispatcher_command(
     ];
     for handler in handlers {
         parts.push(format!("--command {}", shell_quote(&handler.command)));
+        parts.push(format!("--timeout {}", handler.timeout));
     }
     parts.join(" ")
 }
@@ -634,7 +635,10 @@ pub(crate) fn agy_named_entry(
 /// Antigravity's shared `hooks.json` is a map of named hooks, not an event
 /// array, so its merge is by *key*: this integration owns exactly the keys
 /// it namespaces (`<package>:<group-id>`), and every other root key —
-/// a hand-written hook, another tool's — is left byte-identical.
+/// a hand-written hook, another tool's — keeps its value and its position
+/// in the document. The file is re-emitted, not patched, so what a merge
+/// does not preserve is formatting: indentation becomes two spaces and
+/// whitespace between tokens is normalised.
 pub(crate) fn merge_named_entry(
     config_path: &Path,
     entry_name: &str,
@@ -936,8 +940,12 @@ case "$HOOK_TOOL_NATIVE" in                       # the portable vocabulary
 export HOOK_TOOL HOOK_TOOL_NATIVE HOOK_CWD HOOK_INPUT {field_exports}
 
 # --- the handlers, in order; the first denial stops the rest --------------
+# A handler is a shell command line, run from the package root: the same
+# contract the canonical manifest documents, so `sh scripts/check --strict`
+# means here exactly what it means when a person types it.
+cd "$PLUGIN_ROOT" 2>/dev/null || :
 for handler in "$@"; do
-  reason=$("$handler" 2>&1 >/dev/null); status=$?
+  reason=$(sh -c "$handler" </dev/null 2>&1 >/dev/null); status=$?
   case $status in
     0) ;;
     3) deny_native "${{reason:-$handler denied the operation}}" ;;
@@ -971,9 +979,16 @@ pub(crate) fn shared_wrapper_path(uze_home: &UzeHome, target: &str) -> PathBuf {
 pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
     // Rewriting an identical wrapper would replace a file a harness may be
     // executing right now, for no gain: the content is a pure function of
-    // the harness.
+    // the harness. The executable bit is not part of that content, and
+    // `write_atomic` publishes under the umask before the chmod lands — a
+    // crash in between leaves the right bytes with the wrong mode, which
+    // only a second chmod repairs.
     if fs::read_to_string(path).is_ok_and(|current| current == source) {
-        return Ok(());
+        return if is_executable(path) {
+            Ok(())
+        } else {
+            make_executable(path)
+        };
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| UzeError::Write {
@@ -983,6 +998,23 @@ pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
     }
     write_atomic(path, source.as_bytes())?;
     make_executable(path)
+}
+
+/// Whether the wrapper on disk can be run at all. A harness that cannot
+/// execute it reports exit 126, which a `deny` group turns into a
+/// permanent block — so this is drift, not a cosmetic difference. On a
+/// platform without Unix modes there is no bit to lose.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }
 
 fn make_executable(path: &Path) -> Result<()> {
@@ -1001,18 +1033,20 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes a shared wrapper once no hook receipt of this integration is
-/// left to use it. A wrapper still referenced by another group's entry is
-/// kept: it is one file serving every package.
+/// Removes a shared wrapper once no hook entry of this integration is left
+/// to run it. A wrapper another group's entry still points at is kept: it
+/// is one file serving every package.
+///
+/// "Left" is read from the harness's own config files, not from the receipt
+/// ledger. The prune runs inside a detach, and the lifecycle only rewrites
+/// the ledger once every detach of the removal has returned — so the
+/// receipt being detached, and during `uze remove` each of its siblings, is
+/// still listed there while its entry is already gone from the config.
 pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: &str) {
     let still_used = uze_core::state::receipts(uze_home, None).is_ok_and(|ledger| {
-        ledger.iter().any(|(_, receipt)| {
-            receipt.integration == integration_id
-                && matches!(
-                    receipt.artifact,
-                    uze_core::integration::ManagedArtifact::HookConfigEntry { .. }
-                )
-        })
+        ledger
+            .iter()
+            .any(|(_, receipt)| receipt.integration == integration_id && entry_is_attached(receipt))
     });
     if still_used {
         return;
@@ -1022,6 +1056,28 @@ pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, tar
     if let Some(parent) = path.parent() {
         let _ = fs::remove_dir(parent);
     }
+}
+
+/// Whether this receipt's hook entry is still in the harness's config file.
+/// The wrapper is deliberately not part of the question: it is what the
+/// prune is deciding about, so inspecting it would answer "nothing is
+/// attached" for every entry the moment it went missing.
+fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt) -> bool {
+    let uze_core::integration::ManagedArtifact::HookConfigEntry {
+        config_file,
+        entry_name,
+        event,
+        expected,
+        ..
+    } = &receipt.artifact
+    else {
+        return false;
+    };
+    let inspection = match event {
+        Some(event) => inspect_event_entry(config_file, *event, expected, None),
+        None => inspect_named_entry(config_file, entry_name, expected, None),
+    };
+    inspection.state == AttachmentState::Matched
 }
 
 /// The native command an entry runs: the wrapper, the package root, the
@@ -1359,6 +1415,10 @@ fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspectio
                 reason: "the generated hook wrapper does not match what UZE writes".to_owned(),
             })
         }
+        Ok(_) if !is_executable(path) => Some(AttachmentInspection {
+            state: AttachmentState::Drifted,
+            reason: "the generated hook wrapper is not executable".to_owned(),
+        }),
         Ok(_) => None,
     }
 }
@@ -2286,6 +2346,10 @@ mod tests {
             command.contains("--command '${PLUGIN_ROOT}/check'"),
             "the authored command is retained verbatim"
         );
+        assert!(
+            command.contains("--command '${PLUGIN_ROOT}/check' --timeout 10"),
+            "the authored timeout rides beside the command it bounds: {command}"
+        );
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
 
@@ -2889,6 +2953,135 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
+
+    /// A merge rewrites the whole document, so the order the user's own
+    /// keys are in is UZE's to lose. A hand-organised `settings.json` must
+    /// come back in the order it was written, with the merged key appended
+    /// rather than sorted into the middle.
+    #[test]
+    fn a_merge_keeps_the_users_own_key_order() {
+        let root = uze_testkit::temp::scratch("hooks-key-order");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("settings.json");
+        fs::write(
+            &config,
+            r#"{"zed":{"nested":1,"already":2},"model":"opus","apiKeyHelper":"~/bin/key"}"#,
+        )
+        .unwrap();
+
+        let entry = group_entry("claude", &hook(), &invocation(&hook()));
+        merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
+
+        let after = fs::read_to_string(&config).unwrap();
+        let keys: Vec<&str> = after
+            .lines()
+            .filter_map(|line| line.strip_prefix("  \""))
+            .filter_map(|line| line.split('"').next())
+            .collect();
+        assert_eq!(
+            keys,
+            ["zed", "model", "apiKeyHelper", "hooks"],
+            "the user's keys keep their order and UZE's is appended: {after}"
+        );
+        assert!(
+            after.contains("\"nested\": 1,"),
+            "a nested foreign object keeps its own order too: {after}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The executable bit is half the wrapper: `write_atomic` publishes
+    /// under the umask and chmods afterwards, so a crash between the two
+    /// leaves the right bytes unrunnable — exit 126, which a `deny` group
+    /// turns into a permanent block.
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_lost_its_executable_bit_is_drift_and_is_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = uze_testkit::temp::scratch("hooks-wrapper-mode");
+        let wrapper = root.join("hooks").join("exec");
+        let source = wrapper_source("claude").unwrap();
+        materialize_wrapper(&wrapper, &source).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(
+            inspect_wrapper(Some(("claude", &wrapper))).map(|inspection| inspection.state),
+            Some(AttachmentState::Drifted),
+            "a wrapper the harness cannot execute is drift, not a match"
+        );
+        materialize_wrapper(&wrapper, &source).unwrap();
+        assert_eq!(
+            fs::metadata(&wrapper).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "re-materializing repairs the mode even when the bytes match"
+        );
+        assert!(inspect_wrapper(Some(("claude", &wrapper))).is_none());
+        assert_eq!(fs::read_to_string(&wrapper).unwrap(), source);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn hook_receipt(
+        config: &Path,
+        entry_name: &str,
+        expected: &str,
+    ) -> uze_core::integration::AttachmentReceipt {
+        uze_core::integration::AttachmentReceipt {
+            package_id: "pkg@market".to_owned(),
+            resource_identity: None,
+            integration: ANTIGRAVITY_TARGET.to_owned(),
+            strategy: "hook-config-entry".to_owned(),
+            artifact: uze_core::integration::ManagedArtifact::HookConfigEntry {
+                config_file: config.to_path_buf(),
+                entry_name: entry_name.to_owned(),
+                event: None,
+                expected: expected.to_owned(),
+                wrapper: None,
+            },
+        }
+    }
+
+    /// The shared wrapper outlives every entry but the last one. The prune
+    /// runs inside a detach, while the ledger still lists the receipt being
+    /// detached — so "still used" has to be read from the harness's config,
+    /// not from the ledger, or the wrapper is never removed at all.
+    #[test]
+    fn the_last_detached_hook_entry_takes_the_shared_wrapper_with_it() {
+        let root = uze_testkit::temp::scratch("hooks-prune");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("hooks.json");
+        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
+        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+
+        let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        let names = ["pkg@market:protect-env", "other@market:protect-env"];
+        for name in names {
+            merge_named_entry(&config, name, &entry).unwrap();
+            uze_core::state::record_receipt(
+                &home,
+                name.to_owned(),
+                hook_receipt(&config, name, &expected),
+            )
+            .unwrap();
+        }
+
+        remove_named_entry(&config, names[0], &expected, None).unwrap();
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            wrapper.exists(),
+            "a wrapper another entry still runs is kept"
+        );
+
+        remove_named_entry(&config, names[1], &expected, None).unwrap();
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            !wrapper.exists(),
+            "the last detached entry takes the shared wrapper with it"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 /// The generated wrapper against real `sh`: the same cases the reference
@@ -2933,6 +3126,18 @@ mod wrapper_tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// A handler's command as the manifest carries it: a bare script name
+    /// is shorthand for this package's own `scripts/<name>`, and anything
+    /// else — an `sh` invocation, a flag, a relative path — is taken
+    /// verbatim, because the ABI says a command is a shell command line.
+    fn handler_command(spec: &str) -> String {
+        if spec.contains(' ') || spec.contains('/') {
+            spec.to_owned()
+        } else {
+            format!("${{PLUGIN_ROOT}}/scripts/{spec}")
+        }
+    }
+
     fn group(effect: HookEffect, handlers: &[&str]) -> PortableHook {
         PortableHook {
             id: "protect-env".into(),
@@ -2940,9 +3145,9 @@ mod wrapper_tests {
             matchers: vec![HookMatcher::Portable("shell".into())],
             handlers: handlers
                 .iter()
-                .map(|name| CommandHook {
+                .map(|spec| CommandHook {
                     handler_type: CommandHandlerType::Command,
-                    command: format!("${{PLUGIN_ROOT}}/scripts/{name}"),
+                    command: handler_command(spec),
                     timeout: 10,
                 })
                 .collect(),
@@ -3230,6 +3435,20 @@ mod wrapper_tests {
                 ("ls -la", HookEffect::Deny, &["guard", "audit"][..]),
                 ("ls", HookEffect::Deny, &["absent"][..]),
                 ("ls", HookEffect::Observe, &["absent"][..]),
+                // A command line, not an executable path: the shapes the
+                // manifest documents and a bare-argv runner cannot start.
+                (
+                    "cat .env",
+                    HookEffect::Deny,
+                    &["sh ${PLUGIN_ROOT}/scripts/guard --strict", "audit"][..],
+                ),
+                (
+                    "ls -la",
+                    HookEffect::Deny,
+                    &["sh ${PLUGIN_ROOT}/scripts/guard --strict", "audit"][..],
+                ),
+                ("cat .env", HookEffect::Deny, &["scripts/guard"][..]),
+                ("ls -la", HookEffect::Deny, &["scripts/guard", "audit"][..]),
             ] {
                 let root = package(&format!("equiv-{target}"));
                 let hook = group(effect, handlers);

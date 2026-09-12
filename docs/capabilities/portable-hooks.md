@@ -185,6 +185,15 @@ stated) · **—** = not expressible.
   package yet (plugin `requirements` is its own change); `uze doctor`
   reports it missing, and until it is installed a `deny` group denies while
   an `observe` group proceeds and reports.
+- **The `sh` wrapper does not enforce the per-handler `timeout` yet.** The
+  declared value is validated, shown at trust time, and honoured by the
+  OpenCode bridge and by the packager-runtime fallback route — but the
+  generated `sh` wrapper, which is the route Claude, Codex and Antigravity
+  take on Unix, waits for a handler indefinitely. The only bound there is
+  the group `timeout` in the native entry, which is the *harness's* backstop
+  and not enforced by a harness that ignores it. A hanging handler in a
+  `deny` group therefore stalls the tool call for the harness's budget
+  rather than the author's.
 - **Windows has no wrapper template.** A PowerShell wrapper is future work;
   until then hooks there take the packager-runtime fallback route, which
   speaks the same contract but keeps working only while `uze` is installed.

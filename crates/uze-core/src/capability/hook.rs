@@ -576,6 +576,28 @@ pub struct HookNativeOutput {
     pub exit_code: i32,
 }
 
+/// The outcome of a group that could not be evaluated. Failure semantics
+/// depend on the declared effect: an observational hook fails open (its
+/// purpose is diagnostic), so `None` — report it and let the operation
+/// proceed; a declared `deny`/`ask`/`transform` effect fails closed, so the
+/// intercepted operation cannot proceed on an unverifiable verdict
+/// (ADR-033). Written once because both places that can fail answer with
+/// it: a handler that did not run to completion, and a wrapper that never
+/// reached the handlers at all.
+pub fn unevaluated(effect: HookEffect, failure: &str) -> Option<HookDispatchOutcome> {
+    let hook_name = match effect {
+        HookEffect::Deny => "the deny hook",
+        HookEffect::Ask => "the ask hook",
+        HookEffect::Transform => "the transform hook",
+        HookEffect::Observe | HookEffect::Allow => return None,
+    };
+    Some(HookDispatchOutcome {
+        decision: Some(HookDecision::Deny),
+        reason: Some(format!("{hook_name} could not be evaluated: {failure}")),
+        failure: Some(failure.to_owned()),
+    })
+}
+
 /// Per-handler result, consumed by `dispatch_handlers`' aggregation.
 struct HandlerResult {
     decision: Option<HookDecision>,
@@ -731,25 +753,11 @@ fn run_handler(
         }
     };
 
-    // Failure semantics depend on the declared effect: observational hooks
-    // fail open (their purpose is diagnostic); a declared pre-tool
-    // deny/ask/transform effect fails closed so the intercepted operation
-    // cannot proceed on an unverifiable verdict.
     if let Some(failure) = &failure
-        && matches!(
-            effect,
-            HookEffect::Deny | HookEffect::Ask | HookEffect::Transform
-        )
+        && let Some(blocked) = unevaluated(effect, failure)
     {
-        decision = Some(HookDecision::Deny);
-        reason = Some(format!(
-            "{} could not be evaluated: {failure}",
-            match effect {
-                HookEffect::Deny => "the deny hook",
-                HookEffect::Ask => "the ask hook",
-                _ => "the transform hook",
-            }
-        ));
+        decision = blocked.decision;
+        reason = blocked.reason;
     }
 
     Ok(HandlerResult {

@@ -323,10 +323,17 @@ impl UzeApplication {
         // later with a misleading `ManagedEntryDrift`. (ADR-029; with only
         // one canonical Skill kind, same-name resource collisions are
         // structurally gone — the residual case is legacy receipts.)
-        let entry = candidates
-            .last()
-            .cloned()
-            .expect("naming plans always have at least one candidate");
+        // Nothing in `IntegrationPort` forbids an empty candidate list, and a
+        // lifecycle operation is the wrong place to discover that: report the
+        // integration that could not name the resource, the way the ledger
+        // drift a few lines below degrades rather than panics.
+        let Some(entry) = candidates.last().cloned() else {
+            return Err(UzeError::ExposureUnavailable(format!(
+                "`{}` offers no name to expose `{}` under",
+                integration.id(),
+                resource.name()
+            )));
+        };
         let claimant = all_receipts
             .iter()
             .filter(|(_, receipt)| {

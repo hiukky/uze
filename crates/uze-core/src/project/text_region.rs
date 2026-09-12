@@ -63,10 +63,44 @@ impl Newline {
     }
 }
 
-/// Reads `path` into logical lines (no trailing-newline sentinel, no `\r`)
-/// plus the newline style to write back. `Ok(None)` means the file does not
-/// exist yet — a legitimate, common state, not an error.
-fn read_lines(path: &Path) -> Result<Option<(Vec<String>, Newline)>> {
+/// One physical line: its text, and the terminator it carried — `None` on a
+/// final line the file did not terminate.
+///
+/// The terminator is kept per line rather than inferred once for the file,
+/// because a file of mixed endings is a file UZE must hand back exactly as
+/// it found it outside its own region. Inferring one style and re-joining
+/// every line with it rewrote whole files that happened to hold a single
+/// pasted CRLF line.
+#[derive(Clone, Debug)]
+struct Line {
+    text: String,
+    ending: Option<Newline>,
+}
+
+impl Line {
+    fn terminated(text: impl Into<String>, ending: Newline) -> Self {
+        Self {
+            text: text.into(),
+            ending: Some(ending),
+        }
+    }
+}
+
+/// The lines' texts joined by `\n`, for comparing region content against
+/// caller-supplied content, which carries no endings of its own.
+fn joined_text(lines: &[Line]) -> String {
+    lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Reads `path` into physical lines, each keeping its own terminator, plus
+/// the style to give lines UZE inserts: whichever the file uses most, LF on
+/// a tie. `Ok(None)` means the file does not exist yet — a legitimate,
+/// common state, not an error.
+fn read_lines(path: &Path) -> Result<Option<(Vec<Line>, Newline)>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -79,26 +113,49 @@ fn read_lines(path: &Path) -> Result<Option<(Vec<String>, Newline)>> {
     };
     let content =
         String::from_utf8(bytes).map_err(|_| UzeError::InvalidTextEncoding(path.to_path_buf()))?;
-    let style = if content.contains("\r\n") {
+    let mut lines = Vec::new();
+    let mut rest = content.as_str();
+    while !rest.is_empty() {
+        match rest.find('\n') {
+            Some(index) => {
+                let (line, tail) = rest.split_at(index);
+                let (text, ending) = match line.strip_suffix('\r') {
+                    Some(text) => (text, Newline::Crlf),
+                    None => (line, Newline::Lf),
+                };
+                lines.push(Line::terminated(text, ending));
+                rest = &tail[1..];
+            }
+            None => {
+                lines.push(Line {
+                    text: rest.to_owned(),
+                    ending: None,
+                });
+                rest = "";
+            }
+        }
+    }
+    let crlf = lines
+        .iter()
+        .filter(|line| line.ending == Some(Newline::Crlf))
+        .count();
+    let style = if crlf * 2 > lines.len() {
         Newline::Crlf
     } else {
         Newline::Lf
     };
-    let normalized = content.replace("\r\n", "\n");
-    let body = normalized.strip_suffix('\n').unwrap_or(&normalized);
-    let lines = if body.is_empty() {
-        Vec::new()
-    } else {
-        body.split('\n').map(str::to_owned).collect()
-    };
     Ok(Some((lines, style)))
 }
 
-fn write_lines(path: &Path, lines: &[String], style: Newline) -> Result<()> {
-    let sep = style.separator();
-    let mut out = lines.join(sep);
-    if !lines.is_empty() {
-        out.push_str(sep);
+/// Writes the lines back exactly as they stand: every line UZE did not
+/// touch keeps the bytes it arrived with, terminator included.
+fn write_lines(path: &Path, lines: &[Line]) -> Result<()> {
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(&line.text);
+        if let Some(ending) = line.ending {
+            out.push_str(ending.separator());
+        }
     }
     write_atomic(path, out.as_bytes())
 }
@@ -124,17 +181,17 @@ enum Scan {
     Malformed,
 }
 
-fn scan(lines: &[String], begin_marker: &str, end_marker: &str) -> Scan {
+fn scan(lines: &[Line], begin_marker: &str, end_marker: &str) -> Scan {
     let begins: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.as_str() == begin_marker)
+        .filter(|(_, line)| line.text == begin_marker)
         .map(|(index, _)| index)
         .collect();
     let ends: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| line.as_str() == end_marker)
+        .filter(|(_, line)| line.text == end_marker)
         .map(|(index, _)| index)
         .collect();
     match (begins.as_slice(), ends.as_slice()) {
@@ -184,7 +241,7 @@ pub fn inspect(
                 .to_owned(),
         ),
         Scan::WellFormed { begin, end } => {
-            let current = lines[begin + 1..end].join("\n");
+            let current = joined_text(&lines[begin + 1..end]);
             let expected = content_lines(expected_content).join("\n");
             if current == expected {
                 AttachmentInspection {
@@ -214,7 +271,7 @@ pub fn attach(target_file: &Path, region_identity: &str, expected_content: &str)
     let (mut lines, style) = read_lines(target_file)?.unwrap_or((Vec::new(), Newline::Lf));
     match scan(&lines, &begin_marker, &end_marker) {
         Scan::WellFormed { begin, end } => {
-            let current = lines[begin + 1..end].join("\n");
+            let current = joined_text(&lines[begin + 1..end]);
             let expected = content_lines(expected_content).join("\n");
             if current == expected {
                 Ok(())
@@ -224,10 +281,21 @@ pub fn attach(target_file: &Path, region_identity: &str, expected_content: &str)
         }
         Scan::Malformed => Err(UzeError::ManagedRegionConflict(target_file.to_path_buf())),
         Scan::Missing => {
-            lines.push(begin_marker);
-            lines.extend(content_lines(expected_content));
-            lines.push(end_marker);
-            write_lines(target_file, &lines, style)
+            // A file that did not end in a newline gets one, or the begin
+            // marker would land on the end of the user's last line.
+            if let Some(last) = lines.last_mut()
+                && last.ending.is_none()
+            {
+                last.ending = Some(style);
+            }
+            lines.push(Line::terminated(begin_marker, style));
+            lines.extend(
+                content_lines(expected_content)
+                    .into_iter()
+                    .map(|text| Line::terminated(text, style)),
+            );
+            lines.push(Line::terminated(end_marker, style));
+            write_lines(target_file, &lines)
         }
     }
 }
@@ -255,7 +323,7 @@ pub fn detach(
         return Ok(fresh);
     }
     let (begin_marker, end_marker) = markers(region_identity);
-    let (mut lines, style) = read_lines(target_file)?
+    let (mut lines, _style) = read_lines(target_file)?
         .ok_or_else(|| UzeError::ManagedRegionConflict(target_file.to_path_buf()))?;
     let Scan::WellFormed { begin, end } = scan(&lines, &begin_marker, &end_marker) else {
         return Ok(blocked(
@@ -263,7 +331,7 @@ pub fn detach(
         ));
     };
     lines.drain(begin..=end);
-    write_lines(target_file, &lines, style)?;
+    write_lines(target_file, &lines)?;
     Ok(AttachmentInspection {
         state: AttachmentState::Missing,
         reason: "managed text region detached".to_owned(),
@@ -282,12 +350,28 @@ pub fn reconcile(
     expected_content: &str,
     should_exist: bool,
 ) -> AttachmentInspection {
-    if should_exist {
-        let _ = attach(target_file, region_identity, expected_content);
+    let refusal = if should_exist {
+        attach(target_file, region_identity, expected_content).err()
     } else {
-        let _ = detach(target_file, region_identity, expected_content);
+        detach(target_file, region_identity, expected_content).err()
+    };
+    let inspection = inspect(target_file, region_identity, expected_content);
+    // A write that could not happen — a read-only file, a full disk — leaves
+    // the region exactly as it was, and the inspection then reads `Missing`:
+    // the same answer a healthy file nobody has reconciled yet gives. Only
+    // the refusal tells the two apart, so it is what is reported wherever
+    // the inspection has not already named a problem of its own.
+    match refusal {
+        Some(error)
+            if !matches!(
+                inspection.state,
+                AttachmentState::Blocked | AttachmentState::Drifted
+            ) =>
+        {
+            blocked(error.to_string())
+        }
+        _ => inspection,
     }
-    inspect(target_file, region_identity, expected_content)
 }
 
 /// Structural well-formedness of a region's markers, independent of any
@@ -357,7 +441,7 @@ pub fn remove_unconditionally(
             // Absence and validity were already established by
             // `region_shape`; re-reading is cheap and keeps this function
             // free of unsafe unwraps on that already-proven state.
-            let (mut lines, style) =
+            let (mut lines, _style) =
                 read_lines(target_file)?.expect("region_shape proved the file exists");
             let Scan::WellFormed { begin, end } = scan(&lines, &begin_marker, &end_marker) else {
                 return Ok(blocked(
@@ -365,7 +449,7 @@ pub fn remove_unconditionally(
                 ));
             };
             lines.drain(begin..=end);
-            write_lines(target_file, &lines, style)?;
+            write_lines(target_file, &lines)?;
             Ok(AttachmentInspection {
                 state: AttachmentState::Missing,
                 reason: "orphaned managed text region removed (no current source owns it)"
@@ -385,7 +469,8 @@ pub fn region_identities_present(target_file: &Path) -> Vec<String> {
     lines
         .iter()
         .filter_map(|line| {
-            line.strip_prefix("<!-- uze:begin ")
+            line.text
+                .strip_prefix("<!-- uze:begin ")
                 .and_then(|rest| rest.strip_suffix(" -->"))
         })
         .map(str::to_owned)
@@ -413,7 +498,7 @@ pub fn has_content_outside_managed_regions(target_file: &Path) -> bool {
     lines
         .iter()
         .enumerate()
-        .any(|(index, line)| !owned.contains(&index) && !line.trim().is_empty())
+        .any(|(index, line)| !owned.contains(&index) && !line.text.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -429,7 +514,7 @@ mod tests {
         };
         lines
             .iter()
-            .any(|line| line.starts_with("<!-- uze:begin ") && line.ends_with(" -->"))
+            .any(|line| line.text.starts_with("<!-- uze:begin ") && line.text.ends_with(" -->"))
     }
 
     // --- attach --------------------------------------------------------
@@ -692,6 +777,35 @@ mod tests {
         detach(&file, "id", "managed").unwrap();
         let restored = fs::read(&file).unwrap();
         assert_eq!(restored, b"user text A\r\nuser text B\r\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One pasted CRLF line is common in a hand-kept `AGENTS.md`, and used
+    /// to make the whole file CRLF the first time UZE attached a region:
+    /// a whole-file diff in the user's repository, from an operation that
+    /// only ever owns its own delimited slice.
+    #[test]
+    fn a_file_of_mixed_line_endings_comes_back_byte_for_byte() {
+        let root = uze_testkit::temp::scratch("mixed-endings");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("NOTES.md");
+        fs::write(&file, b"a\nb\r\nc\n").unwrap();
+
+        attach(&file, "id", "managed").unwrap();
+        let attached = fs::read(&file).unwrap();
+        assert!(
+            attached.starts_with(b"a\nb\r\nc\n"),
+            "every untouched line keeps its own terminator: {}",
+            String::from_utf8_lossy(&attached)
+        );
+        assert!(
+            attached.ends_with(b"<!-- uze:begin id -->\nmanaged\n<!-- uze:end id -->\n"),
+            "inserted lines take the file's majority style: {}",
+            String::from_utf8_lossy(&attached)
+        );
+
+        detach(&file, "id", "managed").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"a\nb\r\nc\n");
         fs::remove_dir_all(root).unwrap();
     }
 

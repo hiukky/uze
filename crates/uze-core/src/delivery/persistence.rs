@@ -9,7 +9,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{Result, UzeError, home::UzeHome};
@@ -95,9 +96,16 @@ fn sync_directory(path: &Path) {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) {}
 
-/// Process-wide mutation guard for one UZE home. Stale locks deliberately
-/// block mutation rather than guessing that an interrupted process is safe
-/// to race; `doctor` remains read-only and can report the state.
+/// Process-wide mutation guard for one UZE home.
+///
+/// The lock is a file's existence, taken atomically by `create_new`, and the
+/// pid written inside it is what makes the lock recoverable: `Drop` does not
+/// run on `^C`, on `SIGKILL`, or on an abort, and nothing in UZE installs a
+/// signal handler to make it. A lock file outliving its process is therefore
+/// the ordinary outcome of an interrupted `uze install`, not an exotic one —
+/// and a guard that then blocks every mutating command forever, with no
+/// stated way out, is a dead end rather than caution. So a *live* holder
+/// still blocks, named by pid; a pid nobody owns is debris and is reclaimed.
 pub struct MutationLock {
     path: PathBuf,
 }
@@ -106,21 +114,114 @@ impl MutationLock {
     pub fn acquire(home: &UzeHome) -> Result<Self> {
         home.ensure_layout()?;
         let path = home.state_dir().join("mutation.lock");
-        match OpenOptions::new().create_new(true).write(true).open(&path) {
+        if let Some(lock) = Self::claim(&path)? {
+            return Ok(lock);
+        }
+        if let Some(pid) = settled_pid(&path)
+            && process_is_alive(pid)
+        {
+            return Err(UzeError::MutationInProgress {
+                path,
+                pid: Some(pid),
+            });
+        }
+        fs::remove_file(&path).map_err(|source| UzeError::Write {
+            path: path.clone(),
+            source,
+        })?;
+        // Losing this second claim means a live process took the lock in
+        // between, which is the answer the caller was asking for anyway.
+        Self::claim(&path)?.ok_or_else(|| UzeError::MutationInProgress {
+            pid: recorded_pid(&path),
+            path,
+        })
+    }
+
+    fn claim(path: &Path) -> Result<Option<Self>> {
+        match OpenOptions::new().create_new(true).write(true).open(path) {
             Ok(mut file) => {
-                // The lock is the file's existence, taken atomically by
-                // `create_new`; the pid inside is a courtesy to whoever
-                // finds a stale one, not something worth an fsync on
-                // every mutation and every maintenance pass.
-                let _ = writeln!(file, "pid={}", std::process::id());
-                Ok(Self { path })
+                // A lock whose pid never landed would be read as debris by
+                // the next `acquire` while this process still holds it, so
+                // a failed write gives the lock back rather than keeping a
+                // claim nobody else can see the owner of. No fsync: the
+                // question the pid answers is whether a *process* is alive,
+                // and no process outlives the page cache.
+                if let Err(source) = writeln!(file, "pid={}", std::process::id()) {
+                    let _ = fs::remove_file(path);
+                    return Err(UzeError::Write {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+                Ok(Some(Self {
+                    path: path.to_path_buf(),
+                }))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(UzeError::MutationInProgress(path))
-            }
-            Err(source) => Err(UzeError::Write { path, source }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(source) => Err(UzeError::Write {
+                path: path.to_path_buf(),
+                source,
+            }),
         }
     }
+}
+
+fn recorded_pid(path: &Path) -> Option<u32> {
+    fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.trim().parse().ok())
+}
+
+/// The holder's pid, waiting out the gap between `create_new` and the write
+/// that fills the file.
+///
+/// That gap is microseconds wide, but reading inside it would show an empty
+/// file and a live holder would be reclaimed out from under itself. The
+/// window below is the only thing standing between the two, and it is only
+/// ever paid when a lock is already contended.
+fn settled_pid(path: &Path) -> Option<u32> {
+    const SETTLE: Duration = Duration::from_millis(100);
+    const POLL: Duration = Duration::from_millis(5);
+
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        if let Some(pid) = recorded_pid(path) {
+            return Some(pid);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(POLL);
+    }
+}
+
+/// Whether a process with this pid exists — signal `0` performs the
+/// existence and permission checks and delivers nothing.
+///
+/// `EPERM` counts as alive: the process is there, it just is not ours. A pid
+/// can be recycled, and a recycled one reads as alive, which keeps the guard
+/// on the conservative side of its own rule.
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // `kill(0, …)` signals our own group and `kill(-1, …)` everything we
+    // own; no lock holder has such a pid, and signal `0` would answer for
+    // the wrong subject.
+    if pid <= 1 {
+        return true;
+    }
+    // SAFETY: `kill` with signal 0 only queries; no memory is involved.
+    let outcome = unsafe { libc::kill(pid, 0) };
+    outcome == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Without a way to ask, a lock is never judged stale — the old behaviour.
+#[cfg(not(unix))]
+fn process_is_alive(_pid: u32) -> bool {
+    true
 }
 
 impl Drop for MutationLock {
@@ -138,12 +239,72 @@ mod tests {
         let root = uze_testkit::temp::scratch("lock");
         let home = UzeHome::at(&root);
         let first = MutationLock::acquire(&home).unwrap();
+        // This process is the holder and is very much alive, so the lock
+        // holds and names who holds it.
         assert!(matches!(
             MutationLock::acquire(&home),
-            Err(UzeError::MutationInProgress(_))
+            Err(UzeError::MutationInProgress { pid: Some(pid), .. }) if pid == std::process::id()
         ));
         drop(first);
         MutationLock::acquire(&home).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `^C` and `SIGKILL` both skip `Drop`, and nothing installs a signal
+    /// handler to change that. A lock left behind by a process that no
+    /// longer exists must not be the end of mutating this home forever.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_left_by_a_killed_process_is_reclaimed() {
+        let root = uze_testkit::temp::scratch("lock-stale");
+        let home = UzeHome::at(&root);
+        home.ensure_layout().unwrap();
+        let path = home.state_dir().join("mutation.lock");
+
+        // A real holder in a real process: it takes the lock the same way
+        // `claim` does, then is killed without ever running a destructor.
+        let mut child = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "echo pid=$$ > \"$1\"; sleep 30",
+                "sh",
+                &path.to_string_lossy(),
+            ])
+            .spawn()
+            .unwrap();
+        while recorded_pid(&path).is_none() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(matches!(
+            MutationLock::acquire(&home),
+            Err(UzeError::MutationInProgress { .. })
+        ));
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        let reclaimed = MutationLock::acquire(&home).expect("a dead holder's lock is reclaimed");
+        assert_eq!(
+            recorded_pid(&path),
+            Some(std::process::id()),
+            "the reclaimed lock still names the process that died"
+        );
+        drop(reclaimed);
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A lock file that never received its pid is debris too — the writer
+    /// died between creating it and filling it — but only after the window
+    /// a live holder needs to write one.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_with_no_recorded_holder_is_reclaimed() {
+        let root = uze_testkit::temp::scratch("lock-headless");
+        let home = UzeHome::at(&root);
+        home.ensure_layout().unwrap();
+        fs::write(home.state_dir().join("mutation.lock"), b"").unwrap();
+
+        MutationLock::acquire(&home).expect("a lock naming nobody is reclaimed");
         let _ = fs::remove_dir_all(root);
     }
 

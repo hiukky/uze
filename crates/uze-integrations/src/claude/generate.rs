@@ -414,7 +414,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .collect();
     serde_json::json!({
         "name": GENERATED_MARKETPLACE_NAME,
-        "owner": { "name": "UZE Local (generated)", "url": "https://github.com/anomalyco/opencode" },
+        "owner": { "name": "UZE Local (generated)", "url": super::MARKETPLACE_OWNER_URL },
         "plugins": plugins
     })
 }

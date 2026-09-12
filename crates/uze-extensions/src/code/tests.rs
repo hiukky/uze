@@ -461,8 +461,12 @@ impl Host for FakeMachine {
         Err("no git here".to_owned())
     }
 
-    fn read_file(&self, path: &Path) -> Option<String> {
-        self.files.borrow().get(path).cloned()
+    fn read_file(&self, path: &Path) -> Result<String, String> {
+        self.files
+            .borrow()
+            .get(path)
+            .cloned()
+            .ok_or_else(|| "not readable as text".to_owned())
     }
 
     fn list_dir(&self, path: &Path) -> Result<Vec<DirEntry>, String> {
@@ -633,6 +637,52 @@ fn saving_a_file_nobody_edited_a_newline_into_keeps_its_ending() {
     assert_eq!(
         view.open.as_ref().expect("a file is open").contents(),
         "one\ntwo\n"
+    );
+}
+
+/// Opening a file and saving it unedited writes back the bytes it was
+/// given — whatever those bytes were. The buffer is not the place a
+/// project's line endings get an opinion held about them.
+#[test]
+fn a_file_opened_and_saved_unedited_is_byte_for_byte_what_it_was() {
+    for original in [
+        "one\r\ntwo\r\n",
+        "one\r\ntwo",
+        "one\ntwo",
+        "one\ntwo\n",
+        "",
+        "\n",
+        "one",
+    ] {
+        let machine = FakeMachine::default().with_file("/w/a.txt", original);
+        let mut view = files_at("/w");
+        settle(&mut view, &machine);
+        press(&mut view, Command::Activate);
+        settle(&mut view, &machine);
+
+        assert_eq!(
+            view.open.as_ref().expect("a file is open").contents(),
+            original,
+            "opening and saving rewrote {original:?}"
+        );
+    }
+}
+
+/// Editing a CRLF file leaves the lines nobody touched as they were: a
+/// one-character change must not arrive as a whole-file diff.
+#[test]
+fn editing_a_crlf_file_keeps_every_other_line_crlf() {
+    let machine = FakeMachine::default().with_file("/w/a.txt", "one\r\ntwo\r\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    press(&mut view, Command::Edit);
+    type_text(&mut view, "x");
+
+    assert_eq!(
+        view.open.as_ref().expect("a file is open").contents(),
+        "xone\r\ntwo\r\n"
     );
 }
 

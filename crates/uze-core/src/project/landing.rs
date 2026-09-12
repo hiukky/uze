@@ -331,7 +331,16 @@ fn sync_target_locked(primary: &Path, target: &str) -> TargetSync {
     if checkout::tip_of(primary, &tracking).is_empty() {
         return TargetSync::Unpublished;
     }
-    let behind = commits_ahead(primary, target, &tracking);
+    // "Nothing behind" and "the question could not be asked" are different
+    // answers, and the second is what a checkout that never fetched the
+    // declared target gives — reported as current, it read as healthy while
+    // every agent placed afterwards had no branch to start from.
+    let Some(behind) = checkout::commits_ahead_checked(primary, target, &tracking) else {
+        return TargetSync::Stalled {
+            behind: 0,
+            reason: format!("`{target}` does not exist in this checkout"),
+        };
+    };
     if behind == 0 {
         return TargetSync::Current;
     }
@@ -348,18 +357,42 @@ fn sync_target_locked(primary: &Path, target: &str) -> TargetSync {
     }
 }
 
-/// Moves the local target onto `tracking`. Through the working tree when
-/// the operator is standing on the target — Git's own fast-forward, which
-/// refuses rather than overwrite anything uncommitted in the way — and by
-/// moving the ref when they are not, which Git refuses in turn while
-/// another checkout has the branch.
-fn fast_forward(primary: &Path, target: &str, tracking: &str) -> Result<(), String> {
+/// Moves the local target onto `source` — the remote's tracking ref when a
+/// sync brings the target in line, the task's branch when a delivery lands
+/// it. Through the working tree when the operator is standing on the target
+/// — Git's own fast-forward, which refuses rather than overwrite anything
+/// uncommitted in the way — and by moving the ref when they are not, which
+/// Git refuses in turn while another checkout has the branch.
+///
+/// Which of the two it is has to be asked, because `git merge` advances
+/// `HEAD` and not the named target: run against a detached `HEAD` it
+/// succeeds while the target never moves, and run on any other branch that
+/// is an ancestor of `source` it fast-forwards *that* branch instead.
+fn fast_forward(primary: &Path, target: &str, source: &str) -> Result<(), String> {
     let args = if checkout::current_branch(primary).as_deref() == Some(target) {
-        vec!["merge", "--quiet", "--ff-only", tracking]
+        vec!["merge", "--quiet", "--ff-only", "--", source]
     } else {
-        vec!["branch", "--quiet", "--force", target, tracking]
+        vec!["branch", "--quiet", "--force", "--", target, source]
     };
-    git(primary, &args).map(|_| ())
+    git(primary, &args).map(|_| ())?;
+    // `git merge` advances whatever HEAD is, and `git branch --force` can be
+    // refused while another checkout holds the target. Neither says so by
+    // failing in every case, so the one thing that matters — that the target
+    // now names the source's commit — is read back rather than assumed.
+    let moved = checkout::tip_of(primary, target);
+    let expected = checkout::tip_of(primary, source);
+    if moved.is_empty() || moved != expected {
+        return Err(format!(
+            "`{target}` did not move onto `{source}`; it still points at \
+             {landed}",
+            landed = if moved.is_empty() {
+                "nothing".to_owned()
+            } else {
+                moved
+            }
+        ));
+    }
+    Ok(())
 }
 
 /// Delivers a ready task according to `policy`, under the repository write
@@ -416,7 +449,7 @@ fn deliver_locked(
                 task.state = TaskState::Ready;
                 return Err(DeliveryFailure::Overlap { files: overlap });
             }
-            git(primary, &["merge", "--quiet", "--ff-only", &task.branch]).map_err(|reason| {
+            fast_forward(primary, &task.target, &task.branch).map_err(|reason| {
                 task.state = TaskState::Ready;
                 DeliveryFailure::Git(format!("fast-forward refused: {reason}"))
             })?;
@@ -523,9 +556,9 @@ fn rebase_in_slot(
         && is_ancestor(primary, &base, &task.branch)
         && !is_ancestor(primary, &base, tip);
     let rebase = if delivered_below {
-        vec!["rebase", "--quiet", "--onto", tip, base.as_str()]
+        vec!["rebase", "--quiet", "--onto", tip, "--", base.as_str()]
     } else {
-        vec!["rebase", "--quiet", tip]
+        vec!["rebase", "--quiet", "--", tip]
     };
     match uze_git::write(slot, &rebase) {
         Ok(output) if output.is_success() => {
@@ -735,7 +768,7 @@ fn commit_derived_halves(primary: &Path, task: &Task) -> Option<(Option<String>,
 /// The subject of the oldest commit the branch carries beyond its base.
 fn first_commit_subject(primary: &Path, task: &Task) -> Option<String> {
     let range = format!("{}..{}", task.base_commit, task.branch);
-    let listing = uze_git::read(primary, &["log", "--format=%s", "--reverse", &range])
+    let listing = uze_git::read(primary, &["log", "--format=%s", "--reverse", &range, "--"])
         .ok()?
         .successful()
         .ok()?;
@@ -902,7 +935,7 @@ pub fn open_request_message(task: &Task, branch: &str) -> String {
 /// uncommitted changes to — the one case a fast-forward would collide with
 /// the operator.
 fn overlapping_files(primary: &Path, tip: &str, branch: &str) -> Vec<PathBuf> {
-    let changed: Vec<String> = uze_git::read(primary, &["diff", "--name-only", tip, branch])
+    let changed: Vec<String> = uze_git::read(primary, &["diff", "--name-only", tip, branch, "--"])
         .ok()
         .and_then(|output| output.successful().ok())
         .map(|stdout| stdout.lines().map(str::to_owned).collect())
@@ -927,8 +960,11 @@ fn overlapping_files(primary: &Path, tip: &str, branch: &str) -> Vec<PathBuf> {
 }
 
 fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> bool {
-    uze_git::read(root, &["merge-base", "--is-ancestor", ancestor, descendant])
-        .is_ok_and(|output| output.is_success())
+    uze_git::read(
+        root,
+        &["merge-base", "--is-ancestor", "--", ancestor, descendant],
+    )
+    .is_ok_and(|output| output.is_success())
 }
 
 fn has_remote(root: &Path) -> bool {
@@ -1073,6 +1109,67 @@ mod tests {
             "linear history, no merge commit: {log}"
         );
         assert!(primary.join("a.rs").is_file() && primary.join("elsewhere.txt").is_file());
+    }
+
+    /// `git merge` advances `HEAD`, not the declared target. An operator
+    /// looking at an old commit — `git checkout <sha>` — used to get a
+    /// delivery reported as merged while the target never moved, and the
+    /// task recorded `Integrated` over work that was still only on its
+    /// branch.
+    #[test]
+    fn merge_moves_the_target_while_the_primary_stands_on_a_detached_head() {
+        let repository = repository("landing-merge-detached");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "detached");
+        agent_commits(&repository, &task, "a.rs", "");
+        let parked_at = tip_of(primary, TARGET);
+        repository.git(&["checkout", "--quiet", "--detach", &parked_at]);
+
+        let delivered = deliver(primary, &mut task, &merge(&[])).unwrap();
+        assert_eq!(
+            delivered,
+            Delivered::Merged {
+                target_tip: tip_of(primary, &task.branch)
+            }
+        );
+        assert_eq!(task.state, TaskState::Integrated);
+        assert_eq!(
+            tip_of(primary, TARGET),
+            tip_of(primary, &task.branch),
+            "the declared target is what a delivery moves"
+        );
+        assert_eq!(
+            tip_of(primary, "HEAD"),
+            parked_at,
+            "where the operator was standing is left where it was"
+        );
+    }
+
+    /// On any branch that is an ancestor of the rebased tip, `git merge`
+    /// fast-forwarded *that* branch — pulling the whole target plus the
+    /// agent's work into a release branch or a stale local one.
+    #[test]
+    fn merge_never_moves_the_branch_the_primary_happens_to_be_on() {
+        let repository = repository("landing-merge-third-branch");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "third branch");
+        agent_commits(&repository, &task, "a.rs", "");
+        repository.git(&["checkout", "--quiet", "-b", "release/1.0"]);
+        let release_tip = tip_of(primary, "release/1.0");
+
+        deliver(primary, &mut task, &merge(&[])).unwrap();
+        assert_eq!(
+            tip_of(primary, TARGET),
+            tip_of(primary, &task.branch),
+            "the declared target moved"
+        );
+        assert_eq!(
+            tip_of(primary, "release/1.0"),
+            release_tip,
+            "a branch nobody delivered against is never fast-forwarded"
+        );
     }
 
     /// The gate must see the target's newest state, or it passes on a base

@@ -199,6 +199,16 @@ fn take(
     cap: Option<usize>,
     occupied: &[PathBuf],
 ) -> Result<Acquired, AcquireError> {
+    // Reuse resets a slot's working tree to this commit, so a base nobody
+    // could resolve is refused before a slot is chosen rather than handed
+    // to `git reset --hard`.
+    if let Start::Branching { base_tip } = start
+        && base_tip.trim().is_empty()
+    {
+        return Err(AcquireError::Git(
+            "the commit to branch from could not be resolved".to_owned(),
+        ));
+    }
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
         let existing = slots(primary, store, occupied);
         if let Some(free) = existing
@@ -222,11 +232,11 @@ fn reuse(slot: &Slot, branch: &str, start: Start<'_>) -> Result<Acquired, Acquir
     let root = &slot.path;
     let tip = match start {
         Start::Branching { base_tip } => {
-            git(root, &["switch", "--quiet", "-c", branch, base_tip])?;
+            git(root, &["switch", "--quiet", "-c", branch, "--", base_tip])?;
             base_tip
         }
         Start::Existing => {
-            git(root, &["switch", "--quiet", branch])?;
+            git(root, &["switch", "--quiet", "--", branch])?;
             branch
         }
     };
@@ -254,10 +264,13 @@ fn create(primary: &Path, branch: &str, start: Start<'_>) -> Result<Acquired, Ac
         Start::Branching { base_tip } => git(
             primary,
             &[
-                "worktree", "add", "--quiet", "-b", branch, &relative, base_tip,
+                "worktree", "add", "--quiet", "-b", branch, "--", &relative, base_tip,
             ],
         )?,
-        Start::Existing => git(primary, &["worktree", "add", "--quiet", &relative, branch])?,
+        Start::Existing => git(
+            primary,
+            &["worktree", "add", "--quiet", "--", &relative, branch],
+        )?,
     };
     exclude_isolation_directory(primary)?;
     Ok(Acquired {
@@ -516,7 +529,16 @@ pub fn collect(
 /// prefix, or one a recorded task names — whose commits are all reachable
 /// from `target` and which no live task and no checkout is using. Returns
 /// the branches removed.
+///
+/// A `target` this repository does not have is refused outright rather than
+/// asked about branch by branch: the name comes from `worktrees.target` in
+/// `agents.yaml`, which is authored and committed and may well name a
+/// branch this clone never fetched. Nothing is collectable against a
+/// yardstick that does not exist.
 pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str) -> Vec<String> {
+    if tip_of(primary, target).is_empty() {
+        return Vec::new();
+    }
     let checked_out: Vec<String> = registered_checkouts(primary)
         .into_iter()
         .filter_map(|(_, branch)| branch)
@@ -543,7 +565,7 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
             continue;
         }
         if is_integrated(primary, target, &branch)
-            && git(primary, &["branch", "-D", &branch]).is_ok()
+            && git(primary, &["branch", "-D", "--", &branch]).is_ok()
         {
             removed.push(branch);
         }
@@ -572,7 +594,7 @@ pub fn remove_idle_slots(
             continue;
         }
         let path = slot.path.to_string_lossy().into_owned();
-        if git(primary, &["worktree", "remove", &path]).is_ok() {
+        if git(primary, &["worktree", "remove", "--", &path]).is_ok() {
             removed.push(slot.id);
         }
     }
@@ -621,13 +643,20 @@ pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
             if path.is_dir() {
                 git(
                     primary,
-                    &["worktree", "remove", "--force", &path.to_string_lossy()],
+                    &[
+                        "worktree",
+                        "remove",
+                        "--force",
+                        "--",
+                        &path.to_string_lossy(),
+                    ],
                 )
                 .map_err(|error| error.to_string())?;
             }
         }
         if branch_exists(primary, &task.branch) {
-            git(primary, &["branch", "-D", &task.branch]).map_err(|error| error.to_string())?;
+            git(primary, &["branch", "-D", "--", &task.branch])
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
     })
@@ -654,7 +683,7 @@ pub fn is_live(state: &TaskState) -> bool {
 /// working directory needs nothing done to it.
 pub fn rename_branch(primary: &Path, from: &str, to: &str) -> crate::Result<()> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
-        git(primary, &["branch", "--move", from, to])
+        git(primary, &["branch", "--move", "--", from, to])
             .map(|_| ())
             .map_err(|reason| crate::UzeError::TaskNaming(reason.to_string()))
     })
@@ -672,11 +701,20 @@ pub fn current_branch(root: &Path) -> Option<String> {
 
 /// The commit `reference` resolves to in `root`.
 pub fn tip_of(root: &Path, reference: &str) -> String {
-    uze_git::read(root, &["rev-parse", "--verify", "--quiet", reference])
-        .ok()
-        .and_then(|output| output.successful().ok())
-        .map(|stdout| stdout.trim().to_owned())
-        .unwrap_or_default()
+    uze_git::read(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            reference,
+        ],
+    )
+    .ok()
+    .and_then(|output| output.successful().ok())
+    .map(|stdout| stdout.trim().to_owned())
+    .unwrap_or_default()
 }
 
 /// Uncommitted changes, tracked or untracked-but-not-ignored.
@@ -714,16 +752,29 @@ pub fn upstream_divergence(root: &Path) -> Option<UpstreamDivergence> {
     })
 }
 
-/// How many commits `branch` has that `target` lacks.
-pub fn commits_ahead(root: &Path, target: &str, branch: &str) -> usize {
+/// How many commits `branch` has that `target` lacks, or `None` when Git
+/// could not answer — either ref missing, most commonly a declared
+/// `worktrees.target` this clone does not have.
+///
+/// The distinction is the whole of it: an unanswerable question is not
+/// "nothing ahead". Every predicate that authorizes a removal asks this
+/// one, so a count that fell back to zero read as "this branch is fully in
+/// the target" for *every* branch in the repository.
+pub fn commits_ahead_checked(root: &Path, target: &str, branch: &str) -> Option<usize> {
     uze_git::read(
         root,
-        &["rev-list", "--count", &format!("{target}..{branch}")],
+        &["rev-list", "--count", &format!("{target}..{branch}"), "--"],
     )
     .ok()
     .and_then(|output| output.successful().ok())
     .and_then(|count| count.trim().parse().ok())
-    .unwrap_or(0)
+}
+
+/// How many commits `branch` has that `target` lacks, zero when Git could
+/// not answer. For displaying a count; anything deciding whether work may
+/// be destroyed asks [`commits_ahead_checked`].
+pub fn commits_ahead(root: &Path, target: &str, branch: &str) -> usize {
+    commits_ahead_checked(root, target, branch).unwrap_or(0)
 }
 
 /// Whether everything `branch` carries is already in `target`: reachable
@@ -739,10 +790,16 @@ pub fn commits_ahead(root: &Path, target: &str, branch: &str) -> usize {
 /// `git cherry` is Git's own answer to it: asked of the branch's commits
 /// first, which is free, and then of the single patch a squash would have
 /// made of them, which costs one object.
+///
+/// Fails closed, the way [`is_dirty`] does: a question Git could not answer
+/// is answered `false` here, because this predicate is what authorizes
+/// `branch -D` and `reset --hard` over an agent's committed work.
 pub fn is_integrated(root: &Path, target: &str, branch: &str) -> bool {
-    commits_ahead(root, target, branch) == 0
-        || patch_is_in(root, target, branch)
-        || squashed_patch_is_in(root, target, branch)
+    match commits_ahead_checked(root, target, branch) {
+        Some(0) => true,
+        Some(_) => patch_is_in(root, target, branch) || squashed_patch_is_in(root, target, branch),
+        None => false,
+    }
 }
 
 /// Whether every commit of `branch` outside `target` has an equivalent
@@ -770,7 +827,7 @@ fn every_commit_is_there(listing: &str) -> bool {
 /// pass, and a probe dated by the clock was a new object each time — loose
 /// objects piling up in the operator's repository until Git collected them.
 fn squashed_patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
-    let Some(base) = read(root, &["merge-base", target, branch]) else {
+    let Some(base) = read(root, &["merge-base", "--", target, branch]) else {
         return false;
     };
     let Some(tree) = read(root, &["rev-parse", &format!("{branch}^{{tree}}")]) else {
@@ -819,6 +876,7 @@ pub fn branch_exists(root: &Path, branch: &str) -> bool {
             "rev-parse",
             "--verify",
             "--quiet",
+            "--end-of-options",
             &format!("refs/heads/{branch}"),
         ],
     )
@@ -1302,6 +1360,39 @@ mod tests {
         assert!(
             branch_exists(primary, &kept.branch),
             "commits the target lacks are never deleted"
+        );
+    }
+
+    /// `worktrees.target` is authored and committed, so a clone that never
+    /// fetched it — a single-branch clone, a gitflow `develop`, a typo —
+    /// hands every predicate here a name Git cannot resolve. Answered
+    /// "nothing ahead", that made every branch collectable and every slot
+    /// free: `branch -D` and `reset --hard` over an agent's committed work.
+    #[test]
+    fn a_target_this_clone_does_not_have_collects_nothing_and_frees_no_slot() {
+        let repository = repository("slots-missing-target");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        const MISSING: &str = "develop";
+
+        let (parked, slot) = launch(&repository, &mut store, "parked");
+        fs::write(slot.path.join("a.rs"), b"").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "a"]);
+        set_state(&mut store, &parked.id, TaskState::Parked);
+        for task in &mut store.tasks {
+            task.target = MISSING.to_owned();
+        }
+        assert!(tip_of(primary, MISSING).is_empty(), "the target is absent");
+
+        let collected = collect(primary, &store, MISSING, Duration::ZERO, &[]);
+        assert_eq!(collected, Collected::default(), "nothing may be removed");
+        assert!(branch_exists(primary, &parked.branch));
+        assert!(slot.path.join("a.rs").is_file());
+        assert_eq!(
+            slots(primary, &store, &[])[0].state,
+            SlotState::Parked,
+            "a slot measured against a target that does not resolve holds work"
         );
     }
 

@@ -25,7 +25,7 @@ which cell of the matrices below is covered by which test file.
 |---|---|---|---|
 | **L0 — Unit** | pure logic: parsing, normalization, identity, deterministic helpers | nothing real; trivial temp only | `#[cfg(test)]` inside `crates/*/src/**`, `src/**`; `tests/packages/*`, `tests/projection/*` helpers |
 | **L1 — Component/Contract** | a subsystem's contract on a real isolated filesystem, with a *fake* process boundary | isolated temp HOME/UZE_HOME, no developer state, fake harness CLIs only | `tests/{cli,memory,packages,workspace,lifecycle,projection}/**`, `tests/integrations/**` |
-| **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | real vendor binary, skipped cleanly when absent (`UZE_REAL_HARNESS_TESTS`-style probe-and-skip) | `tests/integrations/harness/codex.rs::real_codex_dogfood...`; the `conformance/` container lab (Tiers 1-2) |
+| **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | the real vendor binary in a disposable container: synthetic provider, zero Internet, zero tokens | the `conformance/` container lab (Tiers 1-2) — there is no in-repo L2 probe |
 | **L3 — Acceptance** | public user-level scenario end-to-end through the real `uze` binary | clean isolated `TestEnvironment` (real UZE binary, fake or controlled harness CLIs) | `tests/acceptance/**` |
 | **L3.5 — Journey** | a user's flow performed through the real CLI and the real TUI, checked against real machine state (files, Git, recorded task state, processes) — never against UZE's own report | disposable sandbox HOME/UZE_HOME/XDG_RUNTIME_DIR, generated harness stand-ins, offline; a pinned container in CI | `journeys/suites/*.yml` (see `journeys/README.md`) |
 | **L4 — Manual/Model behavioral** | model-invocation or interactive-only behavior | manual/agentic eval, never CI | `tests/_fixtures/scenarios/eval/` (see `docs/capabilities/uze-skill.md`) |
@@ -115,13 +115,14 @@ cargo test -p uze --test acceptance      # L3 only (the release signal)
 cargo test -p uze --test integrations    # conformance + per-harness semantics
 cargo test -p uze --test projection      # naming/labels/shared roots
 make test-acceptance / make test-conformance  # same as above
-make harness-test                   # L2 probes that need real vendor binaries
+python3 conformance/lab.py --harness codex  # L2, the real binary in the Lab
 ```
 
-Real-harness policy: a probe skips cleanly when the binary is absent
-(`real_codex_dogfood...`); the `conformance/` lab (Docker, offline L2) is the
-place for real-vendor verdicts, and is never required for the ordinary
-suite.
+Real-harness policy: the deterministic suite never spawns a vendor binary.
+The `conformance/` lab (Docker, offline L2) is the only place a real-vendor
+verdict is produced, and it is never required for the ordinary suite. An
+in-repo skip-if-absent probe was tried and removed: it reported green on every
+machine that did not have the binary, which is every machine.
 
 ## Where does a new test go?
 
@@ -171,8 +172,8 @@ real-vendor evidence exists in-repo (see the harness matrix below).
 
 | Harness | Component (L1) | Real CLI (L2) | Acceptance (L3) |
 |---|---:|---:|---:|
-| Claude | ✓ | conformance lab (L2) — no in-repo probe | ✓ |
-| Codex | ✓ | ✓ (`real_codex_dogfood...`, zero model calls, skip-if-absent) | ✓ |
+| Claude | ✓ | conformance lab (L2) | ✓ |
+| Codex | ✓ | conformance lab (L2) | ✓ |
 | OpenCode | ✓ | conformance lab (L2) | ✓ |
 | Antigravity | ✓ | conformance lab (L2) | ✓ |
 

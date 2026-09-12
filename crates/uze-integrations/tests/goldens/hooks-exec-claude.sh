@@ -71,8 +71,12 @@ esac
 export HOOK_TOOL HOOK_TOOL_NATIVE HOOK_CWD HOOK_INPUT HOOK_COMMAND HOOK_PATH HOOK_QUERY
 
 # --- the handlers, in order; the first denial stops the rest --------------
+# A handler is a shell command line, run from the package root: the same
+# contract the canonical manifest documents, so `sh scripts/check --strict`
+# means here exactly what it means when a person types it.
+cd "$PLUGIN_ROOT" 2>/dev/null || :
 for handler in "$@"; do
-  reason=$("$handler" 2>&1 >/dev/null); status=$?
+  reason=$(sh -c "$handler" </dev/null 2>&1 >/dev/null); status=$?
   case $status in
     0) ;;
     3) deny_native "${reason:-$handler denied the operation}" ;;

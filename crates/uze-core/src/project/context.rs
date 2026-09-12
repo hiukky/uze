@@ -18,6 +18,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::{
+    error::UzeError,
     integration::{AttachmentInspection, AttachmentState},
     store::PackageId,
     text_region,
@@ -64,6 +65,12 @@ pub struct AgentsMdReconciliation {
     pub packages: Vec<(PackageId, AttachmentInspection)>,
     pub removed_orphans: Vec<String>,
     pub blocked_orphans: Vec<(String, String)>,
+    /// Contributions whose region could not be written at all — the file or
+    /// its parent read-only, the disk full, the file owned by somebody
+    /// else. Reported separately because the re-observation below cannot
+    /// tell such a region apart from one nobody has reconciled yet: both
+    /// read `Missing`.
+    pub failed: Vec<(PackageId, String)>,
 }
 
 impl AgentsMdReconciliation {
@@ -172,9 +179,17 @@ pub fn reconcile_agents_md(
     agents_md: &Path,
     contributions: &[InstructionContribution],
 ) -> AgentsMdReconciliation {
+    let mut failed = Vec::new();
     for contribution in contributions {
         let identity = region_identity_for(&contribution.package_id);
-        let _ = text_region::attach(agents_md, &identity, &contribution.content);
+        // Drift and malformed markers are refusals by design, and the
+        // observation below names them per package; anything else is a
+        // write that did not happen, which nothing else can report.
+        match text_region::attach(agents_md, &identity, &contribution.content) {
+            Ok(()) => {}
+            Err(UzeError::ManagedRegionDrift(_) | UzeError::ManagedRegionConflict(_)) => {}
+            Err(error) => failed.push((contribution.package_id.clone(), error.to_string())),
+        }
     }
 
     // The attach pass above only ever creates a *missing* region or leaves
@@ -185,6 +200,7 @@ pub fn reconcile_agents_md(
     let mut report = AgentsMdReconciliation {
         packages: observation.packages,
         removed_orphans: Vec::new(),
+        failed,
         blocked_orphans: observation
             .malformed_regions
             .into_iter()
@@ -675,6 +691,45 @@ mod tests {
         reconcile_agents_md(&agents_md, &contributions);
         let after_second = fs::read_to_string(&agents_md).unwrap();
         assert_eq!(after_first, after_second);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write that could not happen and a file nobody has reconciled yet
+    /// both leave the region absent, so the inspection alone tells the
+    /// operator the wrong thing: "the region is missing" rather than "UZE
+    /// could not write it".
+    #[cfg(unix)]
+    #[test]
+    fn a_write_that_could_not_happen_is_named_rather_than_reported_as_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root writes into a read-only directory anyway
+        }
+        let root = uze_testkit::temp::scratch("unwritable");
+        fs::create_dir_all(&root).unwrap();
+        let agents_md = root.join("AGENTS.md");
+        fs::write(&agents_md, "# My Project\n").unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let report = reconcile_agents_md(
+            &agents_md,
+            &[InstructionContribution {
+                package_id: package_id("pkg-a"),
+                content: "content A".to_owned(),
+            }],
+        );
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(report.packages[0].1.state, AttachmentState::Missing);
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert_eq!(report.failed[0].0, package_id("pkg-a"));
+        assert!(
+            report.failed[0].1.contains("failed to write"),
+            "{}",
+            report.failed[0].1
+        );
+        assert_eq!(fs::read_to_string(&agents_md).unwrap(), "# My Project\n");
         fs::remove_dir_all(root).unwrap();
     }
 }

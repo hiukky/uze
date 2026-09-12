@@ -40,13 +40,15 @@ pub fn short_hex(bytes: &[u8]) -> String {
 /// is length-prefixed, so no arrangement of names and contents can be made
 /// to produce the same stream as a different one. Directories contribute
 /// nothing of their own — an empty one carries no behavior — and symlinks
-/// are followed as the files they name, matching what the Store ingested.
+/// are not entered and contribute nothing, exactly as
+/// [`crate::project::files_named`] treats them: the tree being digested is
+/// often a freshly cloned remote checkout, and following a link to an
+/// ancestor is an unbounded walk, not a digest.
 pub fn tree_sha256(root: &std::path::Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
 
-    let mut files = Vec::new();
-    collect_files(root, root, &mut files)?;
+    let mut files = collect_files(root)?;
     files.sort();
 
     let mut hasher = Sha256::new();
@@ -76,20 +78,30 @@ pub fn tree_sha256(root: &std::path::Path) -> std::io::Result<String> {
     Ok(spelled)
 }
 
-fn collect_files(
-    root: &std::path::Path,
-    directory: &std::path::Path,
-    into: &mut Vec<std::path::PathBuf>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(directory)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_files(root, &path, into)?;
-        } else if let Ok(relative) = path.strip_prefix(root) {
-            into.push(relative.to_path_buf());
+/// The tree's ordinary files, relative to `root`.
+///
+/// A worklist rather than recursion, and `symlink_metadata` rather than
+/// `is_dir`: a package may legitimately contain `skills/up -> ..`, which
+/// `is_dir` follows and which would otherwise descend until the stack
+/// overflows — an abort, before any validation the caller meant to run.
+fn collect_files(root: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let path = entry?.path();
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if let Ok(relative) = path.strip_prefix(root) {
+                files.push(relative.to_path_buf());
+            }
         }
     }
-    Ok(())
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -138,6 +150,20 @@ mod tests {
         let one = tree("digest-ambig-a", &[("ab", "cd")]);
         let two = tree("digest-ambig-b", &[("a", "bcd")]);
         assert_ne!(tree_sha256(&one).unwrap(), tree_sha256(&two).unwrap());
+    }
+
+    /// A tree that names itself is the shape a remote repository can ship;
+    /// following it is an unbounded walk, so the digest must terminate and
+    /// report only the content it can name without entering a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_symlink_pointing_at_the_tree_itself_does_not_recurse() {
+        let root = tree("digest-cycle", &[("a.md", "A")]);
+        std::os::unix::fs::symlink(".", root.join("loop")).unwrap();
+        std::os::unix::fs::symlink("..", root.join("up")).unwrap();
+
+        let plain = tree("digest-cycle-plain", &[("a.md", "A")]);
+        assert_eq!(tree_sha256(&root).unwrap(), tree_sha256(&plain).unwrap());
     }
 
     #[test]

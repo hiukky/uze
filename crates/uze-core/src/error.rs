@@ -8,6 +8,14 @@ use thiserror::Error;
 pub enum UzeError {
     #[error("could not determine the default home directory; set UZE_HOME")]
     MissingHomeDirectory,
+    #[error(
+        "{variable} is set to `{value}`, which is not an absolute path: UZE would put its \
+         store, state and receipts under whichever directory each command happened to run from"
+    )]
+    RelativeHomeDirectory {
+        variable: &'static str,
+        value: String,
+    },
     #[error("project path does not exist: {0}")]
     MissingPath(PathBuf),
     #[error("expected a directory: {0}")]
@@ -76,6 +84,13 @@ pub enum UzeError {
     TerminalRuntime(String),
     #[error("setup incomplete: {0}")]
     ProvisioningIncomplete(String),
+    /// A lifecycle mutation the safety check refused (ADR-009): drift or a
+    /// conflicting receipt stopped it and nothing was removed or updated.
+    /// Its own variant for the same reason `ProvisioningIncomplete` has
+    /// one — the report is still worth printing, and the exit status still
+    /// has to say the machine is unchanged.
+    #[error("{0}")]
+    LifecycleBlocked(String),
     /// The operator declined. Distinct from `TrustRequired`: a decision was
     /// made, and repeating the command unchanged should not change it.
     #[error("trust denied for `{0}`; nothing was installed")]
@@ -219,8 +234,11 @@ pub enum UzeError {
     InvalidRegionIdentity(String),
     #[error("{0} is not valid UTF-8 text")]
     InvalidTextEncoding(PathBuf),
-    #[error("another UZE mutation is already in progress at {0}")]
-    MutationInProgress(PathBuf),
+    #[error(
+        "another UZE mutation is already in progress at {path}{}",
+        .pid.map(|pid| format!(" (process {pid})")).unwrap_or_default()
+    )]
+    MutationInProgress { path: PathBuf, pid: Option<u32> },
     #[error("unknown profile `{0}`")]
     UnknownProfile(String),
     #[error("profile `{0}` already exists")]

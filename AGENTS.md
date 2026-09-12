@@ -32,7 +32,7 @@ cargo test --test package_containment                       # one top-level inte
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings                  # CI uses --all-targets; plain `clippy -- -D warnings` is the Makefile default
 cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 \
-  -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+  -- --skip foreground_status_reports
 
 cargo deny check                                           # licences, advisories, bans, sources (deny.toml); part of `make check`
 make attributions                                          # regenerate CREDITS.md (about.hbs + Cargo.lock); CI fails when it drifts

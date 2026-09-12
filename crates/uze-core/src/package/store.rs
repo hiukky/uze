@@ -438,6 +438,17 @@ impl UzeStore {
         Ok(ghosts)
     }
 
+    /// Copies a package's stored bytes to `destination` — symlinks, modes
+    /// and all, exactly as [`ingest_with_active_name`](Self::ingest_with_active_name)
+    /// wrote them, so the copy is itself a materialized package.
+    ///
+    /// What an update keeps aside while the package replacing it installs:
+    /// the removal is what makes an update destructive, and after it only a
+    /// copy of the bytes can put the previous one back.
+    pub fn copy_package_to(&self, id: &PackageId, destination: &Path) -> Result<()> {
+        copy_tree(&self.home.plugin_dir(id), destination)
+    }
+
     /// Removes only UZE-owned package bytes and its registry entry. Callers
     /// must complete attachment reconciliation first; the Store deliberately
     /// knows nothing about harness artifacts or their ownership.
@@ -548,6 +559,16 @@ fn assert_self_contained(root: &Path) -> Result<()> {
                     path: path.clone(),
                     source,
                 })?;
+                // An absolute target is refused whatever it names, including a
+                // path inside the source being read right now. Containment is
+                // judged here against the *source* root, but `copy_symlink`
+                // writes the target verbatim: a relative link keeps pointing
+                // inside the package once copied, while an absolute one keeps
+                // pointing at the source — a store entry aimed at a directory
+                // UZE does not own and the user may repoint afterwards.
+                if target.is_absolute() {
+                    return Err(UzeError::PackageEscapesRoot { link: path, target });
+                }
                 let resolved = resolve_lexically(&path, &target);
                 if !resolved.starts_with(root) {
                     return Err(UzeError::PackageEscapesRoot {
@@ -568,8 +589,9 @@ fn assert_self_contained(root: &Path) -> Result<()> {
 
 /// Resolves a symlink target against its own location **without touching the
 /// filesystem**, so `..` is normalized textually rather than by following
-/// whatever it currently points at. An absolute target resolves to itself and
-/// therefore fails the containment check unless it is already inside.
+/// whatever it currently points at. Only relative targets reach here — an
+/// absolute one is refused before the call, because no copy of the package
+/// can keep it inside the root.
 fn resolve_lexically(link: &Path, target: &Path) -> PathBuf {
     let base = if target.is_absolute() {
         PathBuf::new()

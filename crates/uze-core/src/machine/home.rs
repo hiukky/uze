@@ -247,15 +247,42 @@ impl UzeHome {
         Ok(())
     }
 
+    /// Resolves the root from the environment, refusing the two spellings
+    /// that silently make every UZE path relative to the current directory.
+    ///
+    /// `env::var_os` answers `Some("")` for a variable set to the empty
+    /// string — the ordinary result of `export UZE_HOME="$SOMETHING_UNSET"`
+    /// in a wrapper script or a CI step — and an empty root makes
+    /// `store_dir()` the bare name `store`. A relative value is the same
+    /// failure spread over time: the Store, the ledger and the receipts fork
+    /// per working directory, each command finding a different machine. An
+    /// empty value is read as "not set" because that is what the shell meant
+    /// by it; a relative one is an error, because nothing else it could have
+    /// meant is plausible. [`UzeHome::at`] stays permissive: a caller naming
+    /// a root in code has already decided.
     fn from_values(
         uze_home: Option<std::ffi::OsString>,
         home: Option<std::ffi::OsString>,
     ) -> Result<Self> {
-        if let Some(path) = uze_home {
-            return Ok(Self::at(path));
+        if let Some(path) = uze_home.filter(|value| !value.is_empty()) {
+            return Ok(Self::at(absolute_or_refuse("UZE_HOME", path)?));
         }
-        let home = home.ok_or(UzeError::MissingHomeDirectory)?;
-        Ok(Self::at(PathBuf::from(home).join(".uze")))
+        let home = home
+            .filter(|value| !value.is_empty())
+            .ok_or(UzeError::MissingHomeDirectory)?;
+        Ok(Self::at(absolute_or_refuse("HOME", home)?.join(".uze")))
+    }
+}
+
+fn absolute_or_refuse(variable: &'static str, value: std::ffi::OsString) -> Result<PathBuf> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(UzeError::RelativeHomeDirectory {
+            variable,
+            value: path.to_string_lossy().into_owned(),
+        })
     }
 }
 
@@ -277,5 +304,42 @@ mod tests {
     fn default_home_is_derived_only_when_uze_home_is_missing() {
         let home = UzeHome::from_values(None, Some("/tmp/user-home".into())).unwrap();
         assert_eq!(home.root(), Path::new("/tmp/user-home/.uze"));
+    }
+
+    /// `export UZE_HOME="$SOMETHING_UNSET"` is how a wrapper script sets a
+    /// variable to nothing. It means "not set", never "the directory I
+    /// happen to be standing in".
+    #[test]
+    fn an_empty_uze_home_is_read_as_unset() {
+        let home = UzeHome::from_values(Some("".into()), Some("/tmp/user-home".into())).unwrap();
+        assert_eq!(home.root(), Path::new("/tmp/user-home/.uze"));
+    }
+
+    #[test]
+    fn an_empty_home_leaves_no_default_to_derive() {
+        assert!(matches!(
+            UzeHome::from_values(None, Some("".into())),
+            Err(UzeError::MissingHomeDirectory)
+        ));
+    }
+
+    /// A relative root is the same failure spread over time: the same home
+    /// resolves to a different tree per working directory.
+    #[test]
+    fn a_relative_root_is_refused_by_name() {
+        assert!(matches!(
+            UzeHome::from_values(Some("relative/uze".into()), None),
+            Err(UzeError::RelativeHomeDirectory {
+                variable: "UZE_HOME",
+                ..
+            })
+        ));
+        assert!(matches!(
+            UzeHome::from_values(None, Some("user-home".into())),
+            Err(UzeError::RelativeHomeDirectory {
+                variable: "HOME",
+                ..
+            })
+        ));
     }
 }

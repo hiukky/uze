@@ -5,4 +5,5 @@
 
 mod budget;
 mod grammar;
+mod hook_exec;
 mod machine;

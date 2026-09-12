@@ -9,10 +9,16 @@
 use std::io::{self, Read};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_SHELL_OUTPUT_BYTES: usize = 64 * 1024;
+
+/// How long a finished command's readers are given to hand over what they
+/// captured. They are already at EOF in every ordinary case; this bounds the
+/// one case that is not — a descendant still holding a pipe open.
+const READER_GRACE: Duration = Duration::from_secs(2);
 
 /// Runs `command` in its own process group so a timeout can kill the whole
 /// tree (the process AND its descendants), never just the direct child.
@@ -147,26 +153,35 @@ fn process_group_members(pgid: u32) -> Vec<u32> {
     members
 }
 
-/// Reads a child handle to the end, stopping (and overflowing) past `cap`
-/// bytes so a chatty child cannot exhaust memory.
+/// Reads a child handle to EOF, keeping at most `cap` bytes and reporting
+/// whether more than that arrived.
+///
+/// Past the cap it keeps reading and throws the bytes away rather than
+/// returning. A reader that stopped early would leave the pipe undrained,
+/// and the child then blocks on its next `write()` — or takes `SIGPIPE`
+/// once the handle is dropped. Either way a merely chatty child becomes a
+/// hang until its deadline, or a spurious failure, which is the opposite of
+/// what a cap is for: the cap bounds *memory*, not how much the child is
+/// allowed to say.
 pub fn read_bounded<R: Read>(mut handle: R, cap: usize) -> (Vec<u8>, bool) {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 4096];
+    let mut overflowed = false;
     loop {
         match handle.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                if bytes.len() + read > cap {
-                    bytes.extend_from_slice(&buffer[..cap.saturating_sub(bytes.len())]);
-                    return (bytes, true);
+                let room = cap.saturating_sub(bytes.len()).min(read);
+                if read > room {
+                    overflowed = true;
                 }
-                bytes.extend_from_slice(&buffer[..read]);
+                bytes.extend_from_slice(&buffer[..room]);
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
-    (bytes, false)
+    (bytes, overflowed)
 }
 
 /// Whether an executable of this name is reachable through `PATH`. A
@@ -216,34 +231,59 @@ pub fn run_shell_bounded(cwd: &Path, command: &str, timeout: Duration) -> (bool,
         Ok(child) => child,
         Err(error) => return (false, format!("could not run `{command}`: {error}")),
     };
-    let stdout = child.stdout.take().expect("piped");
-    let stderr = child.stderr.take().expect("piped");
-    let reader = thread::spawn(move || {
-        let (out, _) = read_bounded(stdout, MAX_SHELL_OUTPUT_BYTES);
-        let (err, _) = read_bounded(stderr, MAX_SHELL_OUTPUT_BYTES);
-        let mut combined = String::from_utf8_lossy(&out).into_owned();
-        let err = String::from_utf8_lossy(&err);
-        if !err.trim().is_empty() {
-            if !combined.is_empty() && !combined.ends_with('\n') {
-                combined.push('\n');
-            }
-            combined.push_str(&err);
-        }
-        combined
-    });
+    // One reader per stream, never one reading them in turn: a pipe holds
+    // about 64 KiB, and a gate command is stderr-heavy (every compiler and
+    // test runner is). Reading stdout to EOF first would let stderr fill and
+    // block the child, so stdout never reaches EOF either and the whole
+    // command hangs until its deadline — reported as a timeout, with nothing
+    // captured to say otherwise.
+    let stdout = drain_on_thread(child.stdout.take().expect("piped"));
+    let stderr = drain_on_thread(child.stderr.take().expect("piped"));
     let (status, timed_out) = match wait_with_timeout(&mut child, timeout) {
         Ok(outcome) => outcome,
         Err(error) => return (false, format!("`{command}` failed: {error}")),
     };
+    // The whole group was killed if it timed out, so both pipes close and
+    // the readers finish; a descendant that left the group could still hold
+    // one open, so the wait is bounded rather than unconditional.
+    let stdout = stdout.recv_timeout(READER_GRACE).unwrap_or_default();
+    let stderr = stderr.recv_timeout(READER_GRACE).unwrap_or_default();
+    let captured = combine_streams(&stdout, &stderr);
     if timed_out {
-        drop(reader);
-        return (
-            false,
-            format!("`{command}` timed out after {}s", timeout.as_secs()),
-        );
+        // What the command managed to say before the deadline is usually the
+        // only evidence of *why* it never finished, so it is reported rather
+        // than discarded.
+        let mut report = format!("`{command}` timed out after {}s", timeout.as_secs());
+        if !captured.trim().is_empty() {
+            report.push('\n');
+            report.push_str(captured.trim());
+        }
+        return (false, report);
     }
-    let output = reader.join().unwrap_or_default();
-    (status.success(), output.trim().to_owned())
+    (status.success(), captured.trim().to_owned())
+}
+
+/// Starts draining `handle` immediately, answering through a channel so the
+/// caller can bound how long it waits for the answer.
+fn drain_on_thread<R: Read + Send + 'static>(handle: R) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (bytes, _) = read_bounded(handle, MAX_SHELL_OUTPUT_BYTES);
+        let _ = sender.send(bytes);
+    });
+    receiver
+}
+
+fn combine_streams(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut combined = String::from_utf8_lossy(stdout).into_owned();
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.trim().is_empty() {
+        if !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(&stderr);
+    }
+    combined
 }
 
 #[cfg(test)]
@@ -273,6 +313,57 @@ mod tests {
         let (bytes, overflowed) = read_bounded(&payload[..], 4096);
         assert_eq!(bytes, payload);
         assert!(!overflowed);
+    }
+
+    /// A pipe holds ~64 KiB. A command writing past that on stderr while
+    /// stdout is still open blocks unless both streams are drained at once,
+    /// and blocks for the command's *whole* timeout — 30 minutes for a
+    /// delivery gate. Finishing at all is the assertion.
+    #[test]
+    fn a_stderr_heavy_command_is_not_starved_by_an_open_stdout() {
+        let started = Instant::now();
+        let (succeeded, output) = run_shell_bounded(
+            Path::new("."),
+            "head -c 1048576 /dev/zero | tr '\\0' 'e' 1>&2; echo done",
+            Duration::from_secs(30),
+        );
+        assert!(succeeded, "the command did not exit zero: {output}");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the command was starved rather than drained"
+        );
+        assert!(output.contains("done"), "stdout was lost: {output}");
+    }
+
+    /// The mirror case: output past the cap must be discarded, not left in
+    /// the pipe. A reader that stopped would block the child, or `SIGPIPE`
+    /// it once the handle dropped — a verbose command reported as failed.
+    #[test]
+    fn a_command_writing_past_the_cap_still_exits_zero_with_truncated_output() {
+        let (succeeded, output) = run_shell_bounded(
+            Path::new("."),
+            "head -c 1048576 /dev/zero | tr '\\0' 'o'",
+            Duration::from_secs(30),
+        );
+        assert!(succeeded, "a verbose command was reported as failed");
+        assert!(output.len() <= MAX_SHELL_OUTPUT_BYTES);
+        assert!(!output.is_empty(), "nothing was captured");
+    }
+
+    /// A command that never finishes still had something to say about why.
+    #[test]
+    fn a_timed_out_command_reports_what_it_managed_to_say() {
+        let (succeeded, output) = run_shell_bounded(
+            Path::new("."),
+            "echo preface; sleep 30",
+            Duration::from_millis(300),
+        );
+        assert!(!succeeded);
+        assert!(output.contains("timed out"), "{output}");
+        assert!(
+            output.contains("preface"),
+            "the captured tail was lost: {output}"
+        );
     }
 
     #[test]

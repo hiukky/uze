@@ -349,14 +349,25 @@ impl UzeApplication {
             &uze_core::naming::NoNameCollisionAuthority,
         ) {
             Ok(_) => Ok(true),
-            Err(_) => {
-                // Production resilience: the Store entry is already persisted
-                // before harness attachment, and a foreign-state failure on
-                // one harness must not abort bootstrap for other harnesses nor
-                // fail the whole `setup` on a user's real machine. The package
-                // remains installed; `setup`/`doctor` will surface the
-                // per-harness warning.
-                Ok(true)
+            Err(error) => {
+                // Production resilience: a foreign-state failure on one
+                // harness must not abort bootstrap for the others nor fail
+                // the whole `setup` on a user's real machine. But "installed"
+                // is a fact about the Store, not a consolation: trust can be
+                // refused, a harness can refuse to be prepared, and the ingest
+                // itself can fail, all of them before a byte is written. Ask
+                // the Store instead of assuming.
+                let installed = self.store.package_ids().is_ok_and(|ids| {
+                    ids.iter()
+                        .any(|package_id| package_id.as_str() == format!("{id}@uze-official"))
+                });
+                tracing::warn!(
+                    plugin = id,
+                    installed,
+                    error = %error,
+                    "a default plugin could not be installed completely"
+                );
+                Ok(installed)
             }
         }
     }
@@ -566,12 +577,20 @@ impl UzeApplication {
     /// Re-resolves a package's original request and replaces the installed
     /// copy with the result.
     ///
-    /// The order is the whole safety story. Everything that can fail without
-    /// consequence happens first — re-resolve, materialize, validate, and ask
-    /// about any execution the installed revision did not already have — and
-    /// only then is the current package detached. A network failure, an
-    /// invalid package or a refused trust question therefore mutates nothing
-    /// at all.
+    /// The order is most of the safety story. Everything that can fail
+    /// without consequence happens first — re-resolve, materialize, validate,
+    /// ask about any execution the installed revision did not already have,
+    /// and prepare the detected harnesses — and only then is the current
+    /// package detached. A network failure, an invalid package, a refused
+    /// trust question or a vendor configuration that will not be prepared
+    /// therefore mutates nothing at all.
+    ///
+    /// What remains can still fail after the removal: the ingest itself, and
+    /// the environment the new revision composes. For those the previous
+    /// revision's bytes are kept aside and reinstalled — bytes, registration
+    /// and attachments — and the failure is reported as blocked, because a
+    /// Git- or path-sourced plugin that vanished has nothing on the machine
+    /// to heal it.
     ///
     /// There is deliberately no rollback across integrations. If one fails to
     /// re-attach, the Store stays consistent, the others keep what they got,

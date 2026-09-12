@@ -66,6 +66,10 @@ use plugin::{
 use provision::{detect_binary, provision_cli};
 use skills::materialize_shim;
 const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
+/// The owner every catalogue UZE writes into Claude's marketplace UI
+/// declares. Named once so the two documents that carry it cannot drift
+/// into attributing UZE's local marketplace to someone else.
+const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
 
 /// Claude Code peer integration. Its transparent-attachment strategy is a
 /// UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`

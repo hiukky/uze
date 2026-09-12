@@ -169,7 +169,7 @@ impl Hooks<'_> {
         event: hook::HookEvent,
         effect: hook::HookEffect,
         plugin_root: &std::path::Path,
-        commands: Vec<String>,
+        handlers: Vec<(String, u16)>,
         native: &serde_json::Value,
     ) -> Result<hook::HookNativeOutput> {
         let registry = uze_integrations::registry::IntegrationRegistry::builtin(&self.0.home)?;
@@ -196,12 +196,14 @@ impl Hooks<'_> {
             id: "dispatch".to_owned(),
             event,
             matchers: Vec::new(),
-            handlers: commands
+            // Each handler keeps the timeout its author declared, paired
+            // with its command by the caller that parsed the ABI.
+            handlers: handlers
                 .into_iter()
-                .map(|command| hook::CommandHook {
+                .map(|(command, timeout)| hook::CommandHook {
                     handler_type: hook::CommandHandlerType::Command,
                     command,
-                    timeout: hook::DEFAULT_TIMEOUT_SECONDS,
+                    timeout,
                 })
                 .collect(),
             effect,
@@ -210,6 +212,34 @@ impl Hooks<'_> {
         let outcome = hook::dispatch_handlers(&authored, &input, plugin_root)?;
         adapter
             .render_output(&outcome, event)
+            .map_err(UzeError::HookDispatch)
+    }
+
+    /// The answer for a group that could not be evaluated at all — the
+    /// payload, the adapter's reading of it, or UZE's own state failed
+    /// before any handler ran — rendered in the harness's own contract.
+    /// ADR-033 resolves that by the declared effect exactly as a failing
+    /// handler is resolved, so a `deny`/`ask`/`transform` group denies and
+    /// says why. `None` when the group is observational: the caller reports
+    /// the reason and lets the operation proceed.
+    #[tracing::instrument(name = "hooks.blocked", skip_all, fields(adapter_id = %adapter_id), err)]
+    pub fn blocked(
+        &self,
+        adapter_id: &str,
+        event: hook::HookEvent,
+        effect: hook::HookEffect,
+        reason: &str,
+    ) -> Result<Option<hook::HookNativeOutput>> {
+        let Some(outcome) = hook::unevaluated(effect, reason) else {
+            return Ok(None);
+        };
+        let registry = uze_integrations::registry::IntegrationRegistry::builtin(&self.0.home)?;
+        let adapter = registry.hook_adapter(adapter_id).ok_or_else(|| {
+            UzeError::HookDispatch(format!("unknown hook adapter `{adapter_id}`"))
+        })?;
+        adapter
+            .render_output(&outcome, event)
+            .map(Some)
             .map_err(UzeError::HookDispatch)
     }
 }

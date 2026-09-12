@@ -25,7 +25,7 @@ pub use uze_core::{
     context::PlannedAction,
     hook::{
         CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
-        HookNativeOutput,
+        HookNativeOutput, MAX_TIMEOUT_SECONDS,
     },
     integration::{AttachmentState, PublicationStatus},
     naming::{

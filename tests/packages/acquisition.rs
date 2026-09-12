@@ -10,7 +10,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use uze_core::{PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire};
@@ -19,22 +18,18 @@ fn temporary(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
+/// Through the testkit, which neutralizes the ambient Git configuration.
+///
+/// Spawning `git` here directly is what put this whole file behind a
+/// coverage `--skip`: it inherited the operator's and the runner's global
+/// config, so `commit.gpgsign` blocked on a GPG agent with no key and the
+/// exclusion — a libtest substring filter, so it took the unit tests of
+/// `acquisition` with it — outlived the cause by longer than it should have.
+/// Per invocation rather than through `Repository`, because a fixture here
+/// builds two repositories at once to prove submodules are not recursed
+/// into.
 fn git(arguments: &[&str], directory: &Path) -> String {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .env("GIT_AUTHOR_NAME", "uze")
-        .env("GIT_AUTHOR_EMAIL", "uze@example.invalid")
-        .env("GIT_COMMITTER_NAME", "uze")
-        .env("GIT_COMMITTER_EMAIL", "uze@example.invalid")
-        .args(arguments)
-        .output()
-        .unwrap_or_else(|error| panic!("git {arguments:?}: {error}"));
-    assert!(
-        output.status.success(),
-        "git {arguments:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    uze_testkit::git::isolated_git_in(directory, arguments)
 }
 
 fn write_package(root: &Path, name: &str, with_mcp: bool) {

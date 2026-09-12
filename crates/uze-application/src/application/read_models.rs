@@ -632,6 +632,9 @@ pub struct ContextReconciliationReport {
     /// An orphaned-looking region this pass found but refused to touch —
     /// its markers were malformed, so ownership could not be proven.
     pub blocked_orphans: Vec<(String, String)>,
+    /// A package whose region this pass could not write, with the reason —
+    /// distinct from a region that is merely absent.
+    pub failed: Vec<(String, String)>,
     pub worktree_region: Option<WorktreeRegionStatus>,
     pub bridges: Vec<BridgeStatus>,
 }

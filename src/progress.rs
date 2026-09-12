@@ -4,7 +4,7 @@
 //! same restrained hierarchy as the TUI: warm text, sage for healthy state,
 //! amber for attention, and red only for failures.
 
-use std::{io::IsTerminal, time::Duration};
+use std::{io::IsTerminal, sync::Mutex, time::Duration};
 
 use anstyle::{Color, RgbColor, Style};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -189,6 +189,10 @@ pub fn key_value(key: &str, value: impl AsRef<str>) -> String {
     format!("  {:<16} {}", label(key), value.as_ref())
 }
 
+/// The spinner currently drawing, if one is. A question asked while a
+/// spinner ticks has to get the terminal to itself — see [`uninterrupted`].
+static DRAWING: Mutex<Option<ProgressBar>> = Mutex::new(None);
+
 /// Creates a spinner for long-running operations.
 pub fn spinner(message: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -200,7 +204,33 @@ pub fn spinner(message: &str) -> ProgressBar {
             .template("{spinner:.green} {msg}")
             .expect("valid progress template"),
     );
+    if let Ok(mut drawing) = DRAWING.lock() {
+        *drawing = Some(pb.clone());
+    }
     pb
+}
+
+/// Runs `question` with the terminal to itself.
+///
+/// A spinner redraws its line on stderr every 120 ms, and so does the
+/// prompt widget — so a question asked mid-operation was overwritten as
+/// fast as it was drawn, which for the trust prompt meant a person
+/// answering something they could not read. Held only for as long as the
+/// question takes; nothing is suspended when no spinner is drawing.
+pub fn uninterrupted<T>(question: impl FnOnce() -> T) -> T {
+    // Cloned out rather than held: the question may start a spinner of its
+    // own, and a lock held across it would deadlock. A finished bar is
+    // skipped rather than suspended — suspending one redraws the line it
+    // already closed.
+    let drawing = DRAWING
+        .lock()
+        .ok()
+        .and_then(|drawing| drawing.clone())
+        .filter(|spinner| !spinner.is_finished());
+    match drawing {
+        Some(spinner) => spinner.suspend(question),
+        None => question(),
+    }
 }
 
 pub fn success(msg: &str) {

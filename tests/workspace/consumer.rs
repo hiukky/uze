@@ -245,6 +245,44 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
     );
 }
 
+/// `uze install` leaves the project context reconciled — declaring an
+/// environment and projecting it are one command. A projection that could
+/// not be written was reported as `NoChanges`, which reads as "everything
+/// already agrees", while the half of the environment the agents actually
+/// read had not moved at all.
+#[cfg(unix)]
+#[test]
+fn install_reports_a_projection_it_could_not_write_instead_of_no_changes() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new("install-projection-failed");
+    fx.add_marketplace_to_global_registry();
+    let app = fx.app();
+    app.project()
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .unwrap();
+    app.project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .unwrap();
+
+    // A projection that is behind — the declared policy's region is gone
+    // from the shared file — and an installed package whose bytes the
+    // projection is composed from cannot be read.
+    fs::write(fx.project_root.join("AGENTS.md"), "").unwrap();
+    let unreadable = fx
+        .uze_home
+        .join("store/plugins/test-market/flow/skills/uze-e2e/SKILL.md");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let failure = app
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .expect_err("the projection failed, so the command did");
+    assert!(
+        !format!("{failure}").is_empty(),
+        "and the refusal names what went wrong"
+    );
+}
+
 #[test]
 fn install_project_environment_with_no_lock_installs_nothing_and_settles() {
     let fx = Fixture::new("no-lock");
