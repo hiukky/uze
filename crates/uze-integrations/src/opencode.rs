@@ -408,7 +408,7 @@ impl IntegrationPort for OpenCodeIntegration {
             if detached.state == AttachmentState::Missing
                 && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
             {
-                self.cleanup_unused_skill_wrapper(target)?;
+                self.cleanup_unused_wrapper(target)?;
             }
             return Ok(detached);
         };

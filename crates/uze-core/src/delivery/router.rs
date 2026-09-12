@@ -56,9 +56,6 @@ pub enum VerificationStatus {
     Failed {
         reason: String,
     },
-    BlockedByEnvironment {
-        reason: String,
-    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]

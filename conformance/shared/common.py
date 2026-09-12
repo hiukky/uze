@@ -471,12 +471,11 @@ def start_provider(cfg, mode, extra_env=None):
             ]
         else:
             # Hook scenarios pass their own FC_ARGS (a `run_command` call
-            # carrying the marker); the MCP default applies otherwise.
-            if not extra_env or "FC_ARGS" not in extra_env:
-                env += [
-                    "-e",
-                    'FC_ARGS={"ServerName":"uze-conformance","ToolName":"uze_conformance","Arguments":{},"toolSummary":"Conformance proof","toolAction":"Calling MCP tool"}',
-                ]
+            # carrying the marker); the MCP call is the provider's own
+            # default, kept in one place — its `FC_ARGS` — because the
+            # server name it scripts follows the harness version (1.2.2
+            # namespaces a plugin's server), and a copy here is where the
+            # older name survived a fix to the provider.
             env += ["-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
         sh(
             "docker",

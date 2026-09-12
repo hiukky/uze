@@ -218,7 +218,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     };
     assert_eq!(*config_file, settings);
     assert_eq!(entry_name, "hook-demo@local:protect-env");
-    assert_eq!(*event, Some(HookEvent::PreToolUse));
+    assert_eq!(*event, HookEvent::PreToolUse);
 
     let receipt = claude
         .attach_receipt(protect)
@@ -236,7 +236,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     };
     assert_eq!(*config_file, settings);
     assert_eq!(entry_name, "hook-demo@local:protect-env");
-    assert_eq!(*event, Some(HookEvent::PreToolUse));
+    assert_eq!(*event, HookEvent::PreToolUse);
 
     let document: serde_json::Value =
         serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
@@ -268,11 +268,17 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     assert_eq!(args[1], "pre_tool_use");
     assert_eq!(args[2], "deny");
     assert!(
-        args[3].ends_with("/scripts/check") && !args[3].contains("${PLUGIN_ROOT}"),
-        "the authored handler is resolved against the package root: {}",
+        args[3].starts_with("10:")
+            && args[3].ends_with("/scripts/check")
+            && !args[3].contains("${PLUGIN_ROOT}"),
+        "the handler carries its author's deadline, resolved against the package root: {}",
         args[3]
     );
-    assert_eq!(entry["hooks"][0]["timeout"], 11);
+    assert_eq!(
+        entry["hooks"][0]["timeout"], 12,
+        "the harness's backstop is every handler's own bound plus its kill grace, \
+         plus a second to render — it must never be what fires first"
+    );
     assert_eq!(
         serde_json::to_string(entry).unwrap(),
         *expected,
@@ -293,7 +299,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     // Drift: user edits the exact entry → content identity no longer matches.
     let drifted = fs::read_to_string(&settings)
         .unwrap()
-        .replace("\"timeout\": 11", "\"timeout\": 99");
+        .replace("\"timeout\": 12", "\"timeout\": 99");
     fs::write(&settings, drifted).unwrap();
     assert_eq!(
         claude.inspect_receipt(&receipt).state,
@@ -354,11 +360,7 @@ fn the_generated_wrapper_is_owned_alongside_the_entry_it_serves() {
         .attach_receipt(protect)
         .expect("attach succeeds")
         .expect("attach produces a receipt");
-    let ManagedArtifact::HookConfigEntry {
-        wrapper: Some(wrapper),
-        ..
-    } = &receipt.artifact
-    else {
+    let ManagedArtifact::HookConfigEntry { wrapper, .. } = &receipt.artifact else {
         panic!("a natively delivered hook receipt owns its wrapper");
     };
     assert!(wrapper.is_file(), "the wrapper is written at attach time");
@@ -392,6 +394,42 @@ fn the_generated_wrapper_is_owned_alongside_the_entry_it_serves() {
     assert!(
         !wrapper.exists(),
         "the last entry to need the wrapper takes it with it"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The prune that follows a detach asks the receipt ledger who else runs
+/// the shared wrapper. A ledger it cannot read has not answered "nobody" —
+/// and deleting the wrapper on that silence leaves every live entry exiting
+/// 127, which every harness reads as non-blocking. An unreadable ledger
+/// blocks the destructive half of the detach; the entry itself, whose own
+/// content identity is readable, still goes.
+#[test]
+fn an_unreadable_ledger_leaves_the_shared_wrapper_where_it_is() {
+    let (root, resources) = hook_package("claude-wrapper-ledger", deny_group());
+    let protect = hook_resource(&resources, "protect-env");
+    let home = UzeHome::at(root.join("uze"));
+    let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
+
+    let receipt = claude
+        .attach_receipt(protect)
+        .expect("attach succeeds")
+        .expect("attach produces a receipt");
+    let ManagedArtifact::HookConfigEntry { wrapper, .. } = &receipt.artifact else {
+        panic!("a natively delivered hook receipt owns its wrapper");
+    };
+    let ledger = home.state_dir().join("attachments.json");
+    fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    fs::write(&ledger, b"{ this ledger cannot be read").unwrap();
+
+    assert_eq!(
+        claude.detach_receipt(&receipt).unwrap().state,
+        AttachmentState::Missing,
+        "the entry's own content identity is readable, so the entry still detaches"
+    );
+    assert!(
+        wrapper.is_file(),
+        "a wrapper nothing could prove unused is kept"
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -510,9 +548,9 @@ fn reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones() {
             artifact: ManagedArtifact::HookConfigEntry {
                 config_file: settings.clone(),
                 entry_name: "hook-demo@local:protect-env".to_owned(),
-                event: Some(HookEvent::PreToolUse),
+                event: HookEvent::PreToolUse,
                 expected: previous.to_string(),
-                wrapper: None,
+                wrapper: root.join("uze").join("state").join("hooks").join("exec"),
             },
         },
     )
@@ -562,7 +600,7 @@ fn codex_writes_its_own_hooks_json_command_form() {
     };
     assert_eq!(*config_file, hooks_file);
     assert_eq!(entry_name, "hook-demo@local:protect-env");
-    assert_eq!(*event, Some(HookEvent::PreToolUse));
+    assert_eq!(*event, HookEvent::PreToolUse);
 
     let receipt = codex
         .attach_receipt(protect)
@@ -937,7 +975,7 @@ fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
         entry.get("PreToolUse").is_some(),
         "the named key holds the event map directly: {entry}"
     );
-    let wrapper = wrapper.as_ref().expect("the entry names a wrapper");
+    let wrapper = wrapper.as_path();
     assert!(
         wrapper.ends_with("state/attachments/antigravity/hooks/exec"),
         "a shared config file has no plugin root, so the wrapper lives under UZE state: {}",
@@ -996,49 +1034,4 @@ fn antigravity_hook_delivery_never_touches_a_foreign_named_hook() {
         "the user's own named hook survives untouched: {survivors}"
     );
     let _ = fs::remove_dir_all(_root);
-}
-
-#[test]
-fn a_hook_receipt_without_an_event_blocks_inspection_and_detach() {
-    // `event` is Option in the receipt model; a ledger entry damaged or
-    // predating the field must block doctor/remove, never panic on it.
-    let root = temp("eventless-receipt");
-    let home = UzeHome::at(root.join("uze"));
-    let claude = ClaudeIntegration::new(root.join("claude"), home);
-    let settings = root.join("claude").join("settings.json");
-    fs::create_dir_all(settings.parent().unwrap()).unwrap();
-    fs::write(&settings, r#"{"hooks":{}}"#).unwrap();
-    let receipt = AttachmentReceipt {
-        package_id: "hook-demo@local".to_owned(),
-        resource_identity: None,
-        integration: "claude".to_owned(),
-        strategy: "ManagedHookConfig".to_owned(),
-        artifact: ManagedArtifact::HookConfigEntry {
-            config_file: settings.clone(),
-            entry_name: "hook-demo@local:protect-env".to_owned(),
-            event: None,
-            expected: r#"{"hooks":{"PreToolUse":[]}}"#.to_owned(),
-            wrapper: None,
-        },
-    };
-
-    let inspection = claude.inspect_receipt(&receipt);
-    assert_eq!(inspection.state, AttachmentState::Blocked);
-    assert!(
-        inspection.reason.contains("no event"),
-        "inspection names the missing event, got: {}",
-        inspection.reason
-    );
-
-    let detached = claude
-        .detach_receipt(&receipt)
-        .expect("detach of an eventless receipt is a blocked verdict, not an error");
-    assert_eq!(detached.state, AttachmentState::Blocked);
-    assert!(
-        fs::read_to_string(&settings)
-            .unwrap()
-            .contains(r#"{"hooks":{}}"#),
-        "nothing was written or removed on a blocked detach"
-    );
-    let _ = fs::remove_dir_all(root);
 }

@@ -6,12 +6,10 @@ use std::collections::BTreeSet;
 
 use uze_core::{
     PackageSource, Result, UzeError,
-    integration::{AttachmentState, receipt_location},
     naming::{
         NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,
     },
-    state,
     trust::{self, TrustAuthority},
 };
 
@@ -19,6 +17,7 @@ use crate::bootstrap;
 
 use super::super::services::Plugins;
 use super::super::*;
+use super::attach::NativeDelivery;
 
 impl Plugins<'_> {
     pub(crate) fn acquire(&self, source: &PackageSource) -> Result<uze_core::MaterializedPackage> {
@@ -175,115 +174,24 @@ impl Plugins<'_> {
             if !self.0.detect_cached(integration.as_ref()).present {
                 continue;
             }
-            let mut provided = BTreeSet::new();
             // Native delivery reads the view; attempting it against a view
             // that failed to publish would fail for a reason that has
             // nothing to do with this package.
-            if let Some(plan) = integration
-                .package_exposure_plan(&installed, &resources)
-                .filter(|_| !unpublished.contains(integration.id()))
-            {
-                package_plans.push((integration.id().to_owned(), plan.clone()));
-                // Idempotency: package-level receipt already Matched means the
-                // vendor verb already ran — re-running `agy plugin install`
-                // would hit preflight ("already has an imported plugin named
-                // `git`") even though UZE owns it. Skip attach and keep
-                // `provided` so capability-level attach is also skipped.
-                let already_attached = state::receipts(&self.0.home, Some(installed.id.as_str()))?
-                    .into_iter()
-                    .any(|(_, receipt)| {
-                        receipt.integration == integration.id()
-                            && receipt.resource_identity.is_none()
-                            && integration.inspect_receipt(&receipt).state
-                                == AttachmentState::Matched
-                    });
-                if already_attached {
-                    // `continue` skips straight past the resource loop below,
-                    // so there is no `provided` left to assign here.
-                    continue;
-                }
-                // Migration: if this package was previously decomposed, detach
-                // covered capability receipts that are now provided, but only
-                // if they are safely detachable.
-                let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
-                    state::receipts(&self.0.home, Some(installed.id.as_str()))?
-                        .into_iter()
-                        .filter(|(_, r)| {
-                            r.integration == integration.id() && r.resource_identity.is_some()
-                        })
-                        .collect();
-                let mut covered_existing = Vec::new();
-                for (key, receipt) in &existing {
-                    if let Some(identity) = &receipt.resource_identity
-                        && plan.provided_resource_identities.contains(identity)
-                    {
-                        covered_existing.push((key.clone(), receipt.clone()));
-                    }
-                }
-                let mut migration_blocked = false;
-                for (_, receipt) in &covered_existing {
-                    let inspection = integration.inspect_receipt(receipt);
-                    if matches!(
-                        inspection.state,
-                        AttachmentState::Drifted
-                            | AttachmentState::Conflict
-                            | AttachmentState::Blocked
-                    ) {
-                        migration_blocked = true;
-                        break;
-                    }
-                }
-                if migration_blocked {
-                    // Keep decomposed; do not attach native to avoid duplication.
-                } else {
-                    for (key, receipt) in covered_existing {
-                        let inspection = integration.inspect_receipt(&receipt);
-                        if inspection.state == AttachmentState::Matched {
-                            let detached = integration.detach_receipt(&receipt)?;
-                            if detached.state == AttachmentState::Missing {
-                                state::forget_receipt(&self.0.home, &key)?;
-                            }
-                        } else if inspection.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.0.home, &key)?;
-                        }
-                    }
-                    if let Some(receipt) = integration.attach_package(&installed, &plan)? {
-                        let location = receipt_location(&receipt);
-                        state::record_receipt(
-                            &self.0.home,
-                            package_receipt_key(installed.id.as_str(), integration.id()),
-                            receipt,
-                        )?;
-                        attachments.push(AttachmentSummary {
-                            integration: integration.id().to_owned(),
-                            location,
-                        });
-                    }
-                    // See `attach_package_to`: `None` can mean a native
-                    // plugin is already externally present. Do not create
-                    // duplicate capability-level fallbacks in that case.
-                    provided = plan.provided_resource_identities;
-                }
+            let native_delivery = if unpublished.contains(integration.id()) {
+                NativeDelivery::Skipped
+            } else {
+                NativeDelivery::Allowed
+            };
+            let delivery = self.0.deliver_package_to(
+                &installed,
+                &resources,
+                integration.as_ref(),
+                native_delivery,
+            )?;
+            if let Some(plan) = delivery.plan {
+                package_plans.push((integration.id().to_owned(), plan));
             }
-            for resource in &resources {
-                if !provided.contains(&resource.identity()) {
-                    let resolved = self
-                        .0
-                        .resolve_exposure_name(resource, integration.as_ref())?;
-                    if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                        let location = receipt_location(&receipt);
-                        state::record_receipt(
-                            &self.0.home,
-                            resource_receipt_key(installed.id.as_str(), integration.id(), resource),
-                            receipt,
-                        )?;
-                        attachments.push(AttachmentSummary {
-                            integration: integration.id().to_owned(),
-                            location,
-                        });
-                    }
-                }
-            }
+            attachments.extend(delivery.attachments);
         }
         Ok(AddPluginReport {
             plugin: self.0.plugin_summary(&installed)?,

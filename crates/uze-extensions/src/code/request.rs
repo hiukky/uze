@@ -68,6 +68,34 @@ pub struct LoadedFile {
     pub(super) theme: String,
 }
 
+/// What a request that never ran answers.
+///
+/// The surface reserves itself against a second request while one is out
+/// and releases it on the answer, so a host whose read ended without
+/// answering would leave the files half accepting nothing for the rest of
+/// the session. Every variant here is a state the view already draws —
+/// the refusal shape of the request that was asked.
+pub fn unanswered(request: &FileRequest, reason: &str) -> FileAnswer {
+    match request {
+        FileRequest::List(path) => FileAnswer::Listed {
+            path: path.clone(),
+            entries: Err(reason.to_owned()),
+        },
+        FileRequest::Read(path) => FileAnswer::Read {
+            path: path.clone(),
+            file: Err(reason.to_owned()),
+        },
+        FileRequest::Save { path, .. } => FileAnswer::Saved {
+            path: path.clone(),
+            outcome: Err(reason.to_owned()),
+        },
+        FileRequest::Delete(path) => FileAnswer::Deleted {
+            path: path.clone(),
+            outcome: Err(reason.to_owned()),
+        },
+    }
+}
+
 /// Runs one [`FileRequest`] against the host.
 ///
 /// The only function in this module that reaches anything, which is what
@@ -81,21 +109,18 @@ pub fn fulfill(host: &dyn Host, request: FileRequest) -> FileAnswer {
         },
         FileRequest::Read(path) => {
             let theme = host.syntax_theme();
-            let file = match host.read_file(&path) {
-                Some(text) => {
-                    let highlighted = crate::shared::highlight::lines(&text, &path, &theme);
-                    Ok(LoadedFile {
-                        text,
-                        highlighted,
-                        theme,
-                    })
+            // Whatever the host could not give us — a binary, a broken
+            // symlink, one the operator may not read, one too large to
+            // hold — travels as the sentence the view puts where the
+            // content would be. Only the host can tell them apart.
+            let file = host.read_file(&path).map(|text| {
+                let highlighted = crate::shared::highlight::lines(&text, &path, &theme);
+                LoadedFile {
+                    text,
+                    highlighted,
+                    theme,
                 }
-                // Every unreadable file lands here — a binary, a broken
-                // symlink, one the operator may not read. The view says
-                // so where the content would be, because which of those
-                // it was is not something the filesystem tells us.
-                None => Err("not readable as text".to_owned()),
-            };
+            });
             FileAnswer::Read { path, file }
         }
         FileRequest::Save { path, contents } => FileAnswer::Saved {

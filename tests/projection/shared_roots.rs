@@ -1,10 +1,6 @@
 //! Shared skill-root projection: Codex and OpenCode share exactly one
 //! physical entry per default skill; policy-sensitive skills detect
 //! cross-integration policy loss; user-only skills still install cleanly.
-//! Migrated from the former `tests/skill_invocation_conformance.rs` (groups
-//! 6-7).
-
-#![allow(dead_code)] // helper subset reused across the moved tests
 
 use std::{
     fs,
@@ -42,16 +38,6 @@ fn user_only_body(name: &str) -> String {
 fn model_only_body(name: &str) -> String {
     format!(
         "---\nname: {name}\ndescription: Background knowledge\ninvoke:\n  model: true\n  user: false\n---\n\nBody.\n"
-    )
-}
-
-fn default_body(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Interactive skill\n---\n\nBody.\n")
-}
-
-fn invalid_body(name: &str) -> String {
-    format!(
-        "---\nname: {name}\ndescription: Uninvokable\ninvoke:\n  model: false\n  user: false\n---\n\nBody.\n"
     )
 }
 

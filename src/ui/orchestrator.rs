@@ -164,23 +164,46 @@ struct SupportResolution {
 /// resolves it when it execs the harness from that directory — so the
 /// popup reports the delivery a launch here would really perform, not the
 /// one that would have happened wherever `uze` itself was started.
+/// Runs a background read, answering with `silence` if it panicked.
+///
+/// Every read in this file reserves a key before it starts and releases
+/// it when the answer lands, so a thread that unwinds without answering
+/// leaves that feature dead for the rest of the session — the surface
+/// still believes a read is out, and asks for nothing more. The panic
+/// itself is reported: `ui::run` installs a hook that restores the
+/// terminal first, so the message survives instead of being drawn into
+/// the alternate screen and wiped. What this adds is that the *client*
+/// carries on, which matters because several of these run code over
+/// whatever a repository happens to contain.
+///
+/// `silence` is what the read would have said had it found nothing —
+/// every absorber already draws it.
+fn answered_or<T>(read: impl FnOnce() -> T, silence: T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or(silence)
+}
+
 fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<SupportResolution>) {
     let support_home = home.clone();
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.support_refresh").entered();
-        let support = super::tui_application(support_home).ok().and_then(|app| {
-            let context = app.workspace().agent_context_for(&key.0, &key.1).ok()?;
-            let health = app.health().harness(&key.0).ok()?;
-            let profiles = app.profiles().list().unwrap_or_default();
-            let active_profile = profiles.iter().find(|profile| profile.active);
-            Some(super::agent_support::AgentSupport::resolve(
-                health,
-                &context,
-                active_profile,
-            ))
-        });
+        let support = answered_or(
+            || {
+                super::tui_application(support_home).ok().and_then(|app| {
+                    let context = app.workspace().agent_context_for(&key.0, &key.1).ok()?;
+                    let health = app.health().harness(&key.0).ok()?;
+                    let profiles = app.profiles().list().unwrap_or_default();
+                    let active_profile = profiles.iter().find(|profile| profile.active);
+                    Some(super::agent_support::AgentSupport::resolve(
+                        health,
+                        &context,
+                        active_profile,
+                    ))
+                })
+            },
+            None,
+        );
         let _ = sender.send(SupportResolution { key, support });
     });
 }
@@ -264,6 +287,18 @@ struct EvaluationAnswer {
 /// What a background delivery answered.
 struct DeliveryResolution {
     cwd: PathBuf,
+    /// The task the press reserved in `delivery_pending`, carried the way
+    /// [`TaskResolution`] carries its key and released on arrival
+    /// whatever came back.
+    ///
+    /// Releasing by walking `reports` alone is only correct while there
+    /// is always a report: every empty answer — a checkout removed under
+    /// the agent, an id the store no longer holds, an application that
+    /// would not open — left the task drawn as "delivering" for the rest
+    /// of the session, undeliverable again, and repainting on the
+    /// spinner's clock forever because a pending delivery is one of the
+    /// three things that keep it turning.
+    reserved: Option<String>,
     reports: Vec<DeliveryReport>,
 }
 
@@ -334,32 +369,37 @@ fn spawn_task_evaluation(
         // Every path out of here answers, including the ones that found
         // nothing: a request that returns in silence never releases its
         // key, and the directory is then never evaluated again.
-        let answered = tui_application(home).ok().and_then(|app| {
-            let workspace = app.workspace();
-            // Every question here is about the *repository*, and `cwd` is
-            // only how the caller happened to name it — usually a pane's
-            // directory. Once that directory is removed it names nothing:
-            // `primary_of` asks Git and `evaluate_tasks` opens the
-            // repository, so both answered empty, and the client kept the
-            // task view it already had — one that still believed it had a
-            // checkout, which is the single thing the way back in is gated
-            // on. The slot key is the same repository, derived lexically
-            // before this thread started and already what every other
-            // lookup below asks with; the three that took `cwd` now take
-            // the repository too.
-            let primary = workspace
-                .primary_of(&cwd)
-                .or_else(|| uze_application::is_isolated_checkout(&cwd).then(|| key.clone()))?;
-            Some(EvaluationAnswer {
-                branch: workspace.current_branch(&key),
-                target: workspace
-                    .delivery_policy(&key)
-                    .and_then(|policy| policy.target),
-                sync: workspace.target_upstream_sync(&key),
-                evaluation: workspace.evaluate_tasks(&primary, &occupied),
-                primary,
-            })
-        });
+        let answered = answered_or(
+            || {
+                tui_application(home).ok().and_then(|app| {
+                    let workspace = app.workspace();
+                    // Every question here is about the *repository*, and `cwd` is
+                    // only how the caller happened to name it — usually a pane's
+                    // directory. Once that directory is removed it names nothing:
+                    // `primary_of` asks Git and `evaluate_tasks` opens the
+                    // repository, so both answered empty, and the client kept the
+                    // task view it already had — one that still believed it had a
+                    // checkout, which is the single thing the way back in is gated
+                    // on. The slot key is the same repository, derived lexically
+                    // before this thread started and already what every other
+                    // lookup below asks with; the three that took `cwd` now take
+                    // the repository too.
+                    let primary = workspace.primary_of(&cwd).or_else(|| {
+                        uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
+                    })?;
+                    Some(EvaluationAnswer {
+                        branch: workspace.current_branch(&key),
+                        target: workspace
+                            .delivery_policy(&key)
+                            .and_then(|policy| policy.target),
+                        sync: workspace.target_upstream_sync(&key),
+                        evaluation: workspace.evaluate_tasks(&primary, &occupied),
+                        primary,
+                    })
+                })
+            },
+            None,
+        );
         let _ = sender.send(TaskResolution { key, answered });
     });
 }
@@ -376,18 +416,114 @@ fn spawn_delivery(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.delivery").entered();
-        let Ok(app) = tui_application(home) else {
-            return;
-        };
-        let reports = match task {
-            Some(task) => app
-                .workspace()
-                .deliver_task(&cwd, &task)
-                .into_iter()
-                .collect(),
-            None => app.workspace().deliver_ready(&cwd),
-        };
-        let _ = sender.send(DeliveryResolution { cwd, reports });
+        // Every path out of here answers, including the ones that
+        // delivered nothing: the reservation this was started under is
+        // released on arrival, so a thread that returns in silence leaves
+        // its task drawn as "delivering" for good.
+        let reports = answered_or(
+            || {
+                tui_application(home)
+                    .ok()
+                    .map(|app| match &task {
+                        Some(one) => app
+                            .workspace()
+                            .deliver_task(&cwd, one)
+                            .into_iter()
+                            .collect(),
+                        None => app.workspace().deliver_ready(&cwd),
+                    })
+                    .unwrap_or_default()
+            },
+            Vec::new(),
+        );
+        let _ = sender.send(DeliveryResolution {
+            cwd,
+            reserved: task,
+            reports,
+        });
+    });
+}
+
+/// What a preserved task is asked to become.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TaskMutation {
+    /// Closed, its slot released. The work itself is kept.
+    Finish,
+    /// Thrown away: the checkout removed, the branch deleted.
+    Discard,
+}
+
+impl TaskMutation {
+    /// What the operator is told while it runs, and what they are told
+    /// when it is done.
+    fn underway(self) -> &'static str {
+        match self {
+            Self::Finish => "finishing",
+            Self::Discard => "discarding",
+        }
+    }
+
+    fn done(self) -> &'static str {
+        match self {
+            Self::Finish => "finished",
+            Self::Discard => "discarded",
+        }
+    }
+}
+
+/// What a task mutation answered.
+struct MutationResolution {
+    cwd: PathBuf,
+    /// The task it was reserved under, released on arrival whichever way
+    /// it went — the same rule every other reservation in this file
+    /// follows.
+    task: String,
+    label: String,
+    mutation: TaskMutation,
+    outcome: std::result::Result<(), String>,
+}
+
+/// Finishes or discards one preserved task, off the UI thread.
+///
+/// Discard is `git worktree remove`, then `git branch -D`, then a
+/// recursive removal of the checkout — a slot holding a build directory
+/// is tens of thousands of files — and finish opens the repository and
+/// rewrites the task store. Both used to run where the keystroke was
+/// handled, which froze the client and every pane in it for as long as
+/// the filesystem took.
+fn spawn_task_mutation(
+    home: &UzeHome,
+    cwd: PathBuf,
+    task: String,
+    label: String,
+    mutation: TaskMutation,
+    sender: mpsc::Sender<MutationResolution>,
+) {
+    let home = home.clone();
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.task_mutation").entered();
+        // Every path answers: the reservation that stops a second Enter
+        // from starting a second removal is released nowhere else.
+        let outcome = answered_or(
+            || {
+                tui_application(home)
+                    .and_then(|app| match mutation {
+                        TaskMutation::Finish => app.workspace().finish_task(&cwd, &task),
+                        TaskMutation::Discard => app.workspace().discard_task(&cwd, &task),
+                    })
+                    .map_err(|error| error.to_string())
+            },
+            Err(format!("{} the task failed", mutation.underway())),
+        );
+        let _ = sender.send(MutationResolution {
+            cwd,
+            task,
+            label,
+            mutation,
+            outcome,
+        });
     });
 }
 
@@ -396,6 +532,14 @@ fn spawn_delivery(
 /// is about still needs naming (see `WorkspaceModel::notice_chip`) — and
 /// no restatement of what the pane it came from already says at length.
 fn describe_delivery(report: &DeliveryReport) -> String {
+    let outcome = describe_delivery_outcome(report);
+    match report.warnings.as_slice() {
+        [] => outcome,
+        warnings => format!("{outcome} · {}", warnings.join(" · ")),
+    }
+}
+
+fn describe_delivery_outcome(report: &DeliveryReport) -> String {
     match &report.outcome {
         DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
         DeliveryOutcome::Merged => format!(
@@ -454,15 +598,25 @@ fn spawn_git_read(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.git_read").entered();
-        let summary = code::change_summary(&WorkspaceHost, &cwd);
-        let answer = if history {
-            GitAnswer::Full {
-                summary,
-                timeline: code::timeline(&WorkspaceHost, &cwd, TIMELINE_COMMITS, target.as_deref()),
-            }
-        } else {
-            GitAnswer::Summary(summary)
-        };
+        let answer = answered_or(
+            || {
+                let summary = code::change_summary(&WorkspaceHost, &cwd);
+                if history {
+                    GitAnswer::Full {
+                        summary,
+                        timeline: code::timeline(
+                            &WorkspaceHost,
+                            &cwd,
+                            TIMELINE_COMMITS,
+                            target.as_deref(),
+                        ),
+                    }
+                } else {
+                    GitAnswer::Summary(summary)
+                }
+            },
+            GitAnswer::Summary(None),
+        );
         let _ = sender.send(GitResolution { cwd, answer });
     });
 }
@@ -490,7 +644,7 @@ fn spawn_commit_detail(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.commit_detail").entered();
-        let detail = code::commit_detail(&WorkspaceHost, &cwd, &hash);
+        let detail = answered_or(|| code::commit_detail(&WorkspaceHost, &cwd, &hash), None);
         let _ = sender.send(CommitDetailResolution {
             hash,
             anchor,
@@ -545,23 +699,26 @@ fn spawn_agent_placement(
         // build an application: the request holds the only reservation
         // there is, and a silent return would leave this client unable to
         // create another agent for the rest of the session.
-        let placement = match request {
-            // A placement that cannot isolate still answers, with the
-            // directory it fell back to and the reason — the launch
-            // happens either way.
-            PlacementRequest::New { from } => Ok(tui_application(home)
-                .map(|app| app.workspace().place_new_agent(&from, &occupied))
-                .unwrap_or_else(|error| uze_application::AgentPlacement {
-                    cwd: from,
-                    isolation: uze_application::Isolation::Unisolated {
-                        reason: error.to_string(),
-                    },
-                    warnings: vec![error.to_string()],
-                })),
-            PlacementRequest::Resume { primary, task } => tui_application(home)
-                .and_then(|app| app.workspace().resume_task(&primary, &task, &occupied))
-                .map_err(|error| error.to_string()),
-        };
+        let placement = answered_or(
+            || match request {
+                // A placement that cannot isolate still answers, with the
+                // directory it fell back to and the reason — the launch
+                // happens either way.
+                PlacementRequest::New { from } => Ok(tui_application(home)
+                    .map(|app| app.workspace().place_new_agent(&from, &occupied))
+                    .unwrap_or_else(|error| uze_application::AgentPlacement {
+                        cwd: from,
+                        isolation: uze_application::Isolation::Unisolated {
+                            reason: error.to_string(),
+                        },
+                        warnings: vec![error.to_string()],
+                    })),
+                PlacementRequest::Resume { primary, task } => tui_application(home)
+                    .and_then(|app| app.workspace().resume_task(&primary, &task, &occupied))
+                    .map_err(|error| error.to_string()),
+            },
+            Err("placing the agent failed".to_owned()),
+        );
         let _ = sender.send(PlacementResolution {
             label,
             command,
@@ -598,17 +755,22 @@ fn spawn_occupancy_reconcile(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.occupancy_reconcile").entered();
-        let reconciliation = tui_application(home)
-            .map(|app| {
-                // Shares this pass rather than earning a thread of its own:
-                // the runtime projections left by destroyed checkouts are
-                // swept by exactly the same event that notices a slot is
-                // gone, and the sweep is a `readdir` next to the repository
-                // work already happening here.
-                app.health().prune_runtime_projections();
-                app.workspace().reconcile_occupancy(&look_in, &held)
-            })
-            .unwrap_or_default();
+        let reconciliation = answered_or(
+            || {
+                tui_application(home)
+                    .map(|app| {
+                        // Shares this pass rather than earning a thread of its own:
+                        // the runtime projections left by destroyed checkouts are
+                        // swept by exactly the same event that notices a slot is
+                        // gone, and the sweep is a `readdir` next to the repository
+                        // work already happening here.
+                        app.health().prune_runtime_projections();
+                        app.workspace().reconcile_occupancy(&look_in, &held)
+                    })
+                    .unwrap_or_default()
+            },
+            uze_application::Reconciliation::default(),
+        );
         // Answered even when nothing changed: the pending flag is
         // released here, and a pass that returns in silence would never
         // let another one run.
@@ -645,7 +807,10 @@ fn spawn_file_request(
 ) {
     thread::spawn(move || {
         let _span = tracing::info_span!("tui.code_file_request").entered();
-        let answer = code::fulfill(&WorkspaceHost, request);
+        // Highlighting runs syntect over whatever the tree listed, which
+        // is the one read here whose input nobody controls.
+        let silence = code::unanswered(&request, "reading it failed");
+        let answer = answered_or(|| code::fulfill(&WorkspaceHost, request), silence);
         let _ = sender.send(FileResolution { root, answer });
     });
 }
@@ -659,7 +824,12 @@ fn spawn_changes_refresh(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.code_changes_refresh").entered();
-        let refreshed = code::CodeView::refresh(&WorkspaceHost, root.clone(), placement);
+        let silence =
+            code::RefreshedChanges::failed(placement.clone(), "reading the changes".to_owned());
+        let refreshed = answered_or(
+            || code::CodeView::refresh(&WorkspaceHost, root.clone(), placement),
+            silence,
+        );
         let _ = sender.send(ChangesResolution { root, refreshed });
     });
 }
@@ -840,6 +1010,8 @@ pub(crate) fn attach_workspace(
     let task_receiver = &memory.tasks.receiver;
     let delivery_sender = memory.deliveries.sender.clone();
     let delivery_receiver = &memory.deliveries.receiver;
+    let mutation_sender = memory.mutations.sender.clone();
+    let mutation_receiver = &memory.mutations.receiver;
     let git_sender = memory.git.sender.clone();
     let git_receiver = &memory.git.receiver;
     let commit_detail_sender = memory.commit_details.sender.clone();
@@ -907,6 +1079,7 @@ pub(crate) fn attach_workspace(
             support: support_sender,
             tasks: task_sender,
             deliveries: delivery_sender,
+            mutations: mutation_sender,
             git: git_sender,
             commit_details: commit_detail_sender,
             code_changes: changes_sender,
@@ -923,6 +1096,7 @@ pub(crate) fn attach_workspace(
         support: support_receiver,
         tasks: task_receiver,
         deliveries: delivery_receiver,
+        mutations: mutation_receiver,
         git: git_receiver,
         commit_details: commit_detail_receiver,
         code_changes: changes_receiver,
@@ -934,7 +1108,9 @@ pub(crate) fn attach_workspace(
     // model's memory back, so the loop runs inside one call whose result is
     // read only after that handover.
     let outcome: Result<WorkspaceExit> = (|| loop {
-        attach.pump(&inbox);
+        if let Flow::Exit(exit) = attach.pump(&inbox) {
+            return Ok(exit);
+        }
         let size = terminal.size()?;
         let geometry = compute_layout(
             Rect::new(0, 0, size.width, size.height),
@@ -1005,7 +1181,7 @@ impl WorkspaceShape {
     }
 }
 
-/// `pub(super)` (not private) so `uze_extensions::git` — a crate
+/// `pub(super)` (not private) so `uze_extensions::code` — a crate
 /// this one depends on, not a child module of `orchestrator` — can
 /// construct `ExtensionHit`s from its own render function; `Extension`
 /// below wraps them into the same `hits` vec every other overlay already
@@ -1669,6 +1845,10 @@ pub(crate) struct WorkspaceMemory {
     support: Answers<SupportResolution>,
     tasks: Answers<TaskResolution>,
     deliveries: Answers<DeliveryResolution>,
+    /// Finishing and discarding a preserved task. Off-thread for the same
+    /// reason a delivery is: a discard is `git worktree remove` and a
+    /// recursive directory removal.
+    mutations: Answers<MutationResolution>,
     /// The badge and the timeline behind it. Git is read off-thread like
     /// everything else expensive here; it was the last subsystem still
     /// answering inline on the render path.
@@ -1709,6 +1889,7 @@ struct Remembered {
     task_name_adoptions: BTreeMap<TabId, String>,
     last_task_refresh: Option<Instant>,
     delivery_pending: BTreeSet<String>,
+    task_mutation_pending: BTreeSet<String>,
     notice: Option<Notice>,
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
     pane_tasks: BTreeMap<PaneId, String>,
@@ -1740,6 +1921,7 @@ impl WorkspaceModel {
             label_adoptions,
             last_task_refresh,
             delivery_pending,
+            task_mutation_pending,
             notice,
             pane_checkouts,
             pane_tasks,
@@ -1767,6 +1949,7 @@ impl WorkspaceModel {
             label_adoptions,
             last_task_refresh,
             delivery_pending,
+            task_mutation_pending,
             notice,
             pane_checkouts,
             pane_tasks,
@@ -1799,6 +1982,7 @@ impl WorkspaceModel {
             label_adoptions: self.label_adoptions,
             last_task_refresh: self.last_task_refresh,
             delivery_pending: self.delivery_pending,
+            task_mutation_pending: self.task_mutation_pending,
             notice: self.notice,
             pane_checkouts: self.pane_checkouts,
             pane_tasks: self.pane_tasks,
@@ -1992,6 +2176,11 @@ struct WorkspaceModel {
     recently_quiet: Vec<PaneId>,
     /// Tasks a delivery is in flight for.
     delivery_pending: BTreeSet<String>,
+    /// Tasks a finish or a discard is in flight for. Its own set rather
+    /// than a flag: what a second Enter must not start is a second
+    /// removal of *this* task, and the answer arrives keyed by the task
+    /// it was asked about.
+    task_mutation_pending: BTreeSet<String>,
     /// A one-line message and when it appeared.
     notice: Option<Notice>,
     /// Open state of the preserved-work list; `None` when closed.
@@ -2713,9 +2902,8 @@ impl WorkspaceModel {
     /// clock. Unbound, the row says the checkout is gone and never offers
     /// the way back in.
     ///
-    /// The path stays as a fallback for a task recorded before slots were
-    /// named. Slots are reused, so several tasks can carry the same one:
-    /// the newest is the one standing there now.
+    /// Slots are reused, so several tasks can carry the same one: the
+    /// newest is the one standing there now.
     ///
     /// A placement names the task it put in a slot before any evaluation
     /// lists that task, and in that window the newest task on record is the
@@ -2735,14 +2923,7 @@ impl WorkspaceModel {
         }
         tasks
             .iter()
-            .filter(|task| match task.checkout_id.as_deref() {
-                Some(slot) => slot == checkout.name,
-                None => task
-                    .checkout
-                    .as_deref()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name == checkout.name),
-            })
+            .filter(|task| task.checkout_id.as_deref() == Some(checkout.name))
             .max_by_key(|task| task.created_at_unix)
     }
 
@@ -3722,12 +3903,14 @@ fn deliver_selected_tab(
         model.set_task_notice(&task.id, &task.label, reason.to_owned());
         return;
     }
-    if !model.delivery_pending.insert(task.id.clone()) {
-        return;
-    }
+    // After the directory resolves, never before: a reservation made for
+    // a request that is then not spawned is one nothing ever releases.
     let Some(cwd) = tab_cwd(model, tab) else {
         return;
     };
+    if !model.delivery_pending.insert(task.id.clone()) {
+        return;
+    }
     // No message: the press is already answered where the state lives.
     // `delivery_pending` is what `drawn_state` reads, so the button under
     // the pointer becomes "delivering" and the task's sidebar mark with

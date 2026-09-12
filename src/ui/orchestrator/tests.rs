@@ -36,13 +36,13 @@ mod workspace_tests {
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         Attach, AttachAnswers, AttachInbox, ChangesResolution, CommitDetailPopup,
         CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
-        FileResolution, GitAnswer, GitBadge, GitResolution, NOTICE_TTL, OccupancyResolution,
-        PendingDrop, PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection,
-        SupportResolution, TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync,
-        Viewport, WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
-        blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key,
-        forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
-        pane_relative, pending_tab_drop,
+        FileResolution, Flow, GitAnswer, GitBadge, GitResolution, MutationResolution, NOTICE_TTL,
+        OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
+        ScrollDirection, SupportResolution, TabDragGroup, TaskResolution, TaskStateView, TaskView,
+        UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
+        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
+        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
+        next_shell_label, open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -1279,6 +1279,195 @@ mod workspace_tests {
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
             "and it cannot be pressed again while it runs"
         );
+    }
+
+    /// A delivery that came back with nothing still releases the task it
+    /// was started for.
+    ///
+    /// Releasing by walking the reports is only correct while there is
+    /// always a report, and three ordinary endings produce none: the
+    /// checkout was removed under the agent, the store no longer holds
+    /// the id, the application would not open. Each of those left the
+    /// task drawn as "delivering" for the rest of the session —
+    /// undeliverable again, and repainting every 120 ms forever, because
+    /// a pending delivery is one of the three things that keep the
+    /// spinner's clock turning.
+    #[test]
+    fn a_delivery_that_answered_nothing_still_gives_the_task_back() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-delivery-silence"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let task = driven
+            .attach
+            .model
+            .tasks
+            .values()
+            .flatten()
+            .next()
+            .expect("the fixture has a task")
+            .clone();
+
+        driven.attach.model.delivery_pending.insert(task.id.clone());
+        assert_eq!(
+            driven.attach.model.drawn_state(&task),
+            TaskStateView::Integrating
+        );
+
+        driven
+            .attach
+            .answers
+            .deliveries
+            .send(DeliveryResolution {
+                cwd: PathBuf::from("/repo/.worktrees/ai"),
+                reserved: Some(task.id.clone()),
+                reports: Vec::new(),
+            })
+            .unwrap();
+        driven.pump();
+
+        assert_eq!(
+            driven.attach.model.drawn_state(&task),
+            task.state,
+            "the task is drawn from its record again"
+        );
+        assert!(
+            driven.attach.model.delivery_pending.is_empty(),
+            "and nothing is left holding the spinner on"
+        );
+    }
+
+    /// Discarding a preserved task is asked for, not performed here.
+    ///
+    /// A discard is `git worktree remove`, `git branch -D` and a
+    /// recursive removal of the checkout; both it and `finish` used to run
+    /// on the thread that owns the frame, so a slot holding a build
+    /// directory froze the client and every pane in it until the
+    /// filesystem was done. Held twice: by the architecture rule that
+    /// now forbids `tui_application` under `orchestrator/`, and by this —
+    /// a second confirmation while the first is still out starts no
+    /// second removal.
+    #[test]
+    fn discarding_a_preserved_task_is_asked_for_rather_than_done_on_the_keystroke() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-discard-async"));
+        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let mut parked = task_in(
+            "/repo/.worktrees/old",
+            "yesterday",
+            TaskStateView::Parked,
+            0,
+        );
+        parked.id = "t2".into();
+        model
+            .tasks
+            .get_mut(Path::new("/repo"))
+            .unwrap()
+            .push(parked);
+        model.preserved = Some(PreservedOverlay {
+            selected: 0,
+            confirm_discard: false,
+        });
+        let mut driven = driven(model, &home);
+
+        let keymap = uze_keys::active();
+        let scopes = [uze_keys::Scope::PreservedWork];
+        let ask = keymap
+            .chord_for(uze_keys::Action::DiscardTask, &scopes)
+            .expect("discard is bound here");
+        let confirm = keymap
+            .chord_for(uze_keys::Action::ConfirmDiscard, &scopes)
+            .expect("confirmation is bound here");
+
+        for _ in 0..2 {
+            driven.press_key(key_event(ask));
+            driven.press_key(key_event(confirm));
+        }
+
+        assert_eq!(
+            driven.attach.model.task_mutation_pending.len(),
+            1,
+            "the second confirmation starts no second removal"
+        );
+        assert!(
+            driven
+                .attach
+                .model
+                .notice
+                .as_ref()
+                .is_some_and(|notice| notice.busy),
+            "and the operator is told something is running"
+        );
+
+        // The keystroke started a real thread against a checkout that does
+        // not exist; its answer is the ending this test waits for, rather
+        // than one sent alongside it — two answers on one channel arrive
+        // in whichever order the scheduler picks, and the last one drawn
+        // is the notice.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !driven.attach.model.task_mutation_pending.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the mutation thread must answer, whatever it found"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            driven.pump();
+        }
+        let notice = driven.attach.model.notice.as_ref().expect("an ending");
+        assert!(
+            notice.text.contains("t2") || notice.text.contains("yesterday"),
+            "the ending names the task it was about: {}",
+            notice.text
+        );
+    }
+
+    /// A background read whose work panicked still answers.
+    ///
+    /// Otherwise there is no reservation left to release and nothing on
+    /// screen says so: the message used to go straight into a live
+    /// alternate screen, which ratatui repaints by difference — so it was
+    /// both corrupting and, a frame later, gone. The message is readable
+    /// now (`ui::run` restores the terminal before the hook prints), and
+    /// the client carries on with the answer the read would have given
+    /// had it found nothing.
+    ///
+    /// The panic printed while this runs is the subject of the test, not
+    /// a failure in it.
+    #[test]
+    fn a_read_that_panicked_answers_what_it_would_have_answered_empty() {
+        let silence: Option<GitBadge> = None;
+        assert!(
+            answered_or(|| panic!("syntect, over whatever the tree listed"), silence).is_none(),
+            "a panicked read answers, so its key is released"
+        );
+    }
+
+    /// The terminal server going away is noticed, said, and left.
+    ///
+    /// The reader thread ends — dropping its sender — when the socket
+    /// stops answering, and a `while let Ok(..)` reads that as "nothing
+    /// arrived this tick". Every pane on screen is then a frozen image in
+    /// a client that still redraws, scrolls and accepts keys, with no
+    /// message and no way back but quitting.
+    #[test]
+    fn a_terminal_runtime_that_went_away_is_said_rather_than_waited_on() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-runtime-gone"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        assert!(
+            matches!(driven.pump(), Flow::Continue),
+            "a live runtime is just a quiet one"
+        );
+
+        driven.runtime_gone();
+
+        assert!(
+            matches!(driven.pump(), Flow::Exit(super::WorkspaceExit::Management)),
+            "the client leaves rather than spinning against a dead socket"
+        );
+        let notice = driven
+            .attach
+            .model
+            .notice
+            .as_ref()
+            .expect("it says why it left");
+        assert!(notice.text.contains("disconnected"), "{}", notice.text);
     }
 
     /// The press is answered where the state lives, and nowhere else. The
@@ -4882,9 +5071,15 @@ mod workspace_tests {
         attach: Attach<'a>,
         server: std::os::unix::net::UnixStream,
         events: std::sync::mpsc::Receiver<ClientEvent>,
+        /// The reader thread's end, held so the channel stays connected.
+        /// Dropping it is exactly what the real reader does when the
+        /// socket stops answering, which is how this client learns the
+        /// terminal server is gone.
+        events_sender: Option<std::sync::mpsc::Sender<ClientEvent>>,
         support: std::sync::mpsc::Receiver<SupportResolution>,
         tasks: std::sync::mpsc::Receiver<TaskResolution>,
         deliveries: std::sync::mpsc::Receiver<DeliveryResolution>,
+        mutations: std::sync::mpsc::Receiver<MutationResolution>,
         git: std::sync::mpsc::Receiver<GitResolution>,
         commit_details: std::sync::mpsc::Receiver<CommitDetailResolution>,
         code_changes: std::sync::mpsc::Receiver<ChangesResolution>,
@@ -4936,12 +5131,13 @@ mod workspace_tests {
 
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
-        fn pump(&mut self) {
+        fn pump(&mut self) -> Flow {
             let inbox = AttachInbox {
                 events: &self.events,
                 support: &self.support,
                 tasks: &self.tasks,
                 deliveries: &self.deliveries,
+                mutations: &self.mutations,
                 git: &self.git,
                 commit_details: &self.commit_details,
                 code_changes: &self.code_changes,
@@ -4949,7 +5145,12 @@ mod workspace_tests {
                 occupancy: &self.occupancy,
                 placements: &self.placements,
             };
-            self.attach.pump(&inbox);
+            self.attach.pump(&inbox)
+        }
+
+        /// The terminal server exiting under the client.
+        fn runtime_gone(&mut self) {
+            self.events_sender = None;
         }
 
         /// Every request written to the server since the last read.
@@ -5002,13 +5203,14 @@ mod workspace_tests {
         let (support, support_rx) = std::sync::mpsc::channel();
         let (tasks, tasks_rx) = std::sync::mpsc::channel();
         let (deliveries, deliveries_rx) = std::sync::mpsc::channel();
+        let (mutations, mutations_rx) = std::sync::mpsc::channel();
         let (git, git_rx) = std::sync::mpsc::channel();
         let (commit_details, commit_details_rx) = std::sync::mpsc::channel();
         let (code_changes, code_changes_rx) = std::sync::mpsc::channel();
         let (code_files, code_files_rx) = std::sync::mpsc::channel();
         let (occupancy, occupancy_rx) = std::sync::mpsc::channel();
         let (placements, placements_rx) = std::sync::mpsc::channel();
-        let (_events, events_rx) = std::sync::mpsc::channel();
+        let (events, events_rx) = std::sync::mpsc::channel();
         Driven {
             attach: Attach {
                 model,
@@ -5019,6 +5221,7 @@ mod workspace_tests {
                     support,
                     tasks,
                     deliveries,
+                    mutations,
                     git,
                     commit_details,
                     code_changes,
@@ -5032,9 +5235,11 @@ mod workspace_tests {
             },
             server,
             events: events_rx,
+            events_sender: Some(events),
             support: support_rx,
             tasks: tasks_rx,
             deliveries: deliveries_rx,
+            mutations: mutations_rx,
             git: git_rx,
             commit_details: commit_details_rx,
             code_changes: code_changes_rx,

@@ -111,7 +111,15 @@ fn no_subcommand_stays_headless_when_stdout_is_not_a_terminal() {
     // a bare `uze` seeing it opens a space in the running client instead of
     // printing help. Inherited, this test failed for anyone running the
     // suite from inside uze itself — which is how the project dogfoods.
+    //
+    // `HOME`/`UZE_HOME` are scoped for the same reason every other spawn in
+    // this suite scopes them: a bare `uze` resolves `UzeHome::from_env()` and
+    // reads the theme and keymap under it, and this was the one spawn left
+    // reading the developer's real `~/.uze`.
+    let home = temporary_home("cli-no-subcommand");
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("HOME", &home)
+        .env("UZE_HOME", home.join(".uze"))
         .env_remove("UZE_PANE")
         .output()
         .unwrap();
@@ -119,6 +127,7 @@ fn no_subcommand_stays_headless_when_stdout_is_not_a_terminal() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Manage one local agent plugin environment"));
     assert!(text.contains("Usage:"));
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Writes a fake `claude`/`codex` executable that understands `--version`
@@ -876,4 +885,118 @@ fn root_remove_no_longer_falls_back_to_global_removal() {
         "package must survive a failed project-scoped remove, got {plugins:?}"
     );
     let _ = std::fs::remove_dir_all(home);
+}
+
+/// Repoints one managed symlink this package owns at foreign content, so
+/// reconciliation reports `Drifted` and the removal plan refuses to touch
+/// it — the lifecycle-safety outcome `Blocked` reports.
+#[cfg(unix)]
+fn drift_a_managed_attachment(home: &std::path::Path, uze_home: &std::path::Path) {
+    let skills = home.join(".agents/skills");
+    let managed = std::fs::read_dir(&skills)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|entry| contains_fixture_skill_wrapper(std::slice::from_ref(entry), uze_home))
+        .expect("the fixture attaches at least one managed symlink");
+    let foreign = home.join("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    std::fs::remove_file(&managed).unwrap();
+    std::os::unix::fs::symlink(&foreign, &managed).unwrap();
+}
+
+/// `Blocked` means the safety check refused and nothing was removed. The
+/// report used to print and the process exit 0, so
+/// `uze plugin remove x && uze plugin install y` ran the second half after
+/// the first had done nothing.
+#[cfg(unix)]
+#[test]
+fn a_blocked_removal_reports_and_fails() {
+    let home = temporary_home("cli-remove-blocked-home");
+    let uze_home = temporary_home("cli-remove-blocked-uze-home");
+    let fake_bin = fake_harness_bin_dir("cli-remove-blocked-bin");
+    let path = format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap());
+
+    let add = install_via_marketplace(&home, &uze_home, &package_fixture(), &path);
+    assert!(
+        add.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    drift_a_managed_attachment(&home, &uze_home);
+
+    for format in ["text", "json"] {
+        let removal = Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", &uze_home)
+            .env("HOME", &home)
+            .env("PATH", &path)
+            .args([
+                "plugin",
+                "remove",
+                "uze-agent-skill-conformance",
+                "--format",
+                format,
+            ])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&removal.stdout);
+        assert!(
+            stdout.contains("blocked") || stdout.contains("BLOCKED"),
+            "the report must still say what happened, got: {stdout}"
+        );
+        assert!(
+            !removal.status.success(),
+            "a blocked removal reported success ({format}): {stdout}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
+}
+
+/// The same for `uze plugin update`, which blocks on the same check: it
+/// removes the installed package before putting the new one in place.
+#[cfg(unix)]
+#[test]
+fn a_blocked_update_reports_and_fails() {
+    let home = temporary_home("cli-update-blocked-home");
+    let uze_home = temporary_home("cli-update-blocked-uze-home");
+    let fake_bin = fake_harness_bin_dir("cli-update-blocked-bin");
+    let path = format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap());
+
+    let add = install_via_marketplace(&home, &uze_home, &package_fixture(), &path);
+    assert!(
+        add.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    drift_a_managed_attachment(&home, &uze_home);
+
+    let update = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &uze_home)
+        .env("HOME", &home)
+        .env("PATH", &path)
+        .args([
+            "plugin",
+            "update",
+            "uze-agent-skill-conformance",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&update.stdout);
+    assert!(
+        stdout.contains("Blocked"),
+        "the report must still say what happened, got: {stdout}"
+    );
+    assert!(
+        !update.status.success(),
+        "a blocked update reported success: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
 }

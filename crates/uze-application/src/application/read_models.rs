@@ -256,7 +256,6 @@ pub struct SetupResult {
 #[derive(Clone, Debug, Serialize)]
 pub struct RuntimeShimSetup {
     pub shim_path: PathBuf,
-    pub resolved_executable: PathBuf,
     /// Set only when this call actually wrote a change into a detected
     /// shell rc file (`shell_path::ensure_path_line`) — the file that was
     /// touched. A marked, reversible block; see `shell_path` for the exact
@@ -293,7 +292,31 @@ pub enum RemovePluginReport {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StoreHealth {
     Ready,
+    /// Registrations `packages.json` carries that this UZE cannot read —
+    /// one sentence each, already carrying its remedy. The Store still
+    /// works: every readable package is installed, listed and removable.
+    /// These entries simply answer to nothing until they are cleared, and
+    /// saying so is what keeps a package that quietly vanished from looking
+    /// like a package that was never installed.
+    Quarantined(Vec<String>),
     Blocked(String),
+}
+
+impl std::fmt::Display for StoreHealth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreHealth::Ready => formatter.write_str("ready"),
+            StoreHealth::Quarantined(entries) => {
+                write!(
+                    formatter,
+                    "ready, with {} registration(s) that could not be read\n    {}",
+                    entries.len(),
+                    entries.join("\n    ")
+                )
+            }
+            StoreHealth::Blocked(reason) => write!(formatter, "blocked: {reason}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -632,6 +655,9 @@ pub struct ContextReconciliationReport {
     /// An orphaned-looking region this pass found but refused to touch —
     /// its markers were malformed, so ownership could not be proven.
     pub blocked_orphans: Vec<(String, String)>,
+    /// A package whose region this pass could not write, with the reason —
+    /// distinct from a region that is merely absent.
+    pub failed: Vec<(String, String)>,
     pub worktree_region: Option<WorktreeRegionStatus>,
     pub bridges: Vec<BridgeStatus>,
 }

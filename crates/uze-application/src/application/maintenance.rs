@@ -55,6 +55,54 @@ pub enum MaintenanceOutcome {
     },
 }
 
+/// One sentence per outcome, for the reports a person reads.
+///
+/// `doctor` used to render these through `Debug`, so the operator was handed
+/// `NeedsHumanAction { plugin: "flow@ai", integration: None, receipt: None,
+/// state: None, reason: "…" }` — a struct dump in which the only part that
+/// was for them, `reason`, was the hardest to find.
+impl std::fmt::Display for MaintenanceOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaintenanceOutcome::Repaired {
+                plugin,
+                integration,
+                receipt,
+            } => write!(
+                formatter,
+                "repaired {plugin} on {integration} (receipt {receipt})"
+            ),
+            MaintenanceOutcome::OrphanCleaned {
+                plugin,
+                ledger_keys,
+            } => write!(
+                formatter,
+                "forgot {} orphaned receipt(s) left by {plugin}: {}",
+                ledger_keys.len(),
+                ledger_keys.join(", ")
+            ),
+            MaintenanceOutcome::UpdateAvailable { plugin } => {
+                write!(formatter, "{plugin} has an update available")
+            }
+            MaintenanceOutcome::NeedsHumanAction {
+                plugin,
+                integration,
+                reason,
+                ..
+            } => match integration {
+                Some(integration) => {
+                    write!(formatter, "{plugin} on {integration} needs you: {reason}")
+                }
+                None => write!(formatter, "{plugin} needs you: {reason}"),
+            },
+            MaintenanceOutcome::Unavailable {
+                integration,
+                reason,
+            } => write!(formatter, "{integration} could not be checked: {reason}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MaintenanceReport {
     pub outcomes: Vec<MaintenanceOutcome>,

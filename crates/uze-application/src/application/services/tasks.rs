@@ -194,41 +194,78 @@ impl Workspace<'_> {
         if base_tip.is_empty() {
             return AgentPlacement::unisolated(&primary, "no commit to branch from");
         }
-        let mut store = match task::load(&self.0.home, &primary) {
-            Ok(store) => store,
+        // Whatever the lock's answer, this is what was taken from Git
+        // before it: the slot has to be given back when the record of it
+        // cannot be written.
+        let mut taken: Option<Task> = None;
+        let recorded = task::locked(&self.0.home, &primary, |store| {
+            checkout::reconcile(&primary, store, &target);
+            let mut task = Task::new(
+                None,
+                Base::Ref(target.clone()),
+                base_tip.clone(),
+                target.clone(),
+            );
+            let acquired = match checkout::acquire(
+                &primary,
+                store,
+                &task,
+                &base_tip,
+                policy.slots,
+                occupied,
+            ) {
+                Ok(acquired) => acquired,
+                // Nothing was taken, and the reconciliation above is
+                // still worth writing back.
+                Err(refusal) => return Ok(Err(refusal.to_string())),
+            };
+            task.checkout = Some(acquired.id.clone());
+            store.upsert(task.clone());
+            taken = Some(task.clone());
+            Ok(Ok((task, acquired)))
+        });
+
+        let (task, acquired) = match recorded {
+            Ok(Ok(placed)) => placed,
+            Ok(Err(refusal)) => return AgentPlacement::unisolated(&primary, &refusal),
+            // A slot nothing records is worse than no slot: nothing would
+            // ever park it, `collect_slot_garbage` reads its directory as
+            // unowned, and the agent is told it is isolated. Give the slot
+            // and its empty branch back, and say why this launch is not.
             Err(error) => {
+                let Some(task) = &taken else {
+                    return AgentPlacement::unisolated(
+                        &primary,
+                        &format!("task state could not be read: {error}"),
+                    );
+                };
+                let _ = checkout::discard(&primary, task);
                 return AgentPlacement::unisolated(
                     &primary,
-                    &format!("task state could not be read: {error}"),
+                    &format!("the agent's task could not be recorded: {error}"),
                 );
             }
         };
-        checkout::reconcile(&primary, &mut store, &target);
-        let mut task = Task::new(None, Base::Ref(target.clone()), base_tip.clone(), target);
-        match checkout::acquire(&primary, &store, &task, &base_tip, policy.slots, occupied) {
-            Ok(acquired) => {
-                task.checkout = Some(acquired.id.clone());
-                store.upsert(task.clone());
-                let _ = task::save(&self.0.home, &primary, &store);
-                let mut warnings = sync.concern(&task.target).into_iter().collect::<Vec<_>>();
-                warnings.extend(checkout::materialize(
-                    &primary,
-                    &acquired.path,
-                    &policy.link,
-                    &policy.setup,
-                ));
-                AgentPlacement {
-                    cwd: acquired.path,
-                    isolation: Isolation::Slot {
-                        task: task.id,
-                        checkout: acquired.id,
-                        branch: acquired.branch,
-                        reused: !acquired.created,
-                    },
-                    warnings,
-                }
-            }
-            Err(error) => AgentPlacement::unisolated(&primary, &error.to_string()),
+
+        // Outside the document's lock on purpose: the project's `setup` is
+        // the one unbounded thing a launch runs, and every other mutation
+        // would wait behind it.
+        let mut warnings = sync.concern(&task.target).into_iter().collect::<Vec<_>>();
+        warnings.extend(checkout::materialize(
+            &primary,
+            &acquired.path,
+            &policy.link,
+            &policy.setup,
+        ));
+        AgentPlacement {
+            cwd: acquired.path,
+            isolation: Isolation::Slot {
+                task: task.id,
+                checkout: acquired.id,
+                branch: acquired.branch,
+                reused: !acquired.created,
+            },
+            warnings,
         }
     }
 
@@ -244,48 +281,54 @@ impl Workspace<'_> {
         task_id: &str,
         occupied: &[PathBuf],
     ) -> Result<AgentPlacement> {
-        let mut repository = self
-            .repository(cwd)
+        let (primary, policy) = self
+            .repository_context(cwd)
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-        let target = repository.target();
-        let primary = repository.primary.clone();
-        let policy = repository.policy.clone();
-        checkout::reconcile(&primary, &mut repository.store, &target);
-        let store = repository.store.clone();
-        let task = repository
-            .task_mut(task_id)
-            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-        if let (Some(existing), Some(checkout)) =
-            (landing::slot_path(&primary, task), task.checkout.clone())
-        {
-            return Ok(AgentPlacement {
-                cwd: existing,
-                isolation: Isolation::Slot {
-                    task: task.id.clone(),
-                    checkout,
-                    branch: task.branch.clone(),
-                    reused: true,
-                },
+        let target = target_of(&primary, &policy);
+        let mut acquired_slot = None;
+        let mut placement = task::locked(&self.0.home, &primary, |store| {
+            checkout::reconcile(&primary, store, &target);
+            let snapshot = store.clone();
+            let task = task_mut(store, task_id)
+                .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+            if let (Some(existing), Some(checkout)) =
+                (landing::slot_path(&primary, task), task.checkout.clone())
+            {
+                return Ok(AgentPlacement {
+                    cwd: existing,
+                    isolation: Isolation::Slot {
+                        task: task.id.clone(),
+                        checkout,
+                        branch: task.branch.clone(),
+                        reused: true,
+                    },
+                    warnings: Vec::new(),
+                });
+            }
+            let acquired = checkout::resume(&primary, &snapshot, task, policy.slots, occupied)
+                .map_err(|error| UzeError::ResumeFailed(error.to_string()))?;
+            task.checkout = Some(acquired.id.clone());
+            task.state = TaskState::Running;
+            let isolation = Isolation::Slot {
+                task: task.id.clone(),
+                checkout: acquired.id.clone(),
+                branch: acquired.branch.clone(),
+                reused: !acquired.created,
+            };
+            acquired_slot = Some(acquired.clone());
+            Ok(AgentPlacement {
+                cwd: acquired.path,
+                isolation,
                 warnings: Vec::new(),
-            });
+            })
+        })?;
+        // Preparing the checkout runs the project's `setup`; it waits for
+        // nobody and nobody waits behind it.
+        if let Some(acquired) = acquired_slot {
+            placement.warnings =
+                checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
         }
-        let acquired = checkout::resume(&primary, &store, task, policy.slots, occupied)
-            .map_err(|error| UzeError::ResumeFailed(error.to_string()))?;
-        task.checkout = Some(acquired.id.clone());
-        task.state = TaskState::Running;
-        let isolation = Isolation::Slot {
-            task: task.id.clone(),
-            checkout: acquired.id,
-            branch: acquired.branch,
-            reused: !acquired.created,
-        };
-        task::save(&self.0.home, &primary, &repository.store)?;
-        let warnings = checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
-        Ok(AgentPlacement {
-            cwd: acquired.path,
-            isolation,
-            warnings,
-        })
+        Ok(placement)
     }
 
     /// Names the work the agent in `cwd` is doing.
@@ -301,11 +344,10 @@ impl Workspace<'_> {
     /// replaced by a later mechanism.
     #[tracing::instrument(name = "workspace.name_task", skip_all, fields(cwd = %cwd.display(), proposed = %proposed), err)]
     pub fn name_task(&self, cwd: &Path, proposed: &str) -> Result<NamedTask> {
-        let mut repository = self
-            .repository(cwd)
+        let (primary, policy) = self
+            .repository_context(cwd)
             .ok_or_else(|| UzeError::TaskNaming("not inside a Git working tree".to_owned()))?;
-        let primary = repository.primary.clone();
-        let vocabulary = repository.policy.branch.clone();
+        let vocabulary = policy.branch.clone();
         let branch = vocabulary
             .accept(proposed)
             .map_err(|refusal| UzeError::TaskNaming(refusal_words(&refusal, &vocabulary)))?;
@@ -317,42 +359,42 @@ impl Workspace<'_> {
                         .to_owned(),
                 )
             })?;
-        let target = repository.target();
-        checkout::reconcile(&primary, &mut repository.store, &target);
-        let task = repository
-            .store
-            .tasks
-            .iter_mut()
-            .filter(|task| task.checkout.as_ref() == Some(&checkout_id))
-            .max_by_key(|task| task.created_at_unix)
-            .ok_or_else(|| {
-                UzeError::TaskNaming("no task is recorded for this checkout".to_owned())
-            })?;
-        if task.is_named() {
-            return Err(UzeError::TaskNaming(format!(
-                "this work is already named `{}`; a name nobody generated is never replaced",
-                task.branch
-            )));
-        }
-        if checkout::current_branch(cwd).as_deref() != Some(task.branch.as_str()) {
-            return Err(UzeError::TaskNaming(
-                "this checkout is not on the task's branch — finish the rebase first".to_owned(),
-            ));
-        }
-        if checkout::branch_exists(&primary, &branch) {
-            return Err(UzeError::TaskNaming(format!(
-                "`{branch}` already exists in this repository"
-            )));
-        }
-        checkout::rename_branch(&primary, &task.branch.clone(), &branch)?;
-        task.take_name(branch.clone());
-        let named = NamedTask {
-            task: task.id.as_str().to_owned(),
-            branch,
-            label: task.label.clone(),
-        };
-        task::save(&self.0.home, &primary, &repository.store)?;
-        Ok(named)
+        let target = target_of(&primary, &policy);
+        task::locked(&self.0.home, &primary, |store| {
+            checkout::reconcile(&primary, store, &target);
+            let task = store
+                .tasks
+                .iter_mut()
+                .filter(|task| task.checkout.as_ref() == Some(&checkout_id))
+                .max_by_key(|task| task.created_at_unix)
+                .ok_or_else(|| {
+                    UzeError::TaskNaming("no task is recorded for this checkout".to_owned())
+                })?;
+            if task.is_named() {
+                return Err(UzeError::TaskNaming(format!(
+                    "this work is already named `{}`; a name nobody generated is never replaced",
+                    task.branch
+                )));
+            }
+            if checkout::current_branch(cwd).as_deref() != Some(task.branch.as_str()) {
+                return Err(UzeError::TaskNaming(
+                    "this checkout is not on the task's branch — finish the rebase first"
+                        .to_owned(),
+                ));
+            }
+            if checkout::branch_exists(&primary, &branch) {
+                return Err(UzeError::TaskNaming(format!(
+                    "`{branch}` already exists in this repository"
+                )));
+            }
+            checkout::rename_branch(&primary, &task.branch.clone(), &branch)?;
+            task.take_name(branch.clone());
+            Ok(NamedTask {
+                task: task.id.as_str().to_owned(),
+                branch,
+                label: task.label.clone(),
+            })
+        })
     }
 
     /// The project's declared policy, or the defaults when its manifest
@@ -367,6 +409,16 @@ impl Workspace<'_> {
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
     fn repository(&self, cwd: &Path) -> Option<Repository> {
         self.open(cwd).ok().flatten()
+    }
+
+    /// The same without the tasks: what a *mutation* resolves before it
+    /// takes the document, so the one read it acts on is the one
+    /// [`task::locked`] takes under the lock rather than an earlier one
+    /// somebody else has since replaced.
+    fn repository_context(&self, cwd: &Path) -> Option<(PathBuf, WorktreePolicy)> {
+        let primary = worktree::primary_checkout(cwd)?;
+        let policy = self.policy(&primary).ok()?;
+        Some((primary, policy))
     }
 
     /// The same, telling "there is no repository here" apart from "there
@@ -496,166 +548,225 @@ impl Workspace<'_> {
     /// returns to the owning agent as a notice for its pane.
     #[tracing::instrument(name = "workspace.evaluate_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
-        let mut repository = match self.open(cwd) {
-            Ok(Some(repository)) => repository,
-            Ok(None) => return Evaluation::default(),
-            Err(reason) => {
+        let Some((primary, policy)) = self.repository_context(cwd) else {
+            return Evaluation::default();
+        };
+        let target = target_of(&primary, &policy);
+        let mut notices = Vec::new();
+        let mut ask_the_remote: Vec<Task> = Vec::new();
+        let vocabulary = policy.branch.clone();
+        let names_work = vocabulary.names_work();
+        let completion = policy.completion;
+        let evaluated = task::locked(&self.0.home, &primary, |store| {
+            checkout::reconcile(&primary, store, &target);
+            let owners = slot_owners(store);
+            for task in &mut store.tasks {
+                // A task that ended is still looked at while it owns its
+                // slot: the agent that delivered usually keeps working in the
+                // same checkout, and skipping every non-live task froze that
+                // row on `delivered` for the rest of the session however much
+                // the slot changed. `Closed` is the same story with nothing
+                // delivered — the checkout it ended in can be written in
+                // again. Only the *current* owner is reconsidered: a freed
+                // slot handed to a new agent belongs to that agent's task, not
+                // to the one that used to sit there. `Parked` is nobody's turn
+                // by definition and stays put — unless a pane sits in its
+                // checkout (`occupied`): parked means "no agent left", and an
+                // agent that is there makes it a lie, whichever way it got
+                // there — a release that raced the tab opening, a resume.
+                let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+                    && owners.contains(task.id.as_str());
+                let parked_with_agent = task.state == TaskState::Parked
+                    && landing::slot_path(&primary, task)
+                        .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
+                let revivable = ended_owner || parked_with_agent;
+                let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
+                if task.state == TaskState::Integrating
+                    || (!checkout::is_live(&task.state) && !revivable && !parked_alone)
+                {
+                    continue;
+                }
+                // Parked is nobody's turn, but its work can still reach the
+                // target without it — a request opened before its agent left,
+                // merged on the forge. Left parked, it was listed as preserved
+                // work for good and its slot never went back to the pool.
+                if parked_alone {
+                    landing::settle_delivered(&primary, task);
+                    continue;
+                }
+                // A rebase paused on work the target already carries — what an
+                // earlier refresh left behind when it replayed a squashed
+                // branch onto its own squash — is nobody's to resolve.
+                let paused = landing::slot_path(&primary, task)
+                    .is_some_and(|slot| landing::paused_rebase(&slot).is_some());
+                if paused && landing::settle_delivered(&primary, task) {
+                    continue;
+                }
+                // The branch a task is on is a Git fact, and `task.branch` is
+                // a cache of it. Re-read before anything is asked *about* the
+                // branch: an operator renaming it by hand otherwise leaves
+                // every later question pointed at a ref that no longer exists,
+                // and `commits_ahead` answers such a question with `0` — which
+                // reads as "nothing to deliver" rather than as "wrong branch".
+                // A checkout mid-rebase is on no branch and is left alone.
+                if let Some(slot) = landing::slot_path(&primary, task)
+                    && let Some(actual) = checkout::current_branch(&slot)
+                    && actual != task.branch
+                {
+                    task.take_name(actual);
+                }
+                match landing::readiness(&primary, task) {
+                    // Nothing new since it ended leaves the ending standing:
+                    // the delivery is the last thing that happened to the
+                    // task, and saying `running` instead would erase it on the
+                    // next tick.
+                    Readiness::Running if ended_owner => {}
+                    Readiness::Running => task.state = TaskState::Running,
+                    Readiness::Uncommitted => task.state = TaskState::Uncommitted,
+                    Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+                    // A forge that squashes what it merges leaves none of the
+                    // branch's commits in the target, so they still count as
+                    // ahead; asked by patch instead, the work is delivered.
+                    // Left `Ready`, the refresh below replayed it onto its own
+                    // squash and paused mid-rebase on every file it touched.
+                    Readiness::Ready { .. }
+                        if checkout::is_integrated(&primary, &task.target, &task.branch) =>
+                    {
+                        landing::mark_delivered(&primary, task);
+                    }
+                    Readiness::Ready { base, .. } => {
+                        // Delivered, and now holding work the target lacks: the
+                        // agent kept going, and the request it had answered
+                        // for the work already merged, not for this.
+                        if task.state == TaskState::Integrated {
+                            task.forget_request();
+                        }
+                        task.base_commit = base;
+                        if task.state != TaskState::GateFailed {
+                            task.state = TaskState::Ready;
+                        }
+                    }
+                }
+                // The work has a commit and still carries the name UZE
+                // generated for it: name it from what the agent wrote. This is
+                // the automatic half, and it deliberately runs *late* — until
+                // there is a commit there is nothing to name the work after,
+                // and the agent naming it deliberately arrives earlier and
+                // therefore wins. `Ready` is the safe moment by construction:
+                // commits ahead, a clean tree, no rebase in progress.
+                //
+                // Nothing about this reaches a harness. It is a Git fact read
+                // on a pass that already runs, which is why it works on every
+                // harness and on the next one.
+                if names_work
+                    && task.state == TaskState::Ready
+                    && !task.is_named()
+                    && let Some(derived) = landing::derived_name(&primary, task, &vocabulary)
+                    && !checkout::branch_exists(&primary, &derived)
+                    && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
+                {
+                    task.take_name(derived);
+                }
+                // The other half of what a delivery would do, learned the
+                // same way readiness is: an agent told to push and open the
+                // request itself is the one case UZE's own records can never
+                // cover, and until this ran the button went on offering to
+                // publish a branch the forge already had a request open for.
+                // Only where a request is what completion means — a project
+                // that merges or hands off never asks the remote anything.
+                //
+                // Asked after the pass, with the document unlocked: it is a
+                // `git ls-remote` per task, and inside the lock one slow
+                // remote made every delivery and every placement in the
+                // project wait behind the whole pass.
+                if completion == CompletionBehavior::Pr {
+                    ask_the_remote.push(task.clone());
+                }
+                // Following a moved target costs a clean task nothing and a
+                // dirty one its work in progress, which `refresh` refuses.
+                // Whatever the completion behaviour: a task that follows the
+                // target as it moves meets a conflict while its agent is
+                // still holding the change, rather than in a request already
+                // opened.
+                if matches!(task.state, TaskState::Running | TaskState::Ready)
+                    && let Err(DeliveryFailure::Conflict {
+                        files,
+                        target_moved,
+                    }) = landing::refresh(&primary, task)
+                    && let Some(slot) = landing::slot_path(&primary, task)
+                {
+                    notices.push(AgentNotice {
+                        task: task.id.as_str().to_owned(),
+                        checkout: slot,
+                        message: landing::conflict_message(task, &files, target_moved),
+                    });
+                }
+            }
+            Ok(task_views(&primary, store, completion))
+        });
+        let tasks = match evaluated {
+            Ok(tasks) => tasks,
+            Err(error) => {
                 return Evaluation {
-                    unreadable: Some(reason),
+                    unreadable: Some(error.to_string()),
                     ..Evaluation::default()
                 };
             }
         };
-        let target = repository.target();
-        checkout::reconcile(&repository.primary, &mut repository.store, &target);
-        let mut notices = Vec::new();
-        let primary = repository.primary.clone();
-        let vocabulary = repository.policy.branch.clone();
-        let names_work = vocabulary.names_work();
-        let owners = slot_owners(&repository.store);
-        let completion = repository.policy.completion;
-        for task in &mut repository.store.tasks {
-            // A task that ended is still looked at while it owns its
-            // slot: the agent that delivered usually keeps working in the
-            // same checkout, and skipping every non-live task froze that
-            // row on `delivered` for the rest of the session however much
-            // the slot changed. `Closed` is the same story with nothing
-            // delivered — the checkout it ended in can be written in
-            // again. Only the *current* owner is reconsidered: a freed
-            // slot handed to a new agent belongs to that agent's task, not
-            // to the one that used to sit there. `Parked` is nobody's turn
-            // by definition and stays put — unless a pane sits in its
-            // checkout (`occupied`): parked means "no agent left", and an
-            // agent that is there makes it a lie, whichever way it got
-            // there — a release that raced the tab opening, a resume.
-            let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
-                && owners.contains(task.id.as_str());
-            let parked_with_agent = task.state == TaskState::Parked
-                && landing::slot_path(&primary, task)
-                    .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
-            let revivable = ended_owner || parked_with_agent;
-            let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
-            if task.state == TaskState::Integrating
-                || (!checkout::is_live(&task.state) && !revivable && !parked_alone)
-            {
-                continue;
-            }
-            // Parked is nobody's turn, but its work can still reach the
-            // target without it — a request opened before its agent left,
-            // merged on the forge. Left parked, it was listed as preserved
-            // work for good and its slot never went back to the pool.
-            if parked_alone {
-                landing::settle_delivered(&primary, task);
-                continue;
-            }
-            // A rebase paused on work the target already carries — what an
-            // earlier refresh left behind when it replayed a squashed
-            // branch onto its own squash — is nobody's to resolve.
-            let paused = landing::slot_path(&primary, task)
-                .is_some_and(|slot| landing::paused_rebase(&slot).is_some());
-            if paused && landing::settle_delivered(&primary, task) {
-                continue;
-            }
-            // The branch a task is on is a Git fact, and `task.branch` is
-            // a cache of it. Re-read before anything is asked *about* the
-            // branch: an operator renaming it by hand otherwise leaves
-            // every later question pointed at a ref that no longer exists,
-            // and `commits_ahead` answers such a question with `0` — which
-            // reads as "nothing to deliver" rather than as "wrong branch".
-            // A checkout mid-rebase is on no branch and is left alone.
-            if let Some(slot) = landing::slot_path(&primary, task)
-                && let Some(actual) = checkout::current_branch(&slot)
-                && actual != task.branch
-            {
-                task.take_name(actual);
-            }
-            match landing::readiness(&primary, task) {
-                // Nothing new since it ended leaves the ending standing:
-                // the delivery is the last thing that happened to the
-                // task, and saying `running` instead would erase it on the
-                // next tick.
-                Readiness::Running if ended_owner => {}
-                Readiness::Running => task.state = TaskState::Running,
-                Readiness::Uncommitted => task.state = TaskState::Uncommitted,
-                Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
-                // A forge that squashes what it merges leaves none of the
-                // branch's commits in the target, so they still count as
-                // ahead; asked by patch instead, the work is delivered.
-                // Left `Ready`, the refresh below replayed it onto its own
-                // squash and paused mid-rebase on every file it touched.
-                Readiness::Ready { .. }
-                    if checkout::is_integrated(&primary, &task.target, &task.branch) =>
-                {
-                    landing::mark_delivered(&primary, task);
-                }
-                Readiness::Ready { base, .. } => {
-                    // Delivered, and now holding work the target lacks: the
-                    // agent kept going, and the request it had answered
-                    // for the work already merged, not for this.
-                    if task.state == TaskState::Integrated {
-                        task.forget_request();
-                    }
-                    task.base_commit = base;
-                    if task.state != TaskState::GateFailed {
-                        task.state = TaskState::Ready;
-                    }
-                }
-            }
-            // The work has a commit and still carries the name UZE
-            // generated for it: name it from what the agent wrote. This is
-            // the automatic half, and it deliberately runs *late* — until
-            // there is a commit there is nothing to name the work after,
-            // and the agent naming it deliberately arrives earlier and
-            // therefore wins. `Ready` is the safe moment by construction:
-            // commits ahead, a clean tree, no rebase in progress.
-            //
-            // Nothing about this reaches a harness. It is a Git fact read
-            // on a pass that already runs, which is why it works on every
-            // harness and on the next one.
-            if names_work
-                && task.state == TaskState::Ready
-                && !task.is_named()
-                && let Some(derived) = landing::derived_name(&primary, task, &vocabulary)
-                && !checkout::branch_exists(&primary, &derived)
-                && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
-            {
-                task.take_name(derived);
-            }
-            // The other half of what a delivery would do, learned the
-            // same way readiness is: an agent told to push and open the
-            // request itself is the one case UZE's own records can never
-            // cover, and until this ran the button went on offering to
-            // publish a branch the forge already had a request open for.
-            // Only where a request is what completion means — a project
-            // that merges or hands off never asks the remote anything.
-            if completion == CompletionBehavior::Pr {
-                landing::observe_request(&primary, task);
-            }
-            // Following a moved target costs a clean task nothing and a
-            // dirty one its work in progress, which `refresh` refuses.
-            // Whatever the completion behaviour: a task that follows the
-            // target as it moves meets a conflict while its agent is
-            // still holding the change, rather than in a request already
-            // opened.
-            if matches!(task.state, TaskState::Running | TaskState::Ready)
-                && let Err(DeliveryFailure::Conflict {
-                    files,
-                    target_moved,
-                }) = landing::refresh(&primary, task)
-                && let Some(slot) = landing::slot_path(&primary, task)
-            {
-                notices.push(AgentNotice {
-                    task: task.id.as_str().to_owned(),
-                    checkout: slot,
-                    message: landing::conflict_message(task, &files, target_moved),
-                });
-            }
-        }
-        let _ = task::save(&self.0.home, &primary, &repository.store);
-        Evaluation {
-            tasks: repository.views(),
+        let mut evaluation = Evaluation {
+            tasks,
             notices,
             unreadable: None,
+        };
+        self.adopt_observed_requests(&primary, completion, &ask_the_remote, &mut evaluation);
+        evaluation
+    }
+
+    /// Asks the remote about each task's request with the document
+    /// unlocked, then takes the lock once to write the answers down and
+    /// re-read the views, so a request discovered here is in the answer
+    /// this pass gives rather than in the next one's.
+    fn adopt_observed_requests(
+        &self,
+        primary: &Path,
+        completion: CompletionBehavior,
+        asked: &[Task],
+        evaluation: &mut Evaluation,
+    ) {
+        let observed: Vec<(&Task, landing::RequestObservation)> = asked
+            .iter()
+            .map(|task| (task, landing::observe_request(primary, task)))
+            .collect();
+        if observed.is_empty() {
+            return;
+        }
+        let adopted = task::locked(&self.0.home, primary, |store| {
+            for (asked, observation) in &observed {
+                // Only onto the record the question was asked about.
+                // Anything that moved it since — a delivery that pushed
+                // the branch and found the request itself — knows more
+                // about this than an answer taken before it ran.
+                if let Some(record) = task_mut(store, asked.id.as_str())
+                    && record.branch == asked.branch
+                    && record.published_as == asked.published_as
+                    && record.published_request == asked.published_request
+                    && record.request_branch == asked.request_branch
+                    && record.request_asked_at_unix == asked.request_asked_at_unix
+                {
+                    landing::adopt_request(record, observation);
+                }
+            }
+            Ok(task_views(primary, store, completion))
+        });
+        match adopted {
+            Ok(tasks) => evaluation.tasks = tasks,
+            // The pass itself stands — its states were written, and the
+            // views already say them. What is lost is a request number the
+            // next pass asks for again, which is not worth a notice in an
+            // agent's pane, the only channel an evaluation has.
+            Err(error) => {
+                tracing::warn!(%error, "the remote's answer about open requests was not recorded")
+            }
         }
     }
 
@@ -663,16 +774,14 @@ impl Workspace<'_> {
     /// at a time under the repository write lock.
     #[tracing::instrument(name = "workspace.deliver_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id))]
     pub fn deliver_task(&self, cwd: &Path, task_id: &str) -> Option<DeliveryReport> {
-        let mut repository = self.repository(cwd)?;
-        let report = repository.deliver(task_id)?;
-        let _ = task::save(&self.0.home, &repository.primary, &repository.store);
-        Some(report)
+        let (primary, policy) = self.repository_context(cwd)?;
+        self.deliver_claimed(&primary, &policy, task_id)
     }
 
     /// Delivers every ready task, oldest first; the second sees the first.
     #[tracing::instrument(name = "workspace.deliver_ready", skip_all, fields(cwd = %cwd.display()))]
     pub fn deliver_ready(&self, cwd: &Path) -> Vec<DeliveryReport> {
-        let Some(mut repository) = self.repository(cwd) else {
+        let Some(repository) = self.repository(cwd) else {
             return Vec::new();
         };
         let mut ready: Vec<(u64, String)> = repository
@@ -683,12 +792,115 @@ impl Workspace<'_> {
             .map(|task| (task.created_at_unix, task.id.as_str().to_owned()))
             .collect();
         ready.sort();
-        let reports = ready
+        // One claim per task, in order, so the second is claimed against
+        // what the first wrote: the listing is only a listing, and the
+        // document decides under the lock each delivery takes for itself.
+        ready
             .into_iter()
-            .filter_map(|(_, id)| repository.deliver(&id))
-            .collect();
-        let _ = task::save(&self.0.home, &repository.primary, &repository.store);
-        reports
+            .filter_map(|(_, id)| {
+                self.deliver_claimed(&repository.primary, &repository.policy, &id)
+            })
+            .collect()
+    }
+
+    /// Delivers one recorded task, holding the tasks document only to
+    /// claim the task and to write down what happened to it.
+    ///
+    /// The gate a project declares has half an hour, and the `git fetch`
+    /// and `git push` around it are bounded by nothing at all. Held for
+    /// that, the document's lock made every other mutation in the project
+    /// — another delivery, a placement, the evaluation behind a pane
+    /// going quiet — wait the full two minutes and then fail, and the
+    /// press that waited came back as "nothing ready".
+    ///
+    /// So the lock is taken to mark the task [`TaskState::Integrating`]
+    /// and released. That state is what tells the rest of the client the
+    /// task is spoken for: an evaluation skips it, and so does the release
+    /// of abandoned tasks — both already did, because a delivery has
+    /// always owned its task while it ran. It is retaken at the end, and
+    /// the outcome is written onto the record only while it is still the
+    /// one that was claimed.
+    ///
+    /// A process that dies between the two leaves the record
+    /// `Integrating`, which is the state every pass reads as "a delivery
+    /// owns this" — the delivery it names is gone, and the operator's way
+    /// out is the one they already have for a task nothing is doing:
+    /// finish it, or discard it.
+    fn deliver_claimed(
+        &self,
+        primary: &Path,
+        policy: &WorktreePolicy,
+        task_id: &str,
+    ) -> Option<DeliveryReport> {
+        let claimed = task::locked(&self.0.home, primary, |store| {
+            Ok(task_mut(store, task_id).map(|record| {
+                let claimed = record.clone();
+                record.state = TaskState::Integrating;
+                claimed
+            }))
+        });
+        let mut task = match claimed {
+            Ok(claimed) => claimed?,
+            // Nothing was delivered and nothing was written — said as a
+            // report rather than as `None`, which the client renders as
+            // "nothing ready": the operator who waited on a busy document
+            // would be told the task they can see is not there.
+            Err(error) => {
+                return self.unclaimed_delivery(primary, policy, task_id, &error);
+            }
+        };
+        let outcome = deliver_one(primary, policy, &mut task);
+        let mut report = DeliveryReport {
+            task: TaskView::from_task(primary, &task, policy.completion),
+            outcome,
+            warnings: Vec::new(),
+        };
+        let recorded = task::locked(&self.0.home, primary, |store| {
+            let Some(record) = task_mut(store, task_id) else {
+                return Ok(Recorded::Superseded);
+            };
+            // Only the record this delivery claimed. The operator can
+            // finish or discard a task while its gate runs, and what they
+            // decided about it is newer than this.
+            if record.state != TaskState::Integrating {
+                return Ok(Recorded::Superseded);
+            }
+            *record = task;
+            Ok(Recorded::Applied)
+        });
+        match recorded {
+            Ok(Recorded::Applied) => {}
+            Ok(Recorded::Superseded) => report.warnings.push(superseded_delivery()),
+            Err(error) => report.warnings.push(unrecorded_delivery(&error)),
+        }
+        Some(report)
+    }
+
+    /// The report for a delivery that never started: the task as the
+    /// document last had it, and the reason in place of an outcome.
+    ///
+    /// The view is read without the lock, which is exactly what the lock
+    /// is not for — there is nothing to write here, and the document is
+    /// replaced atomically, so a reader sees one version or the other.
+    /// `None` only where there is genuinely nothing to report about: no
+    /// document, or no such task in it.
+    fn unclaimed_delivery(
+        &self,
+        primary: &Path,
+        policy: &WorktreePolicy,
+        task_id: &str,
+        error: &UzeError,
+    ) -> Option<DeliveryReport> {
+        let store = task::load(&self.0.home, primary).ok()?;
+        let task = store
+            .tasks
+            .iter()
+            .find(|task| task.id.as_str() == task_id)?;
+        Some(DeliveryReport {
+            task: TaskView::from_task(primary, task, policy.completion),
+            outcome: DeliveryOutcome::Refused(format!("the delivery could not start: {error}")),
+            warnings: Vec::new(),
+        })
     }
 
     /// One pass of "who is actually sitting in which slot", across every
@@ -743,31 +955,37 @@ impl Workspace<'_> {
     /// no new agent can reuse.
     #[tracing::instrument(name = "workspace.release_abandoned_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn release_abandoned_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<ReleasedTask> {
-        let Some(mut repository) = self.repository(cwd) else {
+        let Some((primary, policy)) = self.repository_context(cwd) else {
             return Vec::new();
         };
-        let target = repository.target();
-        let primary = repository.primary.clone();
+        let target = target_of(&primary, &policy);
         let mut released = Vec::new();
-        for task in &mut repository.store.tasks {
-            // A delivery in flight owns the task until it answers.
-            if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
-                continue;
+        let recorded = task::locked(&self.0.home, &primary, |store| {
+            for task in &mut store.tasks {
+                // A delivery in flight owns the task until it answers.
+                if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+                    continue;
+                }
+                if landing::slot_path(&primary, task)
+                    .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)))
+                {
+                    continue;
+                }
+                let slot = checkout::release(&primary, task, &target);
+                released.push(ReleasedTask {
+                    id: task.id.as_str().to_owned(),
+                    label: task.label.clone(),
+                    parked: slot == checkout::SlotState::Parked,
+                });
             }
-            if landing::slot_path(&primary, task)
-                .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)))
-            {
-                continue;
-            }
-            let slot = checkout::release(&primary, task, &target);
-            released.push(ReleasedTask {
-                id: task.id.as_str().to_owned(),
-                label: task.label.clone(),
-                parked: slot == checkout::SlotState::Parked,
-            });
-        }
-        if !released.is_empty() {
-            let _ = task::save(&self.0.home, &primary, &repository.store);
+            Ok(())
+        });
+        // A release is a record and nothing else — `checkout::release`
+        // touches no directory — so one that was not written did not
+        // happen, and reporting it would have the collection below act on
+        // a slot the next pass still reads as taken.
+        if recorded.is_err() {
+            return Vec::new();
         }
         released
     }
@@ -801,39 +1019,40 @@ impl Workspace<'_> {
     /// its branch stays.
     #[tracing::instrument(name = "workspace.finish_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id), err)]
     pub fn finish_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
-        let mut repository = self
-            .repository(cwd)
+        let (primary, _) = self
+            .repository_context(cwd)
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-        let task = repository
-            .task_mut(task_id)
-            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-        task.state = TaskState::Integrated;
-        task::save(&self.0.home, &repository.primary, &repository.store)
+        task::locked(&self.0.home, &primary, |store| {
+            let task = task_mut(store, task_id)
+                .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+            task.state = TaskState::Integrated;
+            Ok(())
+        })
     }
 
     /// The one path that deletes work, taken only by the operator on a
     /// named task: the checkout and the branch go, the record goes with them.
     #[tracing::instrument(name = "workspace.discard_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id), err)]
     pub fn discard_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
-        let mut repository = self
-            .repository(cwd)
+        let (primary, _) = self
+            .repository_context(cwd)
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-        let task = repository
-            .task_mut(task_id)
-            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?
-            .clone();
-        checkout::discard(&repository.primary, &task).map_err(UzeError::Discard)?;
-        repository
-            .store
-            .tasks
-            .retain(|recorded| recorded.id.as_str() != task_id);
-        // The one place a task stops existing, and therefore the one place
-        // its conversations stop being reachable. Finishing is deliberately
-        // not such a place: an integrated task whose agent kept working is
-        // revived by reconciliation, and it would come back without the
-        // conversation it never left.
-        conversation::forget(&self.0.home, &repository.primary, &task.id);
-        task::save(&self.0.home, &repository.primary, &repository.store)
+        task::locked(&self.0.home, &primary, |store| {
+            let task = task_mut(store, task_id)
+                .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?
+                .clone();
+            checkout::discard(&primary, &task).map_err(UzeError::Discard)?;
+            store
+                .tasks
+                .retain(|recorded| recorded.id.as_str() != task_id);
+            // The one place a task stops existing, and therefore the one
+            // place its conversations stop being reachable. Finishing is
+            // deliberately not such a place: an integrated task whose agent
+            // kept working is revived by reconciliation, and it would come
+            // back without the conversation it never left.
+            conversation::forget(&self.0.home, &primary, &task.id);
+            Ok(())
+        })
     }
 }
 
@@ -847,72 +1066,99 @@ struct Repository {
 
 impl Repository {
     fn target(&self) -> String {
-        self.policy
-            .target
-            .clone()
-            .or_else(|| checkout::current_branch(&self.primary))
-            .unwrap_or_else(|| "HEAD".to_owned())
-    }
-
-    fn task_mut(&mut self, id: &str) -> Option<&mut Task> {
-        self.store
-            .tasks
-            .iter_mut()
-            .find(|task| task.id.as_str() == id)
+        target_of(&self.primary, &self.policy)
     }
 
     fn views(&self) -> Vec<TaskView> {
-        self.store
-            .tasks
-            .iter()
-            .map(|task| TaskView::from_task(&self.primary, task, self.policy.completion))
-            .collect()
+        task_views(&self.primary, &self.store, self.policy.completion)
     }
+}
 
-    fn deliver(&mut self, task_id: &str) -> Option<DeliveryReport> {
-        let completion = self.policy.completion;
-        let gate = self.policy.gate.clone();
-        let policy = landing::Policy {
-            completion,
-            gate: &gate,
-        };
-        let primary = self.primary.clone();
-        let task = self.task_mut(task_id)?;
-        let outcome = match landing::deliver(&primary, task, &policy) {
-            Ok(Delivered::Handoff) => DeliveryOutcome::Handoff,
-            Ok(Delivered::Merged { .. }) => DeliveryOutcome::Merged,
-            Ok(Delivered::Published { branch, request }) => {
-                DeliveryOutcome::Published { branch, request }
-            }
-            Ok(Delivered::AwaitingRequest {
-                branch: _,
-                instruction,
-            }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
+/// The branch this project delivers into: what it declared, else whatever
+/// the primary checkout is on.
+fn target_of(primary: &Path, policy: &WorktreePolicy) -> String {
+    policy
+        .target
+        .clone()
+        .or_else(|| checkout::current_branch(primary))
+        .unwrap_or_else(|| "HEAD".to_owned())
+}
+
+fn task_mut<'a>(store: &'a mut TaskStore, id: &str) -> Option<&'a mut Task> {
+    store.tasks.iter_mut().find(|task| task.id.as_str() == id)
+}
+
+fn task_views(primary: &Path, store: &TaskStore, completion: CompletionBehavior) -> Vec<TaskView> {
+    store
+        .tasks
+        .iter()
+        .map(|task| TaskView::from_task(primary, task, completion))
+        .collect()
+}
+
+/// What a delivery that landed but could not be written down leaves the
+/// operator to know: the next evaluation will read the task as it was and
+/// offer the same delivery again.
+fn unrecorded_delivery(error: &UzeError) -> String {
+    format!("the delivery could not be recorded: {error}")
+}
+
+/// The same, for a task somebody decided about while it was being
+/// delivered. Their decision stands; the delivery still happened.
+fn superseded_delivery() -> String {
+    "the task changed while it was being delivered, so the delivery is not recorded on it"
+        .to_owned()
+}
+
+/// Whether a delivery's outcome reached the record it was claimed from.
+enum Recorded {
+    Applied,
+    Superseded,
+}
+
+/// Delivers one claimed task the way `policy` says, updating `task` to
+/// say what happened.
+///
+/// Takes the record rather than the document: this is the unbounded half
+/// — the project's gate, then a fetch, a push or a merge — and it runs
+/// with the tasks document unlocked, under Git's own write lock alone.
+fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> DeliveryOutcome {
+    let completion = policy.completion;
+    let gate = policy.gate.clone();
+    let policy = landing::Policy {
+        completion,
+        gate: &gate,
+    };
+    match landing::deliver(primary, task, &policy) {
+        Ok(Delivered::Handoff) => DeliveryOutcome::Handoff,
+        Ok(Delivered::Merged { .. }) => DeliveryOutcome::Merged,
+        Ok(Delivered::Published { branch, request }) => {
+            DeliveryOutcome::Published { branch, request }
+        }
+        Ok(Delivered::AwaitingRequest {
+            branch: _,
+            instruction,
+        }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
+            task: task.id.as_str().to_owned(),
+            checkout: landing::slot_path(primary, task).unwrap_or_default(),
+            message: instruction,
+        }),
+        Err(DeliveryFailure::Conflict {
+            files,
+            target_moved,
+        }) => DeliveryOutcome::ReturnedToAgent(AgentNotice {
+            task: task.id.as_str().to_owned(),
+            checkout: landing::slot_path(primary, task).unwrap_or_default(),
+            message: landing::conflict_message(task, &files, target_moved),
+        }),
+        Err(DeliveryFailure::GateFailed { command, output }) => {
+            DeliveryOutcome::ReturnedToAgent(AgentNotice {
                 task: task.id.as_str().to_owned(),
-                checkout: landing::slot_path(&primary, task).unwrap_or_default(),
-                message: instruction,
-            }),
-            Err(DeliveryFailure::Conflict {
-                files,
-                target_moved,
-            }) => DeliveryOutcome::ReturnedToAgent(AgentNotice {
-                task: task.id.as_str().to_owned(),
-                checkout: landing::slot_path(&primary, task).unwrap_or_default(),
-                message: landing::conflict_message(task, &files, target_moved),
-            }),
-            Err(DeliveryFailure::GateFailed { command, output }) => {
-                DeliveryOutcome::ReturnedToAgent(AgentNotice {
-                    task: task.id.as_str().to_owned(),
-                    checkout: landing::slot_path(&primary, task).unwrap_or_default(),
-                    message: landing::gate_failure_message(task, &command, &output),
-                })
-            }
-            Err(other) => DeliveryOutcome::Refused(other.to_string()),
-        };
-        Some(DeliveryReport {
-            task: TaskView::from_task(&primary, task, completion),
-            outcome,
-        })
+                checkout: landing::slot_path(primary, task).unwrap_or_default(),
+                message: landing::gate_failure_message(task, &command, &output),
+            })
+        }
+        Err(other) => DeliveryOutcome::Refused(other.to_string()),
     }
 }
 
@@ -1246,6 +1492,13 @@ pub enum DeliveryOutcome {
 pub struct DeliveryReport {
     pub task: TaskView,
     pub outcome: DeliveryOutcome,
+    /// What the delivery could not do, none of which undoes the outcome —
+    /// the same channel [`AgentPlacement`] carries. The one entry today is
+    /// the delivery that landed and could not be written down: the branch
+    /// is pushed and the request is open, and the next evaluation still
+    /// reads the task as deliverable, so the operator has to know before
+    /// pressing it again.
+    pub warnings: Vec<String>,
 }
 
 /// What writing the policy is about to do to the project.
@@ -2318,7 +2571,17 @@ mod task_service_tests {
             "origin",
             &format!("{}:refs/pull/12/head", tip.trim()),
         ]);
-        app.workspace().evaluate_tasks(&root, &[]);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(
+            evaluation
+                .tasks
+                .iter()
+                .find(|task| task.id == id)
+                .and_then(|task| task.published_request),
+            Some(12),
+            "the pass that asked the remote is the pass that answers with it, \
+             though it asks with the document unlocked"
+        );
 
         let synced = view_of(&app, &root, &id);
         assert_eq!(synced.published_as.as_deref(), Some(synced.branch.as_str()));
@@ -2453,6 +2716,323 @@ mod task_service_tests {
             matches!(&second.isolation, Isolation::Unisolated { reason } if reason.contains("1 declared")),
             "{second:?}"
         );
+    }
+
+    /// The record of a delivery survives an evaluation that overlapped it.
+    ///
+    /// Both passes are a read-modify-write of one document, and the client
+    /// runs them on threads of their own: before the document was locked
+    /// for the whole pair, the evaluation wrote back the copy it had read
+    /// before the delivery started, the task came back `Ready`, and the
+    /// next tick offered to push and open the request a second time.
+    #[test]
+    fn an_evaluation_that_overlaps_a_delivery_does_not_erase_it() {
+        let repository = repository("svc-race");
+        declare(&repository, "  completion: merge\n  slots: 4\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-race-home");
+        let home = app.home.clone();
+
+        // Three more tasks so the evaluation pass has enough Git to do to
+        // still be running when the delivery lands.
+        let (delivered, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "delivered.rs", "");
+        for index in 0..3 {
+            let (_, slot) = launched(&app, &root);
+            agent_commits(&repository, &slot, &format!("other-{index}.rs"), "");
+        }
+        app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(state_of(&app, &root, &delivered), TaskStateView::Ready);
+
+        let evaluator = {
+            let (home, root) = (home.clone(), root.clone());
+            std::thread::spawn(move || {
+                UzeApplication::new(home, Vec::new())
+                    .workspace()
+                    .evaluate_tasks(&root, &[]);
+            })
+        };
+        let deliverer = {
+            let (home, root, id) = (home.clone(), root.clone(), delivered.clone());
+            std::thread::spawn(move || {
+                UzeApplication::new(home, Vec::new())
+                    .workspace()
+                    .deliver_task(&root, &id)
+                    .expect("the task is deliverable")
+            })
+        };
+        let report = deliverer.join().unwrap();
+        evaluator.join().unwrap();
+
+        assert_eq!(report.outcome, DeliveryOutcome::Merged);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(
+            state_of(&app, &root, &delivered),
+            TaskStateView::Integrated,
+            "the delivery is what the document says happened last"
+        );
+    }
+
+    /// The tasks document's own directory, made unwritable after the
+    /// document and its lock exist: a read still succeeds and every write
+    /// after it fails, which is the shape of a full disk or a read-only
+    /// `$UZE_HOME`.
+    #[cfg(unix)]
+    fn refuse_writes(app: &UzeApplication, root: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = task::store_path(&app.home, &root.canonicalize().unwrap())
+            .parent()
+            .expect("the document has a directory")
+            .to_path_buf();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+        directory
+    }
+
+    #[cfg(unix)]
+    fn allow_writes(directory: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A delivery that could not even claim its task is refused, and the
+    /// refusal names the reason.
+    ///
+    /// Claiming is the first write a delivery makes, and a delivery that
+    /// cannot be written down is one whose outcome nothing will ever
+    /// record — so it does not happen at all, rather than merging work
+    /// nothing on the machine remembers. Said as a report, never as
+    /// silence: an answer with no report in it is what the client renders
+    /// as "nothing ready", and the operator is looking at the task.
+    #[cfg(unix)]
+    #[test]
+    fn a_delivery_that_could_not_claim_its_task_says_why() {
+        let repository = repository("svc-unclaimed-delivery");
+        declare(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unclaimed-delivery-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let directory = refuse_writes(&app, &root);
+        let report = app
+            .workspace()
+            .deliver_task(&root, &id)
+            .expect("a refusal is still an answer about this task");
+        allow_writes(&directory);
+
+        let DeliveryOutcome::Refused(reason) = &report.outcome else {
+            panic!("a delivery that never started was reported as one: {report:?}");
+        };
+        assert!(reason.contains("could not start"), "{reason}");
+        assert_eq!(report.task.id, id, "and says which task it is about");
+        assert!(
+            !root.join("work.rs").is_file(),
+            "nothing was delivered into the target"
+        );
+        assert_eq!(
+            state_of(&app, &root, &id),
+            TaskStateView::Ready,
+            "and the task is exactly as deliverable as it was"
+        );
+    }
+
+    /// A delivery that landed and could not be written down says so. The
+    /// branch is pushed or merged either way, and the operator can only
+    /// know that the record does not say so if they were told.
+    ///
+    /// The document is made unwritable *by the gate*, so the failure lands
+    /// between the claim and the record — the one window where a delivery
+    /// can happen and go unrecorded now that claiming is a write of its
+    /// own.
+    #[cfg(unix)]
+    #[test]
+    fn a_delivery_that_could_not_be_recorded_says_so() {
+        let repository = repository("svc-unrecorded-delivery");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unrecorded-delivery-home");
+        let directory = task::store_path(&app.home, &root.canonicalize().unwrap())
+            .parent()
+            .expect("the document has a directory")
+            .to_path_buf();
+        declare(
+            &repository,
+            &format!(
+                "  completion: merge\n  gate: chmod 555 {}\n",
+                directory.display()
+            ),
+        );
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let report = app
+            .workspace()
+            .deliver_task(&root, &id)
+            .expect("the delivery itself still happens");
+        allow_writes(&directory);
+
+        assert_eq!(report.outcome, DeliveryOutcome::Merged);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("could not be recorded")),
+            "{:?}",
+            report.warnings
+        );
+        assert!(root.join("work.rs").is_file(), "the work really did land");
+        assert_eq!(
+            state_of(&app, &root, &id),
+            TaskStateView::Integrating,
+            "and the record is where the claim left it — the delivery that \
+             owns it is the one that could not write"
+        );
+    }
+
+    /// The document is free while a delivery's gate runs.
+    ///
+    /// A gate has half an hour and the Git around it has no bound at all.
+    /// Held for that, the tasks document made every other mutation in the
+    /// project wait two minutes and then fail — and a second delivery
+    /// pressed meanwhile came back as "nothing ready".
+    #[test]
+    fn a_gate_that_runs_long_does_not_hold_the_tasks_document() {
+        let repository = repository("svc-slow-gate");
+        declare(&repository, "  completion: merge\n  gate: sleep 3\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-slow-gate-home");
+        let home = app.home.clone();
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let deliverer = {
+            let (home, root, id) = (home.clone(), root.clone(), id.clone());
+            std::thread::spawn(move || {
+                UzeApplication::new(home, Vec::new())
+                    .workspace()
+                    .deliver_task(&root, &id)
+                    .expect("the task is deliverable")
+            })
+        };
+
+        // The claim is what says the delivery started: the record is
+        // `Integrating` and the document is back.
+        let spawned = std::time::Instant::now();
+        let claimed = loop {
+            let store = task::load(&home, &root).expect("the document is readable");
+            if store.tasks[0].state == TaskState::Integrating {
+                break std::time::Instant::now();
+            }
+            assert!(
+                spawned.elapsed() < std::time::Duration::from_secs(10),
+                "the delivery never claimed its task"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        task::locked(&home, &root, |_| Ok(())).expect("the document is free while the gate runs");
+        // The gate is three seconds from about the moment the claim was
+        // seen, so taking the document inside two proves it was taken
+        // while the gate was still running.
+        assert!(
+            claimed.elapsed() < std::time::Duration::from_secs(2),
+            "another mutation waited {:?} on a gate that had not finished",
+            claimed.elapsed()
+        );
+
+        let report = deliverer.join().unwrap();
+        assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+    }
+
+    /// What a delivery that never answered leaves behind, and what every
+    /// other pass does with it.
+    ///
+    /// `Integrating` means "a delivery owns this task": the evaluation
+    /// skips it, the release of abandoned tasks skips it, and no surface
+    /// offers to deliver it. A process killed between the claim and the
+    /// record leaves exactly that record, and this is what it costs —
+    /// nothing is lost and nothing is delivered twice, and the way out is
+    /// the one the operator already has for a task nobody is working on.
+    #[test]
+    fn a_task_a_delivery_claimed_and_never_answered_for_is_left_alone() {
+        let repository = repository("svc-abandoned-claim");
+        declare(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-abandoned-claim-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "work.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        task::locked(&app.home, &root, |store| {
+            task_mut(store, &id).expect("the task is recorded").state = TaskState::Integrating;
+            Ok(())
+        })
+        .unwrap();
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(
+            evaluation
+                .tasks
+                .iter()
+                .find(|task| task.id == id)
+                .map(|task| task.state.clone()),
+            Some(TaskStateView::Integrating),
+            "an evaluation neither revives it nor writes over it"
+        );
+        assert!(
+            app.workspace()
+                .release_abandoned_tasks(&root, &[])
+                .is_empty(),
+            "and no pane in its checkout does not make it abandoned"
+        );
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrating);
+        assert!(!TaskStateView::Integrating.is_deliverable());
+        assert_eq!(
+            TaskStateView::Integrating.undeliverable_reason(),
+            Some("already delivering"),
+            "which is what the operator is told if they press it"
+        );
+        assert!(
+            app.workspace().deliver_ready(&root).is_empty(),
+            "and delivering everything ready passes it by"
+        );
+    }
+
+    /// A slot nothing records is worse than no slot: nothing parks it,
+    /// nothing collects it, and the agent is told it is isolated. The
+    /// placement gives it back and says why instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_placement_that_could_not_be_recorded_gives_the_slot_back() {
+        let repository = repository("svc-unrecorded-placement");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-unrecorded-placement-home");
+        let (first, _) = launched(&app, &root);
+
+        let directory = refuse_writes(&app, &root);
+        let placement = app.workspace().place_new_agent(&root, &[]);
+        allow_writes(&directory);
+
+        let Isolation::Unisolated { reason } = &placement.isolation else {
+            panic!("a placement nothing recorded was reported as isolated: {placement:?}");
+        };
+        assert!(reason.contains("could not be recorded"), "{reason}");
+        assert_eq!(placement.cwd, root, "the agent starts where it was created");
+        assert_eq!(
+            app.workspace().tasks(&root).len(),
+            1,
+            "only the task that was recorded"
+        );
+        assert_eq!(
+            repository
+                .git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            2,
+            "the primary and the one slot that is recorded — the other was given back"
+        );
+        let _ = first;
     }
 }
 
@@ -2660,7 +3240,9 @@ mod naming_tests {
         repository.git_in(&checkout, &["commit", "-qm", "feat: work"]);
         repository.git_in(&checkout, &["branch", "--move", "feat/renamed-by-hand"]);
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().expect("a task was evaluated");
         assert_eq!(
@@ -2726,7 +3308,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().unwrap();
         assert_eq!(task.branch, "feat/answer-ping-with-pong");
@@ -2755,7 +3339,9 @@ mod derived_naming_tests {
             .unwrap();
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert_eq!(evaluation.tasks.last().unwrap().branch, "fix/chosen-first");
         assert_eq!(
@@ -2773,7 +3359,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation
@@ -2795,7 +3383,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation
@@ -2817,7 +3407,9 @@ mod derived_naming_tests {
         commits(&repository, &checkout, "feat(api): answer ping with pong");
         std::fs::write(checkout.join("later.rs"), "in progress").unwrap();
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().unwrap();
         assert_eq!(task.state, TaskStateView::Uncommitted);
@@ -2834,7 +3426,9 @@ mod derived_naming_tests {
         let checkout = placed(&app, &root);
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
-        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+        let evaluation = app
+            .workspace()
+            .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         assert!(
             evaluation

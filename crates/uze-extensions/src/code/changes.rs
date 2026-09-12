@@ -427,8 +427,8 @@ mod repository_tests {
                 .or_exit(1)
         }
 
-        fn read_file(&self, path: &Path) -> Option<String> {
-            std::fs::read_to_string(path).ok()
+        fn read_file(&self, path: &Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|error| error.to_string())
         }
 
         fn display_path(&self, path: &Path) -> String {

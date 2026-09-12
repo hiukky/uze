@@ -31,7 +31,9 @@ const AUTHOR_EMAIL: &str = "test@uze.invalid";
 /// A scratch Git repository, isolated from all ambient Git configuration.
 pub struct Repository {
     root: PathBuf,
-    environment: ProcessEnvGuard<'static>,
+    /// Held, never read: dropping it restores the ambient Git configuration
+    /// and releases the process-env lock.
+    _environment: ProcessEnvGuard<'static>,
 }
 
 impl Repository {
@@ -49,7 +51,10 @@ impl Repository {
 
         let root = base.join("repository");
         std::fs::create_dir_all(&root).expect("could not create the fixture repository");
-        let repository = Self { root, environment };
+        let repository = Self {
+            root,
+            _environment: environment,
+        };
         repository.git(&["init", "--quiet", "-b", INITIAL_BRANCH, "."]);
         repository.git(&["config", "user.name", AUTHOR_NAME]);
         repository.git(&["config", "user.email", AUTHOR_EMAIL]);
@@ -66,13 +71,6 @@ impl Repository {
 
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    /// Sets a process environment variable for the fixture's lifetime,
-    /// under the same guard that isolates Git's configuration — for a test
-    /// that puts a fake tool on `PATH` beside the repository.
-    pub fn set_env(&mut self, key: &'static str, value: impl AsRef<std::ffi::OsStr>) {
-        self.environment.set(key, value);
     }
 
     /// Writes `relative`, stages it, and commits it. Returns the new `HEAD`.
@@ -128,26 +126,50 @@ impl Repository {
     }
 }
 
+/// Runs `git` in `checkout` with every ambient configuration neutralized,
+/// without touching the process environment.
+///
+/// The per-invocation form of what [`Repository`] does. `Repository` has to
+/// export `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` *for the process*, because
+/// the code under test spawns its own `git` and a child inherits only what
+/// this process exports — which costs a crate-wide lock and allows one
+/// fixture at a time. A fixture that only drives `git` itself needs neither:
+/// the same variables are passed per command, so a test may build as many
+/// repositories as it likes and each is still isolated from the operator's
+/// `commit.gpgsign` (which blocks on a GPG agent holding no key), their
+/// hooks, their aliases and their `init.defaultBranch`.
+pub fn isolated_git_in(checkout: &Path, args: &[&str]) -> String {
+    uze_git::write_with_env(
+        checkout,
+        args,
+        &[
+            // An empty configuration file that exists on every platform this
+            // suite runs on, so neither the operator's nor the runner's
+            // settings reach the fixture.
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_SYSTEM", "/dev/null"),
+            ("GIT_AUTHOR_NAME", AUTHOR_NAME),
+            ("GIT_AUTHOR_EMAIL", AUTHOR_EMAIL),
+            ("GIT_COMMITTER_NAME", AUTHOR_NAME),
+            ("GIT_COMMITTER_EMAIL", AUTHOR_EMAIL),
+        ],
+    )
+    .unwrap_or_else(|error| panic!("git must be on PATH for this fixture: {error}"))
+    .successful()
+    .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"))
+    .trim()
+    .to_owned()
+}
+
 /// Turns an existing directory into a repository with one commit holding
 /// everything in it, and answers with that commit.
 ///
-/// Deliberately not a [`Repository`]: that fixture isolates ambient Git
-/// configuration by mutating the process environment, which takes a
-/// crate-wide lock and so allows only one at a time. A test that needs a
-/// project repository *and* a marketplace repository needs two, so the two
-/// settings that actually break a fixture — signing, and the operator's
-/// hooks — are passed per invocation instead.
+/// Deliberately not a [`Repository`], for the reason
+/// [`isolated_git_in`] gives: a test that needs a project repository *and* a
+/// marketplace repository needs two at once, which the process-global form
+/// cannot give it.
 pub fn commit_everything_in(root: &Path) -> String {
-    let isolated = |args: &[&str]| -> String {
-        let mut full = vec!["-c", "commit.gpgsign=false", "-c", "core.hooksPath="];
-        full.extend_from_slice(args);
-        uze_git::write(root, &full)
-            .unwrap_or_else(|error| panic!("git must be on PATH for this fixture: {error}"))
-            .successful()
-            .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"))
-            .trim()
-            .to_owned()
-    };
+    let isolated = |args: &[&str]| -> String { isolated_git_in(root, args) };
     let already = uze_git::read(root, &["rev-parse", "--git-dir"])
         .map(|output| output.is_success())
         .unwrap_or(false);

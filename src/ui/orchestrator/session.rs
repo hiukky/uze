@@ -47,6 +47,7 @@ pub(super) struct AttachAnswers {
     pub(super) support: mpsc::Sender<SupportResolution>,
     pub(super) tasks: mpsc::Sender<TaskResolution>,
     pub(super) deliveries: mpsc::Sender<DeliveryResolution>,
+    pub(super) mutations: mpsc::Sender<MutationResolution>,
     pub(super) git: mpsc::Sender<GitResolution>,
     pub(super) commit_details: mpsc::Sender<CommitDetailResolution>,
     pub(super) code_changes: mpsc::Sender<ChangesResolution>,
@@ -702,12 +703,8 @@ impl Attach<'_> {
                 }
             }
             Action::FinishTask => {
-                if let Some((cwd, task)) = preserved.get(overlay.selected)
-                    && let Ok(app) = tui_application(self.home.clone())
-                {
-                    let _ = app.workspace().finish_task(cwd, &task.id);
-                    self.model
-                        .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
+                if let Some((cwd, task)) = preserved.get(overlay.selected) {
+                    self.mutate_task(cwd.clone(), task, TaskMutation::Finish);
                 }
             }
             // Into the task's own slot when it still has one; otherwise
@@ -743,22 +740,38 @@ impl Attach<'_> {
             Action::DiscardTask => overlay.confirm_discard = true,
             Action::ConfirmDiscard if overlay.confirm_discard => {
                 overlay.confirm_discard = false;
-                if let Some((cwd, task)) = preserved.get(overlay.selected)
-                    && let Ok(app) = tui_application(self.home.clone())
-                {
-                    match app.workspace().discard_task(cwd, &task.id) {
-                        Ok(()) => {
-                            self.model.set_notice(format!("{}: discarded", task.label));
-                        }
-                        Err(error) => self.model.set_notice(error.to_string()),
-                    }
-                    self.model
-                        .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
+                let selected = overlay.selected;
+                if let Some((cwd, task)) = preserved.get(selected) {
+                    self.mutate_task(cwd.clone(), task, TaskMutation::Discard);
                 }
             }
             _ => overlay.confirm_discard = false,
         }
         self.model.dirty = true;
+    }
+
+    /// Finishes or discards one preserved task, off this thread.
+    ///
+    /// Reserved under the task's own id, because a discard removes a
+    /// whole checkout and a second Enter arriving while the first removal
+    /// is still walking it must not start another. The busy notice is the
+    /// only thing said until the answer lands: unlike a delivery there is
+    /// no button drawn for this, so silence would read as the key doing
+    /// nothing.
+    fn mutate_task(&mut self, cwd: PathBuf, task: &TaskView, mutation: TaskMutation) {
+        if !self.model.task_mutation_pending.insert(task.id.clone()) {
+            return;
+        }
+        self.model
+            .set_busy_notice(format!("{}: {}", task.label, mutation.underway()));
+        spawn_task_mutation(
+            self.home,
+            cwd,
+            task.id.clone(),
+            task.label.clone(),
+            mutation,
+            self.answers.mutations.clone(),
+        );
     }
 
     /// The tab/space context menu.
@@ -2000,6 +2013,7 @@ pub(super) struct AttachInbox<'a> {
     pub(super) support: &'a mpsc::Receiver<SupportResolution>,
     pub(super) tasks: &'a mpsc::Receiver<TaskResolution>,
     pub(super) deliveries: &'a mpsc::Receiver<DeliveryResolution>,
+    pub(super) mutations: &'a mpsc::Receiver<MutationResolution>,
     pub(super) git: &'a mpsc::Receiver<GitResolution>,
     pub(super) commit_details: &'a mpsc::Receiver<CommitDetailResolution>,
     pub(super) code_changes: &'a mpsc::Receiver<ChangesResolution>,
@@ -2177,14 +2191,36 @@ impl Attach<'_> {
     /// Nothing here blocks. Every read this schedules runs on a thread of
     /// its own and answers through [`AttachInbox`], which is what lets
     /// this be called every tick without the frame waiting on any of it.
-    pub(super) fn pump(&mut self, inbox: &AttachInbox<'_>) {
+    ///
+    /// Answers with a [`Flow`] for the one thing absorbing can discover
+    /// that no keystroke can: the terminal runtime having gone away
+    /// underneath the client.
+    pub(super) fn pump(&mut self, inbox: &AttachInbox<'_>) -> Flow {
         if let Some((revision, notice)) = crate::self_update::since(self.model.release_revision) {
             self.model.release = notice;
             self.model.release_revision = revision;
             self.model.dirty = true;
         }
-        while let Ok(event) = inbox.events.try_recv() {
-            self.model.apply(event, &self.identities);
+        loop {
+            match inbox.events.try_recv() {
+                Ok(event) => self.model.apply(event, &self.identities),
+                Err(mpsc::TryRecvError::Empty) => break,
+                // The reader thread drops its sender only when the socket
+                // stopped answering: the server exited, was replaced, or
+                // the protocol desynced. Nothing will ever arrive again,
+                // and every request this client writes is already failing
+                // in silence — so the panes on screen are frozen images
+                // of a session that is gone, in a client that still looks
+                // perfectly responsive. Treating it as `Empty`, which is
+                // what a `while let Ok(..)` does, is how that became a
+                // hang with no message and no way out but quitting.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.model
+                        .set_notice("terminal runtime disconnected".to_owned());
+                    self.model.dirty = true;
+                    return Flow::Exit(WorkspaceExit::Management);
+                }
+            }
         }
         for request in adopt_task_names(&mut self.model) {
             let _ = send_request(&mut self.stream, &request);
@@ -2265,6 +2301,12 @@ impl Attach<'_> {
             self.model.dirty = true;
         }
         while let Ok(resolution) = inbox.deliveries.try_recv() {
+            // Released before anything is read out of the answer: an
+            // empty one is exactly the case that used to leave the task
+            // drawn as "delivering" with no way back.
+            if let Some(reserved) = &resolution.reserved {
+                self.model.delivery_pending.remove(reserved);
+            }
             for report in &resolution.reports {
                 self.model.delivery_pending.remove(&report.task.id);
                 self.model.set_task_notice(
@@ -2286,8 +2328,31 @@ impl Attach<'_> {
                 }
             }
             if resolution.reports.is_empty() {
-                self.model.set_notice("nothing ready".to_owned());
+                // "Nothing ready" answers the gesture that offered every
+                // ready task and found none. A press on *one* task that
+                // came back with nothing means something else entirely —
+                // the record is gone, or the document holding it could not
+                // be read — and said as "nothing ready" it told the
+                // operator the task in front of them is not there.
+                self.model.set_notice(match &resolution.reserved {
+                    Some(_) => "the task could not be delivered".to_owned(),
+                    None => "nothing ready".to_owned(),
+                });
             }
+            self.model
+                .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
+            self.model.dirty = true;
+        }
+        while let Ok(resolution) = inbox.mutations.try_recv() {
+            self.model.task_mutation_pending.remove(&resolution.task);
+            // Both endings are said. A finish whose store write failed
+            // used to say nothing at all, and the re-evaluation right
+            // behind it simply redrew the task unchanged — which reads as
+            // the key not working.
+            self.model.set_notice(match resolution.outcome {
+                Ok(()) => format!("{}: {}", resolution.label, resolution.mutation.done()),
+                Err(error) => error,
+            });
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
             self.model.dirty = true;
@@ -2396,5 +2461,6 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
+        Flow::Continue
     }
 }

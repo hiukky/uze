@@ -273,25 +273,20 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Restores `$SHELL` on drop, so a test may set it and a panic still
-    /// leaves the process env as it found it.
-    struct ShellEnvGuard(Option<std::ffi::OsString>);
-
-    impl Drop for ShellEnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: test-only; restores even on panic.
-            match self.0.clone() {
-                Some(value) => unsafe { env::set_var("SHELL", value) },
-                None => unsafe { env::remove_var("SHELL") },
-            }
-        }
+    /// `$SHELL` is process-global and `detect_shell_rc` reads it, so the
+    /// three tests below cannot each set it to a different value and run at
+    /// the same time. The testkit's scope both serializes them against every
+    /// other env mutation in this binary and restores the previous value on
+    /// drop — including on a panic.
+    fn shell(value: &str) -> uze_testkit::env::ProcessEnvGuard<'static> {
+        let mut scope = uze_testkit::env::scope();
+        scope.set("SHELL", value);
+        scope
     }
 
     #[test]
     fn unrecognized_shell_detects_to_none() {
-        let _guard = ShellEnvGuard(env::var_os("SHELL"));
-        // SAFETY: test-only; the guard restores the previous value.
-        unsafe { env::set_var("SHELL", "/bin/dash") };
+        let _shell = shell("/bin/dash");
         let result = detect_shell_rc(Path::new("/home/x"));
         assert_eq!(result, None);
     }
@@ -303,9 +298,7 @@ mod tests {
     /// the whole point is that the two answers differ.
     #[test]
     fn bash_is_pointed_at_the_file_this_platform_actually_reads() {
-        let _guard = ShellEnvGuard(env::var_os("SHELL"));
-        // SAFETY: test-only; the guard restores the previous value.
-        unsafe { env::set_var("SHELL", "/bin/bash") };
+        let _shell = shell("/bin/bash");
         let target = detect_shell_rc(Path::new("/home/x")).expect("bash is recognized");
         let expected = if cfg!(target_os = "macos") {
             "/home/x/.bash_profile"
@@ -320,9 +313,7 @@ mod tests {
     /// it two would be a mistake this catches.
     #[test]
     fn zsh_reads_the_same_file_everywhere() {
-        let _guard = ShellEnvGuard(env::var_os("SHELL"));
-        // SAFETY: test-only; the guard restores the previous value.
-        unsafe { env::set_var("SHELL", "/bin/zsh") };
+        let _shell = shell("/bin/zsh");
         let target = detect_shell_rc(Path::new("/home/x")).expect("zsh is recognized");
         assert_eq!(target.rc_file, Path::new("/home/x/.zshrc"));
     }

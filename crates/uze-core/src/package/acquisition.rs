@@ -221,48 +221,10 @@ fn names_a_local_path(url: &str) -> bool {
 /// The Store holds this, writes it and compares it through
 /// [`Provenance::same_origin`] — it never reads a field or matches a variant.
 /// That is what keeps source mechanisms out of `store.rs`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Provenance {
     pub requested: PackageSource,
     pub resolved: ResolvedSource,
-}
-
-/// Accepts both the current shape and the one a registry written before
-/// provenance existed used: a bare path string.
-///
-/// That legacy value maps without losing anything — a path string *is* a
-/// local source, requested and resolved alike. Compatibility is read-only:
-/// nothing here rewrites the registry, and every new write goes through the
-/// derived `Serialize`, which only ever emits the current shape. There is
-/// deliberately no schema version: this is one fallback for one superseded
-/// representation, not a migration framework.
-impl<'de> Deserialize<'de> for Provenance {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Current {
-                requested: PackageSource,
-                resolved: ResolvedSource,
-            },
-            LegacyLocalPath(PathBuf),
-        }
-        Ok(match Wire::deserialize(deserializer)? {
-            Wire::Current {
-                requested,
-                resolved,
-            } => Self {
-                requested,
-                resolved,
-            },
-            Wire::LegacyLocalPath(path) => Self {
-                requested: PackageSource::Local { path: path.clone() },
-                resolved: ResolvedSource::Local { path },
-            },
-        })
-    }
 }
 
 impl Provenance {
@@ -632,37 +594,6 @@ mod tests {
             },
         };
         assert!(!first.same_origin(&other));
-    }
-
-    /// A registry written before provenance existed must still load, because
-    /// an unreadable registry blocks removal — safe, but it strands the user
-    /// with external state UZE can no longer identify.
-    #[test]
-    fn a_legacy_path_string_still_deserializes_as_a_local_source() {
-        let provenance: Provenance = serde_json::from_str("\"/legacy/plugin\"").unwrap();
-        assert_eq!(
-            provenance.requested,
-            PackageSource::Local {
-                path: PathBuf::from("/legacy/plugin")
-            }
-        );
-        assert_eq!(
-            provenance.resolved,
-            ResolvedSource::Local {
-                path: PathBuf::from("/legacy/plugin")
-            }
-        );
-    }
-
-    /// Reading a legacy value never rewrites it, but a new write emits only
-    /// the current shape.
-    #[test]
-    fn a_new_write_uses_only_the_current_shape() {
-        let provenance: Provenance = serde_json::from_str("\"/legacy/plugin\"").unwrap();
-        let encoded = serde_json::to_string(&provenance).unwrap();
-        assert!(encoded.starts_with('{'), "legacy shape was written back");
-        assert!(encoded.contains("requested"));
-        assert!(encoded.contains("resolved"));
     }
 
     #[test]

@@ -11,12 +11,73 @@ use super::request::LoadedFile;
 use crate::view::Command;
 use crate::view::{Caret, Rgb};
 
+/// How the file terminated its lines when it was read.
+///
+/// Carried because saving must reproduce it. An editor that rejoins with
+/// `\n` turns opening a CRLF file into a whole-file diff the operator
+/// never asked for, and one that always appends a terminator does the
+/// same, one character at a time, to a file that deliberately ends
+/// without one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct LineEndings {
+    /// Every terminated line ended `\r\n`. False for a file that mixes
+    /// them, whose `\r`s are then left in the line text rather than
+    /// dropped — nothing this buffer saves may lose a byte it was given.
+    carriage_return: bool,
+    /// The text ended with a terminator.
+    trailing: bool,
+}
+
+impl Default for LineEndings {
+    /// What a buffer with no file behind it yet writes: the convention of
+    /// every platform UZE runs on, and a final newline.
+    fn default() -> Self {
+        Self {
+            carriage_return: false,
+            trailing: true,
+        }
+    }
+}
+
+/// The file's lines without their terminators, and the terminators it
+/// used — the two halves [`OpenFile::contents`] needs to put it back.
+fn split_lines(text: &str) -> (Vec<String>, LineEndings) {
+    let trailing = text.ends_with('\n');
+    let mut pieces: Vec<&str> = text.split('\n').collect();
+    if trailing {
+        pieces.pop();
+    }
+    let terminated = if trailing {
+        pieces.len()
+    } else {
+        pieces.len().saturating_sub(1)
+    };
+    let carriage_return =
+        terminated > 0 && pieces[..terminated].iter().all(|line| line.ends_with('\r'));
+    let lines = pieces
+        .into_iter()
+        .map(|line| match carriage_return {
+            true => line.strip_suffix('\r').unwrap_or(line).to_owned(),
+            false => line.to_owned(),
+        })
+        .collect();
+    (
+        lines,
+        LineEndings {
+            carriage_return,
+            trailing,
+        },
+    )
+}
+
 /// The file being shown, and the state of editing it.
 pub(super) struct OpenFile {
     pub(super) path: PathBuf,
     /// The editable truth. Split into lines because that is the unit both
     /// the caret and the renderer address; rejoined on save.
     pub(super) lines: Vec<String>,
+    /// What rejoining them has to put back.
+    endings: LineEndings,
     /// One entry per line of `lines`, kept in step through every edit.
     pub(super) highlighted: Vec<Vec<(Rgb, String)>>,
     pub(super) theme: String,
@@ -35,6 +96,7 @@ impl OpenFile {
         Self {
             path,
             lines: Vec::new(),
+            endings: LineEndings::default(),
             highlighted: Vec::new(),
             theme: String::new(),
             caret: Caret::default(),
@@ -76,13 +138,17 @@ impl OpenFile {
     /// to start typing.
     pub(super) fn install(&mut self, loaded: LoadedFile) {
         let (text, highlighted, theme) = loaded.into_parts();
-        self.lines = text.lines().map(str::to_owned).collect();
+        let (lines, endings) = split_lines(&text);
+        self.lines = lines;
+        self.endings = endings;
         self.highlighted = highlighted;
         self.theme = theme;
         if self.lines.is_empty() {
             self.lines.push(String::new());
-            self.highlighted.push(Vec::new());
         }
+        // The highlighter walks the text with `str::lines`, which sees no
+        // line at all in an empty file where the caret still needs one.
+        self.highlighted.resize(self.lines.len(), Vec::new());
         self.modified = false;
         self.error = None;
     }
@@ -233,13 +299,19 @@ impl OpenFile {
         }
     }
 
-    /// The text as it would be written: the lines rejoined, ending in a
-    /// newline. A file whose last line lost its terminator on the way
-    /// through `str::lines` would otherwise gain a one-character diff for
-    /// having been opened.
+    /// The text as it would be written: the lines rejoined with the
+    /// terminator they arrived with, and a final one only if the file had
+    /// one. Saving must not be a rewrite — a file opened and saved
+    /// unedited is byte-for-byte what it was.
     pub(super) fn contents(&self) -> String {
-        let mut text = self.lines.join("\n");
-        text.push('\n');
+        let terminator = match self.endings.carriage_return {
+            true => "\r\n",
+            false => "\n",
+        };
+        let mut text = self.lines.join(terminator);
+        if self.endings.trailing {
+            text.push_str(terminator);
+        }
         text
     }
 }

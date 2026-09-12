@@ -8,7 +8,7 @@
 //! - `foreign/` — vendor-native formats (`.claude-plugin/`, `.codex-plugin/`,
 //!   …) that integrations must translate, never treat as canonical.
 //! - `scenarios/` — deliberate broken/edge states (malformed lock,
-//!   malformed marketplace, nested workspace, …).
+//!   malformed marketplace, …).
 //! - `golden/` — the single evolving "North Star" environment used only by
 //!   the acceptance suite's [`crate::scenario`]-free golden health test.
 //!

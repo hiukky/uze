@@ -32,7 +32,7 @@ cargo test --test package_containment                       # one top-level inte
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings                  # CI uses --all-targets; plain `clippy -- -D warnings` is the Makefile default
 cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 \
-  -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+  -- --skip foreground_status_reports
 
 cargo deny check                                           # licences, advisories, bans, sources (deny.toml); part of `make check`
 make attributions                                          # regenerate CREDITS.md (about.hbs + Cargo.lock); CI fails when it drifts
@@ -226,9 +226,10 @@ need to).
   (`conformance/harnesses/{antigravity,claude,codex,opencode}/`) in a
   disposable Docker environment — the real harness binary, a synthetic
   provider, zero Internet, zero tokens. Vendor-specific by design; never
-  linked into the deterministic suite. Single fixture source:
-  `tests/_fixtures`; per-harness synthetic seeds under
-  `conformance/harnesses/<vendor>/fixtures/`. Run with
+  linked into the deterministic suite. Three fixture trees, by owner: the
+  deterministic suites' inputs in `tests/_fixtures`; the Lab's own
+  marketplace in `conformance/_fixtures/marketplace/`; per-harness session
+  and provider state under `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
   `make lab-replay`. `conformance.yml` runs all four verticals (matrix) —
   its own workflow, on the paths that reach the Lab image plus nightly, so
@@ -398,11 +399,17 @@ properties):
   block in SKILL.md (ADR-030), never a second capability kind — no
   canonical `Command`, no `commands/` surface. Integrations translate the
   policy into vendor-specific encodings; Store bytes stay verbatim.
-- **Portable Hooks (ADR-033)**: one authored `hooks.json` + shell-command
-  ABI (normalized stdin/stdout, bounded output/timeout, first-deny-wins,
-  fail-open for observational vs fail-closed for deny/ask/transform) is the
-  canonical Hook surface; every harness projection (merged config entries,
-  the generated Antigravity plugin, the owned OpenCode bridge) is
+- **Portable Hooks (ADR-033, compiled per ADR-040)**: one authored
+  `hooks.json` is the canonical Hook surface, and its handler contract is
+  `HOOK_*` environment in, exit code out (0 allows, 3 denies with the
+  reason on stderr, anything else fails by the group's effect), bounded
+  output and a per-handler timeout, first-deny-wins, fail-open for
+  observational vs fail-closed for deny/ask/transform. The contract is
+  compiled at install time into the delivered artifact — a generated POSIX
+  `sh` wrapper for the command-hook harnesses, the owned OpenCode bridge —
+  with no `uze` on the execution path; a platform with no template is
+  reported Unsupported, never adapted. Every projection (merged config
+  entries, the generated Antigravity plugin, the OpenCode bridge) is
   receipt-owned, content-identity inspected, and never touches foreign
   hooks/plugins/order.
 - **Machine and project scope are independent**: `uze setup`, `uze doctor`,
@@ -454,7 +461,7 @@ properties):
   an experimental mechanism that projects `AGENTS.md` into a harness
   without writing into the project; it must never recursively invoke
   itself — this is a named, tested boundary
-  (`tests/runtime_shim_boundary.rs`).
+  (`tests/integrations/runtime_boundary.rs`).
 - **`command_performance.rs`** enforces that every CLI leaf command is
   classified as `Budgeted` (low-millisecond, cache-backed via
   `UzeApplication::detect_cached`) or `JustifiedSlow` with a stated reason;

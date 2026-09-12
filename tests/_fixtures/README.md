@@ -32,10 +32,6 @@ old `packages/` set hard to reason about.
   marketplace/consumer example used all over lifecycle tests.
 - `workflow/` — `workflow` package with one Skill `review`; the
   invocation-policy carrier (its `SKILL.md` defines `invoke` blocks).
-- `hook-plugin/` — hooks-only package: a `PreToolUse` deny group
-  (`protect-env`, matcher `shell`) plus an observational `PostToolUse`
-  group (`audit`); the portable-hook lifecycle baseline (ADR-033), consumed
-  by the integration hook tests and the conformance Lab's hook scenarios.
 
 ## foreign/
 
@@ -61,7 +57,6 @@ as its own format. One per vendor, minimal:
   exist.
 - `malformed-marketplace/` — `marketplace.json` with a plugin lacking required
   fields.
-- `nested-workspace/` — workspace root with a nested project (`apps/web`).
 
 Scenarios that depend on UZE-generated state (drifted receipts, projection
 conflicts, corrupted stores) cannot be static files — receipts carry
@@ -84,18 +79,15 @@ proves the current canonical product story end-to-end (see
 Only add a fixture a test actually consumes, and say why in this file. If a
 fixture loses every consumer, delete it — do not keep history in fixtures.
 
-## control/ e bin/
+## bin/
 
-`tests/_fixtures/` é a árvore de fixtures dos testes Rust determinísticos,
-consumida via `uze-testkit`. O Lab mantém o seu marketplace final isolado em
-`conformance/_fixtures/marketplace/`: ele contém a combinação evolutiva de
-Skills e MCP exercida pelos harnesses reais, sem alterar os inputs pequenos e
-estáveis desta árvore.
+`tests/_fixtures/` is the fixture tree for the deterministic Rust suites,
+reached through `uze-testkit`. The Lab keeps its own isolated marketplace in
+`conformance/_fixtures/marketplace/`: the evolving combination of Skills and
+MCP the real harnesses exercise, so it never disturbs the small, stable
+inputs in this tree.
 
-- `control/native-skill-discovery/` — dado do **control C1 do Lab**: um
-  projeto com `.agents/skills/uze-e2e/` e **UZE ausente**. Não é canônico
-  (não é um pacote UZE-authored); mede o caminho harness/provider isolado.
-- `bin/mcp_conformance_fixture.rs` — **fonte do binário de teste**
-  `uze-mcp-conformance-fixture` (não um dado): compilado pelo `Cargo.toml`
-  raiz e usado tanto pelo MCP fixture determinístico quanto pelo marketplace
-  isolado do Lab.
+- `bin/mcp_conformance_fixture.rs` — the **source of the test binary**
+  `uze-mcp-conformance-fixture`, not a piece of data: built by the root
+  `Cargo.toml` and used by both the deterministic MCP fixture and the Lab's
+  isolated marketplace.

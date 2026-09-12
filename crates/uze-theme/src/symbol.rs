@@ -173,16 +173,12 @@ vocabulary! {
 
         /// Work that is finished and waiting to become a request.
         ///
-        /// Its own symbol rather than a borrowed arrow: this used to draw
-        /// `arrow.shift`, which the vocabulary defines as the shift *key*
-        /// in a hint line. A theme repainting the keyboard's marks would
-        /// have silently repainted a task's standing with them.
+        /// Its own symbol rather than a borrowed arrow: a task's standing
+        /// is not a direction, and a theme repainting the arrows must not
+        /// silently repaint it too.
         TaskReady = "task.ready",
-        /// A gate that failed, offered again.
-        ///
-        /// The third place `arrow.shift` was standing in for something
-        /// that is not a key. Running a check again is its own meaning, so
-        /// it is its own mark.
+        /// A gate that failed, offered again. Running a check again is its
+        /// own meaning, so it is its own mark.
         TaskRetry = "task.retry",
 
         // ── an agent's standing in the sidebar ─────────────────────────
@@ -233,12 +229,6 @@ vocabulary! {
         ArrowExternal = "arrow.external",
         /// Two things exchange places.
         ArrowSwap = "arrow.swap",
-        /// The shift key, in a hint line.
-        ArrowShift = "arrow.shift",
-        /// Commits ahead of the upstream.
-        ArrowAhead = "arrow.ahead",
-        /// Commits behind the upstream.
-        ArrowBehind = "arrow.behind",
         /// Points from a thing to where it is going — a delivery's target,
         /// a mapping's right-hand side.
         ArrowTo = "arrow.to",

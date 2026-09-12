@@ -32,8 +32,15 @@ binary is removed.
   `transform` is only valid on `PreToolUse`, and is not deliverable today
   (see [Known limitations](#known-limitations)).
 - **Handlers**: only `type: command`. `timeout` is seconds, bounded to
-  1..300, default 30. `command` may use the `${PLUGIN_ROOT}` placeholder;
-  UZE resolves it at generation time and also exports `PLUGIN_ROOT`.
+  1..300, default 30, and it is the handler's real deadline: the wrapper
+  runs each handler under it and stops one that exceeds it (see
+  [Handler contract](#handler-contract)). A *group* is bounded too: the sum
+  of its handlers' deadlines (plus the second between `TERM` and `KILL`, and
+  one to render the answer) may not exceed 300s either, because that sum is
+  what the harness's own backstop has to outlast — a manifest whose group
+  can outlive the backstop is refused, naming the sum. `command` may use the
+  `${PLUGIN_ROOT}` placeholder; UZE resolves it at generation time and also
+  exports `PLUGIN_ROOT`.
 - **`id`** is optional; absent ids are derived deterministically from
   event and group order (`pre_tool_use-0`, `stop-1`, …).
 
@@ -69,10 +76,34 @@ exit code. It never parses a harness payload and never writes harness JSON.
 | `3` | deny — the reason is read from stderr, and no later handler runs |
 | anything else, a failure to start, or a timeout | a handler failure, resolved by the group's effect |
 
+Only the first 4096 bytes of a handler's stderr become the reason; a handler
+that writes megabytes is still a decision, not a document the harness has to
+parse.
+
 A handler failure is **fail-open** for `observe`/`allow` (the tool proceeds
-and the failure is reported) and **fail-closed** for `deny`/`ask` (the tool
-is denied and the reason names the failure). A safety hook that cannot be
-evaluated is never weakened into a no-op.
+and the failure is reported) and **fail-closed** for `deny`/`ask`/`transform`
+(the tool is denied and the reason names the failure). A safety hook that
+cannot be evaluated is never weakened into a no-op — and neither is a rewrite
+that never happened.
+
+The same rule covers everything that can go wrong before a handler is even
+reached: a payload the wrapper cannot parse and a package root that is gone
+are both failures resolved by the group's effect. Neither is ever treated as
+"nothing matched": an unreadable payload would leave every `HOOK_*` variable
+empty, and a missing root would run the handlers from whatever directory the
+harness happened to be in — the user's own checkout, whose same-named script
+is not the author's.
+
+**Each handler is bounded by its own declared `timeout`.** Past it the
+handler is stopped — `TERM`, then `KILL` a second later — along with every
+process it started, and the group's effect decides, exactly as for any other
+failure (`handler timed out after Ns: …`). There is no portable `timeout(1)`
+(macOS ships none) and no job control in a script, so the wrapper does this
+with a cancellable sleeper and a `ps` read, and it collects the handler's
+stderr in a file under `$TMPDIR` rather than through a pipe — anything the
+handler started inherits a pipe, and one that outlived the deadline would
+hold the harness there long past it. A handler that exits `124` of its own
+accord reads as a timeout, the same ambiguity `timeout(1)` carries.
 
 ```sh
 #!/bin/sh
@@ -127,6 +158,29 @@ copy under `$UZE_HOME/state/attachments/<harness>/hooks/exec` — a shared
 vendor config file has no plugin root to resolve against, so every entry
 names the wrapper by absolute path.
 
+A native entry runs it as:
+
+```
+<wrapper> <plugin-root> <event> <effect> <seconds>:<handler> [<seconds>:<handler>…]
+```
+
+One argument per handler, carrying its author's deadline beside its command
+— so what will run, and for how long, is readable in the harness's own
+configuration. The entry's own `timeout` key is the *harness's* backstop and
+is sized (`sum(handler + 1) + 1`) so it can never be the bound that fires
+first — which is also why a manifest whose group needs more than 300s is
+refused rather than clamped: a hook the harness kills is read as
+non-blocking, so a clamped backstop would turn a `deny` group into an
+allowance.
+
+**Nothing else implements this contract.** There is no UZE binary on the
+execution path and no second route: a platform the `sh` template does not
+cover delivers no hook at all and says so (see
+[Known limitations](#known-limitations)). The wrapper's answer for every
+fixture — decision document, exit status, reason — is recorded per harness
+in `crates/uze-integrations/tests/goldens/hooks/`, so a change to what a
+harness is told is a reviewed diff.
+
 Compatibility is semantic, per event and effect. A `Stop` hook is never
 represented as a tool callback: on OpenCode it is Degraded with the reason
 stated, and it is not attached. `deny`/`ask` are Unsupported on OpenCode V2
@@ -179,15 +233,20 @@ stated) · **—** = not expressible.
 
 - **`transform` is not deliverable.** Rewriting the tool input needs a
   channel for the handler to answer on, which an exit code is not. A
-  `transform` group degrades on every harness — stated, never silently
-  attached — until its own change defines that channel.
+  `transform` group is degraded on every harness — stated, never a silent
+  claim — until its own change defines that channel. Delivered degraded, it
+  is fail-closed like `deny`/`ask`: a rewrite that did not happen must not
+  let the original input through as if it had.
 - **`jq` is the shell wrapper's dependency.** It is not declarable by a
   package yet (plugin `requirements` is its own change); `uze doctor`
   reports it missing, and until it is installed a `deny` group denies while
   an `observe` group proceeds and reports.
-- **Windows has no wrapper template.** A PowerShell wrapper is future work;
-  until then hooks there take the packager-runtime fallback route, which
-  speaks the same contract but keeps working only while `uze` is installed.
+- **Windows has no wrapper template, so Windows has no hooks.** A PowerShell
+  wrapper is future work; until it exists a hook there is reported
+  Unsupported with that reason and nothing is attached. There is no second
+  route to fall back to, by design: an entry running something other than
+  the wrapper would be a second implementation of the contract, and the
+  first thing two implementations do is disagree.
 - **Antigravity ran delivered hooks only in a signed-in session through
   1.1.24.** Its hook entries load and list correctly in either mode
   (`hooks_manager: loaded N named hooks`), but the executor reads

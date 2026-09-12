@@ -21,7 +21,6 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
-    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent, HookNativeOutput},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
@@ -66,6 +65,10 @@ use plugin::{
 use provision::{detect_binary, provision_cli};
 use skills::materialize_shim;
 const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
+/// The owner every catalogue UZE writes into Claude's marketplace UI
+/// declares. Named once so the two documents that carry it cannot drift
+/// into attributing UZE's local marketplace to someone else.
+const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
 
 /// Claude Code peer integration. Its transparent-attachment strategy is a
 /// UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
@@ -289,7 +292,7 @@ impl IntegrationPort for ClaudeIntegration {
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
+            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -586,14 +589,10 @@ impl IntegrationPort for ClaudeIntegration {
                     &self.uze_home,
                     self.id(),
                     config_file,
-                    event.ok_or_else(|| {
-                        UzeError::ExposureUnavailable(
-                            "Claude hook plan has no event to attach".to_owned(),
-                        )
-                    })?,
+                    *event,
                     entry_name,
                     expected,
-                    wrapper.as_deref().map(|path| ("claude", path)),
+                    Some(("claude", wrapper.as_path())),
                 )?;
                 Ok(Some(path))
             }
@@ -628,19 +627,13 @@ impl IntegrationPort for ClaudeIntegration {
                 wrapper,
                 ..
             } => {
-                // A ledger entry damaged or predating the event field must
-                // block inspection, never panic doctor/remove.
-                let Some(event) = *event else {
-                    return AttachmentInspection {
-                        state: AttachmentState::Blocked,
-                        reason: "hook receipt has no event; refusing to inspect".to_owned(),
-                    };
-                };
+                // A damaged ledger entry must block inspection, never
+                // panic doctor/remove.
                 hook_projection::inspect_event_entry(
                     config_file,
-                    event,
+                    *event,
                     expected,
-                    wrapper.as_deref().map(|path| ("claude", path)),
+                    Some(("claude", wrapper.as_path())),
                 )
             }
             ManagedArtifact::IntegrationOwned {
@@ -684,17 +677,11 @@ impl IntegrationPort for ClaudeIntegration {
                 wrapper,
                 ..
             } => {
-                let Some(event) = *event else {
-                    return Ok(AttachmentInspection {
-                        state: AttachmentState::Blocked,
-                        reason: "hook receipt has no event; refusing to detach".to_owned(),
-                    });
-                };
                 let detached = hook_projection::remove_event_entry(
                     config_file,
-                    event,
+                    *event,
                     expected,
-                    wrapper.as_deref().map(|path| ("claude", path)),
+                    Some(("claude", wrapper.as_path())),
                 )?;
                 hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "claude");
                 Ok(detached)
@@ -721,7 +708,7 @@ impl IntegrationPort for ClaudeIntegration {
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
-                    self.cleanup_unused_shim(target)?;
+                    self.cleanup_unused_wrapper(target)?;
                 }
                 Ok(detached)
             }
@@ -756,35 +743,12 @@ impl ClaudeIntegration {
             &self.hook_capabilities(),
             self.hooks_config_path(),
             "claude",
-            self.id(),
             // Claude's hook entries accept `command` + `args`, so the
             // wrapper is started directly: nothing to quote, no shell.
             true,
             false,
             "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
         )
-    }
-}
-
-impl HookAdapterPort for ClaudeIntegration {
-    fn adapter_id(&self) -> &'static str {
-        IntegrationPort::id(self)
-    }
-
-    fn normalize_input(
-        &self,
-        native: &serde_json::Value,
-        event: HookEvent,
-    ) -> std::result::Result<HookCommandInput, String> {
-        hook_projection::claude_normalize_input(native, event)
-    }
-
-    fn render_output(
-        &self,
-        outcome: &HookDispatchOutcome,
-        event: HookEvent,
-    ) -> std::result::Result<HookNativeOutput, String> {
-        hook_projection::claude_render_output(outcome, event)
     }
 }
 

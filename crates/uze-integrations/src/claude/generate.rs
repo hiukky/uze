@@ -59,11 +59,7 @@ pub(super) const GENERATED_PLUGIN_KIND: &str = "claude-plugin-generated";
 /// under the Store, so writing here can never mutate canonical package
 /// bytes.
 pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join("claude")
-        .join("generated")
+    crate::shared::path::attachment_root(uze_home, "claude").join("generated")
 }
 
 fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {
@@ -414,7 +410,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .collect();
     serde_json::json!({
         "name": GENERATED_MARKETPLACE_NAME,
-        "owner": { "name": "UZE Local (generated)", "url": "https://github.com/anomalyco/opencode" },
+        "owner": { "name": "UZE Local (generated)", "url": super::MARKETPLACE_OWNER_URL },
         "plugins": plugins
     })
 }
