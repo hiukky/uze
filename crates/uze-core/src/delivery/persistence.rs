@@ -9,7 +9,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{Result, UzeError, home::UzeHome};
@@ -130,7 +130,7 @@ impl MutationLock {
                 path: path.clone(),
                 source,
             })?;
-        match try_lock_exclusive(&file) {
+        match try_lock_exclusive_briefly(&file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 // Read rather than trusted: the pid is display only, and a
@@ -158,6 +158,32 @@ fn recorded_pid(path: &Path) -> Option<u32> {
         .ok()?
         .lines()
         .find_map(|line| line.strip_prefix("pid=")?.trim().parse().ok())
+}
+
+/// How long a contended lock is retried before it is reported as held.
+///
+/// A `flock` belongs to the open file description, and a `fork` on any
+/// thread of this process copies every descriptor into the child until its
+/// `exec` closes them — so a guard this thread just dropped can still be
+/// "held", by nobody, for the microseconds another thread's spawn is
+/// between the two calls. Detection spawns harness binaries constantly. A
+/// genuine holder is another UZE process that keeps the lock for the whole
+/// command, which this budget never masks.
+const CONTENTION_GRACE: Duration = Duration::from_millis(25);
+const CONTENTION_POLL: Duration = Duration::from_millis(2);
+
+fn try_lock_exclusive_briefly(file: &File) -> std::io::Result<()> {
+    let deadline = Instant::now() + CONTENTION_GRACE;
+    loop {
+        match try_lock_exclusive(file) {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(CONTENTION_POLL);
+            }
+            outcome => return outcome,
+        }
+    }
 }
 
 #[cfg(unix)]
