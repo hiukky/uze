@@ -4,6 +4,44 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.5](https://github.com/hiukky/uze/compare/v0.0.0-alpha.4...v0.0.0-alpha.5) - 2026-09-13
+
+### Features
+
+- Make every shortcut optional, configurable, and visible ([#48](https://github.com/hiukky/uze/pull/48)) ([e0136c7](https://github.com/hiukky/uze/commit/e0136c75f1fe77beb3bfd0d7261670e5d328cb4d))
+- **ui:** One code surface for a checkout — its changes, its files, its history ([#51](https://github.com/hiukky/uze/pull/51)) ([6ceeaf2](https://github.com/hiukky/uze/commit/6ceeaf209b5fc04e546cf519d8cce3349e176170))
+- Choose the glyph set apart from the palette ([#58](https://github.com/hiukky/uze/pull/58)) ([5a69b27](https://github.com/hiukky/uze/commit/5a69b27bcf6f83f5bd87671a7af0314daadcc7b2))
+- **theme:** Carry dracula, catppuccin mocha and tokyo night ([#61](https://github.com/hiukky/uze/pull/61)) ([4988067](https://github.com/hiukky/uze/commit/49880670b96ea711b7cd1687f5d7602ed1d95072))
+- Auto-update the installed binary and announce new releases ([#60](https://github.com/hiukky/uze/pull/60)) ([7c758d7](https://github.com/hiukky/uze/commit/7c758d7b74d0e016feb385d7000e542d2a7fbb8e))
+
+### Fixes
+
+- Say `delivering` once, and name the package job by its platform ([#47](https://github.com/hiukky/uze/pull/47)) ([9d1786a](https://github.com/hiukky/uze/commit/9d1786add509dd09de92b863b8f225631020ad95))
+- **profiles:** Write only what each harness accepts, preview it first ([#59](https://github.com/hiukky/uze/pull/59)) ([32b13ed](https://github.com/hiukky/uze/commit/32b13edd677d323a330e03436a37c4a50c468e59))
+- **worktree:** Never replay delivered work, one task per reused slot ([#62](https://github.com/hiukky/uze/pull/62)) ([83b63c1](https://github.com/hiukky/uze/commit/83b63c11805225dbdde964d4aeff726e8028fd4a))
+- Fail closed on hooks, delivery, updates and the terminal runtime ([#63](https://github.com/hiukky/uze/pull/63)) ([ba0448f](https://github.com/hiukky/uze/commit/ba0448f09545834043cb536d22df2cd4fcdaa611))
+- **ui:** Caption agents by harness id; keep forked children out of terminal tests ([#64](https://github.com/hiukky/uze/pull/64)) ([ef6e703](https://github.com/hiukky/uze/commit/ef6e703ef2f60eb29ce6c430033acd0f159927a6))
+
+### Refactor
+
+- **ui:** Act on a row from its drawer, not from a menu ([#57](https://github.com/hiukky/uze/pull/57)) ([eb2c501](https://github.com/hiukky/uze/commit/eb2c5012bb60db36a804f4fadc337b59be6a424c))
+
+### Documentation
+
+- Archive four delivered changes and record what they decided ([#49](https://github.com/hiukky/uze/pull/49)) ([fde7fa7](https://github.com/hiukky/uze/commit/fde7fa756e3102b0ffd2958c6bf4fb0e8d5087b5))
+
+### Tests
+
+- **conformance:** Follow the AGY 1.1.28 and codex 0.154.0 drifts ([#50](https://github.com/hiukky/uze/pull/50)) ([37373a2](https://github.com/hiukky/uze/commit/37373a2e7f95ad92589575ff236ab2953c838f9d))
+
+### Dependencies
+
+- **deps:** Bump taiki-e/install-action from 2.87.5 to 2.87.8 ([#52](https://github.com/hiukky/uze/pull/52)) ([affec1b](https://github.com/hiukky/uze/commit/affec1b61402cc0e6d8949a72f9d6c586f5d33cc))
+- **deps:** Bump actions/download-artifact from 7.0.0 to 8.0.1 ([#53](https://github.com/hiukky/uze/pull/53)) ([af37cd5](https://github.com/hiukky/uze/commit/af37cd5046a1f20d2ab8897c983087dfb4d14fcb))
+- **deps:** Bump actions/attest-build-provenance from 3.0.0 to 4.2.2 ([#54](https://github.com/hiukky/uze/pull/54)) ([c7e9c43](https://github.com/hiukky/uze/commit/c7e9c431f172c2c399290fd52082c282ce62f024))
+- **deps:** Bump the cargo-dependencies group with 3 updates ([#55](https://github.com/hiukky/uze/pull/55)) ([0b8707b](https://github.com/hiukky/uze/commit/0b8707b26691f32de534dd74f65a1226de0886a4))
+- **deps:** Bump noyalib from 0.0.39 to 0.0.41 ([#56](https://github.com/hiukky/uze/pull/56)) ([d47fd35](https://github.com/hiukky/uze/commit/d47fd355cd657fa6997fd4a0172217df3c21e02b))
+
 ## [0.0.0-alpha.4](https://github.com/hiukky/uze/compare/v0.0.0-alpha.3...v0.0.0-alpha.4) - 2026-09-08
 
 ### Features
