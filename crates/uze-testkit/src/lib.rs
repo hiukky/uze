@@ -32,6 +32,7 @@ pub mod fake_harness;
 pub mod fixtures;
 pub mod git;
 pub mod marketplace;
+pub mod process;
 pub mod scenario;
 pub mod temp;
 

@@ -398,11 +398,9 @@ mod tests {
         // in half would pass this test for the wrong reason.
         let dir = uze_testkit::temp::scratch("named-script");
         let script = dir.join("uzeprobe");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
-        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        uze_testkit::process::install_executable(&script, b"#!/bin/sh\nsleep 30\n");
 
-        let mut child = spawn_when_not_busy(&script);
+        let mut child = std::process::Command::new(&script).spawn().unwrap();
         let named = wait_for_name(child.id() as libc::pid_t, "uzeprobe");
         let _ = child.kill();
         let _ = child.wait();
@@ -441,28 +439,6 @@ mod tests {
             Some("sh"),
             "an interpreter given `-c` has no script, so it is its own answer"
         );
-    }
-
-    /// Spawns `program`, retrying while the kernel reports the file busy.
-    ///
-    /// A file this process wrote moments ago cannot be `exec`ed while any
-    /// descriptor to it is still open for writing — and in a test binary
-    /// that is spawning from several threads at once, another thread's
-    /// `fork` inherits that descriptor for the instant before its own
-    /// `exec` closes it. `ETXTBSY` is that instant, and it is a property of
-    /// the harness rather than of anything under test.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn spawn_when_not_busy(program: &std::path::Path) -> std::process::Child {
-        for _ in 0..100 {
-            match std::process::Command::new(program).spawn() {
-                Ok(child) => return child,
-                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(error) => panic!("spawning {}: {error}", program.display()),
-            }
-        }
-        panic!("{} stayed busy", program.display());
     }
 
     /// Polls until `pid` is reported by `expected`, and says what it saw if
