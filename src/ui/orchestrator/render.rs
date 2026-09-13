@@ -825,13 +825,16 @@ pub(super) fn render_sidebar(
                 // The space's `⇄` shows the other side of it: where its work
                 // lives on the header, and what each agent runs on here —
                 // the branch is what the work is, the harness what does it.
+                // Named by its id (`claude`, `codex`), the same word the
+                // picker launches and the process reports, not the vendor's
+                // product name.
                 let showing_runtime = model.roots_shown.contains(&space.id);
                 let detail = if lost {
                     "checkout removed".to_owned()
                 } else if let Some(harness) =
                     agent_for_tab(identities, tab).filter(|_| showing_runtime)
                 {
-                    harness.display_name.to_owned()
+                    harness.binary.to_owned()
                 } else {
                     model
                         .tab_task(tab.id)

@@ -1928,8 +1928,10 @@ mod workspace_tests {
         model.roots_shown.insert(space);
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(
-            rows[caption].contains("Agent") && !rows[caption].contains("agent/t1"),
-            "the harness in the branch's place: {rows:#?}"
+            rows[caption].contains("agent")
+                && !rows[caption].contains("Agent")
+                && !rows[caption].contains("agent/t1"),
+            "the harness id in the branch's place: {rows:#?}"
         );
 
         model.roots_shown.remove(&space);
