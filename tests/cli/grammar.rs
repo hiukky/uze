@@ -381,3 +381,96 @@ fn no_builtin_command_name_contains_at() {
     }
     let _ = std::fs::remove_dir_all(home);
 }
+
+/// `uze --help | head -3` — the shell idiom every report invites. Rust's
+/// runtime ignores `SIGPIPE`, so the first `println!` after the reader
+/// leaves used to panic and exit 101; the process must instead end at the
+/// signal, quietly. The reader here closes before the child writes at all,
+/// which is the same condition without the race a real `head` introduces.
+#[test]
+fn a_reader_that_leaves_ends_the_command_quietly() {
+    use std::process::Stdio;
+
+    let home = temporary_home("closed-pipe");
+    std::fs::create_dir_all(&home).unwrap();
+    for arguments in [vec!["--help"], vec!["doctor"]] {
+        let mut child = uze(&home)
+            .args(&arguments)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take());
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_ne!(
+            output.status.code(),
+            Some(101),
+            "`uze {}` panicked on a closed pipe: {stderr}",
+            arguments.join(" ")
+        );
+        assert!(
+            !stderr.contains("panicked"),
+            "`uze {}` reported a panic: {stderr}",
+            arguments.join(" ")
+        );
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// An argument that is not UTF-8 is clap's to refuse — `std::env::args()`
+/// used to panic on one before clap ever saw the command line.
+#[test]
+fn a_non_utf8_argument_is_refused_rather_than_panicked_on() {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let home = temporary_home("non-utf8-argument");
+    std::fs::create_dir_all(&home).unwrap();
+    let output = uze(&home)
+        .arg(std::ffi::OsStr::from_bytes(&[0xff]))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert_ne!(output.status.code(), Some(101), "panicked: {stderr}");
+    assert!(!stderr.contains("panicked"), "panicked: {stderr}");
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// `uze market add help` asked to add a marketplace named `help`. It used
+/// to print the `market` help page and exit 0, which a script reads as the
+/// marketplace having been added.
+#[test]
+fn a_trailing_help_positional_is_a_value_not_a_help_request() {
+    let home = temporary_home("positional-help");
+    std::fs::create_dir_all(&home).unwrap();
+
+    for arguments in [
+        vec!["market", "add", "help"],
+        vec!["remove", "help"],
+        vec!["plugin", "inspect", "help"],
+    ] {
+        let output = uze(&home).args(&arguments).output().unwrap();
+        let rendered = arguments.join(" ");
+        assert!(
+            !output.status.success(),
+            "`uze {rendered}` did nothing and reported success"
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("UZE market"),
+            "`uze {rendered}` printed a help page instead of acting"
+        );
+    }
+
+    // The verb itself still reaches the renderer, at every depth it stands at.
+    for arguments in [vec!["help"], vec!["help", "market"], vec!["market", "help"]] {
+        let output = uze(&home).args(&arguments).output().unwrap();
+        assert!(
+            output.status.success(),
+            "`uze {}` must still print help",
+            arguments.join(" ")
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("UZE"));
+    }
+    let _ = std::fs::remove_dir_all(home);
+}

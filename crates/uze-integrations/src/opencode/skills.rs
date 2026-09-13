@@ -138,38 +138,15 @@ impl OpenCodeIntegration {
             && target.join("SKILL.md").is_file()
     }
 
-    pub(super) fn cleanup_unused_skill_wrapper(&self, target: &Path) -> Result<()> {
-        let managed_root = self
-            .uze_home
-            .state_dir()
-            .join("attachments")
-            .join("opencode");
-        if !target.starts_with(&managed_root) || !target.is_dir() {
-            return Ok(());
-        }
-        let referenced = std::fs::read_dir(&self.skills_dir)
-            .map_err(|source| UzeError::Read {
-                path: self.skills_dir.clone(),
-                source,
-            })?
-            .filter_map(std::result::Result::ok)
-            .any(|entry| std::fs::read_link(entry.path()).ok().as_deref() == Some(target));
-        if referenced {
-            return Ok(());
-        }
-        if target.join("SKILL.md").is_file() {
-            fs_remove_dir_all(target)?;
-            crate::shared::path::prune_empty_package_dir(
-                target,
-                &self
-                    .uze_home
-                    .state_dir()
-                    .join("attachments")
-                    .join("opencode")
-                    .join("skills"),
-            );
-        }
-        Ok(())
+    pub(super) fn cleanup_unused_wrapper(&self, target: &Path) -> Result<()> {
+        let managed_root = crate::shared::path::attachment_root(&self.uze_home, "opencode");
+        crate::shared::path::cleanup_unused_wrapper(
+            target,
+            &managed_root,
+            &self.skills_dir,
+            &managed_root.join("skills"),
+            &|wrapper| wrapper.join("SKILL.md").is_file(),
+        )
     }
 
     /// Materializes this Skill's wrapper when this resource owns the shared
@@ -201,19 +178,21 @@ impl OpenCodeIntegration {
             .map(|name| self.skills_dir.join(name))
             .unwrap_or_else(|| target.to_path_buf());
         if !policy.model && !crate::shared::skill::has_opencode_autoinvoke_false(&bytes) {
-            return Err(projection_conflict(
+            return Err(crate::shared::projection::conflict(
                 resource,
                 &entry,
                 target,
                 "OpenCode needs metadata.opencode/autoinvoke: false for a user-only Skill",
+                self.id(),
             ));
         }
         if !policy.user && !crate::shared::skill::has_slash_false(&bytes) {
-            return Err(projection_conflict(
+            return Err(crate::shared::projection::conflict(
                 resource,
                 &entry,
                 target,
                 "OpenCode needs slash: false for a model-only Skill",
+                self.id(),
             ));
         }
         Ok(())
@@ -309,33 +288,6 @@ impl OpenCodeIntegration {
                 .to_owned(),
         }
     }
-}
-
-/// Deterministic, pre-attach projection conflict: the shared
-/// `~/.agents/skills` entry this resource would reuse is already owned by
-/// another integration's artifact that lacks OpenCode's invocation
-/// encoding (ADR-030 §25 — never degrade silently).
-fn projection_conflict(
-    resource: &Resource,
-    entry: &Path,
-    reused_target: &Path,
-    requirement: &str,
-) -> UzeError {
-    let requested_target = resource
-        .capability
-        .path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| resource.capability.path.clone());
-    UzeError::ProjectionConflict(Box::new(uze_core::error::ProjectionConflictDetails {
-        entry: entry.to_path_buf(),
-        requested: format!("{} ({requirement})", resource.identity()),
-        requested_integration: "opencode".to_owned(),
-        requested_target,
-        existing: format!("{} ({requirement})", resource.identity()),
-        existing_integration: "shared-root owner".to_owned(),
-        existing_target: reused_target.to_path_buf(),
-    }))
 }
 
 fn fs_create_dir_all(path: &Path) -> Result<()> {

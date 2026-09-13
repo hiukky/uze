@@ -4,8 +4,8 @@ use uze_core::{
     UzeEngine, UzeHome, UzeStore,
     capability::{CapabilityKind, Representation},
     exposure::{ExposureMechanism, ExposurePlan},
-    integration::{IntegrationPort, assess_environment},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    integration::IntegrationPort,
+    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus, route},
 };
 
 use uze_integrations::{
@@ -70,32 +70,26 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     assert_eq!(resource.capability.representation, Representation::Standard);
     assert!(resource.package_root().is_some());
 
-    let claude_skill = assess_environment(&environment, &claude).pop().unwrap();
-    assert_eq!(claude_skill.decision.route, CompatibilityRoute::Adaptable);
-    assert_eq!(
-        claude_skill.decision.verification,
-        VerificationStatus::Unverified
-    );
+    let claude_skill = claude.exposure_plan(resource);
+    assert_eq!(claude_skill.route, CompatibilityRoute::Adaptable);
+    assert_eq!(claude_skill.verification, VerificationStatus::Unverified);
     assert!(matches!(
-        claude_skill.exposure_plan.mechanism,
+        claude_skill.mechanism,
         ExposureMechanism::RuntimeBridge { .. }
     ));
 
-    let codex_skill = assess_environment(&environment, &codex).pop().unwrap();
-    assert_eq!(codex_skill.decision.route, CompatibilityRoute::Adaptable);
-    assert_eq!(
-        codex_skill.decision.verification,
-        VerificationStatus::Unverified
-    );
+    let codex_skill = codex.exposure_plan(resource);
+    assert_eq!(codex_skill.route, CompatibilityRoute::Adaptable);
+    assert_eq!(codex_skill.verification, VerificationStatus::Unverified);
     assert!(matches!(
-        codex_skill.exposure_plan.mechanism,
+        codex_skill.mechanism,
         ExposureMechanism::FilesystemProjection { .. }
     ));
 
-    let opencode_skill = assess_environment(&environment, &opencode).pop().unwrap();
-    assert_eq!(opencode_skill.decision.route, CompatibilityRoute::Adaptable);
+    let opencode_skill = opencode.exposure_plan(resource);
+    assert_eq!(opencode_skill.route, CompatibilityRoute::Adaptable);
     assert!(matches!(
-        opencode_skill.exposure_plan.mechanism,
+        opencode_skill.mechanism,
         ExposureMechanism::FilesystemProjection { .. }
     ));
 
@@ -136,12 +130,19 @@ impl IntegrationPort for FakeIntegration {
 fn a_new_peer_integration_needs_no_core_change() {
     let (home_root, environment) = stored_environment("fake-integration");
     let cursor = FakeIntegration { id: "cursor" };
-    let skill = assess_environment(&environment, &cursor).pop().unwrap();
+    let resource = environment.resources.first().unwrap();
 
-    assert_eq!(skill.decision.route, CompatibilityRoute::Native);
-    assert_eq!(skill.integration_id, "cursor");
+    // The Core routes an integration it has never heard of from what that
+    // integration declares, and nothing else.
+    let decision = route(&resource.capability, &cursor.capabilities());
+    assert_eq!(decision.route, CompatibilityRoute::Native);
+    assert_eq!(decision.evidence, "fake contract evidence");
+    assert_eq!(cursor.id(), "cursor");
+
+    let skill = cursor.exposure_plan(resource);
+    assert_eq!(skill.route, CompatibilityRoute::Native);
     assert!(matches!(
-        skill.exposure_plan.mechanism,
+        skill.mechanism,
         ExposureMechanism::DirectNative { .. }
     ));
 

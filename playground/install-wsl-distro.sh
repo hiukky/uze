@@ -40,7 +40,10 @@ trap 'rm -rf -- "$stage_dir"' EXIT
 
 cd "$repo_root"
 echo "Building UZE and the playground MCP server from $repo_root…"
-cargo build --locked --release --bin uze --bin playground-mcp
+cargo build --locked --release --bin uze
+# The playground server is behind `dev-servers`, with rmcp and tokio; the
+# `uze` binary above deliberately links neither.
+cargo build --locked --release --features dev-servers --bin playground-mcp
 
 install -m 0755 target/release/uze "$stage_dir/uze"
 install -m 0755 target/release/playground-mcp "$stage_dir/playground-mcp"

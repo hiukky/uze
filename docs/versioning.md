@@ -149,8 +149,8 @@ The terminal workspace checks when it opens and every hour it stays open,
 on a thread of its own. A CLI command never touches the network: when the
 last answer is more than an hour old it hands the check to a detached
 `uze self-update` and exits, and what that finds is what the next command
-mentions — once per release, on stderr, and never after `uze agent`,
-`hook-exec` or `terminal`, whose reader is not a person at a prompt.
+mentions — once per release, on stderr, and never after `uze agent` or
+`terminal`, whose reader is not a person at a prompt.
 
 "Latest" is where `releases/latest` redirects, the same answer the
 installer resolves. The archive is verified against `SHASUMS256.txt` the
@@ -170,6 +170,14 @@ automatic one only changes who started it.
 
 `UZE_AUTOUPDATE=off` stops the check, `notify` checks without replacing,
 and `on` is the default — except where `CI` is set, which is off unless the
-variable says otherwise. `UZE_BASE_URL` means what it means to the
-installer: a mirror, or a local fixture. What the updater remembers between
-runs is in `~/.uze/state/update.json`.
+variable says otherwise. What the updater remembers between runs is in
+`~/.uze/state/update.json`.
+
+`UZE_BASE_URL` is the installer's alone. The updater downloads a binary and
+renames it over the one in `PATH`, so where it downloads from is a constant
+in the binary and not an environment variable: anything that can set one —
+a cloned repository's `.envrc`, a `Makefile`, a parent process — would
+otherwise choose which `uze` a person runs from then on, and the checksum
+could not tell, because `SHASUMS256.txt` is fetched from that same root. A
+debug build still honours it, so the offline fixture suite can drive a whole
+pass without a network.

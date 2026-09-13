@@ -16,9 +16,8 @@ use crate::{
     exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
     harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
     home::UzeHome,
-    project::EffectiveEnvironment,
     provisioning::ProvisionStatus,
-    router::{HarnessCapabilities, RouteDecision, route},
+    router::HarnessCapabilities,
     state,
     store::StoredPackage,
 };
@@ -63,16 +62,7 @@ pub enum ManagedArtifact {
     /// A delivery whose ownership proof only the owning integration can
     /// interpret. The Core routes it by `receipt.integration`, never reads
     /// `detail`, and refuses to inspect or detach it generically.
-    ///
-    /// `MARKETPLACE_PLUGIN` is accepted on read so a ledger written before
-    /// this variant existed stays interpretable. Its `marketplace_root` and
-    /// `package_root` land in `detail` through the flattened capture, and
-    /// `kind` falls back to the name that artifact had. Reading a legacy
-    /// receipt never rewrites it; only a genuinely new attachment writes,
-    /// and a new write always emits this representation.
-    #[serde(alias = "MARKETPLACE_PLUGIN")]
     IntegrationOwned {
-        #[serde(default = "legacy_artifact_kind")]
         kind: String,
         selector: String,
         #[serde(flatten, default)]
@@ -88,13 +78,10 @@ pub enum ManagedArtifact {
     HookConfigEntry {
         config_file: PathBuf,
         entry_name: String,
-        event: Option<crate::hook::HookEvent>,
+        event: crate::hook::HookEvent,
         expected: String,
-        /// The generated wrapper this entry runs, when the hook took the
-        /// native route; `None` for the packager-runtime fallback, which
-        /// has no artifact of its own.
-        #[serde(default)]
-        wrapper: Option<PathBuf>,
+        /// The generated wrapper this entry runs.
+        wrapper: PathBuf,
     },
     /// A whole, UZE-owned derived file the harness loads from its own
     /// discovery directory (the OpenCode bridge): no configuration entry
@@ -103,13 +90,6 @@ pub enum ManagedArtifact {
     ManagedHookFile {
         path: PathBuf,
     },
-}
-
-/// The `kind` a receipt predating [`ManagedArtifact::IntegrationOwned`]
-/// implicitly had. Deliberately not a schema version: it is one default for
-/// one superseded variant, not a migration framework.
-fn legacy_artifact_kind() -> String {
-    "marketplace-plugin".to_owned()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -941,49 +921,13 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
 }
 
 #[cfg(test)]
-mod artifact_compatibility_tests {
+mod artifact_representation_tests {
     use super::*;
 
-    /// A ledger written before `IntegrationOwned` existed must stay readable,
-    /// because an unreadable receipt blocks removal — safe, but it strands the
-    /// user with external state UZE can no longer identify.
+    /// The ledger carries one representation for an integration-owned
+    /// artifact, and a write emits exactly it.
     #[test]
-    fn legacy_marketplace_receipt_still_deserializes() {
-        let legacy = r#"{
-            "package_id": "plugin-a",
-            "resource_identity": null,
-            "integration": "codex",
-            "strategy": "native-plugin-marketplace",
-            "artifact": {
-                "MARKETPLACE_PLUGIN": {
-                    "selector": "plugin-a@uze-local",
-                    "marketplace_root": "/uze/store",
-                    "package_root": "/uze/store/packages/plugin-a"
-                }
-            }
-        }"#;
-        let receipt: AttachmentReceipt =
-            serde_json::from_str(legacy).expect("legacy receipt reads");
-        let ManagedArtifact::IntegrationOwned {
-            kind,
-            selector,
-            detail,
-        } = &receipt.artifact
-        else {
-            panic!("legacy artifact did not map onto the integration-owned variant");
-        };
-        assert_eq!(kind, "marketplace-plugin");
-        assert_eq!(selector, "plugin-a@uze-local");
-        // The superseded fields survive as opaque detail, so the owning
-        // integration can still prove ownership and detach safely.
-        assert_eq!(detail["marketplace_root"], "/uze/store");
-        assert_eq!(detail["package_root"], "/uze/store/packages/plugin-a");
-    }
-
-    /// Reading a legacy receipt must not silently rewrite the ledger, but any
-    /// genuinely new write emits only the current representation.
-    #[test]
-    fn a_new_write_uses_only_the_current_representation() {
+    fn a_write_uses_only_the_current_representation() {
         let receipt = AttachmentReceipt {
             package_id: "plugin-a".to_owned(),
             resource_identity: None,
@@ -997,7 +941,6 @@ mod artifact_compatibility_tests {
         };
         let encoded = serde_json::to_string(&receipt).unwrap();
         assert!(encoded.contains("INTEGRATION_OWNED"));
-        assert!(!encoded.contains("MARKETPLACE_PLUGIN"));
     }
 
     /// The Core routes an integration-owned artifact by `receipt.integration`
@@ -1116,39 +1059,6 @@ mod lifecycle_tests {
         fs::set_permissions(&locked, permissions).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct IntegrationAssessment {
-    pub integration_id: String,
-    pub capability_path: String,
-    pub decision: RouteDecision,
-    pub exposure_plan: ExposurePlan,
-}
-
-pub fn assess_environment(
-    environment: &EffectiveEnvironment,
-    integration: &dyn IntegrationPort,
-) -> Vec<IntegrationAssessment> {
-    let capabilities = integration.capabilities();
-    environment
-        .resources
-        .iter()
-        .map(|resource| {
-            let exposure_plan = integration.exposure_plan(resource);
-            let mut decision = route(&resource.capability, &capabilities);
-            decision.route = exposure_plan.route;
-            decision.verification = exposure_plan.verification.clone();
-            decision.rationale.clone_from(&exposure_plan.evidence);
-            decision.evidence.clone_from(&exposure_plan.evidence);
-            IntegrationAssessment {
-                integration_id: integration.id().to_owned(),
-                capability_path: resource.display_path(&environment.root),
-                decision,
-                exposure_plan,
-            }
-        })
-        .collect()
 }
 
 /// A cheap, vendor-neutral fingerprint of the filesystem surface an

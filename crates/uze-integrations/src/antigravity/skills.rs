@@ -50,12 +50,8 @@ use super::AntigravityIntegration;
 /// Root of every generated Skill wrapper directory. Under
 /// `$UZE_HOME/state/attachments/antigravity/skills/` — the same convention
 /// as every other integration's managed artifacts, never under the Store.
-pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join("antigravity")
-        .join("skills")
+pub(super) fn skill_wrapper_root(uze_home: &UzeHome) -> PathBuf {
+    crate::shared::path::attachment_root(uze_home, "antigravity").join("skills")
 }
 
 pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
@@ -66,7 +62,7 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
     let name = resource
         .logical_capability_name()
         .unwrap_or_else(|| resource.name());
-    generated_root(uze_home).join(package_id).join(name)
+    skill_wrapper_root(uze_home).join(package_id).join(name)
 }
 
 /// Antigravity's physical invocation label — the UZE semantic label
@@ -142,32 +138,13 @@ pub(super) fn materialize_generated_skill(
 /// UZE-owned directories under `$UZE_HOME`.
 impl AntigravityIntegration {
     pub(super) fn cleanup_unused_wrapper(&self, target: &Path) -> Result<()> {
-        let managed_root = self
-            .uze_home
-            .state_dir()
-            .join("attachments")
-            .join("antigravity");
-        if !target.starts_with(&managed_root) || !target.is_dir() {
-            return Ok(());
-        }
-        let referenced = fs::read_dir(&self.skills_dir)
-            .map_err(|source| UzeError::Read {
-                path: self.skills_dir.clone(),
-                source,
-            })?
-            .filter_map(std::result::Result::ok)
-            .any(|entry| fs::read_link(entry.path()).ok().as_deref() == Some(target));
-        if referenced {
-            return Ok(());
-        }
-        if target.join("SKILL.md").is_file() {
-            fs::remove_dir_all(target).map_err(|source| UzeError::Write {
-                path: target.to_path_buf(),
-                source,
-            })?;
-            crate::shared::path::prune_empty_package_dir(target, &generated_root(&self.uze_home));
-        }
-        Ok(())
+        crate::shared::path::cleanup_unused_wrapper(
+            target,
+            &crate::shared::path::attachment_root(&self.uze_home, "antigravity"),
+            &self.skills_dir,
+            &skill_wrapper_root(&self.uze_home),
+            &|wrapper| wrapper.join("SKILL.md").is_file(),
+        )
     }
 
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {

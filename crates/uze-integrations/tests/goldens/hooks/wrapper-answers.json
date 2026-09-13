@@ -1,0 +1,756 @@
+{
+  "about": "What the generated hooks/exec wrapper answers for every fixture, per harness: the native decision document, the exit status and the reason on stderr. Regenerate with `cargo test -p uze-integrations regenerate_wrapper_answers -- --ignored`; every changed line is a changed contract and belongs in the review.",
+  "answers": [
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+        }
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "claude",
+      "event": "post_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "claude",
+      "event": "stop",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": null,
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+        }
+      },
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "hooks/exec: the harness payload is not JSON"
+        }
+      },
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+        }
+      },
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "claude",
+      "event": "pre_tool_use",
+      "effect": "transform",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+        }
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+        }
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "cat .env",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "blocked: cat .env (tool=shell cwd=/repo)"
+        }
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "codex",
+      "event": "post_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "codex",
+      "event": "stop",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": null,
+      "exit": 0,
+      "stdout": {},
+      "stderr": ""
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+        }
+      },
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "hooks/exec: the harness payload is not JSON"
+        }
+      },
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+        }
+      },
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "codex",
+      "event": "pre_tool_use",
+      "effect": "transform",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 2,
+      "stdout": {
+        "hookSpecificOutput": {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+        }
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "blocked: cat .env (tool=shell cwd=/repo)"
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "cat .env",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "blocked: cat .env (tool=shell cwd=/repo)"
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "sh ${PLUGIN_ROOT}/scripts/guard --strict",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "cat .env",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "blocked: cat .env (tool=shell cwd=/repo)"
+      },
+      "stderr": "blocked: cat .env (tool=shell cwd=/repo)"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard",
+        "audit"
+      ],
+      "command": "ls -la",
+      "exit": 0,
+      "stdout": null,
+      "stderr": ""
+    },
+    {
+      "harness": "antigravity",
+      "event": "post_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": {},
+      "stderr": ""
+    },
+    {
+      "harness": "antigravity",
+      "event": "stop",
+      "effect": "observe",
+      "handlers": [
+        "audit"
+      ],
+      "command": null,
+      "exit": 0,
+      "stdout": {},
+      "stderr": ""
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+      },
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "stall"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "handler timed out after 1s: ${PLUGIN_ROOT}/scripts/stall"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "hooks/exec: the harness payload is not JSON"
+      },
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "guard"
+      ],
+      "command": "cat .env",
+      "payload": "malformed",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the harness payload is not JSON"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "deny",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+      },
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "observe",
+      "handlers": [
+        "scripts/guard"
+      ],
+      "command": "ls",
+      "package_root": "missing",
+      "exit": 0,
+      "stdout": null,
+      "stderr": "hooks/exec: the package root is gone: ${PLUGIN_ROOT}/gone"
+    },
+    {
+      "harness": "antigravity",
+      "event": "pre_tool_use",
+      "effect": "transform",
+      "handlers": [
+        "absent"
+      ],
+      "command": "ls",
+      "exit": 0,
+      "stdout": {
+        "decision": "deny",
+        "reason": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+      },
+      "stderr_prefix": "handler failed (exit 127): ${PLUGIN_ROOT}/scripts/absent"
+    }
+  ]
+}

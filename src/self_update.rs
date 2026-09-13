@@ -18,6 +18,19 @@
 //! ever replacing, and `CI` being set means off unless the variable says
 //! otherwise: a disposable machine has no use for a newer binary than the
 //! one it was handed.
+//!
+//! `UZE_BASE_URL` is `install.sh`'s testing override and stops there. A
+//! shipped `uze` fetches from [`RELEASES`] and nowhere else, because this
+//! module downloads a binary and renames it over the one in `PATH`: were
+//! the download root an environment variable, anything that can set one —
+//! a cloned repository's `.envrc`, a `Makefile`, a parent process — would
+//! choose which binary a person runs from then on, and the checksum could
+//! not tell, since `SHASUMS256.txt` comes from that same root. The
+//! integrity check proves the bytes arrived whole from the release page;
+//! only the fixed origin makes that page the right one. A debug build
+//! still honours the variable so the offline fixture suite can drive a
+//! whole pass without a network — a developer's own build is not the
+//! threat this closes.
 
 use std::{
     env, fs,
@@ -361,12 +374,24 @@ struct Published {
 }
 
 impl Published {
-    /// `UZE_BASE_URL` is the installer's own override, and means the same
-    /// thing here: a mirror, or a local fixture.
     fn current() -> Self {
         Self {
-            base: env::var("UZE_BASE_URL").unwrap_or_else(|_| RELEASES.to_owned()),
+            base: base(
+                env::var("UZE_BASE_URL").ok().as_deref(),
+                cfg!(debug_assertions),
+            ),
         }
+    }
+}
+
+/// Where a release is fetched from. A shipped binary answers [`RELEASES`]
+/// and nothing else — see the module doc for why `UZE_BASE_URL` stops at
+/// the installer script. `debug` is `cfg!(debug_assertions)`, passed in so
+/// both answers can be tested from one build.
+fn base(override_url: Option<&str>, debug: bool) -> String {
+    match override_url {
+        Some(url) if debug => url.to_owned(),
+        _ => RELEASES.to_owned(),
     }
 }
 
@@ -708,6 +733,24 @@ mod tests {
             Some("cd34")
         );
         assert_eq!(expected_sum(sums, "uze-x86_64-linux-musl.tar.gz"), None);
+    }
+
+    #[test]
+    fn an_untrusted_base_url_is_ignored() {
+        for hostile in ["http://evil/", "file:///tmp/x", "https://evil.test/"] {
+            assert_eq!(
+                base(Some(hostile), false),
+                RELEASES,
+                "a shipped binary downloads from the release page alone"
+            );
+            assert_eq!(
+                base(Some(hostile), true),
+                hostile,
+                "a debug build still drives the offline fixture"
+            );
+        }
+        assert_eq!(base(None, true), RELEASES);
+        assert_eq!(base(None, false), RELEASES);
     }
 
     #[test]

@@ -7,9 +7,13 @@ COPY . .
 # Cache mounts make every rebuild incremental: the crate registry and the
 # build target persist across builds even when sources change. The binaries
 # are copied to /out because cache mounts are not part of the image.
+# Two invocations, not one: the fixture is behind `--features dev-servers`,
+# which carries rmcp/tokio/schemars — and the `uze` the Lab drives has to be
+# the binary a user gets, linking none of them.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --locked --release --bin uze --bin uze-mcp-conformance-fixture \
+    cargo build --locked --release --bin uze \
+    && cargo build --locked --release --features dev-servers --bin uze-mcp-conformance-fixture \
     && mkdir -p /out \
     && cp /src/target/release/uze /src/target/release/uze-mcp-conformance-fixture /out/
 

@@ -235,6 +235,26 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
+        name: "drawing the workspace reaches nothing, by any name",
+        scope: "src/ui/orchestrator",
+        forbidden: "tui_application",
+        reason: "the rule above names one way in and the client had another: \
+                 `tui_application` builds the same facade the extension host \
+                 reaches through, and two arms of the preserved-work list used it \
+                 to run `finish_task` and `discard_task` — a `git worktree remove`, \
+                 a `git branch -D` and a recursive directory removal — on the \
+                 thread that owns the frame. Both guards passed, because both \
+                 keyed on the host's name rather than on reaching the domain at \
+                 all.",
+        remedy: "run it on a thread and answer through a channel, the way \
+                 `spawn_task_mutation`/`spawn_delivery` do, reserving the key the \
+                 answer releases. The file the reads are *driven* from \
+                 (`orchestrator.rs`) is where an application is legitimately \
+                 built, inside a `thread::spawn`.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
         name: "an extension never names the domain crate",
         scope: "crates/uze-extensions/src",
         forbidden: "uze_core",
@@ -409,6 +429,86 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
          from the glyph needs `theme::width(..)` too: a theme may have \
          replaced it with a wider one.\n",
         written.join("\n")
+    );
+}
+
+/// Every `.rs` file a crate carries is a file that crate compiles.
+///
+/// `crates/uze-extensions/src/git.rs` was 2547 lines the compiler never
+/// saw: the predecessor of the code surface, left behind by a rename that
+/// removed its `mod` declaration. Clippy never linted it, its nine tests
+/// never ran, and two doc comments still pointed readers at it — while the
+/// architecture scans above walked it as production source, so its rules
+/// were being enforced against a file that did not exist as far as the
+/// binary was concerned. Dead code that *looks* live is worse than dead
+/// code, because it is read and believed.
+#[test]
+fn every_source_file_a_crate_carries_is_one_it_compiles() {
+    let root = repository_root();
+    let mut crates: Vec<PathBuf> = vec![root.join("src")];
+    if let Ok(entries) = fs::read_dir(root.join("crates")) {
+        crates.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().join("src"))
+                .filter(|source| source.is_dir()),
+        );
+    }
+
+    let mut orphans = Vec::new();
+    for source in crates {
+        let mut files = Vec::new();
+        collect_rust_files(&source, &mut files);
+        files.sort();
+        // `#[path]` names a file the layout rules would not find. None is
+        // used today; if one appears, this check has to learn about it
+        // rather than quietly pass.
+        let declared: String = files
+            .iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .collect();
+        assert!(
+            !declared.contains("#[path"),
+            "{} uses `#[path]`; teach this check to resolve it",
+            source.display()
+        );
+
+        for path in &files {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            // The three roots, and the standalone binaries beside them,
+            // are entry points rather than modules of anything.
+            if matches!(&*stem, "lib" | "main" | "mod")
+                || path.parent().is_some_and(|parent| parent.ends_with("bin"))
+            {
+                continue;
+            }
+            // Only a declaration at the top level of a file compiles a
+            // sibling: `mod x;` nested inside an inline `mod tests { .. }`
+            // names `tests/x.rs`, which is a different file entirely.
+            let declaration = format!("mod {stem};");
+            let inline = format!("mod {stem} {{");
+            if !declared.lines().any(|line| {
+                !line.starts_with([' ', '\t'])
+                    && (line.trim_end().ends_with(&declaration) || line.contains(&inline))
+            }) {
+                orphans.push(format!(
+                    "  {}",
+                    path.strip_prefix(&root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                ));
+            }
+        }
+    }
+
+    assert!(
+        orphans.is_empty(),
+        "\n\nnothing declares these as modules, so nothing compiles them:\n\n{}\n\n\
+         Either declare the module, or delete the file. A source file the \
+         compiler never sees is still read — and believed — by everyone \
+         grepping the crate.\n",
+        orphans.join("\n")
     );
 }
 

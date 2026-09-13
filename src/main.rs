@@ -9,10 +9,10 @@ use crate::progress::Colorize;
 mod prompt;
 mod shim;
 
-use std::{collections::BTreeMap, io::IsTerminal, path::Path, path::PathBuf};
+use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
-use uze_application::{HookEffect, HookEvent, PlannedAction, Result, UzeHome};
+use uze_application::{PlannedAction, Result, UzeHome};
 use uze_application::{
     UzeApplication,
     application::{
@@ -106,28 +106,6 @@ enum Command {
     Agent {
         #[command(subcommand)]
         action: AgentAction,
-    },
-    /// Internal runtime dispatch: runs a package's hook commands for one
-    /// hook event (ADR-033). Harness integrations emit invocations of this
-    /// exact form into managed hook configuration; it is not for
-    /// interactive use and is hidden from help.
-    #[command(hide = true)]
-    HookExec {
-        /// Hook adapter id, as registered by the integration registry
-        #[arg(long)]
-        adapter: String,
-        /// ABI event name: pre_tool_use | post_tool_use | stop
-        #[arg(long)]
-        event: String,
-        /// Declared group effect: observe | allow | ask | deny | transform
-        #[arg(long)]
-        effect: String,
-        /// Canonical package root the handlers run in
-        #[arg(long)]
-        plugin_root: PathBuf,
-        /// Authored handler command, repeatable for sequential handlers
-        #[arg(long = "command", required = true)]
-        commands: Vec<String>,
     },
     /// Internal: the release check a CLI command hands to a detached
     /// process of its own once the last answer has gone stale (see
@@ -335,6 +313,31 @@ struct ShorthandArgs {
     format: OutputFormat,
 }
 
+/// Makes `uze … | head` end the way every other command-line tool ends it.
+///
+/// Rust's runtime ignores `SIGPIPE` so that a write to a closed pipe
+/// surfaces as an `io::Error`, but `println!` panics on one — so the
+/// ordinary shell idiom of piping a report into `head`, `less` or `grep -q`
+/// exited 101 with a panic message. Restoring the default handler makes the
+/// process die quietly at the signal instead, which is what the reader on
+/// the other end of the pipe expects.
+///
+/// Called only on the paths that print a report to stdout, never for the
+/// whole process: the same binary is the terminal server and the workspace
+/// client, both of which write to Unix sockets, and with the default
+/// disposition a peer hanging up would kill the server — and every pane it
+/// owns — instead of surfacing as the `EPIPE` the runtime handles.
+#[cfg(unix)]
+fn die_quietly_on_a_closed_pipe() {
+    // Safety: called once, before any thread is spawned and before anything
+    // is written, and `SIG_DFL` is the disposition the process started life
+    // with — it installs no handler of our own.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+}
+
+#[cfg(not(unix))]
+fn die_quietly_on_a_closed_pipe() {}
+
 fn main() {
     // Checked before any `clap` parsing, on `argv[0]` alone: a process
     // invoked as `claude`/`codex`/`opencode` (via the symlink
@@ -347,7 +350,10 @@ fn main() {
 
     // Help is presentation-only, but every public command routes through the
     // same renderer before Clap can emit its unstyled generated help.
-    let args: Vec<String> = std::env::args().collect();
+    // Read lossily rather than through `args()`, which panics on an
+    // argument that is not UTF-8: what to do about one is clap's answer to
+    // give, and a replacement character matches none of the words below.
+    let args: Vec<String> = argv_lossy();
     if args.iter().skip(1).any(|argument| argument == "-help") {
         Cli::command()
             .error(
@@ -356,7 +362,10 @@ fn main() {
             )
             .exit();
     }
-    if let Some(topic) = help_topic(&args[1..]) {
+    // `get`, not an index: a process `exec`d with an empty argv has no
+    // element 1, and asking for one is a panic before clap ever runs.
+    if let Some(topic) = help_topic(args.get(1..).unwrap_or_default()) {
+        die_quietly_on_a_closed_pipe();
         print_help(topic);
         return;
     }
@@ -365,6 +374,16 @@ fn main() {
         eprintln!("uze: {error}");
         std::process::exit(1);
     }
+}
+
+/// The argument line as text, for the two readers that only present it —
+/// the help router and the command span. An argument that is not UTF-8
+/// keeps its replacement characters here and reaches `Cli::parse`
+/// untouched, so clap is the one that reports it.
+fn argv_lossy() -> Vec<String> {
+    std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -380,13 +399,28 @@ enum HelpTopic {
     Doctor,
 }
 
+/// Whether clap reads `arguments` as a command to run — which makes a
+/// `help` among them one of its values rather than a request for a page.
+/// Asked only about a line ending in a bare `help`, so the second parse it
+/// costs is one no ordinary invocation pays.
+fn is_a_command(arguments: &[String]) -> bool {
+    Cli::command()
+        .try_get_matches_from(std::iter::once("uze".to_owned()).chain(arguments.iter().cloned()))
+        .is_ok()
+}
+
 fn help_topic(arguments: &[String]) -> Option<HelpTopic> {
     let (path, requested) = match arguments {
         [command] if command == "help" || command == "--help" || command == "-h" => (&[][..], true),
         [command, path @ ..] if command == "help" && path.len() <= 1 => (path, true),
-        [path @ .., command] if command == "help" || command == "--help" || command == "-h" => {
-            (path, true)
-        }
+        [path @ .., command] if command == "--help" || command == "-h" => (path, true),
+        // A trailing bare `help` asks for a page only where the line means
+        // nothing else. `uze market help` asks about marketplaces, but
+        // `uze market add help` asked to add a marketplace called `help`
+        // and `uze remove help` to remove a plugin by that name — both of
+        // which used to print a page and exit 0 having done nothing, which
+        // a script reads as success.
+        [path @ .., command] if command == "help" && !is_a_command(arguments) => (path, true),
         _ => (&[][..], false),
     };
     if !requested {
@@ -595,7 +629,7 @@ fn print_command_help(title: &str, description: &str, usage: &str, commands: &[(
 
 fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv: Vec<String> = argv_lossy().into_iter().skip(1).collect();
     // The TUI owns the terminal, so its trace goes to a file; everything
     // else may write to stderr like any other diagnostic.
     let opens_the_tui = cli.command.is_none()
@@ -609,8 +643,8 @@ fn run(cli: Cli) -> Result<()> {
     };
     let _telemetry = uze::telemetry::init(sink);
     let span = uze::telemetry::command_span(&leaf_command_of(&argv), &argv);
-    // A `uze` started by a harness the shim launched — a hook it fired, or
-    // an agent running `uze` itself — continues the launch's trace.
+    // A `uze` started by a harness the shim launched — an agent running
+    // `uze` inside it — continues the launch's trace.
     uze::telemetry::adopt_parent_from_env(&span);
     let _entered = span.enter();
     let tells =
@@ -692,6 +726,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             // took.
             return uze::ui::run(home);
         }
+        die_quietly_on_a_closed_pipe();
         Cli::command()
             .print_help()
             .map_err(|source| uze_application::UzeError::Write {
@@ -725,6 +760,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         uze::self_update::check_now(&home);
         return Ok(());
     }
+    die_quietly_on_a_closed_pipe();
     let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
@@ -830,19 +866,6 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         }
         Command::Setup { arguments } => run_setup_command(&app, &home, &arguments, verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
-        Command::HookExec {
-            adapter,
-            event,
-            effect,
-            plugin_root,
-            commands,
-        } => {
-            let code = run_hook_exec(&home, &adapter, &event, &effect, &plugin_root, commands)?;
-            // The exit code is part of the ABI: a denied outcome must read
-            // as a denial to targets that key off exit codes, and an error
-            // must not print a second `uze:` line into the harness's stderr.
-            std::process::exit(code);
-        }
         Command::Terminal { .. } => {
             unreachable!("terminal commands return before application setup")
         }
@@ -857,67 +880,8 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
 fn tells_about_releases(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Agent { .. }
-            | Command::HookExec { .. }
-            | Command::Terminal { .. }
-            | Command::SelfUpdate
+        Command::Agent { .. } | Command::Terminal { .. } | Command::SelfUpdate
     )
-}
-
-/// The `hook-exec` runtime wrapper (ADR-033): reads the harness's native
-/// hook payload from stdin, normalizes it through the adapter, runs the
-/// authored handlers sequentially against the portable ABI, and renders the
-/// aggregated decision back into the harness's own native contract — JSON
-/// stdout where the harness parses it, the reason on stderr where that is
-/// the fed-back channel, and the harness's own blocking exit code (2 on
-/// the command-hook harnesses) for a deny. Internal canonical exit codes
-/// (the handler-level deny exit `3`) never leak outward: on Claude/Codex
-/// any other non-zero exit is a *non-blocking* error ("logged and ignored,
-/// execution continues") — leaking it would turn a deny into a tool that
-/// still runs.
-fn run_hook_exec(
-    home: &UzeHome,
-    adapter_id: &str,
-    event_name: &str,
-    effect_name: &str,
-    plugin_root: &Path,
-    commands: Vec<String>,
-) -> Result<i32> {
-    use std::io::{Read, Write};
-    use uze_application::UzeError;
-
-    let event = HookEvent::parse_abi(event_name)
-        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook event `{event_name}`")))?;
-    let effect = HookEffect::parse_abi(effect_name)
-        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook effect `{effect_name}`")))?;
-    let mut native = String::new();
-    std::io::stdin()
-        .read_to_string(&mut native)
-        .map_err(|source| {
-            UzeError::HookDispatch(format!("cannot read the native payload: {source}"))
-        })?;
-    let native: serde_json::Value = serde_json::from_str(&native).map_err(|source| {
-        UzeError::HookDispatch(format!("the native hook payload is not JSON: {source}"))
-    })?;
-
-    let rendered = UzeApplication::from_env(home.clone())?.hooks().dispatch(
-        adapter_id,
-        event,
-        effect,
-        plugin_root,
-        commands,
-        &native,
-    )?;
-    if let Some(bytes) = rendered.stdout {
-        std::io::stdout().write_all(&bytes).map_err(|source| {
-            UzeError::HookDispatch(format!("cannot render hook output: {source}"))
-        })?;
-        let _ = std::io::stdout().flush();
-    }
-    if let Some(reason) = rendered.stderr {
-        eprintln!("{reason}");
-    }
-    Ok(rendered.exit_code)
 }
 
 fn run_setup_command(
@@ -1433,6 +1397,9 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
                 OutputFormat::Text => print!("{}", render_remove(&report)),
                 OutputFormat::Json => print_json(&report),
             }
+            if let RemovePluginReport::Blocked { report, plan } = &report {
+                return Err(blocked("removal", &report.package_id, plan));
+            }
         }
         PluginAction::Update {
             plugin,
@@ -1444,6 +1411,11 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
             match format {
                 OutputFormat::Text => print!("{}", render_update(&report)),
                 OutputFormat::Json => print_json(&report),
+            }
+            if let uze_application::application::UpdatePluginReport::Blocked { report, plan } =
+                &report
+            {
+                return Err(blocked("update", &report.package_id, plan));
             }
         }
     }
@@ -2010,6 +1982,24 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     Ok(())
 }
 
+/// The ending a blocked lifecycle mutation deserves.
+///
+/// `Blocked` means the safety check refused and nothing was removed or
+/// updated. Rendered and then returned as an error, so the report is still
+/// on screen (or in the JSON a caller parses) while the exit status says
+/// the machine is unchanged — `uze plugin remove x && uze plugin install y`
+/// used to run the second half after the first did nothing. The same shape
+/// `uze setup` uses for a provisioning step that did not complete.
+fn blocked(
+    operation: &str,
+    package: &str,
+    plan: &impl std::fmt::Debug,
+) -> uze_application::UzeError {
+    uze_application::UzeError::LifecycleBlocked(format!(
+        "{operation} of `{package}` was blocked ({plan:?}); nothing was changed"
+    ))
+}
+
 /// `uze context` defaults to the current directory; an explicit path is
 /// otherwise used exactly as given.
 fn context_path(path: Option<PathBuf>) -> PathBuf {
@@ -2035,37 +2025,50 @@ struct PromptingAuthority;
 
 impl uze_application::TrustAuthority for PromptingAuthority {
     fn authorize(&self, request: &uze_application::TrustRequest) -> uze_application::TrustOutcome {
-        println!();
-        if request.previously_trusted {
-            println!(
-                "This update introduces an executable capability the installed package did not have"
-            );
-        } else {
-            println!("This package requests an executable capability");
-        }
-        println!("\nSource\n  {}", request.requested_source);
-        if request.resolved_source != request.requested_source {
-            println!("\nResolved\n  {}", request.resolved_source);
-        }
-        println!("\nPackage\n  {}", request.package_id);
-        println!("\nMCP");
-        for capability in &request.executable {
-            println!(
-                "  {} → {} {}",
-                capability.name,
-                capability.command,
-                capability.arguments.join(" ")
-            );
-        }
-        match prompt::confirm("Trust and install?", false) {
-            Some(true) => uze_application::TrustOutcome::Granted,
-            Some(false) => uze_application::TrustOutcome::Denied,
-            // Withdrawn, or a terminal that would not carry the question.
-            // Neither is a person declining, and the caller has its own
-            // ending for that.
-            None => uze_application::TrustOutcome::Unavailable,
-        }
+        progress::uninterrupted(|| {
+            // On stderr, with the question: the widget asks there, so
+            // evidence printed to stdout left `uze install > install.log`
+            // asking a person to trust a package whose capabilities they
+            // could not see. What is being decided and the decision belong
+            // to one stream.
+            eprint!("{}", trust_evidence(request));
+            match prompt::confirm("Trust and install?", false) {
+                Some(true) => uze_application::TrustOutcome::Granted,
+                Some(false) => uze_application::TrustOutcome::Denied,
+                // Withdrawn, or a terminal that would not carry the
+                // question. Neither is a person declining, and the caller
+                // has its own ending for that.
+                None => uze_application::TrustOutcome::Unavailable,
+            }
+        })
     }
+}
+
+/// What the trust question is about, as the reader sees it above the
+/// question itself. Rendered rather than printed so there is one call site
+/// deciding which stream it lands on.
+fn trust_evidence(request: &uze_application::TrustRequest) -> String {
+    let mut text = String::from("\n");
+    text.push_str(if request.previously_trusted {
+        "This update introduces an executable capability the installed package did not have\n"
+    } else {
+        "This package requests an executable capability\n"
+    });
+    text.push_str(&format!("\nSource\n  {}\n", request.requested_source));
+    if request.resolved_source != request.requested_source {
+        text.push_str(&format!("\nResolved\n  {}\n", request.resolved_source));
+    }
+    text.push_str(&format!("\nPackage\n  {}\n", request.package_id));
+    text.push_str("\nMCP\n");
+    for capability in &request.executable {
+        text.push_str(&format!(
+            "  {} → {} {}\n",
+            capability.name,
+            capability.command,
+            capability.arguments.join(" ")
+        ));
+    }
+    text
 }
 
 /// Chooses who answers a plugin-name-collision question (ADR-038).
@@ -2101,10 +2104,21 @@ impl uze_application::NameCollisionAuthority for PromptingCollisionAuthority {
         &self,
         request: &uze_application::NameCollisionRequest,
     ) -> uze_application::NameCollisionResolution {
-        println!();
-        println!(
-            "`{}` is already active as `{}` — installing `{}` under the same name would silently \
-             shadow it in every harness.",
+        progress::uninterrupted(|| self.ask(request))
+    }
+}
+
+impl PromptingCollisionAuthority {
+    fn ask(
+        &self,
+        request: &uze_application::NameCollisionRequest,
+    ) -> uze_application::NameCollisionResolution {
+        // Stderr, for the same reason the trust evidence is there: the
+        // widget below asks on stderr, and what it is asking about has to
+        // arrive on the same stream as the question.
+        eprintln!(
+            "\n`{}` is already active as `{}` — installing `{}` under the same name would \
+             silently shadow it in every harness.",
             request.name, request.existing, request.requested
         );
         let resolutions = [
@@ -2391,7 +2405,7 @@ fn render_doctor(report: &DoctorReport) -> String {
     text.push_str(&progress::report_section("UZE Home"));
     text.push_str(&format!("  {}\n\n", report.uze_home.display()));
     text.push_str(&progress::report_section("Store"));
-    text.push_str(&format!("  {:?}\n\n", report.store));
+    text.push_str(&format!("  {}\n\n", report.store));
     text.push_str(&progress::report_section("Plugins"));
     text.push_str(&format!("  {} installed\n\n", report.plugins.len()));
     text.push_str(&progress::report_section("Harnesses"));
@@ -2478,7 +2492,7 @@ fn render_doctor(report: &DoctorReport) -> String {
     if !report.maintenance.outcomes.is_empty() {
         text.push_str("\nMaintenance\n");
         for outcome in &report.maintenance.outcomes {
-            text.push_str(&format!("  {:?}\n", outcome));
+            text.push_str(&format!("  {outcome}\n"));
         }
     }
     text
@@ -2965,6 +2979,9 @@ fn render_context_reconciliation(
     }
     for (orphan, reason) in &report.blocked_orphans {
         text.push_str(&format!("  {orphan}  BLOCKED: {reason}\n"));
+    }
+    for (package, reason) in &report.failed {
+        text.push_str(&format!("  {package}  FAILED: {reason}\n"));
     }
     if let Some(region) = &report.worktree_region {
         text.push_str("\nWorktree policy\n");

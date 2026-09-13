@@ -58,7 +58,16 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let home = UzeHome::at(&root);
     let (package, environment) = installed(&home);
     assert_eq!(package.id.as_str(), "uze-plugin-first-conformance@local");
-    assert_eq!(UzeStore::new(home.clone()).registration_count().unwrap(), 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(home.registry_path()).expect("the registry was written")
+        )
+        .expect("the registry is valid JSON")["packages"]
+            .as_object()
+            .expect("the registry carries a packages map")
+            .len(),
+        1
+    );
     assert_eq!(environment.resources.len(), 2);
     assert!(
         environment

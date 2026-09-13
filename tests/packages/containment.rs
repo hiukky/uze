@@ -231,6 +231,31 @@ fn containment_is_enforced_for_a_plain_local_directory() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// An absolute link that points *inside the source* is still an escape: the
+/// Store copies a link's target verbatim, so the copied entry keeps naming
+/// the source directory — one UZE does not own and the user is free to
+/// repoint after installation.
+#[test]
+fn an_absolute_symlink_into_the_source_itself_is_rejected() {
+    let root = temporary("absolute-inside");
+    let package = root.join("package");
+    package_at(&package);
+    fs::write(package.join("inside"), "secret").unwrap();
+    symlink(package.join("inside"), package.join("abs")).unwrap();
+
+    let (home, result) = install(&root);
+    assert_escape_rejected(result, "an absolute symlink into the source");
+    assert!(
+        !home
+            .plugins_dir()
+            .join("local/containment-fixture")
+            .exists(),
+        "a rejected package still left bytes in the store"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 // ---------------------------------------------------------------------------
 // Discovery must terminate on any tree a self-contained package may legally
 // contain. Containment forbids leaving the root; it does not forbid a cycle
@@ -294,6 +319,15 @@ fn a_symlinked_directory_pointing_at_its_own_ancestor_does_not_hang_discovery() 
             .unwrap()
             .len(),
         1
+    );
+    // Digesting walks the same tree the lock pins, so it has to survive the
+    // same shape: `tree_sha256` must terminate, not descend `skills/up`
+    // until the stack gives out.
+    assert!(
+        uze_core::digest::tree_sha256(&installed.root)
+            .unwrap()
+            .starts_with("sha256:"),
+        "digesting an ancestor-linked package did not terminate"
     );
 
     let _ = fs::remove_dir_all(home.root());

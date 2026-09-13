@@ -170,6 +170,14 @@ jobs:
           # Restore everywhere, save only from `main` — see `test` below.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets -- -D warnings
+      # `make install` — the documented way to put `uze` on a developer's
+      # machine — builds with `--features telemetry`, and nothing else here
+      # ever compiles it. A grouped Dependabot bump of the four
+      # `opentelemetry*` crates therefore passed every gate and broke on the
+      # next `make install`. One extra codegen of four crates, on the job
+      # that is already the compile gate.
+      - run: cargo clippy --features telemetry --bin uze -- -D warnings
+      - run: cargo test --features telemetry --lib telemetry
 
   test:
     name: Test (${{ matrix.platform }})
@@ -283,13 +291,18 @@ jobs:
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-llvm-cov
-      # `--skip` filters out tests that fail due to environment issues,
-      # not code regressions: `real_codex_dogfood_*` (codex CLI removed
-      # the `debug` subcommand), `foreground_status_reports_*` (shell
-      # detection varies at runtime), and `acquisition::*` (GPG agent
-      # signing timeout in a sandbox without a configured GPG key).
-      # Re-enable any of these when the environment supports them.
-      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+      # One `--skip`, and it is an environment fact rather than a code
+      # regression: `foreground_status_reports_*` depends on which shell the
+      # runner reports at runtime.
+      #
+      # Two others used to sit here and no longer do. `real_codex_dogfood_*`
+      # was deleted with the test it named. `acquisition::*` was excluded for
+      # a GPG-agent signing timeout — a libtest *substring* filter, so it took
+      # the whole untrusted-remote-clone path out of the measurement, the one
+      # module that most deserves to be in it. `uze_testkit::git` neutralizes
+      # the ambient Git configuration that caused it, and the fixture now uses
+      # it.
+      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip foreground_status_reports
       - run: cargo llvm-cov report --lcov --output-path lcov.info
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -349,6 +362,12 @@ jobs:
       # deny.toml, including the two `unmaintained` advisories accepted
       # there with a written reason.
       - run: cargo deny check
+      # The same policy over the optional features, which the default
+      # resolution does not see: `telemetry` is what `make install` compiles
+      # and `dev-servers` is what the Lab image builds the MCP fixture with.
+      # Not distributed is not the same as not compiled — see deny.toml's
+      # header.
+      - run: cargo deny --all-features check
       # A drifting attribution file is worse than none: it states a licence
       # set the binary no longer has. Regenerate and compare, so a
       # dependency change that forgets CREDITS.md fails here.

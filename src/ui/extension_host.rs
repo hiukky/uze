@@ -20,6 +20,18 @@ use std::path::Path;
 /// it cannot drift apart.
 const SHOW_TOPLEVEL_ARGS: [&str; 2] = ["rev-parse", "--show-toplevel"];
 
+/// How much of a file this host will hand an extension.
+///
+/// Generous for anything a person reads and small enough that the read
+/// itself is never what they notice — see [`WorkspaceHost::read_file`]
+/// for what the bound is protecting against.
+const READABLE_FILE_LIMIT: u64 = 2 * 1024 * 1024;
+
+/// What a file that cannot be shown as text is called, wherever the
+/// reason is the filesystem's rather than ours. Said once so the surface
+/// and this grant cannot describe the same state differently.
+const UNREADABLE: &str = "not readable as text";
+
 /// The workspace client's grant. Zero-sized: the capabilities are the
 /// host's own, not per-extension state.
 pub(crate) struct WorkspaceHost;
@@ -44,8 +56,36 @@ impl uze_extensions::Host for WorkspaceHost {
             .or_exit(1)
     }
 
-    fn read_file(&self, path: &Path) -> Option<String> {
-        std::fs::read_to_string(path).ok()
+    /// Bounded, because the gesture behind it is a single click on a row
+    /// in a tree. Everything downstream of the read keeps a copy —
+    /// syntect's spans per line, then the buffer's own — so the file's
+    /// size is paid three times over, and a checked-in fixture, a log or
+    /// a minified bundle that is one enormous line is a multi-gigabyte
+    /// allocation and a highlighting pass measured in minutes from a
+    /// click nobody would expect to cost anything.
+    ///
+    /// Read through a `take` rather than checked with `metadata` first:
+    /// what the cap has to bound is how much lands in memory, and a
+    /// length read separately from the bytes is a different question.
+    fn read_file(&self, path: &Path) -> Result<String, String> {
+        use std::io::Read;
+
+        let file = std::fs::File::open(path).map_err(|_| UNREADABLE.to_owned())?;
+        let mut text = String::new();
+        let read = file
+            // One byte past the cap: a file exactly at it still opens,
+            // and anything larger is known to be larger without reading
+            // the rest of it.
+            .take(READABLE_FILE_LIMIT + 1)
+            .read_to_string(&mut text)
+            .map_err(|_| UNREADABLE.to_owned())?;
+        if read as u64 > READABLE_FILE_LIMIT {
+            return Err(format!(
+                "too large to open here — over {} MiB",
+                READABLE_FILE_LIMIT / (1024 * 1024)
+            ));
+        }
+        Ok(text)
     }
 
     /// Directories first, then files, each half by name — the order the
@@ -174,6 +214,41 @@ mod tests {
 
         assert!(WorkspaceHost.delete_file(&file).is_ok());
         assert!(!file.exists());
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A click on a row in a tree never reads more than the grant allows,
+    /// and says so rather than answering the same "not readable as text"
+    /// a binary gets — the two are different things to do about it.
+    #[test]
+    fn opening_a_file_is_bounded_by_what_the_grant_allows() {
+        let directory = scratch("uze-read-cap");
+        let at_the_cap = directory.join("at-the-cap");
+        std::fs::write(&at_the_cap, "x".repeat(super::READABLE_FILE_LIMIT as usize)).unwrap();
+        let over_the_cap = directory.join("over-the-cap");
+        std::fs::write(
+            &over_the_cap,
+            "x".repeat(super::READABLE_FILE_LIMIT as usize + 1),
+        )
+        .unwrap();
+
+        assert_eq!(
+            WorkspaceHost.read_file(&at_the_cap).map(|text| text.len()),
+            Ok(super::READABLE_FILE_LIMIT as usize),
+            "a file exactly at the cap still opens, whole"
+        );
+        let refused = WorkspaceHost
+            .read_file(&over_the_cap)
+            .expect_err("one byte over is refused");
+        assert!(
+            refused.contains("too large"),
+            "the refusal names the size rather than the file's kind: {refused}"
+        );
+        assert_eq!(
+            WorkspaceHost.read_file(&directory.join("absent")),
+            Err(super::UNREADABLE.to_owned()),
+            "a file that is not there is the state a view draws, not a path leak"
+        );
         std::fs::remove_dir_all(&directory).ok();
     }
 

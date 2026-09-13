@@ -87,16 +87,11 @@ identity remain separate concerns.
 - **Easier**: labels are predictable and inspectable; two plugins shipping
   the same capability name are independently addressable without any
   collision-derived renaming; read models can show origin immediately.
-- **Harder** (cont.): legacy artifacts migrate automatically: at attach time,
-  an existing receipt whose physical name is no longer the current
-  deterministic candidate is migrated to the label when the artifact is
-  exactly UZE-owned (Matched → detach + re-attach), forgotten when `Missing`
-  or taken over by foreign content (`Conflict` — foreign content is never
-  touched), and left untouched when `Drifted`/`Blocked` (the user
-  intervened). This is what heals machines that installed plugins under the
-  pre-label naming policies, including the real double-source conflicts a
-  harness can report (`~/.agents/skills/<bare>` + linked generated
-  extension both providing the same skill name).
+- **Harder** (cont.): every integration derives the same single candidate
+  for a shared root, so an attach never renames what a receipt already
+  records — "existing receipt wins" is the whole of the naming decision at
+  attach time. There is no migration step and none is owed: nothing UZE
+  writes carries a name other than the label.
 - **Known vendor constraint (same-name Skill + Command).** One package may
   legitimately ship `skills/review` and `commands/review` — same label
   `flow:review`, distinct canonical identities. Not all harnesses can

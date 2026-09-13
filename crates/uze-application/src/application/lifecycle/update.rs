@@ -2,8 +2,10 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
+use std::fs;
+
 use uze_core::{
-    Result,
+    MaterializedPackage, Result,
     trust::{self, TrustAuthority},
 };
 
@@ -38,12 +40,29 @@ impl Plugins<'_> {
         self.0
             .authorize(&materialized, authority, &previous, true)?;
 
+        // Asked here rather than from inside the install below, which is the
+        // only other place that asks it: preparing a harness needs nothing
+        // the removal takes away, and a vendor configuration that refuses to
+        // be prepared is a failure with no consequence at all while the
+        // package is still installed. Reached after the removal it was a
+        // plugin gone from the machine with nothing left to heal it.
+        self.0.prepare_detected_integrations(None)?;
+
+        // What is left can still fail with the package already removed — the
+        // ingest running out of disk, a revision whose environment will not
+        // compose — so the installed bytes are kept aside until the install
+        // below has answered for them.
+        let superseded = self.0.home.state_dir().join(SUPERSEDED_DIRECTORY);
+        let _ = fs::remove_dir_all(&superseded);
+        self.0.store.copy_package_to(&installed.id, &superseded)?;
+
         // Nothing destructive has happened yet. From here the current package
         // is removed under the same ownership rules any removal obeys.
         // Updates are allowed to replace a protected official plugin — the
         // protection is against `remove`, not `update`.
         let removal = self.detach_and_remove(id, true)?;
         if let RemovePluginReport::Blocked { report, plan } = removal {
+            let _ = fs::remove_dir_all(&superseded);
             return Ok(UpdatePluginReport::Blocked { report, plan });
         }
         // Trust was already settled above against the previous capabilities,
@@ -53,7 +72,7 @@ impl Plugins<'_> {
         // official-plugin protection and any project lock both key on the
         // marketplace-qualified id staying exactly what it was.
         let requested_active_name = (active_name != bare_name).then_some(active_name.as_str());
-        let report = self.install_materialized_from_marketplace_as(
+        let installing = self.install_materialized_from_marketplace_as(
             materialized,
             installed.id.marketplace(),
             requested_active_name,
@@ -61,14 +80,87 @@ impl Plugins<'_> {
             &[],
             true,
             &uze_core::naming::NoNameCollisionAuthority,
-        )?;
+        );
+        let report = match installing {
+            Ok(report) => report,
+            Err(failure) => {
+                let restored = self.reinstate(&installed, &superseded, requested_active_name);
+                let message = match restored {
+                    Ok(()) => {
+                        let _ = fs::remove_dir_all(&superseded);
+                        format!(
+                            "`{id}` could not be updated: {failure}\nThe installed revision was \
+                             put back; nothing on this machine changed."
+                        )
+                    }
+                    // The copy kept aside is now the only one of this
+                    // revision on the machine, so it stays: swept with the
+                    // rest it would leave a message telling the operator to
+                    // install something nothing on the machine still has.
+                    // The directory is named too, because a reinstall that
+                    // found bytes already there is what the failure most
+                    // likely was, and it refuses again until they are gone.
+                    Err(restore_failure) => format!(
+                        "`{id}` could not be updated: {failure}\nPutting the installed revision \
+                         back also failed: {restore_failure}\nIts bytes are kept at {superseded}. \
+                         Remove {plugin_dir} if it is still there, then `uze plugin install \
+                         {qualified}` to restore it.",
+                        qualified = installed.id.as_str(),
+                        superseded = superseded.display(),
+                        plugin_dir = self.0.home.plugin_dir(&installed.id).display(),
+                    ),
+                };
+                return Err(UzeError::LifecycleBlocked(message));
+            }
+        };
+        let _ = fs::remove_dir_all(&superseded);
         Ok(UpdatePluginReport::Updated {
             plugin: report.plugin,
             attachments: report.attachments,
             publications: report.publications,
         })
     }
+
+    /// Puts the revision an update removed back exactly as it was — its
+    /// bytes, its registration under the same marketplace-qualified id and
+    /// local name, and its attachments.
+    ///
+    /// Installing is what restoring is: the removal detached every harness
+    /// artifact, so re-registering the bytes alone would leave the plugin
+    /// listed and reaching nothing.
+    ///
+    /// Which makes it only as recoverable as an install: what it recovers
+    /// from is most often an install that failed part-way and left the
+    /// plugin's directory behind, which the Store clears — no registration
+    /// claims that id — before writing the bytes back into it. Where even
+    /// that fails, the restore fails too, and the caller keeps the
+    /// superseded copy and says where it is rather than telling the
+    /// operator to install a revision the machine no longer has.
+    fn reinstate(
+        &self,
+        installed: &uze_core::StoredPackage,
+        superseded: &Path,
+        requested_active_name: Option<&str>,
+    ) -> Result<()> {
+        let recovered =
+            MaterializedPackage::borrowed(superseded.to_path_buf(), installed.provenance.clone());
+        self.install_materialized_from_marketplace_as(
+            recovered,
+            installed.id.marketplace(),
+            requested_active_name,
+            &trust::AlwaysTrust,
+            &[],
+            true,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )
+        .map(|_| ())
+    }
 }
+
+/// Where an update keeps the revision it is replacing, under UZE's own
+/// state rather than beside the plugins: nothing that reads the Store may
+/// mistake it for an installed package.
+const SUPERSEDED_DIRECTORY: &str = "superseded";
 
 impl Plugins<'_> {
     /// Applies every pending update this machine can settle on its own,

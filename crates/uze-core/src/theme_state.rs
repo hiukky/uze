@@ -23,8 +23,7 @@ use crate::{
 /// decides the other.
 ///
 /// `glyphs` is optional in the sense that never having chosen is the
-/// ordinary case, not an error: a file written before the field existed
-/// reads as "the default set", which is exactly what it drew with.
+/// ordinary case, not an error: its absence reads as "the default set".
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ThemeSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,12 +163,11 @@ mod tests {
         assert_eq!(glyphs(&home).expect("readable").as_deref(), Some("ascii"));
     }
 
-    /// A file written before the glyph set existed still names a theme, and
-    /// says nothing about glyphs — which is the default set, and is what it
-    /// was already drawing with.
+    /// The two axes are independent: a selection that names a theme and
+    /// says nothing about glyphs reads as "the default set".
     #[test]
-    fn a_selection_written_before_the_second_axis_existed_still_loads() {
-        let home = home("theme-legacy");
+    fn a_selection_naming_only_a_theme_leaves_the_glyph_set_at_the_default() {
+        let home = home("theme-only-active");
         home.ensure_layout().expect("layout");
         fs::write(home.active_theme_path(), r#"{"active":"nocturne"}"#).expect("written");
 
@@ -178,25 +176,6 @@ mod tests {
             Some("nocturne")
         );
         assert_eq!(glyphs(&home).expect("readable"), None);
-    }
-
-    /// The other direction, which is the rollback claim: a record this build
-    /// writes still loads on one that has never heard of the field.
-    #[test]
-    fn a_record_carrying_glyphs_still_loads_where_the_field_is_unknown() {
-        #[derive(Deserialize)]
-        struct OlderSelection {
-            active: Option<String>,
-        }
-
-        let home = home("theme-rollback");
-        set_active(&home, "nocturne").expect("written");
-        set_glyphs(&home, "nerd").expect("written");
-
-        let bytes = fs::read(home.active_theme_path()).expect("readable");
-        let older: OlderSelection = serde_json::from_slice(&bytes)
-            .expect("a build without the field ignores it rather than failing");
-        assert_eq!(older.active.as_deref(), Some("nocturne"));
     }
 
     #[test]

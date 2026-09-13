@@ -110,6 +110,10 @@ pub fn run(home: UzeHome) -> Result<()> {
     // a reason to ask GitHub again, and both modes read the one answer.
     crate::self_update::watch(home.clone());
     let mut terminal = TerminalSession::start()?;
+    // Immediately after the screen is entered and before anything draws
+    // into it: from here on, every panic — this thread's or any of the
+    // background reads' — leaves a terminal a message can be read on.
+    report_panics_on_a_restored_terminal(terminal.keyboard());
     // The client's shape as this user last left it — read once, here,
     // and owned by neither mode: both draw the same sidebar column, and a
     // fold, a drag or a screen chosen in one must still be there when
@@ -237,17 +241,52 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        keys::end_enhanced_input(self.keyboard);
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            crossterm::cursor::Show
-        );
+        restore_terminal(self.keyboard);
         let _ = self.terminal.show_cursor();
     }
+}
+
+/// Hands the terminal back the way it was found: raw mode off, the
+/// alternate screen left, the mouse and paste modes and the cursor
+/// restored.
+///
+/// Standalone rather than only [`TerminalSession`]'s `Drop` because the
+/// panic hook has to run it too, and a hook holds no session — see
+/// [`report_panics_on_a_restored_terminal`]. Writes to `io::stdout()`,
+/// which is the same handle the backend holds.
+fn restore_terminal(keyboard: keys::KeyboardSupport) {
+    keys::end_enhanced_input(keyboard);
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        crossterm::cursor::Show
+    );
+}
+
+/// Makes a panic reportable: restore the terminal first, then let the
+/// hook that was already installed print.
+///
+/// Unwinding alone was never the problem — `Drop` restores the terminal
+/// correctly. The order is: the default hook prints the message and the
+/// location to stderr *before* anything unwinds, so it lands on the
+/// alternate screen, and leaving that screen a moment later wipes it. A
+/// panic on the draw path therefore presented as uze vanishing with
+/// nothing at all to report, which is a bug nobody can file.
+///
+/// It covers the background threads too, and there the damage is worse:
+/// their message went straight into a live alternate screen, corrupting
+/// whatever was drawn — ratatui repaints only the cells that differ, so
+/// it stayed there — while the thread died holding a reservation that
+/// nothing releases.
+fn report_panics_on_a_restored_terminal(keyboard: keys::KeyboardSupport) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        restore_terminal(keyboard);
+        previous(panic);
+    }));
 }
 
 fn io_error(source: io::Error) -> uze_application::UzeError {

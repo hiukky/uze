@@ -1,7 +1,12 @@
-//! Hook projections owned by harness integrations (ADR-033): per-vendor
-//! capability profiles, native JSON configuration merging, the owned
-//! OpenCode bridge, and the runtime hook-exec adapters that translate each
-//! harness's native hook payload to the portable command ABI and back.
+//! Hook projections owned by harness integrations (ADR-033, ADR-040):
+//! per-vendor capability profiles, native JSON configuration merging, the
+//! generated `hooks/exec` wrapper each command-hook harness runs, and the
+//! owned OpenCode bridge.
+//!
+//! The wrapper is the only implementation of the hook ABI: it reads that
+//! harness's payload, runs the author's handlers and answers in that
+//! harness's dialect, with no UZE binary anywhere on the execution path. A
+//! platform it has no template for delivers no hook at all, and says so.
 //!
 //! Everything here is deterministic and vendor-local; the vendor-neutral
 //! vocabulary (`PortableHook`, `HookCapabilities`, `assess`, ABI types)
@@ -16,9 +21,8 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
     hook::{
-        CommandHook, HOOKS_FILE_NAME, HarnessToolVocabulary, HookCapabilities, HookCommandInput,
-        HookContext, HookDecision, HookDispatchOutcome, HookEffect, HookEvent, HookMatcher,
-        HookNativeOutput, HookTool, PortableHook, ToolBinding,
+        CommandHook, HOOKS_FILE_NAME, HarnessToolVocabulary, HookCapabilities, HookEffect,
+        HookEvent, HookMatcher, PortableHook, ToolBinding,
     },
     integration::{AttachmentInspection, AttachmentState},
     persistence::write_atomic,
@@ -421,40 +425,8 @@ pub(crate) fn shell_quote(fragment: &str) -> String {
     format!("'{}'", fragment.replace('\'', "'\\''"))
 }
 
-/// The `hook-exec` wrapper invocation that replaces the author's command in
-/// every native entry: the harness runs this one command, which hands the
-/// native payload to the adapter and runs the author's handlers against the
-/// portable ABI. Absolute executable path pins the wrapper regardless of
-/// the harness's own `PATH`; per-handler timeouts and the first-deny-wins
-/// rule live inside the runner.
-pub(crate) fn dispatcher_command(
-    executable: &Path,
-    adapter_id: &str,
-    event: HookEvent,
-    effect: HookEffect,
-    package_root: &Path,
-    handlers: &[CommandHook],
-) -> String {
-    let mut parts = vec![
-        shell_quote(&executable.display().to_string()),
-        "hook-exec".to_owned(),
-        format!("--adapter {}", shell_quote(adapter_id)),
-        format!("--event {}", event.abi_name()),
-        format!("--effect {}", effect.abi_name()),
-        format!(
-            "--plugin-root {}",
-            shell_quote(&package_root.display().to_string())
-        ),
-    ];
-    for handler in handlers {
-        parts.push(format!("--command {}", shell_quote(&handler.command)));
-    }
-    parts.join(" ")
-}
-
-/// How a delivered hook is invoked by the harness. The native route runs
-/// the generated wrapper; the fallback runs the packager's own runtime
-/// where no wrapper template applies (see [`hook_delivery`]).
+/// How a delivered hook is invoked by the harness: the generated wrapper,
+/// in the form that harness's own entry takes (see [`hook_delivery`]).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HookInvocation {
     /// `command` plus `args`: the harness starts the wrapper directly, with
@@ -488,16 +460,13 @@ pub(crate) fn group_entry(
 /// One handler object — `{type, command[, args], timeout}` — the shape both
 /// the grouped and the flat event forms are built from.
 ///
-/// The native timeout is a backstop for the whole group: the sum of the
-/// per-handler timeouts (with a 1s grace for the final render) bounds the
-/// wrapper's own activity, capped at the canonical 300s maximum.
+/// The native timeout is a backstop for the whole group, and it must never
+/// be the bound that fires first: `uze_core::hook::group_timeout_bound` is
+/// what the wrapper can spend, and `parse_manifest` refuses a group whose
+/// bound exceeds the canonical 300s maximum — so the clamp below is the
+/// cast's guard, never a truncation of a manifest UZE accepted.
 fn handler_entry(hook: &PortableHook, invocation: &HookInvocation) -> serde_json::Value {
-    let timeout: u16 = hook
-        .handlers
-        .iter()
-        .map(|handler| u32::from(handler.timeout))
-        .sum::<u32>()
-        .saturating_add(1)
+    let timeout: u16 = uze_core::hook::group_timeout_bound(&hook.handlers)
         .min(u32::from(uze_core::hook::MAX_TIMEOUT_SECONDS)) as u16;
     let mut invoked = serde_json::Map::new();
     invoked.insert("type".to_owned(), serde_json::json!("command"));
@@ -514,75 +483,57 @@ fn handler_entry(hook: &PortableHook, invocation: &HookInvocation) -> serde_json
     serde_json::Value::Object(invoked)
 }
 
-/// One group's delivery: the native entry, the wrapper it needs on disk,
-/// and — when the native route did not apply — why the packager runtime is
-/// carrying it instead.
+/// One group's delivery: the native entry and the wrapper it needs on disk.
 pub(crate) struct HookDelivery {
     pub entry: serde_json::Value,
-    pub wrapper: Option<PathBuf>,
-    pub adapted_reason: Option<String>,
+    pub wrapper: PathBuf,
 }
 
-/// Chooses how one group reaches a harness and renders it.
+/// Why a platform the `sh` template does not cover receives no hook at all.
+/// There is one implementation of the contract and it is the wrapper: a
+/// delivery that cannot write one has nothing honest to attach, so the hook
+/// is reported Unsupported rather than carried by something else.
+pub(crate) const NO_WRAPPER_TEMPLATE: &str =
+    "no wrapper template for this platform, so the hook is not delivered";
+
+/// Whether a wrapper can be written and run for this harness here.
+fn deliverable(target: &str) -> bool {
+    cfg!(unix) && wrapper_source(target).is_some()
+}
+
+/// Renders one group's delivery, or nothing when this platform has no
+/// wrapper to deliver.
 ///
-/// Native-first: the generated wrapper, vendored beside the delivery, with
-/// nothing of the packager on the execution path. The packager's own
-/// runtime stays the fallback for a platform the POSIX `sh` template does
-/// not cover — the delivery still speaks the same contract, and the route
-/// is reported rather than hidden.
+/// The generated wrapper is the only route: it is vendored beside the
+/// delivery with nothing of the packager on the execution path. Where the
+/// POSIX `sh` template does not reach, the answer is that the hook is not
+/// delivered — see [`NO_WRAPPER_TEMPLATE`].
 pub(crate) fn hook_delivery(
-    uze_home: &UzeHome,
     target: &str,
-    adapter_id: &str,
     hook: &PortableHook,
     package_root: &Path,
     wrapper: Option<PathBuf>,
     exec_form: bool,
-) -> HookDelivery {
-    match wrapper.filter(|_| cfg!(unix)) {
-        Some(wrapper) => {
-            let arguments = wrapper_arguments(hook, package_root, &hook.handlers);
-            let invocation = if exec_form {
-                HookInvocation::Exec {
-                    command: wrapper.display().to_string(),
-                    args: arguments,
-                }
-            } else {
-                HookInvocation::Line(
-                    std::iter::once(shell_quote(&wrapper.display().to_string()))
-                        .chain(arguments.iter().map(|argument| shell_quote(argument)))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                )
-            };
-            HookDelivery {
-                entry: group_entry(target, hook, &invocation),
-                wrapper: Some(wrapper),
-                adapted_reason: None,
-            }
+) -> Option<HookDelivery> {
+    let wrapper = wrapper.filter(|_| deliverable(target))?;
+    let arguments = wrapper_arguments(hook, package_root, &hook.handlers);
+    let invocation = if exec_form {
+        HookInvocation::Exec {
+            command: wrapper.display().to_string(),
+            args: arguments,
         }
-        None => {
-            let _ = uze_home;
-            let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("uze"));
-            let invocation = HookInvocation::Line(dispatcher_command(
-                &executable,
-                adapter_id,
-                hook.event,
-                hook.effect,
-                package_root,
-                &hook.handlers,
-            ));
-            HookDelivery {
-                entry: group_entry(target, hook, &invocation),
-                wrapper: None,
-                adapted_reason: Some(
-                    "no wrapper template covers this platform; the packager runtime carries the \
-                     hook with the same contract"
-                        .to_owned(),
-                ),
-            }
-        }
-    }
+    } else {
+        HookInvocation::Line(
+            std::iter::once(shell_quote(&wrapper.display().to_string()))
+                .chain(arguments.iter().map(|argument| shell_quote(argument)))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    };
+    Some(HookDelivery {
+        entry: group_entry(target, hook, &invocation),
+        wrapper,
+    })
 }
 
 const fn hook_event_name(event: HookEvent) -> &'static str {
@@ -634,7 +585,10 @@ pub(crate) fn agy_named_entry(
 /// Antigravity's shared `hooks.json` is a map of named hooks, not an event
 /// array, so its merge is by *key*: this integration owns exactly the keys
 /// it namespaces (`<package>:<group-id>`), and every other root key —
-/// a hand-written hook, another tool's — is left byte-identical.
+/// a hand-written hook, another tool's — keeps its value and its position
+/// in the document. The file is re-emitted, not patched, so what a merge
+/// does not preserve is formatting: indentation becomes two spaces and
+/// whitespace between tokens is normalised.
 pub(crate) fn merge_named_entry(
     config_path: &Path,
     entry_name: &str,
@@ -856,6 +810,10 @@ fn wrapper_field_variables(target: &str) -> Vec<String> {
 ///
 /// Nothing in this file names the packager: the contract is the file, and
 /// any tool that can write it can deliver a portable hook.
+///
+/// The ABI's "bounded output" lives here too: the wrapper is the only route
+/// left, so the bound the removed in-binary runtime carried has to be the
+/// one [`HANDLER_REASON_LIMIT`] states.
 pub(crate) fn wrapper_source(target: &str) -> Option<String> {
     let dialect = wrapper_dialect(target)?;
     let fields = wrapper_field_variables(target);
@@ -866,6 +824,8 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
         .join(" ");
     let field_exports = fields.join(" ");
     let aliases = wrapper_alias_table(target);
+    let deny_exit_code = uze_core::hook::DENY_EXIT_CODE;
+    let reason_limit = HANDLER_REASON_LIMIT;
     let WrapperDialect {
         harness,
         tool_filter,
@@ -880,13 +840,17 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
 # hooks/exec — generated from hooks.json, one per harness. The harness runs
 # this; it runs the author's handlers. The handlers never see a harness
 # payload and never write harness JSON: the context arrives as HOOK_*
-# environment and the decision leaves as an exit code (0 allow, 3 deny with
-# the reason on stderr; anything else is a failure that follows the group's
-# effect).
+# environment and the decision leaves as an exit code: 0 allows, while
+# {deny_exit_code} denies and the reason is read from stderr. Anything else
+# is a failure that follows the group's effect. Only the first {reason_limit}
+# bytes of a handler's stderr become the reason a harness is handed.
 #
-#   usage: exec <plugin-root> <event> <effect> <handler>...
-#     event   pre_tool_use | post_tool_use | stop
-#     effect  observe | allow | ask | deny
+#   usage: exec <plugin-root> <event> <effect> <seconds>:<handler>...
+#     event    pre_tool_use | post_tool_use | stop
+#     effect   observe | allow | ask | deny
+#     seconds  this handler's own deadline; past it the handler and
+#              everything it started are stopped, and the group's effect
+#              decides, exactly as for any other handler failure
 set -u
 PLUGIN_ROOT=$1
 HOOK_EVENT=$2
@@ -907,8 +871,10 @@ allow_native() {{
   {allow_document}
 }}
 
-# fail-closed effects: a guard that cannot be evaluated denies
-closed() {{ [ "$effect" = deny ] || [ "$effect" = ask ]; }}
+# fail-closed effects: a guard that cannot be evaluated denies. `transform`
+# is one of them — a rewrite that did not happen must not let the original
+# through as if it had.
+closed() {{ case $effect in deny|ask|transform) return 0 ;; *) return 1 ;; esac; }}
 fail() {{ closed && deny_native "$1"; printf '%s\n' "$1" >&2; allow_native; exit 0; }}
 
 # jq escapes the reason once it is available; before that (its own absence
@@ -927,6 +893,12 @@ JQ=${{HOOK_JQ:-jq}}
 command -v "$JQ" >/dev/null 2>&1 || fail "hooks/exec: jq is not installed"
 JQ_READY=1
 payload=$(cat)
+# A payload jq cannot read leaves every extraction below empty, and a guard
+# written the documented way (`case "$HOOK_COMMAND" in ...`) then sees
+# nothing and allows. The context is the whole basis of the decision, so a
+# payload that does not parse is a failure like any other.
+printf '%s' "$payload" | "$JQ" -e . >/dev/null 2>&1 \
+  || fail "hooks/exec: the harness payload is not JSON"
 HOOK_TOOL_NATIVE=$(printf '%s' "$payload" | "$JQ" -r '{tool_filter}')
 HOOK_CWD=$(printf '%s' "$payload" | "$JQ" -r '{cwd_filter}')
 HOOK_INPUT=$(printf '%s' "$payload" | "$JQ" -c '{input_filter}')
@@ -935,12 +907,93 @@ case "$HOOK_TOOL_NATIVE" in                       # the portable vocabulary
 {aliases}esac
 export HOOK_TOOL HOOK_TOOL_NATIVE HOOK_CWD HOOK_INPUT {field_exports}
 
+# --- one handler, under its own deadline ---------------------------------
+# There is no portable `timeout(1)` (macOS ships none) and no job control in
+# a script, so there is no process group to signal: the deadline is a
+# sleeper this shell can cancel, and what it stops is the handler plus every
+# process the handler started. That second part is not thoroughness — a
+# child still holding the pipe keeps this shell waiting long past the
+# deadline it just enforced.
+family() {{                                       # $1 pid -> $1 and its issue
+  snapshot=$(ps -A -o pid=,ppid= 2>/dev/null)
+  all=$1 layer=$1
+  while [ -n "$layer" ]; do
+    layer=$(printf '%s\n' "$snapshot" | while read -r pid parent; do
+      for one in $layer; do
+        [ "$parent" = "$one" ] && printf '%s ' "$pid"
+      done
+    done)
+    all="$all $layer"
+  done
+  printf '%s' "$all"
+}}
+
+# Where a handler's reason is collected: a file, never a pipe. Anything the
+# handler starts inherits a pipe, and one that outlives its deadline would
+# hold this shell open long past the deadline it just enforced. `set -C`
+# refuses a path that already exists, so a planted file or symlink is never
+# written through; with nowhere to write at all, the reason is dropped
+# rather than the hook.
+reasons=${{TMPDIR:-/tmp}}/hooks-exec.$$
+(set -C; : > "$reasons") 2>/dev/null || reasons=/dev/null
+discard_reasons() {{ [ "$reasons" = /dev/null ] || rm -f "$reasons"; }}
+trap discard_reasons EXIT INT TERM
+
+# $1 seconds, $2 command. Leaves what the handler wrote on stderr in
+# $reasons and answers with its exit status — or 124, the conventional
+# timeout status, when the deadline stopped it. A handler that exits 124 of
+# its own accord therefore reads as a timeout; `timeout(1)` carries the
+# same ambiguity.
+guarded() {{
+  (
+    sh -c "$2" </dev/null >/dev/null 2>"$reasons" &
+    child=$!
+    (
+      napper= fired=
+      # The parent cancels this watchdog by TERMing it the moment the
+      # handler answers — but the handler answering *because* the sweep
+      # below reached it is the one case where that TERM must be ignored,
+      # or `exit 0` cuts the escalation short and a child that ignored
+      # TERM outlives the hook.
+      trap '[ -n "$fired" ] || {{ [ -n "$napper" ] && kill "$napper" 2>/dev/null; exit 0; }}' TERM
+      sleep "$1" & napper=$!
+      wait "$napper" 2>/dev/null
+      fired=1
+      doomed=$(family "$child")
+      for one in $doomed; do kill -TERM "$one" 2>/dev/null; done
+      sleep 1                                     # then the ones that stayed
+      for one in $doomed; do kill -KILL "$one" 2>/dev/null; done
+    ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$child"; code=$?
+    kill -TERM "$watchdog" 2>/dev/null            # cancels the sleeper too
+    case $code in
+      137|143) exit 124 ;;
+      *) exit "$code" ;;
+    esac
+  ) 2>/dev/null                                   # the shell's own job notices
+}}
+
 # --- the handlers, in order; the first denial stops the rest --------------
-for handler in "$@"; do
-  reason=$("$handler" 2>&1 >/dev/null); status=$?
+# A handler is a shell command line, run from the package root: the same
+# contract the canonical manifest documents, so `sh scripts/check --strict`
+# means here exactly what it means when a person types it.
+# A root that is gone is not a directory to fall back from: the handlers
+# are relative to the package, so the harness's own working directory would
+# run the *project's* same-named script instead of the author's.
+cd "$PLUGIN_ROOT" 2>/dev/null || fail "hooks/exec: the package root is gone: $PLUGIN_ROOT"
+for entry in "$@"; do
+  seconds=${{entry%%:*}}
+  handler=${{entry#*:}}
+  case $seconds in
+    ''|*[!0-9]*) fail "malformed handler argument: $entry" ;;
+  esac
+  guarded "$seconds" "$handler"; status=$?
+  [ "$status" = 0 ] && continue                   # allowed; on to the next
+  reason=$(head -c {reason_limit} "$reasons" 2>/dev/null)
   case $status in
-    0) ;;
-    3) deny_native "${{reason:-$handler denied the operation}}" ;;
+    {deny_exit_code}) deny_native "${{reason:-$handler denied the operation}}" ;;
+    124) fail "handler timed out after ${{seconds}}s: $handler" ;;
     *) fail "handler failed (exit $status): $handler${{reason:+ — $reason}}" ;;
   esac
 done
@@ -953,6 +1006,13 @@ exit 0
 /// The name of the wrapper inside its delivered artifact. `hooks/exec` on
 /// every harness: one path an author or reviewer can look for.
 pub(crate) const WRAPPER_RELATIVE_PATH: &str = "hooks/exec";
+
+/// How much of a handler's stderr becomes the reason a harness is handed.
+/// "Bounded output" is part of the hook ABI (ADR-033), and the generated
+/// wrapper and the OpenCode bridge are the two places that can still hold
+/// it: without a bound a handler writing megabytes turns into a decision
+/// document that big, which the harness then has to parse.
+pub(crate) const HANDLER_REASON_LIMIT: usize = 4096;
 
 /// Where a harness whose hooks are merged into a shared config file keeps
 /// its wrapper: one file per harness under UZE's own state, never in the
@@ -971,9 +1031,16 @@ pub(crate) fn shared_wrapper_path(uze_home: &UzeHome, target: &str) -> PathBuf {
 pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
     // Rewriting an identical wrapper would replace a file a harness may be
     // executing right now, for no gain: the content is a pure function of
-    // the harness.
+    // the harness. The executable bit is not part of that content, and
+    // `write_atomic` publishes under the umask before the chmod lands — a
+    // crash in between leaves the right bytes with the wrong mode, which
+    // only a second chmod repairs.
     if fs::read_to_string(path).is_ok_and(|current| current == source) {
-        return Ok(());
+        return if is_executable(path) {
+            Ok(())
+        } else {
+            make_executable(path)
+        };
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| UzeError::Write {
@@ -983,6 +1050,23 @@ pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
     }
     write_atomic(path, source.as_bytes())?;
     make_executable(path)
+}
+
+/// Whether the wrapper on disk can be run at all. A harness that cannot
+/// execute it reports exit 126, which a `deny` group turns into a
+/// permanent block — so this is drift, not a cosmetic difference. On a
+/// platform without Unix modes there is no bit to lose.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }
 
 fn make_executable(path: &Path) -> Result<()> {
@@ -1001,19 +1085,26 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes a shared wrapper once no hook receipt of this integration is
-/// left to use it. A wrapper still referenced by another group's entry is
-/// kept: it is one file serving every package.
+/// Removes a shared wrapper once no hook entry of this integration is left
+/// to run it. A wrapper another group's entry still points at is kept: it
+/// is one file serving every package.
+///
+/// "Left" is read from the harness's own config files, not from the receipt
+/// ledger. The prune runs inside a detach, and the lifecycle only rewrites
+/// the ledger once every detach of the removal has returned — so the
+/// receipt being detached, and during `uze remove` each of its siblings, is
+/// still listed there while its entry is already gone from the config.
 pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: &str) {
-    let still_used = uze_core::state::receipts(uze_home, None).is_ok_and(|ledger| {
-        ledger.iter().any(|(_, receipt)| {
-            receipt.integration == integration_id
-                && matches!(
-                    receipt.artifact,
-                    uze_core::integration::ManagedArtifact::HookConfigEntry { .. }
-                )
-        })
-    });
+    // A ledger that cannot be read has not said the wrapper is unused; it
+    // has said nothing. Deleting on that answer is a destructive mutation
+    // authorized by an unreadable ledger, which is exactly what receipts
+    // exist to refuse.
+    let still_used = match uze_core::state::receipts(uze_home, None) {
+        Ok(ledger) => ledger.iter().any(|(_, receipt)| {
+            receipt.integration == integration_id && entry_is_attached(receipt, target)
+        }),
+        Err(_) => true,
+    };
     if still_used {
         return;
     }
@@ -1024,10 +1115,50 @@ pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, tar
     }
 }
 
+/// Whether this receipt's hook entry is still in the harness's config file.
+/// The wrapper is deliberately not part of the question: it is what the
+/// prune is deciding about, so inspecting it would answer "nothing is
+/// attached" for every entry the moment it went missing.
+///
+/// The target decides the file's shape — Antigravity keys its entries by
+/// name, the other command-hook harnesses by event — and every receipt
+/// records its event either way, so the shape cannot be read off the
+/// receipt.
+///
+/// The question is "does anything still run this wrapper", not "is this
+/// entry exactly as UZE wrote it": only an entry that is *absent* has
+/// stopped running it. An unreadable config, drift, a hand-edited entry —
+/// each of those still fires the wrapper, and an event-array config reports
+/// an edited entry as absent, so the wrapper's own path in the file is the
+/// last word.
+fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt, target: &str) -> bool {
+    let uze_core::integration::ManagedArtifact::HookConfigEntry {
+        config_file,
+        entry_name,
+        event,
+        expected,
+        wrapper,
+    } = &receipt.artifact
+    else {
+        return false;
+    };
+    let inspection = if target == ANTIGRAVITY_TARGET {
+        inspect_named_entry(config_file, entry_name, expected, None)
+    } else {
+        inspect_event_entry(config_file, *event, expected, None)
+    };
+    if inspection.state != AttachmentState::Missing {
+        return true;
+    }
+    fs::read_to_string(config_file)
+        .is_ok_and(|config| config.contains(&wrapper.display().to_string()))
+}
+
 /// The native command an entry runs: the wrapper, the package root, the
-/// group's event and effect, then the author's handlers with
-/// `${PLUGIN_ROOT}` already resolved. Everything harness-specific is
-/// decided here, at generation time.
+/// group's event and effect, then the author's handlers — each as
+/// `<seconds>:<command>`, with its declared deadline and `${PLUGIN_ROOT}`
+/// already resolved. Everything harness-specific is decided here, at
+/// generation time, so the native entry reads as what will run.
 pub(crate) fn wrapper_arguments(
     hook: &PortableHook,
     package_root: &Path,
@@ -1039,11 +1170,13 @@ pub(crate) fn wrapper_arguments(
         hook.effect.abi_name().to_owned(),
     ];
     for handler in handlers {
-        arguments.push(
+        arguments.push(format!(
+            "{}:{}",
+            handler.timeout,
             handler
                 .command
-                .replace("${PLUGIN_ROOT}", &package_root.display().to_string()),
-        );
+                .replace("${PLUGIN_ROOT}", &package_root.display().to_string())
+        ));
     }
     arguments
 }
@@ -1359,6 +1492,10 @@ fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspectio
                 reason: "the generated hook wrapper does not match what UZE writes".to_owned(),
             })
         }
+        Ok(_) if !is_executable(path) => Some(AttachmentInspection {
+            state: AttachmentState::Drifted,
+            reason: "the generated hook wrapper is not executable".to_owned(),
+        }),
         Ok(_) => None,
     }
 }
@@ -1457,6 +1594,8 @@ pub(crate) fn opencode_bridge(
     let groups = serde_json::to_string(&bridge_hooks(hooks, plugin_root))
         .expect("generated groups serialize");
     let aliases = bridge_alias_table();
+    let deny_exit_code = uze_core::hook::DENY_EXIT_CODE;
+    let reason_limit = HANDLER_REASON_LIMIT;
     format!(
         r#"// Generated from hooks.json — do not edit; regenerate instead.
 // OpenCode V2 (opencode.ai/v2/docs/build/plugins) has no hooks.json: the
@@ -1464,9 +1603,10 @@ pub(crate) fn opencode_bridge(
 // between packages; everything below it is the same runtime every time.
 //
 // Handler contract: the hook context arrives as HOOK_* environment and the
-// decision leaves as an exit code — 0 allows, 3 denies with the reason on
-// stderr, anything else is a failure that follows the group's effect
-// (fail-closed for deny/ask, fail-open for observe/allow).
+// decision leaves as an exit code — 0 allows, {deny_exit_code} denies with
+// the reason on stderr, anything else is a failure that follows the group's
+// effect (fail-closed for deny/ask, fail-open for observe/allow). Each
+// handler is bounded by the deadline its author declared.
 import {{ Plugin }} from "@opencode-ai/plugin";
 
 const ROOT = {root:?};
@@ -1508,16 +1648,22 @@ async function handler(command, timeout, env) {{
   }} catch (error) {{
     return {{ failed: true, reason: `handler failed to start: ${{command}} — ${{error.message}}` }};
   }}
-  const timer = setTimeout(() => proc.kill(), timeout * 1000);
+  // The author's deadline, enforced here for the same reason the sh
+  // wrapper enforces it: nothing else will.
+  let expired = false;
+  const timer = setTimeout(() => {{ expired = true; proc.kill(); }}, timeout * 1000);
   let stderr = "";
   try {{
-    stderr = (await new Response(proc.stderr).text()).trim();
+    // Bounded like the sh wrapper's: the reason is a sentence for a person,
+    // not a transcript, and an unbounded one becomes the harness's document.
+    stderr = (await new Response(proc.stderr).text()).slice(0, {reason_limit}).trim();
   }} finally {{
     clearTimeout(timer);
   }}
   const code = await proc.exited;
+  if (expired) return {{ failed: true, reason: `handler timed out after ${{timeout}}s: ${{command}}` }};
   if (code === 0) return null;
-  if (code === 3) return {{ failed: false, reason: stderr || `${{command}} denied the operation` }};
+  if (code === {deny_exit_code}) return {{ failed: false, reason: stderr || `${{command}} denied the operation` }};
   return {{ failed: true, reason: `handler failed (exit ${{code}}): ${{command}}${{stderr ? " — " + stderr : ""}}` }};
 }}
 
@@ -1623,7 +1769,6 @@ pub(crate) fn hook_exposure_plan(
     capabilities: &HookCapabilities,
     config_file: PathBuf,
     target: &str,
-    adapter_id: &str,
     exec_form: bool,
     bridged: bool,
     evidence: &str,
@@ -1635,7 +1780,7 @@ pub(crate) fn hook_exposure_plan(
         );
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, bridged);
-    let mut adapted_reason = None;
+    let mut undeliverable = None;
     let mechanism = match compatibility.route {
         CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
             ExposureMechanism::Unsupported {
@@ -1649,34 +1794,39 @@ pub(crate) fn hook_exposure_plan(
             let package_root = resource
                 .package_root()
                 .expect("hook exposure_plan is only reached for packages");
-            let delivery = hook_delivery(
-                uze_home,
+            match hook_delivery(
                 target,
-                adapter_id,
                 &hook,
                 package_root,
                 Some(shared_wrapper_path(uze_home, target)),
                 exec_form,
-            );
-            adapted_reason = delivery.adapted_reason;
-            ExposureMechanism::ManagedHookConfig {
-                config_file,
-                entry_name: hook_entry_name(resource, &hook),
-                event: Some(hook.event),
-                expected: serde_json::to_string(&delivery.entry).expect("hook entry serializes"),
-                wrapper: delivery.wrapper,
+            ) {
+                Some(delivery) => ExposureMechanism::ManagedHookConfig {
+                    config_file,
+                    entry_name: hook_entry_name(resource, &hook),
+                    event: hook.event,
+                    expected: serde_json::to_string(&delivery.entry)
+                        .expect("hook entry serializes"),
+                    wrapper: delivery.wrapper,
+                },
+                None => {
+                    undeliverable = Some(NO_WRAPPER_TEMPLATE);
+                    ExposureMechanism::Unsupported {
+                        rationale: NO_WRAPPER_TEMPLATE.to_owned(),
+                    }
+                }
             }
         }
     };
-    // The route the delivery actually took is part of the verdict: a hook
-    // the packager runtime carries is honestly Adaptable, never Native.
-    let route = match (compatibility.route, &adapted_reason) {
-        (CompatibilityRoute::Native, Some(_)) => CompatibilityRoute::Adaptable,
-        (route, _) => route,
+    // A semantic route the delivery cannot take is not a route: a harness
+    // this platform has no wrapper for is Unsupported, and says why.
+    let route = match undeliverable {
+        Some(_) => CompatibilityRoute::Unsupported,
+        None => compatibility.route,
     };
-    let evidence = match (&compatibility.reason, &adapted_reason) {
+    let evidence = match (&compatibility.reason, undeliverable) {
         (Some(reason), _) => format!("{evidence} Compatibility: {reason}"),
-        (None, Some(adapted)) => format!("{evidence} Delivery: {adapted}."),
+        (None, Some(reason)) => format!("{evidence} Delivery: {reason}."),
         (None, None) => evidence.to_owned(),
     };
     ExposurePlan {
@@ -1703,7 +1853,6 @@ pub(crate) fn antigravity_hook_exposure_plan(
     resource: &Resource,
     capabilities: &HookCapabilities,
     config_file: PathBuf,
-    adapter_id: &str,
 ) -> ExposurePlan {
     const EVIDENCE: &str = "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).";
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
@@ -1713,6 +1862,7 @@ pub(crate) fn antigravity_hook_exposure_plan(
         );
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, false);
+    let mut undeliverable = false;
     let mechanism = match compatibility.route {
         CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
             ExposureMechanism::Unsupported {
@@ -1720,6 +1870,12 @@ pub(crate) fn antigravity_hook_exposure_plan(
                     .reason
                     .clone()
                     .unwrap_or_else(|| "no compatible hook route".to_owned()),
+            }
+        }
+        _ if !deliverable(ANTIGRAVITY_TARGET) => {
+            undeliverable = true;
+            ExposureMechanism::Unsupported {
+                rationale: NO_WRAPPER_TEMPLATE.to_owned(),
             }
         }
         _ => {
@@ -1731,20 +1887,24 @@ pub(crate) fn antigravity_hook_exposure_plan(
             ExposureMechanism::ManagedHookConfig {
                 config_file,
                 entry_name: hook_entry_name(resource, &hook),
-                event: Some(hook.event),
+                event: hook.event,
                 expected: serde_json::to_string(&entry).expect("hook entry serializes"),
-                wrapper: Some(wrapper),
+                wrapper,
             }
         }
     };
-    let _ = adapter_id;
-    let evidence = match &compatibility.reason {
-        Some(reason) => format!("{EVIDENCE} Compatibility: {reason}"),
-        None => EVIDENCE.to_owned(),
+    let evidence = match (&compatibility.reason, undeliverable) {
+        (Some(reason), _) => format!("{EVIDENCE} Compatibility: {reason}"),
+        (None, true) => format!("{EVIDENCE} Delivery: {NO_WRAPPER_TEMPLATE}."),
+        (None, false) => EVIDENCE.to_owned(),
     };
     ExposurePlan {
         representation: resource.capability.representation,
-        route: compatibility.route,
+        route: if undeliverable {
+            CompatibilityRoute::Unsupported
+        } else {
+            compatibility.route
+        },
         verification: VerificationStatus::Unverified,
         mechanism,
         evidence,
@@ -1771,364 +1931,6 @@ fn unsupported_plan(resource: &Resource, rationale: &str) -> ExposurePlan {
             rationale: rationale.to_owned(),
         },
         evidence: rationale.to_owned(),
-    }
-}
-
-// ============================================================================
-// Runtime adapters: native payload → portable ABI → native contract
-// ============================================================================
-
-/// Native blocking exit code shared by the command-hook harnesses
-/// (Claude, Codex and Antigravity all document exit 2 as the pre-tool
-/// block signal; every other non-zero exit is a non-blocking error there).
-const NATIVE_BLOCK_EXIT: i32 = 2;
-
-/// The matched tool as a handler sees it: the portable alias (when this
-/// harness's vocabulary knows the native name) and the alias's portable
-/// fields, each read from the native input field the vocabulary names. A
-/// tool the table does not bind carries its native name and nothing else.
-fn matched_tool(target: &str, native: &str, input: &serde_json::Value) -> HookTool {
-    let binding = vocabulary(target).binding_for_native(native);
-    HookTool {
-        portable: binding.map(|entry| entry.alias.to_owned()),
-        native: native.to_owned(),
-        fields: binding
-            .into_iter()
-            .flat_map(|entry| entry.fields.iter())
-            .filter_map(|(portable, native_field)| {
-                input
-                    .get(native_field)
-                    .map(|value| ((*portable).to_owned(), scalar(value)))
-            })
-            .collect(),
-    }
-}
-
-/// A native input field rendered for the environment: a string verbatim,
-/// anything else as its JSON text, so a handler always reads a value and
-/// never a Rust debug rendering.
-fn scalar(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Extracts `tool_name`/`tool_input` shaped payload fields (Claude and
-/// Codex both document this shape for tool events) and the common
-/// `cwd`/`session_id` context keys, sticky across the two vendors' field
-/// casing conventions.
-fn normalize_tool_payload(
-    target: &str,
-    native: &serde_json::Value,
-    event: HookEvent,
-    tool_key: &str,
-    input_key: &str,
-    cwd_key: &str,
-    session_key: &str,
-) -> std::result::Result<HookCommandInput, String> {
-    let tool_name = native.get(tool_key).and_then(serde_json::Value::as_str);
-    let input = native
-        .get(input_key)
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let tool = match (tool_name, event) {
-        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => {
-            Some(matched_tool(target, name, &input))
-        }
-        _ => None,
-    };
-    Ok(HookCommandInput {
-        harness: target.to_owned(),
-        event: event.abi_name().to_owned(),
-        tool,
-        input,
-        context: HookContext {
-            cwd: native
-                .get(cwd_key)
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            session_id: native
-                .get(session_key)
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-        },
-    })
-}
-
-/// Claude Code's native hook payload uses `tool_name`/`tool_input` and a
-/// nested `context` carrying `cwd`/`session_id`.
-pub(crate) fn claude_normalize_input(
-    native: &serde_json::Value,
-    event: HookEvent,
-) -> std::result::Result<HookCommandInput, String> {
-    normalize_tool_payload(
-        "claude",
-        native,
-        event,
-        "tool_name",
-        "tool_input",
-        "cwd",
-        "session_id",
-    )
-    .map(|mut input| {
-        if input.context.cwd.is_none()
-            && let Some(cwd) = native
-                .get("context")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|context| context.get("cwd"))
-                .and_then(serde_json::Value::as_str)
-        {
-            input.context.cwd = Some(cwd.to_owned());
-        }
-        if input.context.session_id.is_none()
-            && let Some(session_id) = native
-                .get("context")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|context| context.get("session_id"))
-                .and_then(serde_json::Value::as_str)
-        {
-            input.context.session_id = Some(session_id.to_owned());
-        }
-        input
-    })
-}
-
-/// Codex's native hook payload mirrors `tool_name`/`tool_input` with
-/// top-level `cwd`/`session_id`.
-pub(crate) fn codex_normalize_input(
-    native: &serde_json::Value,
-    event: HookEvent,
-) -> std::result::Result<HookCommandInput, String> {
-    normalize_tool_payload(
-        "codex",
-        native,
-        event,
-        "tool_name",
-        "tool_input",
-        "cwd",
-        "session_id",
-    )
-}
-
-/// Antigravity CLI's native hook payload (official docs): a nested
-/// `toolCall` object with `name`/`args`, plus `conversationId` and
-/// `workspacePaths` (the first entry is the workspace directory).
-pub(crate) fn antigravity_normalize_input(
-    native: &serde_json::Value,
-    event: HookEvent,
-) -> std::result::Result<HookCommandInput, String> {
-    let tool_name = native
-        .get("toolCall")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|call| call.get("name"))
-        .and_then(serde_json::Value::as_str);
-    let input = native
-        .get("toolCall")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|call| call.get("args"))
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let tool = match (tool_name, event) {
-        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => {
-            Some(matched_tool("antigravity", name, &input))
-        }
-        _ => None,
-    };
-    Ok(HookCommandInput {
-        harness: "antigravity".to_owned(),
-        event: event.abi_name().to_owned(),
-        tool,
-        input,
-        context: HookContext {
-            cwd: native
-                .get("workspacePaths")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|paths| paths.first())
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            session_id: native
-                .get("conversationId")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-        },
-    })
-}
-
-/// Claude Code's native hook stdout contract (current hook reference):
-/// one `hookSpecificOutput` object naming the event plus a
-/// `permissionDecision` (`allow`/`deny`/`ask` for PreToolUse),
-/// `permissionDecisionReason`, and an optional `updatedInput` rewrite.
-/// A deny blocks the tool with **exit code 2**, whose stderr is fed back to
-/// Claude as the reason — the exit-2 route never depends on JSON parsing,
-/// so a deny cannot degrade into an allow under any output failure. Other
-/// non-zero exits are non-blocking errors ("logged and ignored,
-/// execution continues"), which is exactly why the canonical deny exit
-/// must never leak outward.
-pub(crate) fn claude_render_output(
-    outcome: &HookDispatchOutcome,
-    event: HookEvent,
-) -> std::result::Result<HookNativeOutput, String> {
-    // Decisions are honored on PreToolUse (and Stop, where exit 2 prevents
-    // the stop — documented); PostToolUse cannot block anything.
-    let blocking = matches!(event, HookEvent::PreToolUse | HookEvent::Stop);
-    let Some(decision) = outcome.decision else {
-        return Ok(HookNativeOutput::default());
-    };
-    if !blocking {
-        return Ok(HookNativeOutput::default());
-    }
-    let mut hook_specific = serde_json::Map::new();
-    hook_specific.insert(
-        "hookEventName".to_owned(),
-        serde_json::Value::String(hook_event_name(event).to_owned()),
-    );
-    let decision_name = match decision {
-        HookDecision::Allow => "allow",
-        HookDecision::Ask => "ask",
-        HookDecision::Deny => "deny",
-    };
-    hook_specific.insert(
-        "permissionDecision".to_owned(),
-        serde_json::Value::String(decision_name.to_owned()),
-    );
-    hook_specific.insert(
-        "permissionDecisionReason".to_owned(),
-        serde_json::Value::String(outcome.reason.clone().unwrap_or_default()),
-    );
-    let document = serde_json::json!({ "hookSpecificOutput": hook_specific });
-    let stdout = Some(serde_json::to_vec(&document).expect("hook output serializes"));
-    if decision == HookDecision::Deny {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: Some(
-                outcome
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
-            ),
-            exit_code: NATIVE_BLOCK_EXIT,
-        })
-    } else {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: None,
-            exit_code: 0,
-        })
-    }
-}
-
-/// Codex's hook stdout contract: the `hookSpecificOutput` shape with
-/// `permissionDecision` (`deny` is the decision Codex acts on; anything
-/// else runs the tool). Deny blocks with exit code 2 — the documented
-/// block signal — with the reason preserved on stderr. Codex's Stop event
-/// additionally requires parseable JSON on stdout at exit 0, so an empty
-/// observation renders `{}` there rather than plain text.
-pub(crate) fn codex_render_output(
-    outcome: &HookDispatchOutcome,
-    event: HookEvent,
-) -> std::result::Result<HookNativeOutput, String> {
-    let Some(decision) = outcome.decision else {
-        if event == HookEvent::Stop {
-            return Ok(HookNativeOutput {
-                stdout: Some(b"{}".to_vec()),
-                ..HookNativeOutput::default()
-            });
-        }
-        return Ok(HookNativeOutput::default());
-    };
-    let decision_name = match decision {
-        HookDecision::Allow => "allow",
-        HookDecision::Ask => "ask",
-        HookDecision::Deny => "deny",
-    };
-    let document = serde_json::json!({
-        "hookSpecificOutput": {
-            "permissionDecision": decision_name,
-            "permissionDecisionReason": outcome.reason.clone().unwrap_or_default(),
-        }
-    });
-    let stdout = Some(serde_json::to_vec(&document).expect("hook output serializes"));
-    if decision == HookDecision::Deny && event == HookEvent::PreToolUse {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: Some(
-                outcome
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
-            ),
-            exit_code: NATIVE_BLOCK_EXIT,
-        })
-    } else {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: None,
-            exit_code: 0,
-        })
-    }
-}
-
-/// Antigravity CLI's hook stdout contract: native `allow`/`ask`/`deny`
-/// decisions with a reason (official contract). Unlike its peers the
-/// decision travels on stdout *alone*: a non-zero exit is a failed hook
-/// here, so every answer exits 0. Other events return `{}`.
-pub(crate) fn antigravity_render_output(
-    outcome: &HookDispatchOutcome,
-    event: HookEvent,
-) -> std::result::Result<HookNativeOutput, String> {
-    let Some(decision) = outcome.decision else {
-        if event == HookEvent::PreToolUse {
-            return Ok(HookNativeOutput::default());
-        }
-        // PostToolUse/Stop: the official contract requires `{}`.
-        return Ok(HookNativeOutput {
-            stdout: Some(b"{}".to_vec()),
-            ..HookNativeOutput::default()
-        });
-    };
-    if event != HookEvent::PreToolUse {
-        // PostToolUse returns an empty object and Stop answers with a
-        // `continue` decision — neither carries a deny/allow, so any
-        // decision there is observational only.
-        return Ok(HookNativeOutput {
-            stdout: Some(b"{}".to_vec()),
-            ..HookNativeOutput::default()
-        });
-    }
-    let decision_name = match decision {
-        HookDecision::Allow => "allow",
-        HookDecision::Ask => "ask",
-        HookDecision::Deny => "deny",
-    };
-    let document = serde_json::json!({
-        "decision": decision_name,
-        "reason": outcome.reason.clone().unwrap_or_default(),
-    });
-    let stdout = Some(serde_json::to_vec(&document).expect("hook output serializes"));
-    if decision == HookDecision::Deny {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: Some(
-                outcome
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
-            ),
-            // Exit 0, not the block code its peers use: this harness reads
-            // the decision from stdout and treats any non-zero exit as a
-            // *failed* hook — it logs "pre-tool hook failed", falls through
-            // to the permission prompt, and the command runs (measured on
-            // 1.1.24). The denial is the document; the status must not
-            // contradict it.
-            exit_code: 0,
-        })
-    } else {
-        Ok(HookNativeOutput {
-            stdout,
-            stderr: None,
-            exit_code: 0,
-        })
     }
 }
 
@@ -2163,10 +1965,6 @@ mod tests {
             hook,
             Path::new("/pkg"),
         ))
-    }
-
-    fn executable() -> PathBuf {
-        PathBuf::from("/opt/uze stake/bin")
     }
 
     #[test]
@@ -2227,11 +2025,6 @@ mod tests {
             tool_names("claude", &HookMatcher::Native("Write".into())),
             ["Write"]
         );
-        assert!(
-            matched_tool("claude", "SomeVendorOnlyTool", &serde_json::json!({"x": 1}))
-                .fields
-                .is_empty()
-        );
     }
 
     #[test]
@@ -2264,77 +2057,81 @@ mod tests {
         );
     }
 
+    /// A platform the `sh` template does not cover gets no hook, and the
+    /// plan says so. The wrapper is the only implementation of the
+    /// contract, so a delivery that cannot write one has nothing honest to
+    /// attach — an entry running something else would be a hook the author
+    /// never wrote.
     #[test]
-    fn dispatcher_command_is_shell_quoted_for_paths_and_commands() {
-        let command = dispatcher_command(
-            &executable(),
-            "claude-code",
-            hook().event,
-            hook().effect,
-            Path::new("/tmp/plugin root"),
-            &hook().handlers,
-        );
-        assert!(
-            command.starts_with("'/opt/uze stake/bin'"),
-            "executable path with spaces is quoted"
-        );
-        assert!(command.contains("--adapter 'claude-code'"));
-        assert!(command.contains("--event pre_tool_use"));
-        assert!(command.contains("--effect deny"));
-        assert!(command.contains("--plugin-root '/tmp/plugin root'"));
-        assert!(
-            command.contains("--command '${PLUGIN_ROOT}/check'"),
-            "the authored command is retained verbatim"
-        );
-        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
-    }
-
-    #[test]
-    fn a_platform_without_a_wrapper_template_falls_back_to_the_packager_runtime() {
-        let home = UzeHome::at(Path::new("/tmp/uze-home"));
-        let native = hook_delivery(
-            &home,
+    fn a_platform_without_a_wrapper_template_delivers_no_hook() {
+        let delivered = hook_delivery(
             "claude",
-            "claude-code",
             &hook(),
             Path::new("/pkg"),
             Some(PathBuf::from("/state/hooks/exec")),
             true,
-        );
-        assert_eq!(native.adapted_reason, None);
-        assert_eq!(
-            native.wrapper.as_deref(),
-            Some(Path::new("/state/hooks/exec"))
-        );
-        assert_eq!(native.entry["hooks"][0]["command"], "/state/hooks/exec");
+        )
+        .expect("a harness with a template delivers");
+        assert_eq!(delivered.wrapper, Path::new("/state/hooks/exec"));
+        assert_eq!(delivered.entry["hooks"][0]["command"], "/state/hooks/exec");
 
-        // `None` is what a platform the POSIX template does not cover
-        // yields; the hook still reaches the harness, through the runtime
-        // that is the contract's reference implementation.
-        let fallback = hook_delivery(
-            &home,
-            "claude",
-            "claude-code",
-            &hook(),
-            Path::new("/pkg"),
-            None,
-            true,
-        );
-        assert!(fallback.wrapper.is_none());
         assert!(
-            fallback
-                .adapted_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("no wrapper template")),
-            "the fallback states why it was taken"
+            hook_delivery("claude", &hook(), Path::new("/pkg"), None, true).is_none(),
+            "no wrapper to run is no delivery"
         );
-        let command = fallback.entry["hooks"][0]["command"].as_str().unwrap();
-        assert!(command.contains("hook-exec"));
-        assert!(command.contains("--effect deny"));
-        assert_eq!(
-            fallback.entry["matcher"], native.entry["matcher"],
-            "both routes intercept exactly the same tools"
+        assert!(
+            hook_delivery(
+                "a-harness-with-no-template",
+                &hook(),
+                Path::new("/pkg"),
+                Some(PathBuf::from("/state/hooks/exec")),
+                true,
+            )
+            .is_none(),
+            "a harness the template generator does not cover delivers nothing"
         );
+    }
+
+    /// The same answer one level up: the exposure plan reports Unsupported
+    /// with the reason, rather than an entry pointing at something that is
+    /// not there.
+    #[test]
+    fn a_hook_that_cannot_be_delivered_is_reported_unsupported() {
+        let home = UzeHome::at(Path::new("/tmp/uze-home"));
+        let package = uze_testkit::temp::scratch("undeliverable");
+        fs::create_dir_all(&package).unwrap();
+        let resource = Resource::from_package(
+            uze_core::store::PackageId::from_plugin_name("demo", &package.join("plugin.json"))
+                .unwrap(),
+            package.clone(),
+            uze_core::capability::Capability {
+                kind: uze_core::capability::CapabilityKind::Hook,
+                representation: uze_core::capability::Representation::Standard,
+                path: package.join(HOOKS_FILE_NAME),
+                payload: serde_json::to_vec(&hook()).unwrap(),
+            },
+        );
+        let plan = hook_exposure_plan(
+            &home,
+            &resource,
+            &claude_capabilities(),
+            PathBuf::from("/config/settings.json"),
+            "a-harness-with-no-template",
+            true,
+            false,
+            "evidence.",
+        );
+        assert_eq!(plan.route, CompatibilityRoute::Unsupported);
+        assert!(
+            matches!(
+                &plan.mechanism,
+                ExposureMechanism::Unsupported { rationale } if rationale == NO_WRAPPER_TEMPLATE
+            ),
+            "nothing is attached: {:?}",
+            plan.mechanism
+        );
+        assert!(plan.evidence.contains(NO_WRAPPER_TEMPLATE));
+        let _ = fs::remove_dir_all(package);
     }
 
     #[test]
@@ -2344,8 +2141,8 @@ mod tests {
         assert_eq!(entry["matcher"], "Bash|Write");
         assert_eq!(entry["hooks"][0]["type"], "command");
         assert_eq!(
-            entry["hooks"][0]["timeout"], 11,
-            "sum of handler timeouts plus 1s grace"
+            entry["hooks"][0]["timeout"], 12,
+            "each handler's own bound plus its kill grace, plus 1s to render"
         );
         hook.matchers = Vec::new();
         let entry = group_entry("claude", &hook, &invocation(&hook));
@@ -2353,6 +2150,40 @@ mod tests {
             entry.get("matcher").is_none(),
             "no matcher key for a match-all group"
         );
+    }
+
+    /// The harness's own timeout is a backstop, and a backstop that fires
+    /// first defeats the purpose: a hook the harness kills is read as
+    /// non-blocking, so a `deny` group would be allowed through. The bound
+    /// therefore has to cover everything the wrapper can spend — and
+    /// `parse_manifest` is what keeps a manifest from asking for more than
+    /// the maximum, since clamping here would silently reintroduce the
+    /// problem.
+    #[test]
+    fn the_native_timeout_outlasts_everything_the_wrapper_can_spend() {
+        let manifest = serde_json::json!({
+            "hooks": {"PreToolUse": [{
+                "id": "protect-env",
+                "hooks": (1..=9).map(|_| serde_json::json!({
+                    "type": "command", "command": "check", "timeout": 30
+                })).collect::<Vec<_>>(),
+            }]}
+        })
+        .to_string();
+        let hooks =
+            uze_core::hook::parse_manifest(Path::new("hooks.json"), manifest.as_bytes()).unwrap();
+        let entry = group_entry("claude", &hooks[0], &invocation(&hooks[0]));
+        let native = entry["hooks"][0]["timeout"].as_u64().unwrap();
+        let spent: u64 = hooks[0]
+            .handlers
+            .iter()
+            .map(|handler| u64::from(handler.timeout) + 1)
+            .sum();
+        assert!(
+            native > spent,
+            "the native backstop ({native}s) must outlast the wrapper's own worst case ({spent}s)"
+        );
+        assert!(u64::from(uze_core::hook::MAX_TIMEOUT_SECONDS) >= native);
     }
 
     /// The vendor's own docs split the two shapes: a tool event is grouped
@@ -2402,7 +2233,7 @@ mod tests {
                 .is_some_and(|command| command.contains("'stop' 'observe'")),
             "the flat entry still runs the wrapper with the group's arguments: {flat}"
         );
-        assert_eq!(flat["timeout"], 11);
+        assert_eq!(flat["timeout"], 12);
     }
 
     #[test]
@@ -2606,7 +2437,7 @@ mod tests {
             1,
             "the old version is replaced, not duplicated"
         );
-        assert_eq!(entries[0]["hooks"][0]["timeout"], 21);
+        assert_eq!(entries[0]["hooks"][0]["timeout"], 22);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2624,7 +2455,7 @@ mod tests {
             &config,
             serde_json::to_string(&value)
                 .unwrap()
-                .replace("\"timeout\":11", "\"timeout\":99"),
+                .replace("\"timeout\":12", "\"timeout\":99"),
         )
         .unwrap();
         assert_eq!(
@@ -2710,147 +2541,6 @@ mod tests {
     }
 
     #[test]
-    fn adapters_render_native_decisions_and_block_exit_codes() {
-        // Normalization: Claude/Codex carry tool_name/tool_input; AGY
-        // carries toolCall.name/toolCall.args (official hooks docs).
-        let claude = serde_json::json!({
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-            "hook_event_name": "PreToolUse",
-            "context": {"cwd": "/work", "session_id": "s1"},
-        });
-        let input = claude_normalize_input(&claude, HookEvent::PreToolUse).unwrap();
-        assert_eq!(
-            input.tool.clone().unwrap().portable.as_deref(),
-            Some("shell")
-        );
-        assert_eq!(input.tool.unwrap().native, "Bash");
-        assert_eq!(input.context.cwd.as_deref(), Some("/work"));
-        assert_eq!(input.context.session_id.as_deref(), Some("s1"));
-
-        let agy = serde_json::json!({
-            "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}},
-            "stepIdx": 4,
-            "conversationId": "c2",
-            "workspacePaths": ["/work"],
-        });
-        let input = antigravity_normalize_input(&agy, HookEvent::PreToolUse).unwrap();
-        assert_eq!(input.tool.unwrap().native, "run_command");
-        assert_eq!(input.context.cwd.as_deref(), Some("/work"));
-        assert_eq!(input.context.session_id.as_deref(), Some("c2"));
-
-        // Deny: the native JSON decision, with the reason on stderr (the
-        // fed-back channel), and each harness's own block signal — exit 2
-        // where the harness reads the decision alongside it, exit 0 on
-        // Antigravity, which reads the decision from stdout and treats any
-        // non-zero exit as a *failed* hook. Internal canonical exit codes
-        // never leak outward.
-        let deny = HookDispatchOutcome {
-            decision: Some(HookDecision::Deny),
-            reason: Some("blocked by policy".to_owned()),
-            ..HookDispatchOutcome::default()
-        };
-        let claude_out = claude_render_output(&deny, HookEvent::PreToolUse).unwrap();
-        assert_eq!(claude_out.exit_code, 2);
-        assert_eq!(claude_out.stderr.as_deref(), Some("blocked by policy"));
-        let json: serde_json::Value = serde_json::from_slice(&claude_out.stdout.unwrap()).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
-        assert_eq!(
-            json["hookSpecificOutput"]["permissionDecisionReason"],
-            "blocked by policy"
-        );
-        let codex_out = codex_render_output(&deny, HookEvent::PreToolUse).unwrap();
-        assert_eq!(codex_out.exit_code, 2);
-        assert_eq!(codex_out.stderr.as_deref(), Some("blocked by policy"));
-        let json: serde_json::Value = serde_json::from_slice(&codex_out.stdout.unwrap()).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
-        let agy_out = antigravity_render_output(&deny, HookEvent::PreToolUse).unwrap();
-        assert_eq!(
-            agy_out.exit_code, 0,
-            "a non-zero exit is a failed hook here, not a block"
-        );
-        let json: serde_json::Value = serde_json::from_slice(&agy_out.stdout.unwrap()).unwrap();
-        assert_eq!(json["decision"], "deny");
-        assert_eq!(json["reason"], "blocked by policy");
-
-        // Allow/observe: exit 0, no stderr; an observation renders no JSON
-        // on Claude pre-tool, and the AGY official contract for
-        // PostToolUse/Stop is an empty object.
-        let allow = HookDispatchOutcome {
-            decision: Some(HookDecision::Allow),
-            reason: Some("ok".to_owned()),
-            ..HookDispatchOutcome::default()
-        };
-        assert_eq!(
-            claude_render_output(&allow, HookEvent::PreToolUse)
-                .unwrap()
-                .exit_code,
-            0
-        );
-        assert_eq!(
-            claude_render_output(&allow, HookEvent::PreToolUse)
-                .unwrap()
-                .stderr,
-            None
-        );
-        let observed = HookDispatchOutcome::default();
-        assert!(
-            claude_render_output(&observed, HookEvent::PreToolUse)
-                .unwrap()
-                .stdout
-                .is_none()
-        );
-        assert_eq!(
-            antigravity_render_output(&observed, HookEvent::PostToolUse)
-                .unwrap()
-                .stdout
-                .as_deref(),
-            Some(&b"{}"[..])
-        );
-        // Decisions on non-blocking events are observational only.
-        let agy_post = antigravity_render_output(&deny, HookEvent::PostToolUse).unwrap();
-        assert_eq!(agy_post.exit_code, 0);
-        assert_eq!(agy_post.stdout.as_deref(), Some(&b"{}"[..]));
-    }
-
-    #[test]
-    fn stop_payloads_carry_no_tool_and_a_matched_tool_carries_its_portable_fields() {
-        let stop = serde_json::json!({"stop_hook_active": true});
-        let input = claude_normalize_input(&stop, HookEvent::Stop).unwrap();
-        assert!(input.tool.is_none());
-
-        let call = serde_json::json!({
-            "tool_name": "Bash",
-            "tool_input": {"command": "cat .env"},
-            "cwd": "/repo",
-        });
-        let input = claude_normalize_input(&call, HookEvent::PreToolUse).unwrap();
-        let environment: std::collections::BTreeMap<String, String> =
-            input.environment().into_iter().collect();
-        assert_eq!(environment["HOOK_HARNESS"], "claude");
-        assert_eq!(environment["HOOK_TOOL"], "shell");
-        assert_eq!(environment["HOOK_TOOL_NATIVE"], "Bash");
-        assert_eq!(environment["HOOK_COMMAND"], "cat .env");
-        assert_eq!(environment["HOOK_CWD"], "/repo");
-        assert_eq!(environment["HOOK_INPUT"], r#"{"command":"cat .env"}"#);
-
-        let raw = serde_json::json!({
-            "tool_name": "SomeVendorOnlyTool",
-            "tool_input": {"anything": 1},
-        });
-        let environment: std::collections::BTreeMap<String, String> =
-            claude_normalize_input(&raw, HookEvent::PreToolUse)
-                .unwrap()
-                .environment()
-                .into_iter()
-                .collect();
-        assert_eq!(environment["HOOK_TOOL"], "");
-        assert_eq!(environment["HOOK_TOOL_NATIVE"], "SomeVendorOnlyTool");
-        assert!(!environment.contains_key("HOOK_COMMAND"));
-    }
-
-    #[test]
     fn bridge_path_lives_in_the_auto_discovered_global_plugin_directory() {
         let root = uze_testkit::temp::scratch("hooks-path");
         let bridge = opencode_bridge_path(&root, "demo");
@@ -2889,6 +2579,219 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
+
+    /// A merge rewrites the whole document, so the order the user's own
+    /// keys are in is UZE's to lose. A hand-organised `settings.json` must
+    /// come back in the order it was written, with the merged key appended
+    /// rather than sorted into the middle.
+    #[test]
+    fn a_merge_keeps_the_users_own_key_order() {
+        let root = uze_testkit::temp::scratch("hooks-key-order");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("settings.json");
+        fs::write(
+            &config,
+            r#"{"zed":{"nested":1,"already":2},"model":"opus","apiKeyHelper":"~/bin/key"}"#,
+        )
+        .unwrap();
+
+        let entry = group_entry("claude", &hook(), &invocation(&hook()));
+        merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
+
+        let after = fs::read_to_string(&config).unwrap();
+        let keys: Vec<&str> = after
+            .lines()
+            .filter_map(|line| line.strip_prefix("  \""))
+            .filter_map(|line| line.split('"').next())
+            .collect();
+        assert_eq!(
+            keys,
+            ["zed", "model", "apiKeyHelper", "hooks"],
+            "the user's keys keep their order and UZE's is appended: {after}"
+        );
+        assert!(
+            after.contains("\"nested\": 1,"),
+            "a nested foreign object keeps its own order too: {after}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The executable bit is half the wrapper: `write_atomic` publishes
+    /// under the umask and chmods afterwards, so a crash between the two
+    /// leaves the right bytes unrunnable — exit 126, which a `deny` group
+    /// turns into a permanent block.
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_lost_its_executable_bit_is_drift_and_is_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = uze_testkit::temp::scratch("hooks-wrapper-mode");
+        let wrapper = root.join("hooks").join("exec");
+        let source = wrapper_source("claude").unwrap();
+        materialize_wrapper(&wrapper, &source).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(
+            inspect_wrapper(Some(("claude", &wrapper))).map(|inspection| inspection.state),
+            Some(AttachmentState::Drifted),
+            "a wrapper the harness cannot execute is drift, not a match"
+        );
+        materialize_wrapper(&wrapper, &source).unwrap();
+        assert_eq!(
+            fs::metadata(&wrapper).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "re-materializing repairs the mode even when the bytes match"
+        );
+        assert!(inspect_wrapper(Some(("claude", &wrapper))).is_none());
+        assert_eq!(fs::read_to_string(&wrapper).unwrap(), source);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn hook_receipt(
+        config: &Path,
+        entry_name: &str,
+        expected: &str,
+        wrapper: &Path,
+    ) -> uze_core::integration::AttachmentReceipt {
+        uze_core::integration::AttachmentReceipt {
+            package_id: "pkg@market".to_owned(),
+            resource_identity: None,
+            integration: ANTIGRAVITY_TARGET.to_owned(),
+            strategy: "hook-config-entry".to_owned(),
+            artifact: uze_core::integration::ManagedArtifact::HookConfigEntry {
+                config_file: config.to_path_buf(),
+                entry_name: entry_name.to_owned(),
+                event: HookEvent::PreToolUse,
+                expected: expected.to_owned(),
+                wrapper: wrapper.to_path_buf(),
+            },
+        }
+    }
+
+    /// The shared wrapper outlives every entry but the last one. The prune
+    /// runs inside a detach, while the ledger still lists the receipt being
+    /// detached — so "still used" has to be read from the harness's config,
+    /// not from the ledger, or the wrapper is never removed at all.
+    #[test]
+    fn the_last_detached_hook_entry_takes_the_shared_wrapper_with_it() {
+        let root = uze_testkit::temp::scratch("hooks-prune");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("hooks.json");
+        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
+        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+
+        let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        let names = ["pkg@market:protect-env", "other@market:protect-env"];
+        for name in names {
+            merge_named_entry(&config, name, &entry).unwrap();
+            uze_core::state::record_receipt(
+                &home,
+                name.to_owned(),
+                hook_receipt(&config, name, &expected, &wrapper),
+            )
+            .unwrap();
+        }
+
+        remove_named_entry(&config, names[0], &expected, None).unwrap();
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            wrapper.exists(),
+            "a wrapper another entry still runs is kept"
+        );
+
+        remove_named_entry(&config, names[1], &expected, None).unwrap();
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            !wrapper.exists(),
+            "the last detached entry takes the shared wrapper with it"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A ledger that cannot be read has not answered "nothing uses it"; it
+    /// has not answered at all. Deleting a wrapper live entries still run
+    /// leaves every one of them exiting 127 — which every harness reads as
+    /// non-blocking.
+    #[test]
+    fn an_unreadable_ledger_keeps_the_shared_wrapper() {
+        let root = uze_testkit::temp::scratch("hooks-prune-ledger");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("hooks.json");
+        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
+        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+
+        let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_named_entry(&config, "pkg@market:protect-env", &entry).unwrap();
+        uze_core::state::record_receipt(
+            &home,
+            "pkg@market:protect-env".to_owned(),
+            hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper),
+        )
+        .unwrap();
+
+        let ledger = home.state_dir().join("attachments.json");
+        assert!(ledger.exists(), "the receipt was recorded where it is read");
+        fs::write(&ledger, b"{ this is not json").unwrap();
+
+        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        assert!(
+            wrapper.exists(),
+            "an unreadable ledger blocks the destructive step, it does not authorize it"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// "Still used" is about what runs the wrapper, not about what matches
+    /// the receipt. A hand-edited entry is drift — the harness still fires
+    /// it, and on an event-array config it reads as *absent*, so the
+    /// wrapper's own path in the file is what settles it.
+    #[test]
+    fn an_entry_that_drifted_still_counts_as_using_the_wrapper() {
+        let root = uze_testkit::temp::scratch("hooks-prune-drift");
+        fs::create_dir_all(&root).unwrap();
+        let home = UzeHome::at(root.join("home"));
+        let config = root.join("settings.json");
+        let wrapper = shared_wrapper_path(&home, "claude");
+        materialize_wrapper(&wrapper, &wrapper_source("claude").unwrap()).unwrap();
+
+        let entry = group_entry(
+            "claude",
+            &hook(),
+            &HookInvocation::Exec {
+                command: wrapper.display().to_string(),
+                args: wrapper_arguments(&hook(), Path::new("/pkg"), &hook().handlers),
+            },
+        );
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
+        let mut receipt = hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper);
+        receipt.integration = "claude".to_owned();
+        uze_core::state::record_receipt(&home, "pkg@market:protect-env".to_owned(), receipt)
+            .unwrap();
+
+        // The user edits the timeout: the entry no longer matches the
+        // receipt, and still runs the wrapper on every tool call.
+        let mut document: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        document["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = serde_json::json!(99);
+        fs::write(&config, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        assert_eq!(
+            inspect_event_entry(&config, HookEvent::PreToolUse, &expected, None).state,
+            AttachmentState::Missing,
+            "content identity reports an edited entry as absent — the reason this needs a second look"
+        );
+
+        prune_shared_wrapper(&home, "claude", "claude");
+        assert!(
+            wrapper.exists(),
+            "a wrapper a live entry still names is never removed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 /// The generated wrapper against real `sh`: the same cases the reference
@@ -2897,11 +2800,10 @@ mod tests {
 mod wrapper_tests {
     use super::*;
     use std::{
-        collections::BTreeMap,
         os::unix::fs::PermissionsExt,
         process::{Command, Stdio},
     };
-    use uze_core::hook::{CommandHandlerType, HookDecision, HookEvent};
+    use uze_core::hook::{CommandHandlerType, HookEvent};
 
     const TARGETS: [&str; 3] = ["claude", "codex", "antigravity"];
 
@@ -2925,6 +2827,10 @@ mod wrapper_tests {
             &scripts.join("audit"),
             "printf '%s\\t%s\\n' \"$HOOK_HARNESS\" \"$HOOK_COMMAND\" >> \"$PLUGIN_ROOT/audit.log\"\nexit 0",
         );
+        // A handler that never answers, and does it through a child of its
+        // own — the shape a deadline has to survive: killing the shell that
+        // started it leaves the child holding the pipe.
+        write_script(&scripts.join("stall"), "sh -c 'sleep 30'\nexit 0");
         root
     }
 
@@ -2933,17 +2839,38 @@ mod wrapper_tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// A handler's command as the manifest carries it: a bare script name
+    /// is shorthand for this package's own `scripts/<name>`, and anything
+    /// else — an `sh` invocation, a flag, a relative path — is taken
+    /// verbatim, because the ABI says a command is a shell command line.
+    fn handler_command(spec: &str) -> String {
+        if spec.contains(' ') || spec.contains('/') {
+            spec.to_owned()
+        } else {
+            format!("${{PLUGIN_ROOT}}/scripts/{spec}")
+        }
+    }
+
     fn group(effect: HookEffect, handlers: &[&str]) -> PortableHook {
+        group_at(HookEvent::PreToolUse, effect, handlers, 10)
+    }
+
+    fn group_at(
+        event: HookEvent,
+        effect: HookEffect,
+        handlers: &[&str],
+        timeout: u16,
+    ) -> PortableHook {
         PortableHook {
             id: "protect-env".into(),
-            event: HookEvent::PreToolUse,
+            event,
             matchers: vec![HookMatcher::Portable("shell".into())],
             handlers: handlers
                 .iter()
-                .map(|name| CommandHook {
+                .map(|spec| CommandHook {
                     handler_type: CommandHandlerType::Command,
-                    command: format!("${{PLUGIN_ROOT}}/scripts/{name}"),
-                    timeout: 10,
+                    command: handler_command(spec),
+                    timeout,
                 })
                 .collect(),
             effect,
@@ -2957,6 +2884,22 @@ mod wrapper_tests {
         stderr: String,
     }
 
+    /// One execution of the wrapper. The package root and the directory the
+    /// harness happens to be in are separate because a stale entry is
+    /// exactly the case where they differ.
+    struct Run<'a> {
+        target: &'a str,
+        /// Where the wrapper itself is written.
+        wrapper_root: &'a Path,
+        /// The root the group's entry names — the wrapper's first argument.
+        package_root: &'a Path,
+        /// The harness's own working directory, when it matters.
+        cwd: Option<&'a Path>,
+        hook: &'a PortableHook,
+        payload: &'a str,
+        jq: Option<&'a str>,
+    }
+
     /// Runs the generated wrapper exactly as the harness does: the payload
     /// on stdin, the group's own arguments on the command line.
     fn run_wrapper(
@@ -2966,10 +2909,34 @@ mod wrapper_tests {
         payload: &str,
         jq: Option<&str>,
     ) -> Answer {
-        let wrapper = root.join("hooks").join("exec");
+        run(Run {
+            target,
+            wrapper_root: root,
+            package_root: root,
+            cwd: None,
+            hook,
+            payload,
+            jq,
+        })
+    }
+
+    fn run(execution: Run<'_>) -> Answer {
+        let Run {
+            target,
+            wrapper_root,
+            package_root,
+            cwd,
+            hook,
+            payload,
+            jq,
+        } = execution;
+        let wrapper = wrapper_root.join("hooks").join("exec");
         materialize_wrapper(&wrapper, &wrapper_source(target).unwrap()).unwrap();
         let mut command = Command::new(&wrapper);
-        command.args(wrapper_arguments(hook, root, &hook.handlers));
+        command.args(wrapper_arguments(hook, package_root, &hook.handlers));
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         if let Some(jq) = jq {
             command.env("HOOK_JQ", jq);
         }
@@ -2999,6 +2966,15 @@ mod wrapper_tests {
             exit: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
+    /// A `stop` payload as each harness sends it: no tool at all, which is
+    /// what the wrapper has to leave the handler seeing.
+    fn stop_payload(target: &str) -> String {
+        match target {
+            "antigravity" => serde_json::json!({"workspacePaths": ["/repo"]}).to_string(),
+            _ => serde_json::json!({"cwd": "/repo"}).to_string(),
         }
     }
 
@@ -3199,82 +3175,516 @@ mod wrapper_tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// The reference runtime and the generated wrapper are two renderings of
-    /// one contract: for the same payload they must answer identically.
+    /// The author's `timeout` is the bound the handler actually gets. It is
+    /// the only bound there is: the native entry's group timeout is the
+    /// *harness's* backstop, which a harness is free to ignore, and a
+    /// hanging `deny` handler would otherwise stall every matching tool
+    /// call for as long as the handler felt like taking.
     #[test]
-    fn the_wrapper_and_the_reference_runtime_answer_alike() {
-        let render: BTreeMap<&str, fn(&_, HookEvent) -> _> = [
-            (
-                "claude",
-                claude_render_output as fn(&_, HookEvent) -> std::result::Result<_, String>,
-            ),
-            ("codex", codex_render_output),
-            ("antigravity", antigravity_render_output),
-        ]
-        .into_iter()
-        .collect();
-        let normalize: BTreeMap<&str, fn(&_, HookEvent) -> _> = [
-            (
-                "claude",
-                claude_normalize_input as fn(&_, HookEvent) -> std::result::Result<_, String>,
-            ),
-            ("codex", codex_normalize_input),
-            ("antigravity", antigravity_normalize_input),
-        ]
-        .into_iter()
-        .collect();
-
+    fn a_handler_is_stopped_at_the_deadline_its_author_declared() {
         for target in TARGETS {
-            for (command, effect, handlers) in [
-                ("cat .env", HookEffect::Deny, &["guard", "audit"][..]),
-                ("ls -la", HookEffect::Deny, &["guard", "audit"][..]),
-                ("ls", HookEffect::Deny, &["absent"][..]),
-                ("ls", HookEffect::Observe, &["absent"][..]),
-            ] {
-                let root = package(&format!("equiv-{target}"));
-                let hook = group(effect, handlers);
-                let raw = payload(target, command);
-                let through_wrapper = run_wrapper(target, &root, &hook, &raw, None);
+            let root = package(&format!("wrapper-timeout-{target}"));
+            let closed = group_at(HookEvent::PreToolUse, HookEffect::Deny, &["stall"], 1);
+            let started = std::time::Instant::now();
+            let answer = run_wrapper(target, &root, &closed, &payload(target, "ls"), None);
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(20),
+                "{target}: the 1s bound decided when to stop waiting, not the handler: {elapsed:?}"
+            );
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group whose handler timed out blocks"
+            );
+            assert!(
+                answer.stderr.contains("timed out after 1s"),
+                "{target}: the reason names the author's own bound: {}",
+                answer.stderr
+            );
 
-                let native: serde_json::Value = serde_json::from_str(&raw).unwrap();
-                let input = normalize[target](&native, HookEvent::PreToolUse).unwrap();
-                let outcome = uze_core::hook::dispatch_handlers(&hook, &input, &root).unwrap();
-                let reference = render[target](&outcome, HookEvent::PreToolUse).unwrap();
+            let open = group_at(HookEvent::PreToolUse, HookEffect::Observe, &["stall"], 1);
+            let answer = run_wrapper(target, &root, &open, &payload(target, "ls"), None);
+            assert_eq!(answer.exit, 0, "{target}: an observe group proceeds");
+            assert!(answer.stderr.contains("timed out after 1s"));
+            let _ = fs::remove_dir_all(root);
+        }
+    }
 
-                assert_eq!(
-                    through_wrapper.exit, reference.exit_code,
-                    "{target}/{command}: the two routes must agree on the exit code"
-                );
-                assert_eq!(
-                    through_wrapper.stdout.trim().is_empty(),
-                    reference.stdout.is_none(),
-                    "{target}/{command}: the two routes must agree on whether a document is written"
-                );
-                if let Some(expected) = &reference.stdout {
-                    let expected: serde_json::Value = serde_json::from_slice(expected).unwrap();
-                    let actual: serde_json::Value =
-                        serde_json::from_str(through_wrapper.stdout.trim()).unwrap();
-                    let decision = |document: &serde_json::Value| {
-                        if target == "antigravity" {
-                            document["decision"].clone()
-                        } else {
-                            document["hookSpecificOutput"]["permissionDecision"].clone()
-                        }
-                    };
-                    assert_eq!(
-                        decision(&expected),
-                        decision(&actual),
-                        "{target}/{command}: the two routes must agree on the decision"
-                    );
-                }
-                assert_eq!(
-                    outcome.decision == Some(HookDecision::Deny),
-                    through_wrapper.exit == block_exit(target)
-                        && !through_wrapper.stdout.trim().is_empty(),
-                    "{target}/{command}: a denial is a denial on both routes"
-                );
-                let _ = fs::remove_dir_all(root);
+    /// A payload the wrapper cannot read leaves every `HOOK_*` variable
+    /// empty, and a guard written the documented way (`case "$HOOK_COMMAND"
+    /// in *"rm -rf"*)`) then sees nothing and allows. The context is the
+    /// whole basis of the decision, so an unreadable payload is a failure
+    /// like any other and the group's effect decides.
+    #[test]
+    fn a_payload_that_does_not_parse_follows_the_groups_effect() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-payload-{target}"));
+            let truncated = r#"{"tool_name":"Bash","tool_input":{"command":"cat .env""#;
+            let closed = group(HookEffect::Deny, &["guard"]);
+            let answer = run_wrapper(target, &root, &closed, truncated, None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group blocks a payload it cannot read"
+            );
+            assert!(
+                answer.stderr.contains("the harness payload is not JSON"),
+                "{target}: the reason names what went wrong: {}",
+                answer.stderr
+            );
+
+            let open = group(HookEffect::Observe, &["guard"]);
+            let answer = run_wrapper(target, &root, &open, truncated, None);
+            assert_eq!(answer.exit, 0, "{target}: an observe group proceeds");
+            assert!(answer.stderr.contains("the harness payload is not JSON"));
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// A handler is a command line relative to the package root — the
+    /// documented shape, and two recorded fixtures use it. A root that is
+    /// gone must therefore stop the hook, not leave the handlers running
+    /// from wherever the harness happened to be: that directory is the
+    /// user's own checkout, whose content ADR-041 keeps off UZE's
+    /// execution path.
+    #[test]
+    fn a_package_root_that_is_gone_never_runs_the_checkouts_own_script() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-root-{target}"));
+            let checkout = uze_testkit::temp::scratch(&format!("wrapper-checkout-{target}"));
+            fs::create_dir_all(checkout.join("scripts")).unwrap();
+            write_script(
+                &checkout.join("scripts").join("guard"),
+                "touch \"$PWD/ran-the-projects-script\"\nexit 0",
+            );
+            let gone = root.join("gone");
+            let closed = group(HookEffect::Deny, &["scripts/guard"]);
+            let answer = run(Run {
+                target,
+                wrapper_root: &root,
+                package_root: &gone,
+                cwd: Some(&checkout),
+                hook: &closed,
+                payload: &payload(target, "ls"),
+                jq: None,
+            });
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group whose package is gone blocks"
+            );
+            assert!(
+                answer.stderr.contains("the package root is gone"),
+                "{target}: the reason names the missing root: {}",
+                answer.stderr
+            );
+            assert!(
+                !checkout.join("ran-the-projects-script").exists(),
+                "{target}: the checkout's same-named script must never run"
+            );
+            let _ = fs::remove_dir_all(checkout);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// ADR-033's fail-closed set is deny, ask **and** transform: a rewrite
+    /// that did not happen must not let the original input through as if it
+    /// had. `transform` degrades rather than being dropped, so the wrapper
+    /// is the only thing that can hold this.
+    #[test]
+    fn a_transform_group_fails_closed_like_a_deny() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-transform-{target}"));
+            let hook = group(HookEffect::Transform, &["absent"]);
+            let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a handler that cannot run denies for a transform group"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// "Bounded output" is part of the ABI and the wrapper is the only
+    /// place left that can hold it: without the bound, a handler that
+    /// writes megabytes to stderr hands the harness a decision document
+    /// that big to parse.
+    #[test]
+    fn the_reason_a_harness_is_handed_is_bounded() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-reason-{target}"));
+            write_script(
+                &root.join("scripts").join("loud"),
+                "head -c 1000000 /dev/zero | tr '\\0' 'x' >&2\nexit 3",
+            );
+            let hook = group(HookEffect::Deny, &["loud"]);
+            let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: the denial stands"
+            );
+            assert!(
+                answer.stdout.len() < HANDLER_REASON_LIMIT * 2,
+                "{target}: the decision document carries a bounded reason, not {} bytes",
+                answer.stdout.len()
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    /// The deadline's second pass is the one that matters: a handler (or a
+    /// child of one) that ignores `TERM` is what `KILL` is for, and the
+    /// parent cancelling the watchdog the moment the handler dies must not
+    /// cancel that pass with it. One leaked process per timed-out tool call
+    /// is what this costs when it is wrong.
+    #[test]
+    fn a_handler_that_ignores_term_does_not_outlive_its_deadline() {
+        let target = "claude";
+        let root = package("wrapper-escalation");
+        // `trap '' TERM` is SIG_IGN, which survives the `exec`: the
+        // grandchild is a `sleep` that cannot be TERMed, only killed.
+        write_script(
+            &root.join("scripts").join("stubborn"),
+            "trap '' TERM\nsh -c 'trap \"\" TERM; exec sleep 30' &\n\
+             printf '%s' \"$!\" > \"$PLUGIN_ROOT/grandchild.pid\"\nsleep 30",
+        );
+        let hook = group_at(HookEvent::PreToolUse, HookEffect::Deny, &["stubborn"], 1);
+        let answer = run_wrapper(target, &root, &hook, &payload(target, "ls"), None);
+        assert_eq!(answer.exit, block_exit(target), "the deadline blocks");
+        let grandchild = fs::read_to_string(root.join("grandchild.pid")).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let alive = Command::new("ps")
+            .args(["-p", grandchild.trim(), "-o", "pid="])
+            .output()
+            .expect("ps reports whether the grandchild is still running");
+        assert!(
+            String::from_utf8_lossy(&alive.stdout).trim().is_empty(),
+            "a grandchild that ignored TERM is killed, not left behind: pid {grandchild}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A `stop` payload carries no tool at all, and the wrapper has to
+    /// leave the handler seeing that rather than a stale or invented one.
+    #[test]
+    fn a_stop_payload_leaves_the_handler_without_a_tool() {
+        for target in TARGETS {
+            let root = package(&format!("wrapper-stop-{target}"));
+            write_script(
+                &root.join("scripts").join("probe"),
+                "printf '%s|%s|%s' \"$HOOK_EVENT\" \"$HOOK_TOOL\" \"$HOOK_TOOL_NATIVE\" \
+                 > \"$PLUGIN_ROOT/seen.txt\"\nexit 0",
+            );
+            let hook = group_at(HookEvent::Stop, HookEffect::Observe, &["probe"], 10);
+            let answer = run_wrapper(target, &root, &hook, &stop_payload(target), None);
+            assert_eq!(answer.exit, 0, "{target}: a stop observation proceeds");
+            assert_eq!(
+                fs::read_to_string(root.join("seen.txt")).unwrap(),
+                "stop||",
+                "{target}: no tool is invented for a payload that carries none"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    // ========================================================================
+    // The recorded answers
+    // ========================================================================
+
+    /// One fixture the wrapper is run against: a group, the payload it is
+    /// fired with, and what the handlers do.
+    struct Fixture {
+        event: HookEvent,
+        effect: HookEffect,
+        handlers: &'static [&'static str],
+        timeout: u16,
+        /// The shell command the payload carries. `None` is a `stop`
+        /// payload, which carries no tool.
+        command: Option<&'static str>,
+        /// Whether the payload is one the wrapper cannot read. The context
+        /// is the whole basis of a decision, so what happens to a payload
+        /// that does not parse is part of the contract.
+        malformed_payload: bool,
+        /// Whether the group's entry names a package root that is gone — a
+        /// stale entry for a package removed, renamed, or a moved `~/.uze`.
+        missing_root: bool,
+        /// Whether the recorded stderr is the wrapper's own words all the
+        /// way. A handler that never started is reported with the system
+        /// shell's diagnostic appended, and that wording is the platform's,
+        /// so only the head of the line is recorded.
+        wrapper_owns_the_whole_reason: bool,
+    }
+
+    /// A payload no harness would send — truncated mid-object, the shape a
+    /// crashed writer or a wrong-dialect entry produces.
+    const MALFORMED_PAYLOAD: &str = r#"{"tool_name":"Bash","tool_input":{"command":"cat .env""#;
+
+    /// Every fixture, in the order the recorded table holds them.
+    fn fixtures() -> Vec<Fixture> {
+        let case = |event, effect, handlers, command| Fixture {
+            event,
+            effect,
+            handlers,
+            timeout: 10,
+            command,
+            malformed_payload: false,
+            missing_root: false,
+            wrapper_owns_the_whole_reason: true,
+        };
+        let pre = HookEvent::PreToolUse;
+        vec![
+            case(pre, HookEffect::Deny, &["guard", "audit"], Some("cat .env")),
+            case(pre, HookEffect::Deny, &["guard", "audit"], Some("ls -la")),
+            Fixture {
+                wrapper_owns_the_whole_reason: false,
+                ..case(pre, HookEffect::Deny, &["absent"], Some("ls"))
+            },
+            Fixture {
+                wrapper_owns_the_whole_reason: false,
+                ..case(pre, HookEffect::Observe, &["absent"], Some("ls"))
+            },
+            // A command line, not an executable path: the shapes the
+            // manifest documents and a bare-argv runner cannot start.
+            case(
+                pre,
+                HookEffect::Deny,
+                &["sh ${PLUGIN_ROOT}/scripts/guard --strict", "audit"],
+                Some("cat .env"),
+            ),
+            case(
+                pre,
+                HookEffect::Deny,
+                &["sh ${PLUGIN_ROOT}/scripts/guard --strict", "audit"],
+                Some("ls -la"),
+            ),
+            case(pre, HookEffect::Deny, &["scripts/guard"], Some("cat .env")),
+            case(
+                pre,
+                HookEffect::Deny,
+                &["scripts/guard", "audit"],
+                Some("ls -la"),
+            ),
+            case(
+                HookEvent::PostToolUse,
+                HookEffect::Observe,
+                &["audit"],
+                Some("ls"),
+            ),
+            case(HookEvent::Stop, HookEffect::Observe, &["audit"], None),
+            // A handler that never answers is a handler failure like any
+            // other: the deadline is its author's, and the group's effect
+            // decides what that means.
+            Fixture {
+                timeout: 1,
+                ..case(pre, HookEffect::Deny, &["stall"], Some("ls"))
+            },
+            Fixture {
+                timeout: 1,
+                ..case(pre, HookEffect::Observe, &["stall"], Some("ls"))
+            },
+            // The three shapes the wrapper has to answer for without ever
+            // reaching the author's handlers: a payload it cannot read, a
+            // package root that is gone, and an effect whose rewrite never
+            // happened. Each follows the group's effect, so each is
+            // recorded both ways round.
+            Fixture {
+                malformed_payload: true,
+                ..case(pre, HookEffect::Deny, &["guard"], Some("cat .env"))
+            },
+            Fixture {
+                malformed_payload: true,
+                ..case(pre, HookEffect::Observe, &["guard"], Some("cat .env"))
+            },
+            Fixture {
+                missing_root: true,
+                ..case(pre, HookEffect::Deny, &["scripts/guard"], Some("ls"))
+            },
+            Fixture {
+                missing_root: true,
+                ..case(pre, HookEffect::Observe, &["scripts/guard"], Some("ls"))
+            },
+            Fixture {
+                wrapper_owns_the_whole_reason: false,
+                ..case(pre, HookEffect::Transform, &["absent"], Some("ls"))
+            },
+        ]
+    }
+
+    fn answers_path() -> PathBuf {
+        goldens_dir().join("hooks").join("wrapper-answers.json")
+    }
+
+    /// Runs one fixture through one harness's wrapper and records the
+    /// answer, with the throwaway package root written back as the
+    /// placeholder an author would have typed.
+    fn recorded_answer(target: &str, index: usize, fixture: &Fixture) -> serde_json::Value {
+        let root = package(&format!("recorded-{target}-{index}"));
+        let hook = group_at(
+            fixture.event,
+            fixture.effect,
+            fixture.handlers,
+            fixture.timeout,
+        );
+        let raw = if fixture.malformed_payload {
+            MALFORMED_PAYLOAD.to_owned()
+        } else {
+            match fixture.command {
+                Some(command) => payload(target, command),
+                None => stop_payload(target),
             }
+        };
+        let package_root = if fixture.missing_root {
+            root.join("gone")
+        } else {
+            root.clone()
+        };
+        let answer = run(Run {
+            target,
+            wrapper_root: &root,
+            package_root: &package_root,
+            cwd: None,
+            hook: &hook,
+            payload: &raw,
+            jq: None,
+        });
+        let portable = |text: &str| {
+            text.trim()
+                .replace(&root.display().to_string(), "${PLUGIN_ROOT}")
+        };
+        let stdout = portable(&answer.stdout);
+        let mut case = serde_json::Map::new();
+        case.insert("harness".to_owned(), serde_json::json!(target));
+        case.insert(
+            "event".to_owned(),
+            serde_json::json!(fixture.event.abi_name()),
+        );
+        case.insert(
+            "effect".to_owned(),
+            serde_json::json!(fixture.effect.abi_name()),
+        );
+        case.insert(
+            "handlers".to_owned(),
+            serde_json::json!(fixture.handlers.to_vec()),
+        );
+        case.insert("command".to_owned(), serde_json::json!(fixture.command));
+        if fixture.malformed_payload {
+            case.insert("payload".to_owned(), serde_json::json!("malformed"));
+        }
+        if fixture.missing_root {
+            case.insert("package_root".to_owned(), serde_json::json!("missing"));
+        }
+        case.insert("exit".to_owned(), serde_json::json!(answer.exit));
+        let document = if stdout.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&stdout).expect("the wrapper answers with one JSON document")
+        };
+        case.insert(
+            "stdout".to_owned(),
+            if fixture.wrapper_owns_the_whole_reason {
+                document
+            } else {
+                without_the_shells_own_words(document)
+            },
+        );
+        let stderr = portable(&answer.stderr);
+        if fixture.wrapper_owns_the_whole_reason {
+            case.insert("stderr".to_owned(), serde_json::json!(stderr));
+        } else {
+            case.insert(
+                "stderr_prefix".to_owned(),
+                serde_json::json!(stderr.split(" — ").next().unwrap_or_default()),
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+        serde_json::Value::Object(case)
+    }
+
+    /// A reason the system shell contributed the tail of, cut back to the
+    /// wrapper's own words: `sh` says "not found" on one platform and "No
+    /// such file or directory" on another, and neither is a contract.
+    fn without_the_shells_own_words(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::String(text) => serde_json::Value::String(
+                text.split(" \u{2014} ")
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ),
+            serde_json::Value::Object(fields) => serde_json::Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| (key, without_the_shells_own_words(value)))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
+    fn recorded_answers() -> Vec<serde_json::Value> {
+        let fixtures = fixtures();
+        let mut answers = Vec::new();
+        for target in TARGETS {
+            for (index, fixture) in fixtures.iter().enumerate() {
+                answers.push(recorded_answer(target, index, fixture));
+            }
+        }
+        answers
+    }
+
+    #[test]
+    #[ignore = "rewrites the recorded answers; run with --ignored and review the diff"]
+    fn regenerate_wrapper_answers() {
+        let table = serde_json::json!({
+            "about": "What the generated hooks/exec wrapper answers for every \
+                      fixture, per harness: the native decision document, the \
+                      exit status and the reason on stderr. Regenerate with \
+                      `cargo test -p uze-integrations regenerate_wrapper_answers \
+                      -- --ignored`; every changed line is a changed contract \
+                      and belongs in the review.",
+            "answers": recorded_answers(),
+        });
+        fs::create_dir_all(answers_path().parent().unwrap()).unwrap();
+        fs::write(
+            answers_path(),
+            format!("{}\n", serde_json::to_string_pretty(&table).unwrap()),
+        )
+        .unwrap();
+    }
+
+    /// The wrapper is the only implementation of the contract, so what it
+    /// answers is the contract — recorded once, per harness, per fixture.
+    ///
+    /// The recorded values were taken from the reference runtime this file
+    /// used to be tested against (`uze hook-exec`, removed 2026-09-12): each
+    /// pre-tool fixture below was proven to answer identically on both
+    /// routes before the runtime was deleted. A golden that changes is a
+    /// changed contract, and the diff is where that gets reviewed — never a
+    /// regeneration folded into an unrelated change.
+    #[test]
+    fn the_wrapper_answers_every_fixture_as_recorded() {
+        let table: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(answers_path()).unwrap_or_default())
+                .expect("the recorded answers are readable");
+        let expected = table["answers"]
+            .as_array()
+            .expect("the recorded answers are a list");
+        let actual = recorded_answers();
+        assert_eq!(
+            expected.len(),
+            actual.len(),
+            "the fixture set changed; regenerate {}",
+            answers_path().display()
+        );
+        for (recorded, answered) in expected.iter().zip(actual) {
+            assert_eq!(
+                *recorded, answered,
+                "{}/{} answered differently than recorded",
+                recorded["harness"], recorded["event"]
+            );
         }
     }
 }

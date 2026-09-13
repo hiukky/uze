@@ -98,10 +98,18 @@ MODE = os.environ.get("PROVIDER_MODE", "static")
 # pair every AGY tool requires): the harness validates a call against that
 # schema before any hook runs or any tool executes, and rejects the rest as
 # "invalid arguments" — a turn that settles with no hook and no tool.
+#
+# `ServerName` is the name the harness gives the server at load time, not
+# the one the plugin declares: since 1.2.2 a server bundled in a plugin is
+# namespaced `<plugin>_<server>` ("Fixed MCP servers bundled inside plugins
+# colliding … by automatically namespacing plugin MCP servers", 1.2.2
+# release notes), and `/mcp` lists it that way. A call naming the bare
+# server answers a functionResponse without the proof, which reads as
+# "the tool never ran".
 FC_ARGS = json.loads(
     os.environ.get(
         "FC_ARGS",
-        '{"ServerName":"uze-conformance","ToolName":"uze_conformance","Arguments":{},"toolSummary":"Conformance proof","toolAction":"Calling MCP tool"}',
+        '{"ServerName":"uze-mcp-conformance_uze-conformance","ToolName":"uze_conformance","Arguments":{},"toolSummary":"Conformance proof","toolAction":"Calling MCP tool"}',
     )
 )
 FINAL_TEXT = os.environ.get("FINAL_TEXT", "UZE_CONFORMANCE_PASS")

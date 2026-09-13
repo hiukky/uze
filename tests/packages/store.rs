@@ -30,6 +30,19 @@ fn temporary_home(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
+/// Counts registry entries by reading `packages.json` itself, so the Store's
+/// own bookkeeping is never the witness for its own claim.
+fn registered(home: &UzeHome) -> usize {
+    let Ok(text) = fs::read_to_string(home.registry_path()) else {
+        return 0;
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .expect("the registry is valid JSON")["packages"]
+        .as_object()
+        .expect("the registry carries a packages map")
+        .len()
+}
+
 #[test]
 fn uze_home_derives_every_owned_path_from_one_root() {
     let root = temporary_home("paths");
@@ -68,7 +81,7 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
     let second = install(&store, package_fixture()).unwrap();
 
     assert_eq!(first.id, second.id);
-    assert_eq!(store.registration_count().unwrap(), 1);
+    assert_eq!(registered(&home), 1);
     assert_eq!(first.root, home.plugin_dir(&first.id));
     assert!(first.manifest.is_file());
     assert!(home.registry_path().is_file());
@@ -118,7 +131,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
                 && requested == "uze-agent-skill-conformance@beta"
     ));
     // The refused install must not have written anything.
-    assert_eq!(store.registration_count().unwrap(), 1);
+    assert_eq!(registered(&home), 1);
 
     // Resolved with an explicit alias, `beta`'s copy installs and coexists —
     // its own bytes, its own registration, active under the chosen name.
@@ -140,7 +153,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
         from_beta.root,
         root.join("store/plugins/beta/uze-agent-skill-conformance")
     );
-    assert_eq!(store.registration_count().unwrap(), 2);
+    assert_eq!(registered(&home), 2);
     assert_eq!(
         store
             .find_by_active_name("uze-agent-skill-conformance")
@@ -169,7 +182,7 @@ fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
             .is_err()
     );
     assert!(!home.plugins_dir().join("not/a-marketplace").exists());
-    assert_eq!(store.registration_count().unwrap(), 0);
+    assert_eq!(registered(&home), 0);
 }
 
 #[test]
@@ -321,5 +334,88 @@ fn store_preserves_plugin_symlinks_and_executable_permissions() {
         fs::metadata(copied).unwrap().permissions().mode() & 0o111,
         0
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// An install interrupted between the copy and the registration leaves a
+/// plugin directory nothing in `packages.json` names. `create_dir` refused
+/// it forever after, and the refusal was a dead end: `remove` answers only
+/// to registered ids, so there was no command that could clear it. The next
+/// attempt now clears the debris and succeeds.
+#[test]
+fn an_install_interrupted_mid_copy_never_blocks_the_next_attempt() {
+    let root = temporary_home("store-partial-install");
+    let home = UzeHome::at(root.join("uze"));
+    let store = UzeStore::new(home.clone());
+    let source = package_fixture();
+
+    // The state an interrupted install leaves: a partial directory where
+    // the package's bytes go, and no registration for it.
+    let installed = install(&store, &source).unwrap();
+    let plugin_dir = installed.root.clone();
+    fs::write(home.registry_path(), r#"{"packages":{}}"#).unwrap();
+    for entry in fs::read_dir(&plugin_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_name().unwrap() != "plugin.json" {
+            let _ = fs::remove_file(&path).or_else(|_| fs::remove_dir_all(&path));
+        }
+    }
+    fs::write(plugin_dir.join("half-written"), "truncated").unwrap();
+    assert_eq!(
+        registered(&home),
+        0,
+        "the interrupted install registered nothing"
+    );
+
+    let reinstalled = install(&store, &source).expect("a second attempt must not be refused");
+
+    assert_eq!(reinstalled.root, plugin_dir);
+    assert_eq!(registered(&home), 1);
+    assert!(
+        !plugin_dir.join("half-written").exists(),
+        "the partial tree survived into the reinstalled package"
+    );
+    assert!(
+        plugin_dir.join("skills").exists(),
+        "the package was not copied in full"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The mirror: an ingest that fails after the bytes are copied leaves the
+/// Store as it found it, so the failure is one the operator can simply
+/// retry rather than the state the test above describes.
+#[cfg(unix)]
+#[test]
+fn a_failed_ingest_leaves_no_directory_behind() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root writes into a read-only directory anyway
+    }
+    let root = temporary_home("store-failed-ingest");
+    let home = UzeHome::at(root.join("uze"));
+    let store = UzeStore::new(home.clone());
+    home.ensure_layout().unwrap();
+    // The registry cannot be written, so the ingest fails at its last step —
+    // after `copy_tree` has already landed the package's bytes.
+    fs::set_permissions(home.state_dir(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let outcome = install(&store, package_fixture());
+
+    fs::set_permissions(home.state_dir(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        outcome.is_err(),
+        "an unregistrable package must not be reported as installed"
+    );
+    assert!(
+        !home
+            .plugins_dir()
+            .join("local")
+            .join("uze-agent-skill-conformance")
+            .exists(),
+        "a failed ingest left a directory the next attempt would trip over"
+    );
+    assert_eq!(registered(&home), 0);
     fs::remove_dir_all(root).unwrap();
 }

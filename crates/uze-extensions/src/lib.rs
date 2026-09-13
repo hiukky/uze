@@ -110,11 +110,11 @@ impl PartialOrd for DirEntry {
 /// the directory listing that makes either reachable), which is a
 /// widening of what this trait once granted and the reason it is worth
 /// stating plainly: an extension that edits a file needs to be *given*
-/// that, and a grant nobody can name is a grant nobody can withhold. The
-/// mutating methods answer with a `Result` rather than swallowing the
-/// failure the way [`Host::read_file`] does — an unreadable file is a
-/// state a view draws, but a save that did not happen is something the
-/// person who asked for it has to be told.
+/// that, and a grant nobody can name is a grant nobody can withhold.
+/// Every method that can refuse says why it refused, because the reason
+/// is what the surface draws or tells the person who asked — a file too
+/// large to open and a file that is not text are both "nothing to show",
+/// and only one of them is worth trying something else about.
 pub trait Host {
     /// Runs a read-only Git command in `root`, returning its stdout.
     ///
@@ -123,9 +123,12 @@ pub trait Host {
     /// a view whose whole job is showing them.
     fn git(&self, root: &std::path::Path, args: &[&str]) -> Result<String, String>;
 
-    /// A file's contents, or `None` when it cannot be read. Unreadable is
-    /// a state a view renders, never an error it propagates.
-    fn read_file(&self, path: &std::path::Path) -> Option<String>;
+    /// A file's contents, or why they cannot be shown. Unreadable is a
+    /// state a view renders, never an error it propagates — but the
+    /// reasons are not interchangeable to the person looking at the row,
+    /// and only the host knows which one applies: a binary, a file it may
+    /// not read, and one too large to hold in memory all land here.
+    fn read_file(&self, path: &std::path::Path) -> Result<String, String>;
 
     /// How many lines a file has, counted the way [`str::lines`] counts
     /// them. Separate from [`Host::read_file`] because the badge asks this

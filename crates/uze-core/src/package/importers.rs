@@ -91,7 +91,6 @@ pub(crate) fn import_from_manifest(
         importer: importer.to_owned(),
         standard_items,
         optional_enhancements,
-        compatibility_fallback: true,
     })
 }
 

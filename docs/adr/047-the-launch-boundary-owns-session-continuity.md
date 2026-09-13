@@ -61,7 +61,7 @@ The shim stops being experimental in practice: a user-visible guarantee
 now runs through it. Every failure path in it falls open to the launch
 that happens today, so a missing or broken shim costs continuity and
 nothing else — but the mechanism can no longer be removed casually, and
-`tests/runtime_shim_boundary.rs` is now guarding more than recursion.
+`tests/integrations/runtime_boundary.rs` is now guarding more than recursion.
 
 Adding a harness means answering the continuity question in its
 integration and nowhere else; the client, the terminal runtime and the

@@ -186,7 +186,7 @@ long-term is explicitly undecided (ADR-014 Consequences).
 |---|---|---|---|
 | `IntegrationOwned{kind:"claude-plugin"}` (explicit) | `inspect_claude_plugin` — `claude plugin marketplace list --json` + `plugin list --json`, checks marketplace root + installed + enabled | `claude plugin uninstall <selector>` | Yes — MATCHED only when marketplace root, installed, and enabled all agree |
 | `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `remove_claude_plugin`, plus `remove_generated_package_by_id` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
-| `SymlinkReference` (Skill shim) | standard receipt inspection (`inspect_standard_receipt`) | standard detach + `cleanup_unused_shim` GC if the shim is now unreferenced | Yes |
+| `SymlinkReference` (Skill shim) | standard receipt inspection (`inspect_standard_receipt`) | standard detach + `cleanup_unused_wrapper` GC if the shim is now unreferenced | Yes |
 | `VendorConfigEntry` (MCP) | `inspect_claude_mcp` — read-only `~/.claude.json` parse, exact command+args match | `claude mcp remove <name>` | Yes — Blocked (not silently accepted) if the receipt requests cwd/env/enabled state this integration can't verify |
 
 One thing worth a second look, not necessarily a bug: `inspect_claude_plugin`

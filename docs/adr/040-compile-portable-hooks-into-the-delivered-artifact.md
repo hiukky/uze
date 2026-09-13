@@ -2,6 +2,11 @@
 
 Status: Accepted
 
+Amended 2026-09-12: the in-binary runtime (`uze hook-exec`) is removed. The
+generated wrapper is the sole route, a platform without a template is
+Unsupported, and the per-handler timeout is the wrapper's to enforce. The
+paragraphs below say so; nothing else about the decision changed.
+
 Supersedes the ABI and dispatcher parts of
 [033 — Adopt a canonical portable Hook capability](033-adopt-portable-hook-capability.md).
 Everything else ADR-033 decided — `hooks.json` as the canonical manifest,
@@ -36,7 +41,8 @@ the execution path.
 The translation is compiled at install time into the delivered artifact.
 
 Each command-hook harness receives one generated POSIX `sh` wrapper,
-`hooks/exec`, invoked as `exec <plugin-root> <event> <effect> <handler>…`.
+`hooks/exec`, invoked as
+`exec <plugin-root> <event> <effect> <seconds>:<handler>…`.
 It reads the harness's payload from stdin, exposes the hook context as
 environment, runs the handlers, and answers in that harness's dialect. Its
 arguments carry everything the group needs beyond the matcher the harness
@@ -69,8 +75,8 @@ author might reach for, and an exit code needs no parser; stdin JSON forced
 a JSON parser into every handler, which is the burden the capability exists
 to remove.
 
-Ordering, first-deny-wins, per-handler timeout and fail-closed are compiled
-into the wrapper as constants, because no harness provides them. The
+Ordering, first-deny-wins, the per-handler deadline and fail-closed are
+compiled into the wrapper, because no harness provides them. The
 wrapper's own dependency (`jq`) follows the same rule: a `deny` group whose
 wrapper cannot parse the payload denies.
 
@@ -81,10 +87,29 @@ is read from. Matchers, wrappers and the OpenCode plugin's alias table are
 all generated from it. `native:<name>` bypasses the table: the handler gets
 `HOOK_TOOL_NATIVE` and `HOOK_INPUT` and nothing else.
 
-`uze hook-exec` stays, as the executable reference the wrapper templates are
-tested against with shared fixtures, and as the delivery route where no
-template applies (a platform the POSIX wrapper does not cover). A hook
-delivered that way is reported as adapted with the reason, never as native.
+There is one implementation of the contract, and it is the wrapper. The
+in-binary runtime is gone: no `uze` appears on any hook's execution path,
+and a platform the POSIX template does not cover delivers **no hook at
+all** — reported Unsupported with that reason, never carried by something
+else. A delivery that cannot write a wrapper has nothing honest to attach,
+and an entry running a second implementation is a hook the author did not
+write.
+
+What the runtime was also the reference for is now data: the answer the
+wrapper gives for every fixture — the native decision document, the exit
+status and the reason — is recorded per harness under
+`crates/uze-integrations/tests/goldens/hooks/`, taken from the runtime
+before it was deleted. A golden that changes is a changed contract, and the
+diff is where that is reviewed.
+
+The per-handler `timeout` an author declares is the wrapper's to enforce,
+since nothing else can: each handler is run under its own deadline, and past
+it the handler and every process it started are stopped (`TERM`, then `KILL`)
+and the group's effect decides, exactly as for any other handler failure. The
+deadline rides beside its command in the native entry (`<seconds>:<command>`),
+so what will run, and for how long, is readable there. The native entry's own
+group timeout stays what it always was — the *harness's* backstop, sized so
+it is never the bound that fires first.
 
 Nothing in a delivered artifact names the packager. `HOOK_*`, `hooks/exec`,
 `hooks-<package>.ts`, the comments — the convention must be usable by
@@ -110,15 +135,18 @@ rather than argued about per group.
 
 The cost is a runtime dependency (`jq`) the author's handler does not have,
 guarded by effect and reported by `uze doctor`; a Windows machine has no
-template yet and takes the fallback route; and the semantics now live in
-templates rather than one Rust function. The last is contained by generating
-them from one vocabulary, by an equivalence test that runs every fixture
-payload through both routes, and by the conformance Lab proving each
-vocabulary row against the real harness.
+template yet and therefore no hooks; and the semantics now live in templates
+rather than one Rust function. The last is contained by generating them from
+one vocabulary, by the recorded answers above, and by the conformance Lab
+proving each vocabulary row against the real harness. Enforcing a deadline
+without job control costs a `ps` read on the timeout path and a file under
+`$TMPDIR` for the handler's stderr — a pipe is inherited by whatever the
+handler started, and the answer would then wait for *that*; a machine with
+nowhere to write one loses the reason, not the hook.
 
 The handler contract is a breaking change for anything written against
 ADR-033's stdin JSON. The project is pre-1.0 and ships no compatibility
-layer: fixtures, examples and documentation are rewritten, and the fallback
-route speaks the new contract too, so there is exactly one contract.
+layer: fixtures, examples and documentation are rewritten, and there is
+exactly one route, so there is exactly one contract.
 
 Source change: openspec/changes/native-first-hooks/

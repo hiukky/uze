@@ -15,12 +15,20 @@
 //! worktree can never remove history. Written atomically, and carrying a
 //! schema version from the first commit: a document from a schema this
 //! build does not know is refused, never guessed at.
+//!
+//! Atomic is not the same as serialized: every change goes through
+//! [`locked`], which holds the document for the whole read-modify-write so
+//! two of the client's threads cannot each write back the version they
+//! read.
 
 use std::{
+    cell::RefCell,
     fmt, fs,
+    fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -88,14 +96,11 @@ pub(crate) fn generated_identifier(kind: &[u8]) -> String {
         .collect()
 }
 
-/// Where a task's branch starts: a ref (normally the target), or another
-/// task's tip. The second variant is carried without behaviour today so
-/// stacking is never a migration.
+/// Where a task's branch starts: a ref, normally the target.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Base {
     Ref(String),
-    Task(TaskId),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -145,25 +150,19 @@ pub struct Task {
     /// remote at all, and what the remote holds — is read from the
     /// repository's remote-tracking refs, so a push somebody else made
     /// counts exactly as much as one UZE made.
-    #[serde(default)]
     pub published_as: Option<String>,
     /// The number of the request open on the forge for the published
     /// branch, once one was found. Read off the remote like every other
     /// readiness fact, never announced by the agent that opened it.
-    #[serde(default)]
     pub published_request: Option<u32>,
     /// The branch `published_request` was found for. A number answers for
     /// one branch, and the task outlives it: the agent that delivered keeps
-    /// working, often on a new branch with a request of its own. `None`
-    /// beside a number is a record older than this field, and is asked
-    /// again once.
-    #[serde(default)]
+    /// working, often on a new branch with a request of its own.
     pub request_branch: Option<String>,
     /// When the remote was last asked whether a request exists for this
     /// branch, so the question is asked on a clock instead of on every
     /// evaluation: it is the one publication fact that costs a network
     /// round trip, and it stops being asked the moment it is answered.
-    #[serde(default)]
     pub request_asked_at_unix: Option<u64>,
     pub created_at_unix: u64,
 }
@@ -347,6 +346,143 @@ pub fn save(home: &UzeHome, project_root: &Path, store: &TaskStore) -> Result<()
     write_atomic(&store_path(home, project_root), &payload)
 }
 
+/// How long a mutation waits for another one to finish. Longer than
+/// `uze_git::DEFAULT_WRITE_TIMEOUT` on purpose: this lock is the outer
+/// one, and what it guards may itself wait that long for Git.
+const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
+const MUTATION_RETRY: Duration = Duration::from_millis(20);
+
+/// Reads, changes and writes back the project's tasks as one operation.
+///
+/// [`load`] → mutate → [`save`] is not one operation without this. The
+/// client evaluates, delivers, places and reconciles occupancy on four
+/// threads against the same document, so two overlapping passes each write
+/// back the version they read and the later one erases the other: a
+/// delivered task comes back `Ready` and is delivered a second time, or a
+/// placed agent's record is dropped and nothing knows its slot is taken.
+///
+/// A mutation that answers `Err` is not saved, so a pass that gave up
+/// leaves the document exactly as it found it.
+///
+/// # Lock order
+///
+/// This is always the **outer** lock. Everything it guards speaks to Git,
+/// and Git serializes itself under `uze_git`'s repository write lock;
+/// taking the two the other way round anywhere would be an inversion.
+/// Keep what runs inside to the read-modify-write and the Git it needs —
+/// a project's `setup` command, or anything else unbounded, belongs
+/// outside.
+///
+/// Unbounded is the word, not slow: a project's gate has half an hour and
+/// the `git fetch` and `git push` a delivery makes have no bound at all.
+/// Both of the passes that run one — placing an agent, delivering a task
+/// — take this twice around it rather than once through it: once to write
+/// down what they are about to do, once to write down what happened. The
+/// state they write in between (`Integrating`, for a delivery) is what
+/// every other pass reads to leave the task alone while it runs.
+pub fn locked<T>(
+    home: &UzeHome,
+    project_root: &Path,
+    mutate: impl FnOnce(&mut TaskStore) -> Result<T>,
+) -> Result<T> {
+    let _held = MutationGuard::acquire(&store_path(home, project_root))?;
+    let mut store = load(home, project_root)?;
+    let outcome = mutate(&mut store)?;
+    save(home, project_root, &store)?;
+    Ok(outcome)
+}
+
+thread_local! {
+    /// Lock files this thread already holds, so a nested mutation degrades
+    /// to a lost update rather than to a deadlock against itself. No path
+    /// nests today and the assertion below fails a test build over one.
+    static HELD: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Proof the document is this thread's to rewrite; releasing it is
+/// dropping this.
+struct MutationGuard {
+    /// `None` when this thread already held the lock.
+    owned: Option<(PathBuf, File)>,
+}
+
+impl MutationGuard {
+    fn acquire(store: &Path) -> Result<Self> {
+        let path = store.with_extension("lock");
+        if HELD.with(|held| held.borrow().contains(&path)) {
+            debug_assert!(
+                false,
+                "a task mutation nested inside another: the inner one reads a document the \
+                 outer has not written yet"
+            );
+            return Ok(Self { owned: None });
+        }
+        let parent = path.parent().expect("UZE state paths have a parent");
+        fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|source| UzeError::Write {
+                path: path.clone(),
+                source,
+            })?;
+        let started = Instant::now();
+        while let Err(error) = try_lock_exclusive(&file) {
+            if error.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(UzeError::Write {
+                    path,
+                    source: error,
+                });
+            }
+            if started.elapsed() >= MUTATION_TIMEOUT {
+                // `flock` names no holder, so the pid is genuinely unknown
+                // here rather than merely unread.
+                return Err(UzeError::MutationInProgress { path, pid: None });
+            }
+            thread::sleep(MUTATION_RETRY);
+        }
+        HELD.with(|held| held.borrow_mut().push(path.clone()));
+        Ok(Self {
+            owned: Some((path, file)),
+        })
+    }
+}
+
+impl Drop for MutationGuard {
+    fn drop(&mut self) {
+        if let Some((path, _file)) = self.owned.take() {
+            HELD.with(|held| held.borrow_mut().retain(|held| held != &path));
+            // Closing the file releases the `flock`.
+        }
+    }
+}
+
+#[cfg(unix)]
+fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `flock` is called on a file descriptor this process owns and
+    // keeps open for as long as the lock is held.
+    let outcome = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if outcome == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Without an OS-level advisory lock the guard serializes only this
+/// process's own threads, which the register above already does; a
+/// cross-process guarantee is a Unix property here, matching the runtime's
+/// supported platforms.
+#[cfg(not(unix))]
+fn try_lock_exclusive(_file: &File) -> std::io::Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +607,77 @@ mod tests {
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),
             "{error}"
+        );
+    }
+
+    /// The property the lock exists for: neither writer's record is the
+    /// version the other read back, however the two passes interleave.
+    #[test]
+    fn overlapping_mutations_do_not_erase_each_other() {
+        let home = home("tasks-locked");
+        let root = uze_testkit::temp::scratch("tasks-locked-project");
+        let (first, second) = (task("first"), task("second"));
+        locked(&home, &root, |store| {
+            store.upsert(first.clone());
+            store.upsert(second.clone());
+            Ok(())
+        })
+        .unwrap();
+
+        let deliverer = {
+            let (home, root, id) = (home.clone(), root.clone(), first.id.clone());
+            std::thread::spawn(move || {
+                locked(&home, &root, |store| {
+                    // Long enough that an unlocked pass would certainly
+                    // have read this document before it is written back.
+                    std::thread::sleep(Duration::from_millis(80));
+                    store.get_mut(&id).unwrap().state = TaskState::Integrated;
+                    Ok(())
+                })
+                .unwrap();
+            })
+        };
+        let evaluator = {
+            let (home, root, id) = (home.clone(), root.clone(), second.id.clone());
+            std::thread::spawn(move || {
+                locked(&home, &root, |store| {
+                    std::thread::sleep(Duration::from_millis(80));
+                    store.get_mut(&id).unwrap().state = TaskState::Ready;
+                    Ok(())
+                })
+                .unwrap();
+            })
+        };
+        deliverer.join().unwrap();
+        evaluator.join().unwrap();
+
+        let store = load(&home, &root).unwrap();
+        assert_eq!(store.get(&first.id).unwrap().state, TaskState::Integrated);
+        assert_eq!(store.get(&second.id).unwrap().state, TaskState::Ready);
+    }
+
+    /// A mutation that gives up writes nothing, so a caller can abandon a
+    /// pass without having to undo what it had already changed in memory.
+    #[test]
+    fn a_refused_mutation_leaves_the_document_untouched() {
+        let home = home("tasks-refused");
+        let root = uze_testkit::temp::scratch("tasks-refused-project");
+        let seed = task("seed");
+        locked(&home, &root, |store| {
+            store.upsert(seed.clone());
+            Ok(())
+        })
+        .unwrap();
+
+        let refused = locked(&home, &root, |store| {
+            store.get_mut(&seed.id).unwrap().state = TaskState::Integrated;
+            Err::<(), _>(UzeError::UnknownTask("gave up".into()))
+        });
+
+        assert!(refused.is_err());
+        assert_eq!(
+            load(&home, &root).unwrap().get(&seed.id).unwrap().state,
+            TaskState::Running
         );
     }
 

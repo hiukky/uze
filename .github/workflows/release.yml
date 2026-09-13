@@ -9,7 +9,8 @@ name: Release
 # nothing reaches `main` until you merge it.
 #
 # Merging is what publishes. Every push to `main` asks whether the version in
-# the tree has a release yet; when it does not, this workflow tags the commit
+# the tree has a release yet; when it does not, this workflow waits for `CI`'s
+# `Gate` to pass on that exact commit, then tags the commit
 # if needed, builds the six artifacts on native runners, generates the
 # SBOM, signs the provenance, and creates the GitHub Release with the
 # tarballs and SHASUMS256.txt that install.sh consumes — under notes written
@@ -154,6 +155,12 @@ jobs:
     name: Tag the release commit
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
+    # Mostly spent waiting for `Gate`, which caps itself at an hour.
+    timeout-minutes: 70
+    permissions:
+      contents: write
+      # Reading whether `Gate` passed for this commit.
+      checks: read
     outputs:
       version: ${{ steps.detect.outputs.version }}
       tag: ${{ steps.detect.outputs.tag }}
@@ -185,6 +192,49 @@ jobs:
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi
+      # Nothing is tagged, built, signed or published until CI has answered
+      # for *this* commit.
+      #
+      # `needs:` cannot reach across workflows and `workflow_run` would
+      # replace the push trigger this job is built on, so the edge is drawn
+      # here instead: `Gate` is the single check `ci.yml` exists to close and
+      # `.github/rulesets/main.json` requires, and it runs on the same push.
+      # Branch protection is not a substitute — it proves the pull request's
+      # head was green, not the merge result, which is precisely where a
+      # semantic conflict between two approved changes shows up.
+      #
+      # `concurrency: release` already serialises this workflow, so the wait
+      # costs latency and nothing else.
+      - name: Wait for the gate on this commit
+        if: steps.detect.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 3600 ))
+          while :; do
+            conclusion="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=Gate" \
+              --jq '.check_runs | map(select(.status == "completed")) | last | .conclusion // empty')"
+            case "${conclusion}" in
+              success)
+                echo "Gate passed for ${GITHUB_SHA}"
+                break
+                ;;
+              "")
+                if [ "$(date +%s)" -ge "${deadline}" ]; then
+                  echo "::error::Gate has not reported for ${GITHUB_SHA} within an hour — refusing to release"
+                  exit 1
+                fi
+                echo "Gate has not finished for ${GITHUB_SHA} yet; waiting"
+                sleep 30
+                ;;
+              *)
+                echo "::error::Gate concluded '${conclusion}' for ${GITHUB_SHA} — refusing to release"
+                exit 1
+                ;;
+            esac
+          done
       # Only when it is missing: a tag that already points at this commit is
       # the earlier attempt's, and moving it would change what a `v*` means.
       - name: Create the tag

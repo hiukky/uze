@@ -13,7 +13,6 @@ pub struct ImportedBundle {
     pub importer: String,
     pub standard_items: Vec<BundleItem>,
     pub optional_enhancements: Vec<BundleItem>,
-    pub compatibility_fallback: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

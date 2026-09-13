@@ -15,8 +15,6 @@
 //! those files were drawn deliberately, and redrawing them in the same
 //! change would have made the diff argue two things at once.
 
-use uze_core::{Result, UzeError, hook};
-
 use super::UzeApplication;
 
 /// The current directory's workspace, as presentation needs to see it:
@@ -143,73 +141,3 @@ pub struct AgentIdentity {
 mod tasks;
 
 pub use tasks::*;
-
-/// Portable hooks, and the translation into a harness's native contract.
-pub struct Hooks<'a>(pub(super) &'a UzeApplication);
-
-impl UzeApplication {
-    /// Dispatching an authored hook on a harness's behalf.
-    pub fn hooks(&self) -> Hooks<'_> {
-        Hooks(self)
-    }
-}
-
-impl Hooks<'_> {
-    /// Runs the handlers a harness's native hook payload asks for, and
-    /// renders the answer back in that harness's own contract.
-    ///
-    /// The whole translation — native payload in, native decision out —
-    /// belongs here rather than in the CLI: the only part of it that is
-    /// presentation is reading stdin and writing stdout, which is exactly
-    /// what the caller is left holding.
-    #[tracing::instrument(name = "hooks.dispatch", skip_all, fields(adapter_id = %adapter_id, plugin_root = %plugin_root.display()), err)]
-    pub fn dispatch(
-        &self,
-        adapter_id: &str,
-        event: hook::HookEvent,
-        effect: hook::HookEffect,
-        plugin_root: &std::path::Path,
-        commands: Vec<String>,
-        native: &serde_json::Value,
-    ) -> Result<hook::HookNativeOutput> {
-        let registry = uze_integrations::registry::IntegrationRegistry::builtin(&self.0.home)?;
-        let adapter = registry.hook_adapter(adapter_id).ok_or_else(|| {
-            UzeError::HookDispatch(format!("unknown hook adapter `{adapter_id}`"))
-        })?;
-        let input = adapter
-            .normalize_input(native, event)
-            .map_err(UzeError::HookDispatch)?;
-        // A dispatch is the harness itself saying which conversation it is
-        // in, through the surface its vendor documents — the one channel
-        // that needs no records read and no guessing at all. Recorded
-        // before the handlers run, so a handler that denies the operation
-        // does not also lose the fact.
-        if let (Some(cwd), Some(session)) = (&input.context.cwd, &input.context.session_id) {
-            uze_core::continuity::record_observed(
-                &self.0.home,
-                std::path::Path::new(cwd),
-                &input.harness,
-                uze_core::conversation::SessionId::new(session.clone()),
-            );
-        }
-        let authored = hook::PortableHook {
-            id: "dispatch".to_owned(),
-            event,
-            matchers: Vec::new(),
-            handlers: commands
-                .into_iter()
-                .map(|command| hook::CommandHook {
-                    handler_type: hook::CommandHandlerType::Command,
-                    command,
-                    timeout: hook::DEFAULT_TIMEOUT_SECONDS,
-                })
-                .collect(),
-            effect,
-            order: 0,
-        };
-        let outcome = hook::dispatch_handlers(&authored, &input, plugin_root)?;
-        adapter
-            .render_output(&outcome, event)
-            .map_err(UzeError::HookDispatch)
-    }
-}

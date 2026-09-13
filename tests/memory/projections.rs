@@ -91,7 +91,16 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
     let store = UzeStore::new(home.clone());
     let installed =
         install(&store, package_fixture()).expect("fixture is a valid Agent Plugin 1.0 package");
-    assert_eq!(store.registration_count().expect("registry is readable"), 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(home.registry_path()).expect("the registry was written")
+        )
+        .expect("the registry is valid JSON")["packages"]
+            .as_object()
+            .expect("the registry carries a packages map")
+            .len(),
+        1
+    );
 
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
@@ -151,20 +160,22 @@ fn projection_keeps_real_project_cwd_and_cleans_its_managed_artifact() {
         .prepare(&fixture.home, "codex", "agent-skill", &fixture.workspace)
         .expect("Codex fallback can prepare a managed symlink");
 
-    let artifact = prepared
-        .managed_artifact_path()
-        .expect("projection is managed")
-        .to_path_buf();
+    // The artifact's path is read off the receipt UZE left on disk, never
+    // asked of the object that created it.
+    let record = prepared
+        .runtime_directory
+        .as_ref()
+        .expect("runtime metadata exists")
+        .join("managed-exposure.json");
+    assert!(record.is_file());
+    let artifact = PathBuf::from(
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&record).unwrap())
+            .expect("the exposure record is valid JSON")["target"]
+            .as_str()
+            .expect("the record names the managed artifact"),
+    );
     assert_eq!(prepared.working_directory, fixture.workspace);
     assert!(artifact.is_symlink());
-    assert!(
-        prepared
-            .runtime_directory
-            .as_ref()
-            .expect("runtime metadata exists")
-            .join("managed-exposure.json")
-            .is_file()
-    );
     prepared.cleanup().expect("managed projection cleans up");
     assert!(!artifact.exists());
     assert_clean_workspace(&fixture.workspace);

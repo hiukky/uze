@@ -60,8 +60,9 @@ as adapted, not native.
 
 ## Hooks (portable, ADR-033)
 
-One authored `hooks.json` plus a shell-command ABI — normalized stdin/stdout,
-bounded output and timeout, first-deny-wins — is the canonical hook surface.
+One authored `hooks.json` plus a shell-command ABI — the hook context in as
+`HOOK_*` environment, the decision out as an exit code, with a bounded reason,
+a bounded timeout and first-deny-wins — is the canonical hook surface.
 Each harness gets its own projection:
 
 - **[Claude Code](https://code.claude.com) / [Codex](https://chatgpt.com/codex)** — merged

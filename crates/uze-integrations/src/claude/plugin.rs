@@ -16,7 +16,7 @@ use uze_core::{
 use crate::shared::path::normalize_declared_relative_path;
 use crate::shared::process::run_quiet;
 
-use super::CLAUDE_MARKETPLACE_NAME;
+use super::{CLAUDE_MARKETPLACE_NAME, MARKETPLACE_OWNER_URL};
 
 pub(super) fn claude_marketplace_exists(
     executable: &Path,
@@ -159,7 +159,7 @@ pub(super) fn claude_catalogue_document(packages: &[StoredPackage]) -> serde_jso
         .collect();
     serde_json::json!({
         "name": CLAUDE_MARKETPLACE_NAME,
-        "owner": { "name": "UZE Local", "url": "https://github.com/anomalyco/opencode" },
+        "owner": { "name": "UZE Local", "url": MARKETPLACE_OWNER_URL },
         "plugins": plugins
     })
 }
@@ -792,6 +792,10 @@ mod claude_native_coverage_tests {
         let doc1_again = claude_catalogue_document(&[pkg1, pkg2]);
         assert_eq!(doc1, doc1_again);
         assert_eq!(doc1["name"], "uze-local");
+        assert_eq!(
+            doc1["owner"]["url"], "https://github.com/hiukky/uze",
+            "the owner Claude's marketplace UI shows is this project, not another"
+        );
         assert_eq!(doc1["plugins"].as_array().unwrap().len(), 2);
         let _ = fs::remove_dir_all(_root);
         let _ = fs::remove_dir_all(root2);

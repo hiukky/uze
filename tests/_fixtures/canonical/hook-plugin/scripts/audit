@@ -1,5 +1,0 @@
-#!/bin/sh
-# Observational fixture handler: records the tool and its portable command.
-printf '%s\t%s\t%s\n' "$HOOK_HARNESS" "$HOOK_TOOL_NATIVE" "$HOOK_COMMAND" \
-  >> "${PLUGIN_ROOT}/audit.log"
-exit 0

@@ -19,31 +19,22 @@ use uze_core::{
 use super::ClaudeIntegration;
 
 impl ClaudeIntegration {
-    pub(super) fn cleanup_unused_shim(&self, shim_root: &Path) -> Result<()> {
-        let managed_root = self.uze_home.state_dir().join("attachments").join("claude");
-        if !shim_root.starts_with(&managed_root) || !shim_root.is_dir() {
-            return Ok(());
-        }
-        let referenced = fs::read_dir(&self.skills_dir)
-            .map_err(|source| UzeError::Read {
-                path: self.skills_dir.clone(),
-                source,
-            })?
-            .filter_map(std::result::Result::ok)
-            .any(|entry| fs::read_link(entry.path()).ok().as_deref() == Some(shim_root));
-        if referenced {
-            return Ok(());
-        }
-        let manifest = shim_root.join(".claude-plugin/plugin.json");
-        let skill = shim_root.join("SKILL.md");
-        if manifest.is_file() && (skill.is_symlink() || skill.is_file()) {
-            fs::remove_dir_all(shim_root).map_err(|source| UzeError::Write {
-                path: shim_root.to_path_buf(),
-                source,
-            })?;
-            crate::shared::path::prune_empty_package_dir(shim_root, &managed_root);
-        }
-        Ok(())
+    /// Claude's shim is a one-skill plugin, so its proof of ownership is
+    /// the plugin manifest beside the `SKILL.md` — the shim root is the
+    /// vendor root itself, not a `skills` directory inside it.
+    pub(super) fn cleanup_unused_wrapper(&self, shim_root: &Path) -> Result<()> {
+        let managed_root = crate::shared::path::attachment_root(&self.uze_home, "claude");
+        crate::shared::path::cleanup_unused_wrapper(
+            shim_root,
+            &managed_root,
+            &self.skills_dir,
+            &managed_root,
+            &|shim| {
+                let skill = shim.join("SKILL.md");
+                shim.join(".claude-plugin/plugin.json").is_file()
+                    && (skill.is_symlink() || skill.is_file())
+            },
+        )
     }
 
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {

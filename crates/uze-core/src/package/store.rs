@@ -152,34 +152,47 @@ struct PackageRegistry {
     packages: BTreeMap<PackageId, Registration>,
 }
 
-/// The on-disk shape of `packages.json`, read with plain `String` keys so
-/// `load_registry` can validate each id independently — see its doc comment
-/// for why deserializing straight into `PackageRegistry` (keyed by the
-/// strict `PackageId`) is the wrong tool here: one bad key would fail the
+/// The on-disk shape of `packages.json`, read with plain `String` keys and
+/// undecided values so `load_registry` can validate each entry
+/// independently — see its doc comment for why deserializing straight into
+/// `PackageRegistry` (keyed by the strict `PackageId`, valued by the strict
+/// `Registration`) is the wrong tool here: one bad entry would fail the
 /// whole map instead of just that entry.
 #[derive(Deserialize)]
 struct RawPackageRegistry {
-    packages: BTreeMap<String, Registration>,
+    packages: BTreeMap<String, serde_json::Value>,
+}
+
+/// A `packages.json` entry this UZE cannot read, and why.
+///
+/// Quarantined rather than fatal: the registry is a ledger of independent
+/// registrations, and the entries that *do* read are still the truth about
+/// the packages they name. A quarantined entry answers to nothing — it is
+/// not listed, not resolvable, not removable — and the next `save_registry`
+/// drops it, which is exactly what the remedy asks for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuarantinedRegistration {
+    pub id: String,
+    pub reason: String,
+}
+
+impl QuarantinedRegistration {
+    /// What to do about it. The one shape this has been seen in is an entry
+    /// written by an older UZE whose field names have since changed, and the
+    /// way out of that is the same for every other shape: the registry is
+    /// rebuilt from what is installed, so losing an entry costs a re-register
+    /// and nothing else.
+    pub const REMEDY: &'static str =
+        "written by an older UZE; remove it and run `uze install` to re-register";
 }
 
 /// One registry entry.
-///
-/// `source` is the historical field name, kept so a ledger written before
-/// provenance existed still loads: a bare JSON string deserializes as a local
-/// source (see `Provenance`'s deserializer). Reading a legacy entry never
-/// rewrites it, and every new write emits the current shape.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Registration {
-    #[serde(rename = "source")]
     provenance: Provenance,
     /// `None` means "no alias was ever chosen" — the local name defaults to
-    /// `id.plugin_name()`. A registration written before this field existed
-    /// deserializes as `None` here too (`#[serde(default)]`), which is
-    /// exactly the correct meaning for it: every pre-existing install was
-    /// implicitly active under its own bare plugin name, no migration
-    /// needed. `Some(alias)` is only ever written by an explicit `alias`
-    /// collision resolution at install time.
-    #[serde(default)]
+    /// `id.plugin_name()`. `Some(alias)` is only ever written by an explicit
+    /// `alias` collision resolution at install time.
     active_name: Option<String>,
 }
 
@@ -312,26 +325,48 @@ impl UzeStore {
                 .to_path_buf(),
             source: source_error,
         })?;
+        // Nothing in the registry claims this id — the checks above returned
+        // for every id that does — so a directory already sitting here is
+        // debris from an install that was interrupted between the copy and
+        // the registration. Clearing it is what keeps `create_dir` from
+        // refusing this id forever; leaving it was a dead end with no
+        // command to escape it, since `remove` answers only to registered
+        // ids.
+        if destination.exists() {
+            fs::remove_dir_all(&destination).map_err(|source_error| UzeError::Write {
+                path: destination.clone(),
+                source: source_error,
+            })?;
+        }
         fs::create_dir(&destination).map_err(|source_error| UzeError::Write {
             path: destination.clone(),
             source: source_error,
         })?;
-        copy_tree(source, &destination)?;
 
         // The importer has already performed external-manifest safety checks.
         // Keeping this value live makes that boundary explicit and prevents an
         // accidental installation of an empty, non-Agent-Plugin directory.
         let _ = imported;
-        registry.packages.insert(
-            id.clone(),
-            Registration {
-                provenance: package.provenance().clone(),
-                active_name: active_name
-                    .filter(|alias| *alias != name)
-                    .map(str::to_owned),
-            },
-        );
-        self.save_registry(&registry)?;
+        let ingested = (|| {
+            copy_tree(source, &destination)?;
+            registry.packages.insert(
+                id.clone(),
+                Registration {
+                    provenance: package.provenance().clone(),
+                    active_name: active_name
+                        .filter(|alias| *alias != name)
+                        .map(str::to_owned),
+                },
+            );
+            self.save_registry(&registry)
+        })();
+        if let Err(error) = ingested {
+            // A half-copied, unregistered tree is debris the next attempt
+            // would have to clear anyway; clearing it here is what makes a
+            // failed install leave the Store as it found it.
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error);
+        }
         self.package(&id)
     }
 
@@ -392,10 +427,6 @@ impl UzeStore {
         })
     }
 
-    pub fn registration_count(&self) -> Result<usize> {
-        Ok(self.load_registry()?.packages.len())
-    }
-
     /// Lists installed package identities in deterministic order. Package
     /// selection and dependency resolution are intentionally out of scope for
     /// this PoC; the composed local environment currently includes every
@@ -438,6 +469,17 @@ impl UzeStore {
         Ok(ghosts)
     }
 
+    /// Copies a package's stored bytes to `destination` — symlinks, modes
+    /// and all, exactly as [`ingest_with_active_name`](Self::ingest_with_active_name)
+    /// wrote them, so the copy is itself a materialized package.
+    ///
+    /// What an update keeps aside while the package replacing it installs:
+    /// the removal is what makes an update destructive, and after it only a
+    /// copy of the bytes can put the previous one back.
+    pub fn copy_package_to(&self, id: &PackageId, destination: &Path) -> Result<()> {
+        copy_tree(&self.home.plugin_dir(id), destination)
+    }
+
     /// Removes only UZE-owned package bytes and its registry entry. Callers
     /// must complete attachment reconciliation first; the Store deliberately
     /// knows nothing about harness artifacts or their ownership.
@@ -455,22 +497,41 @@ impl UzeStore {
         self.save_registry(&registry)
     }
 
-    /// `packages.json` is a ledger of independent registrations, so one
-    /// entry whose key fails `PackageId`'s validation (tampered, corrupted,
-    /// or hand-edited) must not make every *other*, still-valid package
-    /// unreachable through `list`/`remove`/`doctor`. Deserializing the whole
-    /// map through `PackageId`'s strict `Deserialize` would do exactly that
-    /// — one bad key fails the entire parse — so this reads keys as plain
-    /// `String` first and validates each independently, dropping only the
-    /// ones that fail. A dropped id can never be looked up or acted on by
-    /// any valid id anyway, so dropping it is equivalent to quarantining it,
-    /// never to trusting it.
+    /// The entries of `packages.json` this UZE cannot read, each with the
+    /// reason and [`QuarantinedRegistration::REMEDY`] — what `doctor` reports
+    /// instead of leaving the operator to guess why a package vanished.
+    pub fn quarantined_registrations(&self) -> Result<Vec<QuarantinedRegistration>> {
+        Ok(self.read_registry()?.1)
+    }
+
     fn load_registry(&self) -> Result<PackageRegistry> {
+        Ok(self.read_registry()?.0)
+    }
+
+    /// `packages.json` is a ledger of independent registrations, so one
+    /// unreadable entry — a key that fails `PackageId`'s validation, or a
+    /// value whose fields this UZE no longer knows (an install by an older
+    /// UZE, a hand edit, corruption) — must not make every *other*,
+    /// still-valid package unreachable through `list`/`remove`/`doctor`.
+    /// Deserializing the whole map through the strict types would do exactly
+    /// that: one bad entry fails the entire parse. So keys are read as plain
+    /// `String` and values left undecided, then each is validated on its own
+    /// and the failures are quarantined rather than trusted — they answer to
+    /// nothing, and the next save drops them.
+    ///
+    /// What is *not* tolerated is a file that is not JSON at all, or one
+    /// whose top level is not a registry: there are no independent entries
+    /// to salvage, and silently reading it as empty would invite the next
+    /// mutation to overwrite it.
+    fn read_registry(&self) -> Result<(PackageRegistry, Vec<QuarantinedRegistration>)> {
         let path = self.home.registry_path();
         if !path.exists() {
-            return Ok(PackageRegistry {
-                packages: BTreeMap::new(),
-            });
+            return Ok((
+                PackageRegistry {
+                    packages: BTreeMap::new(),
+                },
+                Vec::new(),
+            ));
         }
         let bytes = fs::read(&path).map_err(|source| UzeError::Read {
             path: path.clone(),
@@ -478,13 +539,27 @@ impl UzeStore {
         })?;
         let raw: RawPackageRegistry =
             serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
-        let packages = raw
-            .packages
-            .into_iter()
-            .filter(|(key, _)| is_valid_qualified_id(key))
-            .map(|(key, registration)| (PackageId(key), registration))
-            .collect();
-        Ok(PackageRegistry { packages })
+        let mut packages = BTreeMap::new();
+        let mut quarantined = Vec::new();
+        for (key, value) in raw.packages {
+            if !is_valid_qualified_id(&key) {
+                quarantined.push(QuarantinedRegistration {
+                    id: key,
+                    reason: "not a valid marketplace-qualified package id".to_owned(),
+                });
+                continue;
+            }
+            match serde_json::from_value::<Registration>(value) {
+                Ok(registration) => {
+                    packages.insert(PackageId(key), registration);
+                }
+                Err(source) => quarantined.push(QuarantinedRegistration {
+                    id: key,
+                    reason: source.to_string(),
+                }),
+            }
+        }
+        Ok((PackageRegistry { packages }, quarantined))
     }
 
     fn save_registry(&self, registry: &PackageRegistry) -> Result<()> {
@@ -548,6 +623,16 @@ fn assert_self_contained(root: &Path) -> Result<()> {
                     path: path.clone(),
                     source,
                 })?;
+                // An absolute target is refused whatever it names, including a
+                // path inside the source being read right now. Containment is
+                // judged here against the *source* root, but `copy_symlink`
+                // writes the target verbatim: a relative link keeps pointing
+                // inside the package once copied, while an absolute one keeps
+                // pointing at the source — a store entry aimed at a directory
+                // UZE does not own and the user may repoint afterwards.
+                if target.is_absolute() {
+                    return Err(UzeError::PackageEscapesRoot { link: path, target });
+                }
                 let resolved = resolve_lexically(&path, &target);
                 if !resolved.starts_with(root) {
                     return Err(UzeError::PackageEscapesRoot {
@@ -568,8 +653,9 @@ fn assert_self_contained(root: &Path) -> Result<()> {
 
 /// Resolves a symlink target against its own location **without touching the
 /// filesystem**, so `..` is normalized textually rather than by following
-/// whatever it currently points at. An absolute target resolves to itself and
-/// therefore fails the containment check unless it is already inside.
+/// whatever it currently points at. Only relative targets reach here — an
+/// absolute one is refused before the call, because no copy of the package
+/// can keep it inside the root.
 fn resolve_lexically(link: &Path, target: &Path) -> PathBuf {
     let base = if target.is_absolute() {
         PathBuf::new()
@@ -758,7 +844,10 @@ mod tests {
         let state = serde_json::json!({
             "packages": {
                 "../../..": {
-                    "source": "local",
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/plugin" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/plugin" } }
+                    },
                     "active_name": ".."
                 }
             }
@@ -788,11 +877,17 @@ mod tests {
         let state = serde_json::json!({
             "packages": {
                 "../../escape@local": {
-                    "source": "local",
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/escape" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/escape" } }
+                    },
                     "active_name": "escape"
                 },
                 "flow@local": {
-                    "source": "local"
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/flow" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/flow" } }
+                    }
                 }
             }
         });
@@ -811,6 +906,62 @@ mod tests {
                 .unwrap()
             ],
             "the valid entry must still load even though its sibling is quarantined"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The published alpha spelled `provenance` as `"source"`. One such
+    /// entry used to fail the whole file, so `status`, `plugin list`,
+    /// `plugin remove` and `install` all died on a machine that had ever
+    /// installed one — with no way out, since the commands that would clear
+    /// it were the ones that could not run. The entry is now quarantined
+    /// like an unreadable key, and named with what to do about it.
+    #[test]
+    fn an_entry_written_by_an_older_uze_is_quarantined_and_named() {
+        let root = uze_testkit::temp::scratch("registry-older-uze");
+        let home = UzeHome::at(&root);
+        let store = UzeStore::new(home.clone());
+        home.ensure_layout().unwrap();
+        let state = serde_json::json!({
+            "packages": {
+                "old@local": {
+                    "source": {
+                        "requested": { "LOCAL": { "path": "/tmp/old" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/old" } }
+                    },
+                    "active_name": null
+                },
+                "flow@local": {
+                    "provenance": {
+                        "requested": { "LOCAL": { "path": "/tmp/flow" } },
+                        "resolved": { "LOCAL": { "path": "/tmp/flow" } }
+                    }
+                }
+            }
+        });
+        fs::write(home.registry_path(), state.to_string()).unwrap();
+
+        let ids = store
+            .package_ids()
+            .expect("an entry an older UZE wrote must not fail the whole registry load");
+        assert_eq!(
+            ids.iter().map(PackageId::as_str).collect::<Vec<_>>(),
+            vec!["flow@local"],
+            "the readable entry must survive its unreadable sibling"
+        );
+
+        let quarantined = store.quarantined_registrations().unwrap();
+        assert_eq!(
+            quarantined
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>(),
+            vec!["old@local"]
+        );
+        assert!(
+            quarantined[0].reason.contains("provenance"),
+            "the reason must name the field that could not be read: {}",
+            quarantined[0].reason
         );
         let _ = fs::remove_dir_all(root);
     }

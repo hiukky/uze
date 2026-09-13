@@ -63,10 +63,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
-    hook::{
-        HOOKS_FILE_NAME, HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent,
-        HookNativeOutput,
-    },
+    hook::HOOKS_FILE_NAME,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
@@ -521,11 +518,10 @@ impl IntegrationPort for AntigravityIntegration {
             } => {
                 // The wrapper is what the harness actually runs, so it lands
                 // before the entry that names it.
-                if let Some(path) = wrapper
-                    && let Some(source) =
-                        hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET)
+                if let Some(source) =
+                    hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET)
                 {
-                    hook_projection::materialize_wrapper(path, &source)?;
+                    hook_projection::materialize_wrapper(wrapper, &source)?;
                 }
                 let entry: serde_json::Value =
                     serde_json::from_str(expected).map_err(|source| UzeError::Json {
@@ -591,9 +587,7 @@ impl IntegrationPort for AntigravityIntegration {
                 config_file,
                 entry_name,
                 expected,
-                wrapper
-                    .as_deref()
-                    .map(|path| (hook_projection::ANTIGRAVITY_TARGET, path)),
+                Some((hook_projection::ANTIGRAVITY_TARGET, wrapper.as_path())),
             ),
             _ => inspect_standard_receipt(receipt),
         }
@@ -642,9 +636,7 @@ impl IntegrationPort for AntigravityIntegration {
                     config_file,
                     entry_name,
                     expected,
-                    wrapper
-                        .as_deref()
-                        .map(|path| (hook_projection::ANTIGRAVITY_TARGET, path)),
+                    Some((hook_projection::ANTIGRAVITY_TARGET, wrapper.as_path())),
                 )?;
                 hook_projection::prune_shared_wrapper(
                     &self.uze_home,
@@ -723,30 +715,7 @@ impl AntigravityIntegration {
             resource,
             &self.hook_capabilities(),
             self.hooks_config_path(),
-            self.id(),
         )
-    }
-}
-
-impl HookAdapterPort for AntigravityIntegration {
-    fn adapter_id(&self) -> &'static str {
-        "antigravity"
-    }
-
-    fn normalize_input(
-        &self,
-        native: &serde_json::Value,
-        event: HookEvent,
-    ) -> std::result::Result<HookCommandInput, String> {
-        hook_projection::antigravity_normalize_input(native, event)
-    }
-
-    fn render_output(
-        &self,
-        outcome: &HookDispatchOutcome,
-        event: HookEvent,
-    ) -> std::result::Result<HookNativeOutput, String> {
-        hook_projection::antigravity_render_output(outcome, event)
     }
 }
 

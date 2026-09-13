@@ -37,11 +37,13 @@ from event, available data, decision/effect, transform safety, matcher,
 handler type, and ordering. A route is explicitly `native`, `adapted`,
 `degraded`, or `unsupported`; security-relevant loss cannot be implicit.
 
-Handlers receive a normalized JSON object on stdin and may emit one bounded
-JSON decision on stdout. UZE provides the small generated/owned dispatcher
-needed to translate native payloads and decisions while keeping author scripts
-portable, setting `PLUGIN_ROOT`, running handlers sequentially, and preserving
-the first denial. This is intentionally a narrow command ABI, not a general
+Handlers receive the normalized hook context as `HOOK_*` environment and answer
+with an exit code — `0` allows, the canonical deny exit denies with a bounded
+reason on stderr, anything else is a failure the group's effect resolves. UZE
+provides the small generated/owned dispatcher needed to translate native
+payloads and decisions while keeping author scripts portable, setting
+`PLUGIN_ROOT`, bounding each handler by its declared timeout, running handlers
+sequentially, and preserving the first denial. This is intentionally a narrow command ABI, not a general
 plugin runtime.
 
 Claude Code, Codex, and Antigravity CLI receive their documented native hook
@@ -96,7 +98,7 @@ as a tool callback.
       have deterministic unit coverage.
 - [ ] Each integration has native/bridge emission, existing-config merge,
       idempotence, inspection, drift, and safe-detach tests.
-- [ ] Bridge tests prove matching, normalized stdin, transformation, denial,
+- [ ] Bridge tests prove matching, the normalized `HOOK_*` context, transformation, denial,
       reason propagation, sequence, handler error, timeout, and regeneration.
 - [ ] CLI status/doctor/TUI expose compatibility and generated artifacts.
 - [ ] Four real-harness conformance verticals prove only documented, observed

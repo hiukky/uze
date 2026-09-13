@@ -309,6 +309,11 @@ impl Context<'_> {
                 .collect(),
             removed_orphans: agents_md_report.removed_orphans,
             blocked_orphans: agents_md_report.blocked_orphans,
+            failed: agents_md_report
+                .failed
+                .into_iter()
+                .map(|(package_id, reason)| (package_id.as_str().to_owned(), reason))
+                .collect(),
             worktree_region,
             bridges,
         })

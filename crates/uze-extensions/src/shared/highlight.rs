@@ -1,8 +1,9 @@
 //! Syntax highlighting, for the extensions that show a file's own text.
 //!
-//! Its own module because two extensions now colour source code — the
-//! diff [`crate::git`] draws and the file [`crate::files`] opens — and
-//! the alternative was a second copy of the syntect plumbing, which is
+//! Its own module because two surfaces colour source code — the diff
+//! [`crate::code::diff`] draws and the file [`crate::code::editor`]
+//! opens — and the alternative was a second copy of the syntect
+//! plumbing, which is
 //! the shape where a fallback theme is fixed in one place and left wrong
 //! in the other.
 //!

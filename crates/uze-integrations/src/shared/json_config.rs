@@ -187,6 +187,41 @@ mod tests {
         );
     }
 
+    /// A preference merge re-emits the whole document, so the order of the
+    /// user's own keys is UZE's to lose. One setting must not reshuffle a
+    /// hand-organised config.
+    #[test]
+    fn a_merge_keeps_the_users_own_key_order() {
+        let path = temp_path("key-order");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"zed":"last alphabetically","apiKeyHelper":"~/bin/key","permissions":{"allow":[]}}"#,
+        )
+        .unwrap();
+        merge(&path, |config| {
+            set_path(
+                config,
+                &["permissions", "defaultMode"],
+                serde_json::json!("acceptEdits"),
+            )
+        })
+        .unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        let keys: Vec<&str> = after
+            .lines()
+            .filter_map(|line| line.strip_prefix("  \""))
+            .filter_map(|line| line.split('"').next())
+            .collect();
+        assert_eq!(
+            keys,
+            ["zed", "apiKeyHelper", "permissions"],
+            "the user's keys keep the order they were written in: {after}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
     #[test]
     fn merge_round_trips_through_disk_atomically() {
         let path = temp_path("merge");

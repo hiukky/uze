@@ -198,74 +198,6 @@
       "additionalProperties": false,
       "description": "Symbol name to glyph: a string, a list of frames for an animation, or an object with an explicit display width for a glyph the terminal measures differently than Unicode does.",
       "properties": {
-        "arrow.ahead": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "arrow.behind": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
         "arrow.down": {
           "oneOf": [
             {
@@ -301,40 +233,6 @@
           ]
         },
         "arrow.external": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "arrow.shift": {
           "oneOf": [
             {
               "type": "string"

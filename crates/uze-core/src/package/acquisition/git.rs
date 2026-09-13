@@ -76,22 +76,51 @@ pub fn reject_inline_credentials(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuses a value Git would read as an option instead of as the URL or
+/// reference it is meant to be.
+///
+/// The input is not only operator-typed: `git:` comes out of a project's
+/// checked-in `agents.yaml` and out of `agents.lock`, so cloning a repository
+/// and running `uze install` is a delivery path. A leading `-` turns the URL
+/// into `--upload-pack=<cmd>` (a command Git spawns), `--template=<dir>` (a
+/// directory Git copies into the new repository) or `--separate-git-dir=<p>`
+/// (a write outside the scratch directory). The end-of-options markers at
+/// each call site are the second half of the same rule; this half is what
+/// holds for `git checkout`, which offers no such marker, and it refuses
+/// before any process is spawned.
+fn reject_option_shaped(value: &str, what: &str) -> Result<()> {
+    if value.starts_with('-') {
+        return Err(UzeError::AcquisitionFailed(format!(
+            "{what} `{value}` starts with `-`, which git reads as an option"
+        )));
+    }
+    Ok(())
+}
+
 /// Clones `url` into `destination` and checks out `reference`, returning the
 /// resolved commit.
 ///
 /// `destination` must not exist; the caller owns it and its cleanup.
 pub fn materialize(url: &str, reference: Option<&str>, destination: &Path) -> Result<String> {
     reject_inline_credentials(url)?;
+    reject_option_shaped(url, "repository url")?;
+    if let Some(reference) = reference {
+        reject_option_shaped(reference, "reference")?;
+    }
 
     // `--no-checkout` first, so nothing from the repository lands on disk
     // before the requested revision is chosen. Full history, not `--depth 1`:
     // a shallow clone cannot check out an arbitrary commit the caller pinned,
     // and correctness comes before the transfer saving.
+    //
+    // `--` is where `git clone [<options>] [--] <repo> [<dir>]` stops reading
+    // options, so neither positional can be taken for one.
     run(
         &[
             "clone",
             "--no-checkout",
             "--no-recurse-submodules",
+            "--",
             url,
             &destination.to_string_lossy(),
         ],
@@ -104,6 +133,10 @@ pub fn materialize(url: &str, reference: Option<&str>, destination: &Path) -> Re
     // or `HEAD` being read as a path — and it yields the resolved revision as
     // a side effect rather than as a second question.
     let commit = resolve_commit(reference, destination)?;
+    // `git checkout` accepts no end-of-options marker (`--` there introduces
+    // pathspecs), so the guard is the only thing standing between a value
+    // Git printed and a value Git parses as an option.
+    reject_option_shaped(&commit, "resolved commit")?;
     run(&["checkout", "--detach", &commit], Some(destination))?;
 
     assert_within_size_budget(destination)?;
@@ -150,8 +183,17 @@ fn resolve_commit(reference: Option<&str>, checkout: &Path) -> Result<String> {
         ],
     };
     for candidate in &candidates {
+        // `--end-of-options`, not `--`: in `rev-parse` the latter separates
+        // revisions from *paths*, so it would stop the candidate being read
+        // as a revision at all.
         if let Ok(output) = run(
-            &["rev-parse", "--verify", "--quiet", candidate],
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                candidate,
+            ],
             Some(checkout),
         ) {
             let commit = output.trim().to_owned();
@@ -445,6 +487,49 @@ mod tests {
         let redacted = redact("failed to clone https://user:secret@example.com/repo.git now");
         assert!(!redacted.contains("secret"));
         assert!(redacted.contains("<redacted>@example.com/repo.git"));
+    }
+
+    /// A `git:` line is project input, and a URL beginning with `-` is an
+    /// option to Git — `--upload-pack=<cmd>` being the one that runs a
+    /// command. The refusal has to happen before `git` is spawned, which is
+    /// what a destination that is never created proves.
+    #[test]
+    fn an_option_shaped_url_or_reference_is_refused_before_git_is_spawned() {
+        let root = uze_testkit::temp::scratch("option-shaped-url");
+        let destination = root.join("checkout");
+
+        for url in [
+            "--upload-pack=touch /tmp/uze-injection",
+            "--template=/tmp/uze-template",
+            "-c",
+        ] {
+            assert!(
+                matches!(
+                    materialize(url, None, &destination),
+                    Err(UzeError::AcquisitionFailed(_))
+                ),
+                "accepted {url}"
+            );
+            assert!(!destination.exists(), "{url} reached git");
+        }
+
+        assert!(
+            matches!(
+                materialize(
+                    "file:///srv/repo.git",
+                    Some("--output=/tmp/x"),
+                    &destination
+                ),
+                Err(UzeError::AcquisitionFailed(_))
+            ),
+            "accepted an option-shaped reference"
+        );
+        assert!(
+            !destination.exists(),
+            "an option-shaped reference reached git"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -254,12 +254,11 @@ pub fn summarize_apply(details: [PreferenceApplyDetail; 3]) -> PreferenceApplyOu
     PreferenceApplyOutcome::Applied { changed_keys }
 }
 
-/// A harness's preference translation/application contract. A sibling to
-/// `HookAdapterPort`: a second narrow trait implemented by (some of) the
-/// integrations, registered in its own slice on `IntegrationRegistry` rather
-/// than folded into `IntegrationPort`, which is about capability kinds, not
-/// runtime settings. Named `preference_id`, not `id`, so a type implementing
-/// both traits has no method ambiguity.
+/// A harness's preference translation/application contract: a narrow trait
+/// implemented by the integrations, registered in its own slice on
+/// `IntegrationRegistry` rather than folded into `IntegrationPort`, which is
+/// about capability kinds, not runtime settings. Named `preference_id`, not
+/// `id`, so a type implementing both traits has no method ambiguity.
 pub trait PreferencePort: Send + Sync {
     fn preference_id(&self) -> &'static str;
 

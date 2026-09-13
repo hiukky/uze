@@ -103,8 +103,9 @@ project-scoped.
 What it buys is a matching pair: commands whose audience is the agent are
 hidden from `uze --help` and documented in the projected region. Each
 audience reads one surface, and neither is polluted by the other's
-vocabulary. `hook-exec` is the existing precedent for a hidden,
-machine-audience command; this names the pattern rather than inventing it.
+vocabulary. `uze self-update` and `uze terminal` are the existing
+precedent for a hidden command whose caller is not a person; this names the
+pattern rather than inventing it.
 
 Rejected: sorting the human help by frequency (treats a discovery symptom,
 leaves the agent's commands in the person's list) and putting the verb at

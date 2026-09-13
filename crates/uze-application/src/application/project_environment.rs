@@ -512,14 +512,24 @@ impl Project<'_> {
         // `AGENTS.md`, and a policy edit changes what the projected region
         // should say. Leaving either to a second command is how a policy
         // stayed in force for UZE and not for the agents reading the file.
-        let reconciled = if installed_plugins.is_empty() && removed_plugins.is_empty() {
-            self.stale_projection(&canonical).is_some()
-                && self.0.context().reconcile(&canonical).is_ok()
-        } else {
-            self.0.context().reconcile(&canonical).is_ok()
+        let nothing_moved = installed_plugins.is_empty() && removed_plugins.is_empty();
+        let attempted = (!nothing_moved || self.stale_projection(&canonical).is_some())
+            .then(|| self.0.context().reconcile(&canonical));
+        // Declaring an environment and projecting it are one command, so a
+        // projection that failed fails the command. Swallowed, it reported
+        // `NoChanges` — "everything already agrees" — over a read-only
+        // `AGENTS.md` or a bridge that could not be written, and the half of
+        // the environment the agents actually read never moved. Re-running
+        // `install` converges the rest again and retries this.
+        let reconciled = match attempted {
+            Some(outcome) => {
+                outcome?;
+                true
+            }
+            None => false,
         };
 
-        if installed_plugins.is_empty() && removed_plugins.is_empty() && !reconciled {
+        if nothing_moved && !reconciled {
             return Ok(InstallReport::NoChanges);
         }
         Ok(InstallReport::Installed {

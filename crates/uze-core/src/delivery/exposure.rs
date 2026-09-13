@@ -98,12 +98,12 @@ pub enum ExposureMechanism {
     ManagedHookConfig {
         config_file: PathBuf,
         entry_name: String,
-        event: Option<HookEvent>,
+        event: HookEvent,
         expected: String,
-        /// The generated wrapper the entry runs, when the delivery took the
-        /// native route. Owned alongside the entry: materialized on attach,
-        /// verified by content identity, removed once no entry needs it.
-        wrapper: Option<PathBuf>,
+        /// The generated wrapper the entry runs. Owned alongside the entry:
+        /// materialized on attach, verified by content identity, removed
+        /// once no entry needs it.
+        wrapper: PathBuf,
     },
     /// A whole, UZE-owned derived file loaded by the harness directly from
     /// its own discovery directory — e.g. the OpenCode hook bridge
@@ -287,12 +287,6 @@ impl PreparedExposure {
             return Ok(());
         };
         remove_managed_artifact(&managed)
-    }
-
-    pub fn managed_artifact_path(&self) -> Option<&Path> {
-        self.managed
-            .as_ref()
-            .map(|artifact| artifact.target.as_path())
     }
 }
 

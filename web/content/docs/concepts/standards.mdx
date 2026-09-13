@@ -60,8 +60,8 @@ Two capabilities in that gap are canonical enough to ship today:
   custom-agent format. Only the verified portable frontmatter subset is claimed; vendor-only
   model, permission, and orchestration fields are never silently dropped — a route that can't
   preserve them is reported as adapted or degraded, not native.
-- **Portable Hooks** (`hooks.json`, ADR-033) — a command-only hook ABI (normalized JSON on stdin,
-  one bounded JSON decision on stdout) instead of picking one vendor's hook contract as the
+- **Portable Hooks** (`hooks.json`, ADR-033) — a command-only hook ABI (the hook context as
+  `HOOK_*` environment, one exit code as the decision) instead of picking one vendor's hook contract as the
   de-facto format. Claude, Codex, and Antigravity get native hook configuration; OpenCode — which
   only exposes hooks as TypeScript plugin callbacks — gets an owned, regenerable bridge, so authors
   never need a TypeScript toolchain to ship a hook.

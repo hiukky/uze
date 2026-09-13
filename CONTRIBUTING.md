@@ -233,20 +233,24 @@ format the API imports.
 
 `main.json` forbids deleting the branch, force-pushing it, merge commits and
 rebase merges — squash only, which is what the history already is — and
-requires the fast checks to be green — the eleven that finish in about four
-minutes, `MSRV` and `Web` among them. The long E2E verticals run and report
-without gating: they only trigger for changes that can reach the Lab image,
-so requiring them would leave every documentation pull request waiting on a
-check that never arrives. `release-tags.json` stops a published `v*` tag
-being deleted or repointed, because `install.sh` resolves a release by tag
-and moving one changes what a user installs under a version they already
-have.
+requires exactly one status check: `Gate`. That is the job `ci.yml` closes
+every run with, and it is green when every other job either passed or was
+not needed, so an expensive tier that a documentation change never triggers
+does not leave the pull request waiting on a check that never arrives.
+Listing the individual jobs instead is what this replaced: the list went
+stale the moment `Test` became `Test (linux)` and `Test (macos)`, and adding
+a matrix leg meant editing repository settings, which is not a diff and
+which nobody reviews. `release-tags.json` stops a published `v*` tag being
+deleted or repointed, because `install.sh` resolves a release by tag and
+moving one changes what a user installs under a version they already have.
 
 **These files are a reference for re-import, not a deployment.** Live
 enforcement is a repository setting, so the two can drift: a rule changed in
 the UI does not change the file, and merging a change to the file does not
 change the repository. Both ship with `"enforcement": "disabled"` for that
-reason — importing one is never what turns it on.
+reason — importing one is never what turns it on. Nothing in the repository
+can tell you what is enforced right now; `gh api /repos/:owner/:repo/rulesets`
+can, and is the only thing that can.
 
 ## Security
 

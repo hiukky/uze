@@ -73,7 +73,7 @@ mod request;
 pub use changes::{ChangeSummary, change_summary};
 pub use history::{Commit, CommitDetail, Timeline, commit_detail, timeline, timeline_section};
 pub use render::view;
-pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill};
+pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 
 use changes::Changes;
 use changes_tree::{FileTreeItem, file_tree_items};
@@ -604,6 +604,29 @@ pub struct RefreshedChanges {
     placement: ViewPlacement,
     branch: String,
     changes: Changes,
+}
+
+impl RefreshedChanges {
+    /// What a refresh that never ran answers.
+    ///
+    /// The host reserves the surface against a second refresh while one
+    /// is out and releases it when the answer lands, so a read that ends
+    /// without answering — a thread that unwound over whatever the
+    /// repository happened to contain — would leave the changes half
+    /// frozen for the rest of the session. This is the same shape a
+    /// checkout that is no repository already produces, which the view
+    /// draws as the reason where the diff would be.
+    pub fn failed(placement: ViewPlacement, reason: String) -> Self {
+        Self {
+            placement,
+            branch: String::new(),
+            changes: Changes {
+                error: Some(reason),
+                refreshed_at: Some(std::time::Instant::now()),
+                ..Changes::default()
+            },
+        }
+    }
 }
 
 fn file_name(path: &Path) -> String {

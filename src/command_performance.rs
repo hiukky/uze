@@ -114,17 +114,6 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "provisions or updates harness executables through each harness's official installer",
         ),
     ),
-    // Internal runtime dispatch (ADR-033): not a user command. `hook-exec`
-    // runs package hook commands with a child-process boundary, per-handler
-    // timeouts, and bounded reads — inherently outside any CLI latency
-    // budget, and only ever invoked by the managed hook configuration UZE
-    // itself emits.
-    (
-        "hook-exec",
-        PerformanceClass::JustifiedSlow(
-            "internal hook runtime dispatch: spawns each authored handler with bounded stdout/timeout semantics",
-        ),
-    ),
     // Internal: the release check a CLI command hands to a detached process
     // of its own once the last answer has gone stale, so the command that
     // noticed it never waits on the network.

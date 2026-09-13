@@ -20,7 +20,8 @@ there is no declarative JSON hook file, so it needs generated source.
 
 ## Goals / Non-Goals
 
-Goals: one authored `hooks.json`, command handlers with JSON stdin/stdout,
+Goals: one authored `hooks.json`, command handlers with an environment/exit-code
+contract,
 tool aliases plus explicit native names, ordered handler execution, explicit
 compatibility diagnostics, generated artifacts that are rebuildable, and
 receipt-safe merge/removal.
@@ -52,28 +53,23 @@ absent. The initial canonical events are `PreToolUse`, `PostToolUse`, and
 `native:<name>` escape hatch. Only `type: command` is canonical. Timeout is
 seconds, bounded to 1..300 and defaults to 30.
 
-Every adapter sends a normalized JSON object on stdin:
+Every delivery hands the handler the same normalized context as environment
+(the `HOOK_*` set: `HOOK_HARNESS`, `HOOK_EVENT`, `HOOK_TOOL`,
+`HOOK_TOOL_NATIVE`, `HOOK_CWD`, `HOOK_INPUT`, the matched alias's portable
+fields such as `HOOK_COMMAND`/`HOOK_PATH`, and `PLUGIN_ROOT` as the canonical
+package root). Nothing arrives on stdin and nothing is parsed from stdout —
+`native-first-hooks` replaced that ABI, because the harness payload is read
+and the harness's decision document is written by the delivered wrapper, not
+by the handler.
 
-```json
-{
-  "version": 1,
-  "event": "pre_tool_use",
-  "tool": { "portable": "shell", "native": "Bash" },
-  "input": {},
-  "context": { "cwd": "/path", "session_id": "optional" }
-}
-```
-
-stdout is either empty (observe/allow) or one JSON object:
-`{"decision":"allow|ask|deny","reason":"...","input":{...}}`.
-`input` is honored only where the target supports a safe pre-tool rewrite.
-Invalid stdout, launch failure, non-zero exit except the canonical deny exit,
-and timeout are fail-open for observational hooks but fail-closed for a
-declared pre-tool `deny`/`ask` effect only when the target can enforce it;
-otherwise the plan is `degraded` and attach requires an explicit diagnostic.
-Adapters cap stdout at 64 KiB, preserve stderr for diagnostics, and inject
-`PLUGIN_ROOT` as the canonical package root. Handlers are sequential in
-manifest order; the first deny wins.
+The decision is the handler's exit code: `0` allows, `3` denies with the
+reason on stderr, and anything else — a launch failure, a timeout, any other
+status — is a handler failure. A failure is fail-open for `observe`/`allow`
+and fail-closed for `deny`/`ask`/`transform`, and a target that cannot
+enforce the declared effect yields a `degraded` plan whose attach requires an
+explicit diagnostic. The reason read back from stderr is bounded, each
+handler is bounded by its own declared timeout, handlers run sequentially in
+manifest order, and the first deny wins.
 
 ## IR and compatibility
 

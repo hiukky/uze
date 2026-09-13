@@ -27,11 +27,7 @@ use uze_core::{
 /// `$UZE_HOME/state/attachments/antigravity/plugins/` — the same convention
 /// every other integration's generated envelopes use, never under the Store.
 pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join("antigravity")
-        .join("plugins")
+    crate::shared::path::attachment_root(uze_home, "antigravity").join("plugins")
 }
 
 fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {

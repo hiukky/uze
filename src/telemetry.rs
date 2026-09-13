@@ -16,12 +16,12 @@
 //! With neither set, nothing subscribes and a span costs a branch.
 //!
 //! The trace crosses one process boundary: the runtime shim `exec`s a
-//! harness, and a hook that harness fires runs `uze hook-exec`. The shim
-//! puts its span's context into the child's environment as W3C
-//! `TRACEPARENT`, the harness passes its environment through, and
-//! `hook-exec` adopts it as its root's parent — so a hook is a child of
-//! the launch that caused it. Both halves are no-ops without the feature:
-//! there is no trace id to carry.
+//! harness, and the harness runs `uze` again — an agent inside it asking
+//! UZE something. The shim puts its span's context into the child's
+//! environment as W3C `TRACEPARENT`, the harness passes its environment
+//! through, and that `uze` adopts it as its root's parent, so the two are
+//! one trace. Both halves are no-ops without the feature: there is no
+//! trace id to carry.
 
 use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 
@@ -137,9 +137,52 @@ where
 }
 
 /// The root span of a CLI invocation: the leaf command a person typed and
-/// the whole argument line.
+/// the argument line, less anything that looks like a secret.
 pub fn command_span(command: &str, argv: &[String]) -> tracing::Span {
-    tracing::info_span!("cli", command, argv = %argv.join(" "))
+    tracing::info_span!("cli", command, argv = %redact(argv))
+}
+
+/// What is left of `argv` once nothing in it is worth stealing.
+///
+/// This line is appended to `~/.uze/state/logs/uze.log`, which is never
+/// rotated, and exported to whatever collector `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// names. `uze market add https://user:token@host/market` is a supported,
+/// documented shape, so a credential arriving here is an ordinary input,
+/// not a mistake — and a log is exactly the place it must not survive.
+fn redact(argv: &[String]) -> String {
+    argv.iter()
+        .map(|argument| redacted(argument))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+const REDACTED: &str = "<redacted>";
+
+fn redacted(argument: &str) -> String {
+    if let Some(scheme) = argument.find("://") {
+        let (scheme, rest) = argument.split_at(scheme + 3);
+        // Only the authority carries userinfo; an `@` past the first `/`
+        // belongs to the path and is nobody's password.
+        let authority = rest.find('/').unwrap_or(rest.len());
+        return match rest[..authority].find('@') {
+            Some(at) => format!("{scheme}{REDACTED}@{}", &rest[at + 1..]),
+            None => argument.to_owned(),
+        };
+    }
+    if looks_minted(argument) {
+        return REDACTED.to_owned();
+    }
+    argument.to_owned()
+}
+
+/// Whether an argument is a credential standing on its own. Only shapes a
+/// provider actually mints: a length-and-alphabet guess would redact the
+/// digests and package ids this trace exists to show.
+fn looks_minted(argument: &str) -> bool {
+    const MINTED: [&str; 7] = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xox"];
+    MINTED
+        .iter()
+        .any(|prefix| argument.starts_with(prefix) && argument.len() > prefix.len() + 8)
 }
 
 /// Puts the current span's trace context into `command`'s environment as
@@ -259,13 +302,53 @@ mod otlp {
     }
 }
 
-#[cfg(all(test, feature = "telemetry"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The handshake the shim and `hook-exec` perform, in one process: a
-    /// child `Command` gets the parent's `TRACEPARENT`, and a span that
-    /// adopts it belongs to the same trace.
+    #[test]
+    fn a_credential_in_the_argument_line_never_reaches_the_trace() {
+        let recorded =
+            |argv: &[&str]| redact(&argv.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+
+        assert_eq!(
+            recorded(&[
+                "market",
+                "add",
+                "team",
+                "https://romullo:ghp_0123456789abcdef@github.com/org/market.git"
+            ]),
+            "market add team https://<redacted>@github.com/org/market.git"
+        );
+        assert_eq!(
+            recorded(&["plugin", "install", "foo@https://token@host/market"]),
+            "plugin install foo@https://<redacted>@host/market"
+        );
+        assert_eq!(
+            recorded(&["agent", "task", "name", "fix/ghp_short"]),
+            "agent task name fix/ghp_short",
+            "a word that merely starts like a token is not one"
+        );
+        assert_eq!(
+            recorded(&["plugin", "install", "ghp_0123456789abcdefghij"]),
+            "plugin install <redacted>"
+        );
+        assert_eq!(
+            recorded(&["market", "add", "https://github.com/org/market.git"]),
+            "market add https://github.com/org/market.git",
+            "a URL with nothing to hide is left as it was typed"
+        );
+        assert_eq!(
+            recorded(&["market", "add", "https://github.com/org/a@b/market"]),
+            "market add https://github.com/org/a@b/market",
+            "an `@` in the path is not userinfo"
+        );
+    }
+
+    /// The handshake the shim and a `uze` under it perform, in one
+    /// process: a child `Command` gets the parent's `TRACEPARENT`, and a
+    /// span that adopts it belongs to the same trace.
+    #[cfg(feature = "telemetry")]
     #[test]
     fn the_trace_context_survives_the_environment_round_trip() {
         use opentelemetry::trace::TraceContextExt;
@@ -305,7 +388,7 @@ mod tests {
                 env.set("TRACEPARENT", &traceparent);
                 parent.context().span().span_context().trace_id()
             };
-            let child = tracing::info_span!("hook-exec");
+            let child = tracing::info_span!("uze-under-the-shim");
             adopt_parent_from_env(&child);
             let _entered = child.enter();
             assert_eq!(

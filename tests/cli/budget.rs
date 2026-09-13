@@ -17,7 +17,14 @@ fn uze_bin() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_uze"))
 }
 
-/// Every file under `root` with its size and modification time.
+/// Every file under `root` with its size and modification time — except
+/// the mutation lock, which is not state.
+///
+/// `state/mutation.lock` is a permanent file an `flock` is taken on, and
+/// every acquirer stamps its own pid inside it so the next contender can be
+/// told who is blocking. Two runs of a read-only command therefore leave two
+/// different pids in it, and neither has rewritten anything the command
+/// reports on.
 fn tree_state(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
     let mut out = Vec::new();
     let mut pending = vec![root.to_path_buf()];
@@ -29,6 +36,8 @@ fn tree_state(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
+            } else if path.file_name().is_some_and(|name| name == "mutation.lock") {
+                continue;
             } else if let Ok(meta) = fs::symlink_metadata(&path) {
                 out.push((path, meta.len(), meta.modified().unwrap()));
             }

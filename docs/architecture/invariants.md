@@ -16,14 +16,14 @@ with no such test does not belong on this page.
 The Store writes package bytes and its own registry. It never writes anything
 a harness reads.
 
-> `tests/vendor_neutral_core.rs::the_store_writes_no_harness_owned_artifact_of_its_own_accord`
+> `tests/integrations/vendor_neutral.rs::the_store_writes_no_harness_owned_artifact_of_its_own_accord`
 
 ### Integrations own vendor semantics
 
 Which packages belong in a harness-owned view, what shape that view takes, and
 when it is rebuilt are decisions of the integration that owns the harness.
 
-> `tests/vendor_neutral_core.rs::a_package_without_the_native_envelope_is_not_published`
+> `tests/integrations/vendor_neutral.rs::a_package_without_the_native_envelope_is_not_published`
 
 ### Adding a harness requires no semantic change to Store, Engine, Router or the package model
 
@@ -32,8 +32,8 @@ Codex needs a published catalogue, Antigravity CLI needs neither but
 *copies* (its `agy plugin install` stages bytes — no link verb exists), and
 both go through the same `IntegrationPort`.
 
-> `tests/vendor_neutral_core.rs::the_store_contains_no_source_mechanism_semantics`
-> `tests/vendor_neutral_core.rs::no_core_module_depends_on_acquisition`
+> `tests/integrations/vendor_neutral.rs::the_store_contains_no_source_mechanism_semantics`
+> `tests/integrations/vendor_neutral.rs::no_core_module_depends_on_acquisition`
 
 ### Package publication and package-native delivery are independent
 
@@ -41,15 +41,15 @@ both go through the same `IntegrationPort`.
 native delivery. Codex uses both. Antigravity uses only the second — its
 `republish_packages` is never overridden.
 
-> `tests/vendor_neutral_core.rs::a_derived_view_is_rebuilt_from_the_package_set_alone`
-> `tests/vendor_neutral_core.rs::republish_is_a_noop_for_an_integration_that_publishes_nothing`
+> `tests/integrations/vendor_neutral.rs::a_derived_view_is_rebuilt_from_the_package_set_alone`
+> `tests/integrations/vendor_neutral.rs::republish_is_a_noop_for_an_integration_that_publishes_nothing`
 
 ### A failed derived view never invalidates an installation
 
 One harness failing to publish leaves the package installed, the other
 harnesses untouched, and the failure observable through `doctor`.
 
-> `tests/vendor_neutral_core.rs::a_failed_publication_leaves_the_package_installed_and_says_so`
+> `tests/integrations/vendor_neutral.rs::a_failed_publication_leaves_the_package_installed_and_says_so`
 
 ### The Codex generated envelope is self-contained
 
@@ -139,13 +139,13 @@ exact coverage is semantic-aware: an envelope only claims a Skill when the
 policy is actually preserved (`provided = discovered ∩ safely
 representable`).
 
-> `tests/skill_invocation_conformance.rs::codex_routes_every_combination_honestly`
-> `tests/skill_invocation_conformance.rs::antigravity_routes_every_combination_honestly`
-> `tests/skill_invocation_conformance.rs::opencode_routes_every_combination_natively`
-> `tests/skill_invocation_conformance.rs::claude_routes_every_combination_at_capability_level`
-> `tests/skill_invocation_conformance.rs::codex_generated_package_never_claims_a_model_only_skill`
-> `tests/skill_invocation_conformance.rs::antigravity_generated_package_never_claims_a_user_only_skill`
-> `tests/skill_invocation_conformance.rs::claude_generated_package_covers_a_user_only_skill_and_materializes_the_marker`
+> `tests/integrations/harness/codex.rs::codex_routes_every_combination_honestly`
+> `tests/integrations/harness/antigravity.rs::antigravity_routes_every_combination_honestly`
+> `tests/integrations/harness/opencode.rs::opencode_routes_each_combination_by_what_the_vendor_carries`
+> `tests/integrations/harness/claude.rs::claude_routes_every_combination_at_capability_level`
+> `tests/integrations/harness/codex.rs::codex_generated_package_never_claims_a_model_only_skill`
+> `tests/integrations/harness/antigravity.rs::antigravity_generated_package_never_claims_a_user_only_skill`
+> `tests/integrations/harness/claude.rs::claude_generated_package_covers_a_user_only_skill_and_materializes_the_marker`
 > `crates/uze-integrations/src/claude/plugin.rs::claude_native_coverage_tests::explicit_user_only_skill_with_the_vendor_marker_is_covered`
 > `crates/uze-integrations/src/claude/plugin.rs::claude_native_coverage_tests::explicit_user_only_skill_without_the_vendor_marker_is_not_covered`
 > `crates/uze-integrations/src/claude/generate.rs::generated_native_tests::user_only_skill_is_materialized_with_the_claude_marker`
@@ -157,8 +157,8 @@ explicit (never silently defaulted to a model-visible or user-visible
 combination), every integration routes it Unsupported, and no receipt,
 symlink or generated file is ever created for it.
 
-> `tests/skill_invocation_conformance.rs::invalid_policy_never_creates_a_receipt_anywhere`
-> `crates/uze-core/src/skill.rs::invalid_combination_is_kept_explicit_never_defaulted`
+> `tests/integrations/policy.rs::invalid_policy_never_creates_a_receipt_anywhere`
+> `crates/uze-core/src/capability/skill.rs::invalid_combination_is_kept_explicit_never_defaulted`
 
 ### Existing Skills without `invoke:` behave exactly as before (ADR-030)
 
@@ -166,8 +166,8 @@ The canonical default is model+user; a SKILL.md with no `invoke:` block is
 discovered with no parsed policy (defaults apply), delivered byte-preserving
 where it always was, and never gains a policy sidecar it did not declare.
 
-> `tests/skill_invocation_conformance.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
-> `tests/skill_invocation_conformance.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
+> `tests/integrations/policy.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
+> `tests/integrations/policy.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
 > `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
 
 ### A shared-root entry always carries the superset of both encodings
@@ -186,7 +186,6 @@ or model-only policy.
 > `tests/projection/shared_roots.rs::user_only_skill_codex_and_opencode_preserves_codex_policy`
 > `tests/projection/shared_roots.rs::model_only_skill_shared_root_reuse_carries_both_encodings`
 > `tests/projection/shared_roots.rs::foreign_shared_entry_without_opencode_encoding_still_conflicts`
-> `tests/integrations/harness/codex.rs::real_codex_dogfood_user_only_skill_stays_hidden_in_opencode_owned_shared_entry`
 
 ### Invocation labels are stable and presentation-only (ADR-026)
 
@@ -200,11 +199,11 @@ bodies are untouched — and the vendor integration owns the physical
 encoding (Claude's native plugin namespace, Codex/OpenCode/Antigravity
 verbatim `flow:review`).
 
-> `tests/invocation_labels.rs::installing_another_plugin_never_renames_an_existing_one`
-> `tests/invocation_labels.rs::labels_never_touch_canonical_identity_store_or_receipts`
-> `tests/invocation_labels.rs::claude_declares_plain_and_namespaces_natively_without_double_prefix`
-> `tests/invocation_labels.rs::physical_representations_preserve_the_semantic_label`
-> `tests/exposure_naming.rs::two_packages_with_the_same_skill_name_coexist_deterministically`
+> `tests/projection/invocation.rs::installing_another_plugin_never_renames_an_existing_one`
+> `tests/projection/invocation.rs::labels_never_touch_canonical_identity_store_or_receipts`
+> `tests/projection/invocation.rs::claude_declares_plain_and_namespaces_natively_without_double_prefix`
+> `tests/projection/invocation.rs::physical_representations_preserve_the_semantic_label`
+> `tests/projection/naming.rs::two_packages_with_the_same_skill_name_coexist_deterministically`
 
 ---
 
@@ -226,24 +225,48 @@ working, and stays safely removable, after its source directory is deleted.
 Provenance reaches the Store as an opaque value it stores and compares through
 `Provenance::same_origin`. It never matches a variant or reads a field.
 
-> `tests/vendor_neutral_core.rs::the_store_contains_no_source_mechanism_semantics`
+> `tests/integrations/vendor_neutral.rs::the_store_contains_no_source_mechanism_semantics`
+
+### One unreadable registration never takes the registry with it
+
+`packages.json` is a ledger of independent registrations, so an entry this
+UZE cannot read — a key that is not a valid qualified id, or a value whose
+fields an older UZE spelled differently — is quarantined, never fatal. The
+readable entries stay listable, resolvable and removable; the quarantined one
+answers to nothing and the next save drops it. `doctor` reports it as a named
+state carrying its remedy, not as the serde error that produced it.
+
+> `crates/uze-core/src/package/store.rs::tests::an_entry_written_by_an_older_uze_is_quarantined_and_named`
+> `crates/uze-core/src/package/store.rs::tests::load_registry_quarantines_a_tampered_entry_without_losing_valid_ones`
+> `crates/uze-application/src/application/doctor.rs::tests::doctor_names_an_unreadable_registration_and_its_remedy`
+
+### An interrupted install never blocks the next one
+
+An install that dies between the copy and the registration leaves a plugin
+directory nothing in the registry names. Reaching the copy means nothing
+claims that id, so the debris is cleared and the second attempt succeeds —
+and an ingest that fails part-way removes what it wrote, because `remove`
+answers only to registered ids and could not have cleaned up after it.
+
+> `tests/packages/store.rs::an_install_interrupted_mid_copy_never_blocks_the_next_attempt`
+> `tests/packages/store.rs::a_failed_ingest_leaves_no_directory_behind`
 
 ### Remote mutable references resolve to immutable Git commits
 
 A branch, a tag and an unspecified reference all persist as a commit SHA. The
 default branch is read from the remote, never guessed from a hardcoded name.
 
-> `tests/git_acquisition.rs::a_branch_resolves_to_an_immutable_commit`
-> `tests/git_acquisition.rs::a_tag_resolves_to_an_immutable_commit`
-> `tests/git_acquisition.rs::an_unspecified_reference_resolves_the_repositorys_own_default_branch`
+> `tests/packages/acquisition.rs::a_branch_resolves_to_an_immutable_commit`
+> `tests/packages/acquisition.rs::a_tag_resolves_to_an_immutable_commit`
+> `tests/packages/acquisition.rs::an_unspecified_reference_resolves_the_repositorys_own_default_branch`
 
 ### Reinstall uses resolved provenance; update re-resolves requested provenance
 
 Reinstalling stays at the recorded commit even after the branch has moved.
 Updating asks the original request again and may land on a new commit.
 
-> `tests/git_acquisition.rs::reinstalling_a_resolved_commit_stays_at_that_commit`
-> `tests/git_acquisition.rs::updating_re_resolves_the_request_and_moves_with_the_branch`
+> `tests/packages/acquisition.rs::reinstalling_a_resolved_commit_stays_at_that_commit`
+> `tests/packages/acquisition.rs::updating_re_resolves_the_request_and_moves_with_the_branch`
 
 A local path has no immutable revision, and the model does not pretend
 otherwise: reinstall and update both re-read the directory as it is now.
@@ -258,29 +281,54 @@ written, so a rejected package leaves nothing behind.
 > escape, escape through a symlinked directory, and a local package held to
 > the identical rule.
 
+An absolute symlink target is refused whatever it names, the source's own
+content included: the Store copies a link's target verbatim, so only a
+relative link still points inside the package once copied.
+
+> `tests/packages/containment.rs::an_absolute_symlink_into_the_source_itself_is_rejected`
+
 ### Package discovery never follows directory symlinks
 
 Discovery uses `symlink_metadata` and never descends into a symlink, which
 makes the traversal acyclic by construction. Containment forbids leaving the
 root but does not forbid a cycle inside it.
 
-> `tests/package_containment.rs::a_mutual_symlink_cycle_does_not_hang_discovery`
+> `tests/packages/containment.rs::a_mutual_symlink_cycle_does_not_hang_discovery`
 > and the self-link and ancestor-link cases beside it.
 
 The documented cost: content reachable only through a symlinked directory is
 not discovered. The symlink is still preserved as package content.
 
-> `tests/package_containment.rs::content_reachable_only_through_a_symlinked_directory_is_not_discovered`
+> `tests/packages/containment.rs::content_reachable_only_through_a_symlinked_directory_is_not_discovered`
+
+Digesting walks by the same rule. `tree_sha256` runs over a freshly
+materialized remote checkout before any other guard has had a say, so a link
+to an ancestor would be an unbounded descent and a process abort rather than
+a digest.
+
+> `crates/uze-core/src/digest.rs::tests::a_directory_symlink_pointing_at_the_tree_itself_does_not_recurse`
+> and `tests/packages/containment.rs::a_symlinked_directory_pointing_at_its_own_ancestor_does_not_hang_discovery`
+
+A link is read, though, never merely skipped: it contributes its name and the
+path it points at, so a marketplace cannot add, remove or repoint an
+in-package symlink — which containment explicitly permits when relative —
+behind an unchanged `integrity`. Its target is framed by a content length no
+file can have, so a tree without symlinks digests to exactly the stream it
+always did.
+
+> `crates/uze-core/src/digest.rs::tests::adding_or_repointing_a_symlink_changes_the_digest`
+> `crates/uze-core/src/digest.rs::tests::a_symlink_does_not_digest_as_a_file_holding_its_target`
+> `crates/uze-core/src/digest.rs::tests::a_tree_without_symlinks_digests_to_its_recorded_value`
 
 ### Remote executable capabilities cross an explicit consent boundary
 
 A remote package declaring an MCP `command` requires explicit consent before
 anything is written or attached. A declarative package requires none.
 
-> `tests/git_acquisition.rs::a_remote_package_with_an_mcp_command_requires_trust`
-> `tests/git_acquisition.rs::a_remote_package_with_only_a_skill_requires_no_trust`
-> `tests/git_acquisition.rs::denied_trust_leaves_the_store_completely_untouched`
-> `tests/git_acquisition.rs::a_non_interactive_process_reports_trust_required_rather_than_assuming_consent`
+> `tests/packages/acquisition.rs::a_remote_package_with_an_mcp_command_requires_trust`
+> `tests/packages/acquisition.rs::a_remote_package_with_only_a_skill_requires_no_trust`
+> `tests/packages/acquisition.rs::denied_trust_leaves_the_store_completely_untouched`
+> `tests/packages/acquisition.rs::a_non_interactive_process_reports_trust_required_rather_than_assuming_consent`
 
 **This is a consent boundary, not a security sandbox, and not a provenance
 guarantee.** It is scoped to remote acquisition: `uze add ./local` is treated
@@ -290,12 +338,12 @@ deliberately changes the classification of that origin. UZE does not
 fingerprint downloads, mark them, track origins out of band, or persist trust
 decisions — and should not be described as if it did.
 
-> `tests/git_acquisition.rs::a_local_package_with_an_mcp_command_still_requires_no_trust`
+> `tests/packages/acquisition.rs::a_local_package_with_an_mcp_command_still_requires_no_trust`
 
 Consent is not inherited across an update. A revision introducing execution
 the installed one did not have asks again.
 
-> `tests/git_acquisition.rs::an_update_introducing_executable_capability_asks_again`
+> `tests/packages/acquisition.rs::an_update_introducing_executable_capability_asks_again`
 
 ### Acquisition never executes package code
 
@@ -303,7 +351,36 @@ Cloning does not run hooks, does not recurse submodules, and reads
 configuration from nothing but explicit flags. Capability inspection parses
 declarations; it invokes nothing.
 
-> `tests/git_acquisition.rs::submodules_are_not_recursed_into`
+> `tests/packages/acquisition.rs::submodules_are_not_recursed_into`
+
+### One machine mutation at a time, and never two
+
+The machine mutation guard is an `flock` on a permanent `state/mutation.lock`,
+the same primitive `project::task` uses for its document. Nothing is unlinked
+and no liveness is judged, so there is no window in which two acquirers both
+declare a holder dead and both take the lock — the failure that let two
+concurrent `uze install` runs rewrite the Store, the ledger and every harness
+config at once. A holder killed outright releases it, because the kernel
+closes its descriptors however it dies; the pid in the file names who is
+blocking and decides nothing.
+
+> `crates/uze-core/src/delivery/persistence.rs::tests::two_acquirers_racing_on_a_stale_lock_never_both_win`
+> `crates/uze-core/src/delivery/persistence.rs::tests::a_holder_killed_outright_releases_the_lock`
+> `crates/uze-core/src/delivery/persistence.rs::tests::a_lock_file_nobody_holds_is_not_a_lock`
+
+### A bounded report keeps the evidence, and says what it dropped
+
+A gate or `setup` step is capped per stream, and what is kept is the **tail**:
+every runner writes its progress noise first and what failed last, so a
+head-kept cap reported 64 KiB of "Compiling …" and none of the failure. What
+fell off the front is counted and announced, and a stream that could not be
+read at all says so rather than being reported as empty — a descendant
+holding the pipe open is swept once before the reader is given up on.
+
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_failing_gate_reports_the_failure_and_not_the_progress_noise`
+> `crates/uze-core/src/machine/subprocess.rs::tests::read_bounded_keeps_the_end_of_a_long_stream`
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_step_whose_pipe_a_survivor_holds_open_is_still_reported`
+> `crates/uze-core/src/machine/subprocess.rs::tests::a_stream_that_could_not_be_read_says_so`
 
 ### Cache is not required for correctness
 
@@ -327,6 +404,62 @@ conflict, and an unreadable ledger all block a destructive operation rather
 than authorizing one. Every M2 addition preserved this: a failed acquisition,
 a rejected package and a refused consent all mutate nothing.
 
+### A blocked mutation says so in the exit status
+
+`Blocked` means nothing was removed or updated, so `uze plugin remove` and
+`uze plugin update` render the report and then exit non-zero — in both text
+and JSON. A caller chaining `uze plugin remove x && uze plugin install y`
+must not run the second half after the first did nothing.
+
+> `tests/cli/machine.rs::a_blocked_removal_reports_and_fails`
+> `tests/cli/machine.rs::a_blocked_update_reports_and_fails`
+
+### An update that fails leaves the plugin installed
+
+The removal is what makes an update destructive, so everything that can
+refuse without needing the removed state refuses before it: re-resolving,
+materializing, the trust question, and preparing the detected harnesses.
+What genuinely cannot be asked first — the ingest, and the environment the
+new revision composes — runs with the previous revision's bytes kept aside,
+and a failure puts them back: bytes, registration and attachments, reported
+as blocked. A Git- or path-sourced plugin has nothing on the machine that
+would heal it otherwise.
+
+> `crates/uze-application/src/application/tests.rs::an_update_a_harness_refuses_removes_nothing`
+> `crates/uze-application/src/application/tests.rs::an_update_that_fails_after_the_removal_puts_the_revision_back`
+
+---
+
+## The command line's edges
+
+### The updater fetches from the release page and nowhere else
+
+`self_update` downloads a binary and renames it over the one in `PATH`, so
+its download root is a constant. `UZE_BASE_URL` is `install.sh`'s testing
+override and is honoured only by a debug build: were it a runtime input, an
+environment variable would choose which binary a person runs from then on,
+and the checksum could not tell, since `SHASUMS256.txt` comes from the same
+root.
+
+> `src/self_update.rs::tests::an_untrusted_base_url_is_ignored`
+
+### Ordinary shell usage is never a panic
+
+A closed pipe (`uze doctor | head -3`) ends the process at `SIGPIPE`, and an
+argument that is not UTF-8 is clap's error to report — neither is an exit
+101 with a panic message.
+
+> `tests/cli/grammar.rs::a_reader_that_leaves_ends_the_command_quietly`
+> `tests/cli/grammar.rs::a_non_utf8_argument_is_refused_rather_than_panicked_on`
+
+### No credential reaches the trace
+
+A marketplace or plugin source may carry userinfo (`https://user:token@…`),
+and the command span is appended to `uze.log` and exported over OTLP. The
+argument line is redacted before it is recorded.
+
+> `src/telemetry.rs::tests::a_credential_in_the_argument_line_never_reaches_the_trace`
+
 ---
 
 ## Prompt history (ADR-038 companion)
@@ -339,8 +472,8 @@ line invisibly — history recall, completion, an escape, a control chord —
 discards the reconstruction instead of persisting a prompt the user never
 typed. The history is a navigation aid, never a record of a session.
 
-> `src/ui/orchestrator.rs::prompt_buffer_tests::history_recall_discards_the_reconstruction`
-> `src/ui/orchestrator.rs::prompt_buffer_tests::a_control_or_alt_chord_discards_the_reconstruction`
+> `src/ui/orchestrator/tests.rs::prompt_buffer_tests::history_recall_discards_the_reconstruction`
+> `src/ui/orchestrator/tests.rs::prompt_buffer_tests::a_control_or_alt_chord_discards_the_reconstruction`
 
 ### Prompt text is owner-only, workspace-scoped, and deletable
 
@@ -372,13 +505,19 @@ ordinary repository `git status --untracked-files=all` outlasts several
 frames, which made that a stalled UI by construction rather than by
 accident.
 
-Two rules hold it: the render and input halves of the client may not name
-the extension host at all, and in the file they are driven from every
-mention of it is inside a `thread::spawn`.
+Three rules hold it: the render and input halves of the client may not
+name the extension host at all, nor build an application of their own
+through `tui_application` — the other way into the domain, by which
+finishing and discarding a preserved task ran `git worktree remove` and a
+recursive directory removal on the thread that draws — and in the file
+they are driven from every mention of the host is inside a
+`thread::spawn`.
 
 > `tests/architecture/layering.rs::architecture_rules_hold` ("drawing the workspace reaches nothing")
+> `tests/architecture/layering.rs::architecture_rules_hold` ("drawing the workspace reaches nothing, by any name")
 > `tests/architecture/layering.rs::the_workspace_client_reaches_for_git_only_from_a_thread`
-> `src/ui/orchestrator.rs::workspace_tests::scheduling_a_git_read_reserves_the_checkout_and_answers_nothing`
+> `src/ui/orchestrator/tests.rs::workspace_tests::scheduling_a_git_read_reserves_the_checkout_and_answers_nothing`
+> `src/ui/orchestrator/tests.rs::workspace_tests::discarding_a_preserved_task_is_asked_for_rather_than_done_on_the_keystroke`
 > `crates/uze-extensions/src/code/tests.rs::selecting_a_file_asks_for_its_diff_rather_than_reading_it`
 
 ### An answer that arrives late is dropped, never drawn
@@ -389,8 +528,22 @@ question the viewer has since moved past releases its key and is
 discarded; it is not wrong, it is no longer what is being asked. This is
 what makes an unbounded read safe to start from a keystroke.
 
-> `src/ui/orchestrator.rs::workspace_tests::a_git_answer_for_another_checkout_is_released_and_dropped`
-> `src/ui/orchestrator.rs::workspace_tests::a_commit_account_arrives_only_for_the_row_last_clicked`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_git_answer_for_another_checkout_is_released_and_dropped`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_commit_account_arrives_only_for_the_row_last_clicked`
+
+### Every background read answers, and the answer is what releases its key
+
+A reservation is taken before a read starts and released when its answer
+lands, so a read that ends in silence — the application would not open,
+the repository was removed under the agent, the work panicked — leaves
+that feature reserved for the rest of the session. Every answer therefore
+carries the key it was reserved under rather than only the data it found,
+every spawned read answers on every path, and the work is run so that a
+panic still produces the "nothing found" answer the absorber already
+draws.
+
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_delivery_that_answered_nothing_still_gives_the_task_back`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_terminal_runtime_that_went_away_is_said_rather_than_waited_on`
 
 ### An extension describes every surface it has, including a sidebar section
 
@@ -403,7 +556,7 @@ hits come back as `ExtensionHit` — one variant per surface, so
 "row 3 was clicked" cannot be confused between a file list and a list of
 commits.
 
-> `src/ui/orchestrator.rs::workspace_tests::the_timeline_speaks_only_the_extensions_vocabulary`
+> `src/ui/orchestrator/tests.rs::workspace_tests::the_timeline_speaks_only_the_extensions_vocabulary`
 > `crates/uze-extensions/src/code/tests.rs::the_timeline_section_names_meaning_rather_than_colour`
 
 ### Slot lifecycle is the application's, not the client's
@@ -417,6 +570,60 @@ caller getting the order wrong hands one agent's slot to another.
 
 > `tests/acceptance/engine.rs::one_reconciliation_pass_answers_a_repository_once_however_it_is_named`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_delivered_tasks_slot_stays_its_agents_while_a_pane_sits_in_it`
+
+### One task document, one writer at a time
+
+Evaluation, delivery, placement and occupancy reconciliation are four
+threads of the client, each reading the project's task document, changing
+it and writing it back. The write is atomic, which is not the same as the
+pair being one operation: the later writer used to erase the other's
+record, so a delivered task came back `Ready` and the next tick offered to
+push and open its request a second time, and a placed agent's row could
+vanish while its slot stayed taken. Every mutation now runs inside
+`task::locked`, which holds the document across the whole read-modify-write.
+
+That lock is the **outer** one: everything under it speaks to Git, and Git
+serializes itself under `uze_git`'s repository write lock. Nothing unbounded
+belongs inside it — a placement runs the project's `setup` after the lock is
+released, and a delivery runs the project's gate and its pushes between two
+takes of it.
+
+A mutation that could not be written is never reported as having happened:
+a delivery carries the reason in `DeliveryReport::warnings`, and a placement
+whose task could not be recorded gives the slot back and answers
+`Unisolated`.
+
+> `crates/uze-core/src/project/task.rs::tests::overlapping_mutations_do_not_erase_each_other`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_evaluation_that_overlaps_a_delivery_does_not_erase_it`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_delivery_that_could_not_be_recorded_says_so`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_placement_that_could_not_be_recorded_gives_the_slot_back`
+
+### A delivery holds the document to claim its task and to record it, never while it works
+
+A delivery runs the project's gate — thirty minutes, by its own bound —
+and then a fetch, a push or a merge, none of which the document knows
+anything about. Held across all of it, one delivery froze every other
+mutation of every other task in the project for the full two-minute
+timeout, and `flock` names no holder, so the failure could not even say
+who. So the document is taken to mark the task `Integrating` and released,
+and taken again to write the outcome onto the record only while it is
+still the one that was claimed. `Integrating` is what the other passes
+already read as "a delivery owns this": the evaluation skips it and so
+does the release of abandoned tasks, so a pass that overlaps a delivery
+neither reports the task as ready nor writes back the state it read before
+the delivery began. The same rule covers the evaluation's one question
+that leaves the machine — the `git ls-remote` behind an open request is
+asked with the document unlocked and adopted under it, onto the record it
+was asked about.
+
+A delivery that could not claim its task answers with a report naming the
+reason, never with nothing: an empty answer is what the client renders as
+"nothing ready", which is the one thing a press on a visible, ready task
+does not mean.
+
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_gate_that_runs_long_does_not_hold_the_tasks_document`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_delivery_that_could_not_claim_its_task_says_why`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_task_a_delivery_claimed_and_never_answered_for_is_left_alone`
 
 ---
 
@@ -436,21 +643,21 @@ no opinion on how the directory reached local disk.
 
 None of them import `acquisition::marketplace` or its types.
 
-> `tests/exposure_naming.rs::store_engine_router_and_integrations_stay_marketplace_neutral`
+> `tests/projection/naming.rs::store_engine_router_and_integrations_stay_marketplace_neutral`
 
 ### Adding a plugin to the marketplace needs no Rust change
 
 Resolution is generic over plugin content: files + one `marketplace.json`
 entry, nothing more.
 
-> `crates/uze-core/src/acquisition/marketplace.rs::two_distinct_plugins_resolve_independently_with_no_special_casing`
+> `crates/uze-core/src/package/acquisition/marketplace.rs::two_distinct_plugins_resolve_independently_with_no_special_casing`
 
 ### Default plugins are policy, not marketplace fact
 
 `bootstrap::DEFAULT_PLUGIN_IDS` names which marketplace plugins install on a
 fresh `UZE_HOME`; the marketplace itself may offer more.
 
-> `crates/uze-application/src/application.rs::bootstrap_installs_exactly_the_default_policy_and_is_idempotent`
+> `crates/uze-application/src/application/tests.rs::bootstrap_installs_exactly_the_default_policy_and_is_idempotent`
 
 ### Bootstrap installs; it never silently updates
 
@@ -459,8 +666,8 @@ read-only commands — only installs a default plugin that is absent. An
 already-installed plugin's content is never rewritten as a side effect of a
 diagnostic command.
 
-> `crates/uze-application/src/application.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
-> `crates/uze-application/src/application.rs::read_only_bootstrap_leaves_store_state_byte_identical_on_repeat`
+> `crates/uze-application/src/application/tests.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
+> `crates/uze-application/src/application/tests.rs::read_only_bootstrap_leaves_store_state_byte_identical_on_repeat`
 
 ### A newer snapshot is reported, never silently applied
 
@@ -469,7 +676,7 @@ comparison, discarded before returning); acting on it is a separate,
 explicit `update_plugin` call. Every CLI dispatch — `doctor`/`list`
 included — stays on the reporting side of that line.
 
-> `crates/uze-application/src/application.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
+> `crates/uze-application/src/application/tests.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
 
 ### Automatic update is local-only, and never grants trust
 
@@ -480,8 +687,8 @@ re-resolution of a Git or path source) and runs under `NoTrustAuthority`,
 so a revision introducing new executable capability is reported and left
 for an explicit confirmation rather than applied.
 
-> `crates/uze-application/src/application.rs::auto_update_applies_a_pending_official_snapshot_update`
-> `crates/uze-application/src/application.rs::auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
+> `crates/uze-application/src/application/tests.rs::auto_update_applies_a_pending_official_snapshot_update`
+> `crates/uze-application/src/application/tests.rs::auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
 
 ### A default plugin crossing the trust boundary is never installed silently
 
@@ -489,7 +696,7 @@ for an explicit confirmation rather than applied.
 non-interactive bootstrap authority (`NoTrustAuthority`) refuses rather than
 granting, even for the official marketplace.
 
-> `crates/uze-application/src/application.rs::a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently`
+> `crates/uze-application/src/application/tests.rs::a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently`
 
 ---
 
@@ -509,15 +716,20 @@ a degraded or unsupported route states the exact loss.
 The harness invokes a wrapper vendored in the delivered artifact, never the
 `uze` binary, and nothing in that artifact names the packager. The wrapper
 is a per-harness constant, owned alongside the entry that names it: written
-on attach, drift-checked on inspect, removed with the last entry. Where no
-wrapper template covers the platform the packager runtime carries the hook
-with the same contract, and the route is reported as adapted with its
-reason rather than claimed native.
+on attach, drift-checked on inspect, removed with the last entry — and only
+once nothing is left that runs it, which an unreadable ledger and a
+hand-edited entry both count as. Where no
+wrapper template covers the platform, nothing is attached at all (see
+below).
 
 > `tests/integrations/hooks.rs::the_generated_wrapper_is_owned_alongside_the_entry_it_serves`
 > `tests/integrations/hooks.rs::reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones`
-> `crates/uze-integrations/src/hooks.rs::a_platform_without_a_wrapper_template_falls_back_to_the_packager_runtime`
 > `crates/uze-integrations/src/hooks.rs::the_wrapper_is_one_byte_identical_file_per_harness`
+> `crates/uze-integrations/src/hooks.rs::a_wrapper_that_lost_its_executable_bit_is_drift_and_is_repaired`
+> `crates/uze-integrations/src/hooks.rs::the_last_detached_hook_entry_takes_the_shared_wrapper_with_it`
+> `crates/uze-integrations/src/hooks.rs::an_unreadable_ledger_keeps_the_shared_wrapper`
+> `crates/uze-integrations/src/hooks.rs::an_entry_that_drifted_still_counts_as_using_the_wrapper`
+> `tests/integrations/hooks.rs::an_unreadable_ledger_leaves_the_shared_wrapper_where_it_is`
 
 ### One vocabulary drives matchers, wrappers and handlers
 
@@ -536,11 +748,15 @@ and a `native:` tool yields raw input only.
 Merging adds only the exact rendered entry; inspection compares that exact
 content; removal refuses drift and preserves foreign hooks, plugins,
 entries, and ordering — and a UZE-created file holding nothing but UZE's
-own entry is cleaned up when the last entry goes.
+own entry is cleaned up when the last entry goes. A merge into a JSON
+config the *user* owns re-emits the document with their own key order
+intact, so one attached hook does not reshuffle a hand-organised file.
 
 > `tests/integrations/hooks.rs::claude_merges_into_settings_json_preserving_foreign_content`
 > `tests/integrations/hooks.rs::foreign_codex_hooks_survive_attach_and_detach`
 > `crates/uze-integrations/src/hooks.rs::drift_blocks_removal_and_an_empty_file_is_removed`
+> `crates/uze-integrations/src/hooks.rs::a_merge_keeps_the_users_own_key_order`
+> `crates/uze-integrations/src/shared/json_config.rs::a_merge_keeps_the_users_own_key_order`
 
 ### A package's hooks attach once per harness, idempotently
 
@@ -552,25 +768,72 @@ second `plugin` config entry) and regenerates from the receipt set.
 > `tests/integrations/hooks.rs::an_update_replaces_the_previous_version_of_the_samed_group`
 > `tests/integrations/hooks.rs::opencode_bridge_is_package_scoped_and_regenerates_across_groups`
 
-### Neither route ever silently weakens a safety hook
+### The generated wrapper never silently weakens a safety hook
 
 A handler answers with its exit code: `0` allows, `3` denies with the reason
 on stderr. A failure to start, a timeout, and any other exit are fail-open
 for observational hooks and fail-closed (a deny) for a declared
 deny/ask/transform effect; the first deny stops later handlers, whatever
 order the harness itself would have used. The wrapper's own dependency
-follows the same rule. A deny is translated into the harness's own blocking
-contract (its decision document plus exit 2 on the command-hook harnesses)
-— internal exit codes never leak outward, because any other non-zero exit is
-a non-blocking error there. The generated wrapper and the packager runtime
-answer identically for every fixture payload.
+(`jq`) follows the same rule. A deny is translated into the harness's own
+blocking contract (its decision document plus exit 2 on the command-hook
+harnesses) — internal exit codes never leak outward, because any other
+non-zero exit is a non-blocking error there. This holds for every command
+shape the ABI allows: a `sh <script> --flag` invocation, a relative path,
+because a handler's `command` is a shell command line run from the package
+root. Each handler is bounded by the timeout its own author declared, not by
+a fixed default and not by the harness's backstop: past it the handler and
+everything it started are stopped — `TERM`, then `KILL` a second later, the
+second pass reaching what ignored the first — and the group's effect decides.
 
-> `crates/uze-core/src/hook.rs::observation_fails_open_but_a_declared_deny_effect_fails_closed`
-> `crates/uze-core/src/hook.rs::handlers_run_in_order_and_the_first_deny_stops_later_ones`
-> `crates/uze-core/src/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
-> `crates/uze-integrations/src/hooks.rs::a_missing_wrapper_dependency_follows_the_groups_effect`
-> `crates/uze-integrations/src/hooks.rs::the_wrapper_and_the_reference_runtime_answer_alike`
-> `crates/uze-integrations/src/hooks.rs::adapters_render_native_decisions_and_block_exit_codes`
+The same rule covers everything that decides *before* a handler runs. A
+harness payload the wrapper cannot parse and a package root that is gone are
+both failures resolved by the group's effect, never a quiet allowance: an
+unreadable payload would leave every `HOOK_*` variable empty, so a guard
+written the documented way would see nothing and allow, and a missing root
+would run the author's relative commands from whatever directory the harness
+happened to be in — the user's own checkout. The reason a harness is handed
+is bounded, so a handler that writes megabytes to stderr is still a decision
+and not a document the harness has to parse.
+
+What the wrapper answers for every recorded fixture — the native decision
+document, the exit status and the reason — is a golden per harness, taken
+from the in-binary runtime that used to be the second implementation of this
+contract, before it was removed (ADR-040, amended).
+
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::the_wrapper_answers_every_fixture_as_recorded`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_that_cannot_run_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_missing_wrapper_dependency_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_denial_is_relayed_in_each_harnesss_own_dialect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_is_stopped_at_the_deadline_its_author_declared`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_handler_that_ignores_term_does_not_outlive_its_deadline`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_payload_that_does_not_parse_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_package_root_that_is_gone_never_runs_the_checkouts_own_script`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::a_transform_group_fails_closed_like_a_deny`
+> `crates/uze-integrations/src/hooks.rs::wrapper_tests::the_reason_a_harness_is_handed_is_bounded`
+
+### The harness's own hook timeout is a backstop, never the first bound
+
+A native entry's `timeout` is sized to outlast everything the wrapper can
+spend on that group — each handler's declared deadline, the second between
+`TERM` and `KILL`, and one to render the answer. A group that could outlast
+it is refused at the manifest, naming the sum, rather than clamped: a hook
+the harness kills is read as non-blocking, so a clamped backstop would turn
+a `deny` group into an allowance.
+
+> `crates/uze-core/src/capability/hook.rs::rejects_a_group_whose_handlers_can_outlast_the_harnesss_own_backstop`
+> `crates/uze-integrations/src/hooks.rs::the_native_timeout_outlasts_everything_the_wrapper_can_spend`
+
+### A hook UZE cannot deliver is never half-delivered
+
+There is one implementation of the hook contract, and it is the generated
+wrapper. A platform or harness the template does not cover gets no native
+entry at all and is reported Unsupported with that reason — never an entry
+pointing at a second implementation, and never a Native verdict for a
+delivery that did not happen.
+
+> `crates/uze-integrations/src/hooks.rs::a_platform_without_a_wrapper_template_delivers_no_hook`
+> `crates/uze-integrations/src/hooks.rs::a_hook_that_cannot_be_delivered_is_reported_unsupported`
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
 
@@ -582,11 +845,11 @@ assigned to an agent, so the operator's uncommitted work is exactly what they
 left after any number of agents have run. Where isolation is impossible the
 agent starts in place and its tab says so.
 
-> `crates/uze-application/src/application/services.rs::placement_tests::the_first_agent_is_isolated`
-> `crates/uze-application/src/application/services.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
-> `crates/uze-application/src/application/services.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
-> `crates/uze-application/src/application/services.rs::placement_tests::a_repository_without_a_commit_launches_in_place_with_the_reason`
-> `src/ui/orchestrator/tests.rs::workspace_tests::the_marker_leaves_the_status_column_alone`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_first_agent_is_isolated`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_launches_in_place_with_the_reason`
+> `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_carries_no_marker`
 
 ### A checkout is a slot; a task is what comes and goes
 
@@ -598,7 +861,7 @@ ignored artifacts survive. A slot holding work is never reused.
 > `crates/uze-core/src/project/checkout.rs::a_free_slot_is_reused_and_ignored_artifacts_survive`
 > `crates/uze-core/src/project/checkout.rs::a_previous_tasks_edits_never_reach_the_next`
 > `crates/uze-core/src/project/checkout.rs::a_new_directory_appears_only_when_none_is_free_and_the_cap_holds`
-> `crates/uze-application/src/application/services.rs::placement_tests::a_delivered_tasks_slot_is_reused_by_the_next_agent`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_delivered_tasks_slot_is_reused_by_the_next_agent`
 
 ### Work in the target is recognized by its patch, not by its commits
 
@@ -666,10 +929,17 @@ target lacks outlives its directory. The two automatic removals are a branch
 fully reachable from the target and the directory of a clean slot idle beyond
 an age, whose branch stays.
 
+Both removals are authorized by one predicate, and it fails closed: a
+question Git could not answer — most often a `worktrees.target` this clone
+does not have — is answered "not integrated", never "nothing ahead". Read
+the other way, a declared target the repository lacks made every branch in
+it collectable.
+
 > `crates/uze-core/src/project/checkout.rs::a_checkout_holding_work_is_parked_with_every_file_preserved`
 > `crates/uze-core/src/project/checkout.rs::an_unintegrated_branch_outlives_its_directory`
 > `crates/uze-core/src/project/checkout.rs::a_parked_slot_is_never_removed_for_being_idle`
 > `crates/uze-core/src/project/checkout.rs::an_integrated_branch_is_pruned_and_an_unintegrated_one_is_not`
+> `crates/uze-core/src/project/checkout.rs::a_target_this_clone_does_not_have_collects_nothing_and_frees_no_slot`
 
 ### Reconciliation adopts before it prunes
 
@@ -722,7 +992,7 @@ that.
 
 > `crates/uze-core/src/project/landing.rs::readiness_is_read_from_the_checkout`
 > `crates/uze-core/src/project/landing.rs::a_task_without_commits_is_not_delivered`
-> `crates/uze-application/src/application/services.rs::task_service_tests::evaluation_reads_the_checkout_and_merge_delivers`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::evaluation_reads_the_checkout_and_merge_delivers`
 
 ### The target is written only in deliver, and only by UZE
 
@@ -733,12 +1003,19 @@ returns the task to the agent that owns it, with the rebase paused in its
 checkout. `handoff` never touches the target; `pr` publishes against the
 remote's tip and never pulls the operator's local branch.
 
+What moves is the declared target, not whatever the primary checkout has
+checked out: `git merge` advances `HEAD`, so the branch is asked for first
+and the ref moved directly when the operator is standing elsewhere, and the
+target's new tip is read back before the task is recorded `Integrated`.
+
 > `crates/uze-core/src/project/landing.rs::handoff_never_touches_the_target`
 > `crates/uze-core/src/project/landing.rs::merge_advances_the_target_linearly_after_the_gate`
+> `crates/uze-core/src/project/landing.rs::merge_moves_the_target_while_the_primary_stands_on_a_detached_head`
+> `crates/uze-core/src/project/landing.rs::merge_never_moves_the_branch_the_primary_happens_to_be_on`
 > `crates/uze-core/src/project/landing.rs::the_gate_runs_after_the_rebase_not_before`
 > `crates/uze-core/src/project/landing.rs::a_gate_failure_leaves_the_target_untouched_and_returns_to_the_owner`
 > `crates/uze-core/src/project/landing.rs::a_conflict_leaves_the_rebase_paused_and_the_target_untouched`
-> `crates/uze-core/src/project/landing.rs::pr_pushes_under_the_readable_name_and_opens_the_request`
+> `crates/uze-core/src/project/landing.rs::pr_publishes_and_leaves_the_request_to_the_agent`
 
 ### A delivery never collides with the operator's own edits
 
@@ -757,7 +1034,7 @@ task's commits directly.
 
 > `crates/uze-core/src/project/landing.rs::the_second_task_sees_the_first`
 > `crates/uze-core/src/project/landing.rs::a_live_task_follows_the_target_when_clean_and_is_left_alone_when_dirty`
-> `crates/uze-application/src/application/services.rs::task_service_tests::evaluation_lets_a_clean_task_follow_the_target`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::evaluation_lets_a_clean_task_follow_the_target`
 
 ### A linked file is ignored by the repository
 
@@ -766,8 +1043,8 @@ be ignored by it; a violation is a malformed lock at read time, not a
 surprise at launch. Linked or not, a failed `setup` warns and never blocks a
 launch.
 
-> `crates/uze-core/src/project/project_lock.rs::a_link_escaping_the_repository_is_rejected_at_read_time`
-> `crates/uze-core/src/project/project_lock.rs::a_link_to_a_tracked_file_is_rejected_and_an_ignored_one_loads`
+> `crates/uze-core/src/project/manifest.rs::a_link_escaping_the_repository_is_rejected`
+> `crates/uze-core/src/project/manifest.rs::a_link_to_a_tracked_file_is_rejected_and_an_ignored_one_loads`
 > `crates/uze-core/src/project/checkout.rs::a_failing_setup_warns_with_its_last_line_and_a_passing_one_is_silent`
 
 ### The projection never triggers a harness's own isolation
@@ -801,19 +1078,18 @@ slots whose agent is long gone — inside a tab that owns exactly one of them.
 
 > `crates/uze-extensions/src/code/changes.rs::repository_tests::discovers_main_and_configured_linked_worktrees`
 
-### A replaced lock field is rejected, never silently dropped
+### An unknown lock field is rejected, never silently dropped
 
-The top level of `ProjectLock` stays open, so a lock written by a newer UZE
-still loads on an older one; the superseded worktree-directory key is
-therefore refused by name in the parser rather than by serde. `WorktreePolicy`
-is the opposite: a closed vocabulary that denies unknown fields, because
-everything a project may declare about isolation is already named there. Both
-halves say the same thing — a declared policy can never become no policy in
-silence.
+A key `ProjectLock` does not understand is refused at every level.
+Tolerating one for forward compatibility buys nothing here: the
+`version` field already says whether this UZE can read the file, and a lock is
+regenerated rather than preserved. `WorktreePolicy` denies unknown fields for
+the opposite reason — everything a project may declare about isolation is
+already named there. Both halves say the same thing: a declared policy can
+never become no policy in silence.
 
-> `crates/uze-core/src/project/project_lock.rs::the_replaced_directory_key_is_rejected_rather_than_silently_dropped`
-> `crates/uze-core/src/project/project_lock.rs::an_unknown_key_at_the_top_level_is_tolerated`
-> `crates/uze-core/src/project/project_lock.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
+> `crates/uze-core/src/project/project_lock.rs::a_key_this_uze_does_not_understand_is_refused`
+> `crates/uze-core/src/project/manifest.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
 
 ---
 
@@ -868,6 +1144,93 @@ a call site.
 > `crates/uze-terminal/src/process_probe.rs::tests::a_key_matches_only_itself`
 > `crates/uze-terminal/src/runtime.rs::foreground_status_prefers_the_shim_identity_over_a_version_named_comm`
 
+### Nothing a peer sends is acted on before it is bounded
+
+A frame's length prefix is refused before it is allocated, and the same
+bound holds on the way out, so the two sides cannot disagree about what is
+sendable; the bound is derived from the largest thing the protocol
+legitimately carries — a full repaint of the largest pane it allows. Pane
+dimensions are bounded at the edge that receives them and again where a
+pane is created, because `Term::resize` allocates a cell per position and
+clamps nothing of its own. Nothing the server sends may be larger than that
+one pane, so a whole-workspace repaint goes out one frame per pane rather
+than one frame carrying them all. The *first* frame from a peer nothing has
+vouched for is held to a smaller bound still — what a handshake actually
+says — and to one deadline over the whole handshake rather than one per
+read, which `SO_RCVTIMEO` alone cannot express.
+
+> `crates/uze-terminal/src/runtime.rs::a_length_prefix_past_the_frame_limit_is_refused_before_it_is_allocated`
+> `crates/uze-terminal/src/runtime.rs::a_frame_past_the_limit_is_never_written_either`
+> `crates/uze-terminal/src/runtime.rs::a_full_repaint_of_the_largest_pane_fits_in_one_frame`
+> `crates/uze-terminal/src/runtime.rs::every_pane_reaches_a_client_when_one_frame_could_not_have_carried_them_all`
+> `crates/uze-terminal/src/runtime.rs::a_first_frame_is_bounded_by_what_a_handshake_says_not_by_a_repaint`
+> `crates/uze-terminal/src/runtime.rs::a_dribbling_peer_runs_out_of_handshake_rather_than_restarting_it`
+> `crates/uze-terminal/src/runtime.rs::a_resize_to_the_largest_number_on_the_wire_leaves_the_server_answering`
+
+### A client is told the runtime went away, never left looking at it
+
+A frame that cannot be written ends the connection — both halves — rather
+than only the thread that tried to write it, so the peer reads EOF and runs
+its disconnected path instead of sitting on chrome that still looks live
+while events it will never see pile up behind it. And `stop` is heard as a
+first frame, by a server no client has ever attached to: since the
+workspace claim makes a survivor refuse every replacement, that request is
+the only way back in short of a manual `kill`.
+
+> `crates/uze-terminal/src/runtime.rs::a_client_an_event_cannot_reach_is_disconnected_rather_than_frozen`
+> `crates/uze-terminal/src/runtime.rs::stop_is_heard_as_a_first_frame_by_a_server_nobody_attached_to`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_terminal_runtime_that_went_away_is_said_rather_than_waited_on`
+
+### A pid file is a claim; the process table is the fact
+
+Nothing is signalled, and no endpoint is trusted, on a pid file's word
+alone: the file outlives the process it names, and pids are recycled. Two
+independent witnesses have to name the same process before it is signalled
+— the pid the kernel stamps on the socket's own connection (`SO_PEERCRED`),
+which nothing can forge, and the pid file — and the kernel has to say that
+process runs `uze`. Where nothing can corroborate that, nothing is
+signalled at all; clearing the endpoint files is the whole recovery there.
+A file that does not name exactly one process names none: `libc::pid_t` is
+signed, and `kill(-1, …)` is every process the user owns. A process without
+an executable image — a crashed server nobody reaped — is not alive however
+addressable it remains. The directory the endpoint lives in is proved to be
+this user's own, unreachable by anyone else, and not a symlink, before a
+socket carrying every pane's contents is put in it.
+
+> `crates/uze-terminal/src/runtime.rs::replace_incompatible_server_leaves_a_process_that_is_not_a_server_running`
+> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_disagrees_with_the_peer_gets_nobody_signalled`
+> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_does_not_name_one_process_names_none`
+> `crates/uze-terminal/src/runtime.rs::nothing_is_signalled_where_nothing_can_corroborate_it`
+> `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_does_not_count_as_alive`
+> `crates/uze-terminal/src/runtime.rs::a_runtime_directory_that_is_not_ours_to_own_is_stepped_over`
+
+### One workspace, one server
+
+A server holds an advisory claim on the persisted workspace for as long as
+it exists, taken beside the workspace under `$UZE_HOME` rather than in the
+runtime directory a `/tmp` cleaner can take away. A second server refuses to
+restore a workspace another live one holds, so an endpoint that vanishes
+under a running server can never turn one set of agents into two — and the
+server that holds it puts itself back at the endpoint instead, under the
+same flag the shutdown takes, so the two orderings are the only two there
+are. Only a lock another process actually holds reads as contention: a
+filesystem that cannot lock at all surfaces as the I/O failure it is,
+rather than as a server to go and stop that does not exist.
+
+> `crates/uze-terminal/src/runtime.rs::a_second_server_refuses_to_restore_a_workspace_another_one_holds`
+> `crates/uze-terminal/src/runtime.rs::a_workspace_claim_is_exclusive_and_released_with_its_holder`
+> `crates/uze-terminal/src/runtime.rs::only_a_held_lock_reads_as_another_server`
+
+### A pane's identity is its own
+
+A pane's environment carries only what that pane's launch put there, and a
+shim identity stamp is read only from the process it was stamped for.
+Without both, every plain shell under a `uze` started inside a shimmed agent
+reported as that agent, persisted as one, and was relaunched as one.
+
+> `crates/uze-terminal/src/runtime.rs::a_pane_does_not_inherit_the_servers_shim_identity`
+> `crates/uze-terminal/src/runtime.rs::foreground_status_ignores_a_shim_identity_stamped_for_another_process`
+
 ---
 
 ## Agent session continuity (`add-agent-session-continuity`)
@@ -911,7 +1274,7 @@ clears, forks or switches the conversation. What is recorded is the last one
 observed for the task, so what resumes is where the work was left.
 
 > `crates/uze-core/src/delivery/continuity.rs::a_conversation_the_agent_moved_to_replaces_the_one_it_started_in`
-> `crates/uze-core/src/delivery/continuity.rs::an_answer_to_a_replaced_launch_is_dropped`
+> `crates/uze-core/src/project/conversation.rs::an_answer_to_a_replaced_launch_is_dropped`
 
 ### Continuity is declared per harness, and the matrix is derived from it
 
@@ -1356,3 +1719,21 @@ for what can be done now and for nothing else.
 > `uze-application::application::offers::tests::an_action_that_cannot_run_says_why_rather_than_doing_nothing`
 > `src/ui/tests.rs::every_drawer_draws_what_its_row_can_do_as_buttons`
 > `src/ui/tests.rs::the_drawer_offers_what_can_be_done_as_buttons`
+
+---
+
+## This page
+
+### Every citation on this page names a test that exists
+
+Each entry above is tied to the test that proves it, and a tie nothing
+checks is one that quietly comes undone: a refactor moves a file, the
+property still reads as guarded, and nothing guards it. Every
+`` `<path>.rs::<name>` `` here is resolved against the tree, so a moved or
+deleted test surfaces on the change that moved it — the same discipline
+`journey validate` enforces for a journey's `proves:` one tier up.
+
+Structural only, deliberately. It cannot tell you a property drifted away
+from the test that still bears its name, and nothing can.
+
+> `tests/architecture/invariants_citations.rs::every_invariant_cites_a_test_that_exists`

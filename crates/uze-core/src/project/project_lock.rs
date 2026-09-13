@@ -258,24 +258,6 @@ pub fn load_lock(root: &Path) -> Result<Option<ProjectLock>> {
     parse_lock_str(&text, &path).map(Some)
 }
 
-/// Keys a lock once carried and no longer may. `worktrees_dir` was the
-/// bare-directory spelling of the isolation policy; `worktrees` was the
-/// policy itself, which now lives in `agents.yaml` because every field of
-/// it is a decision rather than a resolution. Both are rejected loudly:
-/// `ProjectLock` does not deny unknown fields, so dropping them silently
-/// would turn a declared policy into no policy at all with nothing said.
-const REPLACED_KEYS: [(&str, &str); 2] = [
-    (
-        "worktrees_dir",
-        "the checkout layout is fixed infrastructure rather than something a project declares",
-    ),
-    (
-        "worktrees",
-        "the isolation policy is a declaration, so it belongs in agents.yaml; agents.lock records \
-         only what resolution produced",
-    ),
-];
-
 fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
     // A key written twice is a mistake, not a precedence question — the
     // same rule the manifest holds. YAML's default is to keep the last,
@@ -287,10 +269,9 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
             path: path.to_path_buf(),
             reason: e.to_string(),
         })?;
-    // Asked before the schema sees the document, and before the keys that
-    // moved out are looked for: a lock written by another UZE must be
-    // reported as exactly that, not as whichever of its fields this
-    // version happens to notice first.
+    // Asked before the schema sees the document: a lock written by another
+    // UZE must be reported as exactly that, not as whichever of its fields
+    // this version happens to notice first.
     let version = raw
         .as_mapping()
         .and_then(|mapping| mapping.get("version"))
@@ -313,21 +294,6 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
             });
         }
     }
-    for (key, why) in REPLACED_KEYS {
-        if raw
-            .as_mapping()
-            .is_some_and(|mapping| mapping.contains_key(key))
-        {
-            return Err(UzeError::MalformedLock {
-                path: path.to_path_buf(),
-                reason: format!(
-                    "`{key}` no longer belongs in agents.lock: {why}. Move it to agents.yaml and \
-                     let UZE regenerate the lock."
-                ),
-            });
-        }
-    }
-
     serde_yaml::from_value(raw).map_err(|e| UzeError::MalformedLock {
         path: path.to_path_buf(),
         reason: e.to_string(),
@@ -616,35 +582,6 @@ plugins:
         let yaml = "version: 1\nmarketplaces: [";
         let err = parse_lock_str(yaml, &PathBuf::from("agents.lock")).unwrap_err();
         assert!(matches!(err, UzeError::MalformedLock { .. }));
-    }
-
-    #[test]
-    fn a_key_the_lock_no_longer_carries_is_rejected_rather_than_silently_dropped() {
-        for (key, spelled) in [
-            (
-                "worktrees_dir",
-                "version: 1
-worktrees_dir: ./.worktrees
-",
-            ),
-            (
-                "worktrees",
-                "version: 1
-worktrees:
-  completion: pr
-",
-            ),
-        ] {
-            let err = parse_lock_str(spelled, &PathBuf::from("agents.lock")).unwrap_err();
-            let UzeError::MalformedLock { reason, .. } = err else {
-                panic!("a retired key must be reported as a malformed lock");
-            };
-            assert!(reason.contains(key), "{reason}");
-            assert!(
-                reason.contains("agents.yaml"),
-                "the operator must be told where the declaration lives now: {reason}"
-            );
-        }
     }
 
     /// A key nothing here understands is refused, at every level. The

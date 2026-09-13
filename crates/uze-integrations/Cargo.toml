@@ -13,7 +13,13 @@ publish = false
 # subscribes (see `src/telemetry.rs`).
 tracing = "0.1"
 uze-core = { path = "../uze-core" }
-serde_json = "1"
+# `preserve_order` backs `Value`'s maps with an IndexMap instead of a
+# BTreeMap. Every JSON config UZE merges into is a file the *user* owns and
+# organised; without it a read-modify-write re-emits their whole document
+# alphabetically. Declared on every crate of the workspace so a single-crate
+# build behaves like the whole one. It costs no new supply chain: indexmap
+# is already compiled in through noyalib, rmcp and syntect.
+serde_json = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.25.13"
 
 [dev-dependencies]

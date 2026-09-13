@@ -52,15 +52,15 @@ carrying what was run and how it ended.
   code
 
 ### Requirement: A trace continues into what the harness runs
-When a harness launched through UZE's runtime shim runs `uze` — a hook UZE
-dispatches, or a command an agent types — that invocation's root span
-SHALL be a child of the shim's root span, carried across the harness
-process through `TRACEPARENT`.
+When a harness launched through UZE's runtime shim runs `uze` — a command
+an agent inside it types — that invocation's root span SHALL be a child of
+the shim's root span, carried across the harness process through
+`TRACEPARENT`.
 
-#### Scenario: A hook joins the launch that caused it
+#### Scenario: A command joins the launch that caused it
 - **WHEN** telemetry is enabled and a harness launched by the shim runs
-  `uze hook-exec`
-- **THEN** the hook dispatch's root span has the shim's span as its parent
+  `uze`
+- **THEN** that invocation's root span has the shim's span as its parent
 
 #### Scenario: Without telemetry nothing is carried
 - **WHEN** the binary was built without the `telemetry` feature

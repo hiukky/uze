@@ -1,9 +1,18 @@
 # Dependency policy, enforced by `cargo deny` (see `make deny`).
 #
-# The graph is resolved with the features the shipped binary is actually
-# built with — not `--all-features`. An optional backend nobody enables is
-# not something this project distributes, and auditing it would mean
-# answering for licences that never reach a user.
+# Run twice, against two different questions.
+#
+# The default run resolves the features the *shipped* binary is built with.
+# That is the graph a user receives, and it is the one a licence question is
+# really about: an optional backend nobody enables is not something this
+# project distributes.
+#
+# `--all-features` then covers the rest, because "not distributed" is not
+# the same as "not compiled". `telemetry` is what the documented local
+# install (`make install`) builds, and `dev-servers` carries the MCP
+# conformance fixture — sixty-odd crates between them, on developers'
+# machines and in the Lab image. Nothing about the policy differs between
+# the two runs; only the answer to "which crates does it apply to".
 
 [licenses]
 # Permissive only. A copyleft crate in the tree is the single most common
