@@ -2721,7 +2721,10 @@ mod tests {
         std::fs::write(&socket, b"placeholder").unwrap();
 
         let server_binary = scratch.join("uze");
-        std::fs::copy("/bin/sleep", &server_binary).unwrap();
+        uze_testkit::process::install_executable(
+            &server_binary,
+            &std::fs::read("/bin/sleep").unwrap(),
+        );
         let mut child = std::process::Command::new(&server_binary)
             .arg("30")
             .spawn()
@@ -3101,7 +3104,10 @@ mod tests {
         let bin_dir = uze_testkit::temp::scratch("shim-identity-test");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let versioned_binary = bin_dir.join("2.1.251");
-        std::fs::copy("/bin/sleep", &versioned_binary).unwrap();
+        uze_testkit::process::install_executable(
+            &versioned_binary,
+            &std::fs::read("/bin/sleep").unwrap(),
+        );
 
         let (damage, _damage_events) = std::sync::mpsc::channel();
         let pane = PaneRuntime::spawn(
@@ -3799,7 +3805,10 @@ mod tests {
         let bin_dir = uze_testkit::temp::scratch("shim-inherited-test");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let versioned_binary = bin_dir.join("2.1.251");
-        std::fs::copy("/bin/sleep", &versioned_binary).unwrap();
+        uze_testkit::process::install_executable(
+            &versioned_binary,
+            &std::fs::read("/bin/sleep").unwrap(),
+        );
 
         let (damage, _damage_events) = std::sync::mpsc::channel();
         let pane = PaneRuntime::spawn(
@@ -3984,20 +3993,19 @@ mod tests {
         env.set("UZE_HOME", &uze_home);
 
         let endpoint = Endpoint::global().unwrap();
-        let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
         assert!(
             workspace_lock_path().starts_with(&uze_home),
             "the claim must live beside the workspace, never in a wipeable temp directory"
         );
 
+        let first = ClaimHolder::spawn(&uze_home);
         let second = Server::new(project.clone(), endpoint.clone());
         assert!(
             matches!(second, Err(RuntimeError::Protocol(_))),
             "a workspace a live server holds must not be restored a second time"
         );
 
-        first.stop_panes();
-        drop(first);
+        first.release();
         let (third, _damage3) =
             Server::new(project, endpoint).expect("the claim is released with its holder");
         third.stop_panes();
@@ -4014,7 +4022,7 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &scratch);
 
-        let held = WorkspaceLock::acquire().expect("the first claim is granted");
+        let holder = ClaimHolder::spawn(&scratch);
         match WorkspaceLock::acquire() {
             Err(RuntimeError::Protocol(refusal)) => assert!(
                 refusal.contains("already serving this workspace"),
@@ -4023,10 +4031,91 @@ mod tests {
             Err(other) => panic!("a held claim must read as contention, not as {other}"),
             Ok(_) => panic!("a held claim must not be granted twice"),
         }
-        drop(held);
+        holder.release();
         WorkspaceLock::acquire().expect("released with its holder");
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Set on the process that plays the other server in the claim tests.
+    const CLAIM_HOLDER: &str = "UZE_TERMINAL_TEST_HOLDS_CLAIM";
+    /// What that process says once the claim is its.
+    const CLAIM_HELD: &str = "workspace claim held";
+
+    /// The other server in the two claim tests: a process of its own that
+    /// takes the workspace claim under the `UZE_HOME` it is given, says so,
+    /// and keeps it for as long as its stdin stays open.
+    ///
+    /// A claim is made against a *process* — `flock` lives on the open file
+    /// description, which a `fork` shares with the child until the child's
+    /// own `exec` closes it. A test that held the claim itself and dropped
+    /// it could therefore find it still held, for an instant, by a process
+    /// a sibling test had just forked; a claim this process never took is
+    /// one nothing it forked can be keeping. Ignored so the suite never
+    /// runs it on its own — [`ClaimHolder`] runs it, by name, in a process
+    /// of its own — and guarded by [`CLAIM_HOLDER`] so `--include-ignored`
+    /// cannot sit it on a terminal's stdin.
+    #[test]
+    #[ignore = "the holder side of the workspace-claim tests, run by them in a process of their own"]
+    fn holds_the_workspace_claim_while_its_stdin_is_open() {
+        if std::env::var_os(CLAIM_HOLDER).is_none() {
+            return;
+        }
+        let _held = WorkspaceLock::acquire().expect("the holder's claim is granted");
+        println!("{CLAIM_HELD}");
+        let mut until_eof = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut until_eof);
+    }
+
+    /// A separate process holding the workspace claim under one `UZE_HOME`
+    /// — this test binary, re-run on the one ignored test above.
+    struct ClaimHolder {
+        process: std::process::Child,
+        /// Kept open until the holder has exited, so its test harness has
+        /// somewhere to write its own closing lines.
+        _output: std::io::BufReader<std::process::ChildStdout>,
+    }
+
+    impl ClaimHolder {
+        /// Returns once the holder says the claim is its.
+        fn spawn(uze_home: &Path) -> Self {
+            let mut process = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "--nocapture",
+                    "runtime::tests::holds_the_workspace_claim_while_its_stdin_is_open",
+                ])
+                .env("UZE_HOME", uze_home)
+                .env(CLAIM_HOLDER, "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("this test binary runs itself");
+            let mut output = std::io::BufReader::new(process.stdout.take().unwrap());
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut output, &mut line) {
+                    Ok(0) => panic!("the holder exited without taking the claim"),
+                    Ok(_) if line.trim_end() == CLAIM_HELD => break,
+                    Ok(_) => continue,
+                    Err(error) => panic!("reading the holder: {error}"),
+                }
+            }
+            Self {
+                process,
+                _output: output,
+            }
+        }
+
+        /// Lets the holder exit and waits for it: the kernel releases the
+        /// claim with the process, so once this returns nothing holds it.
+        fn release(mut self) {
+            drop(self.process.stdin.take());
+            let status = self.process.wait().expect("the holder is waited on");
+            assert!(status.success(), "the holder's own run failed: {status}");
+        }
     }
 
     /// The whole workspace is rewritten on every structural change, and a
@@ -4345,7 +4434,10 @@ mod tests {
         std::fs::write(&endpoint.socket, b"placeholder").unwrap();
 
         let server_binary = scratch.join("uze");
-        std::fs::copy("/bin/sleep", &server_binary).unwrap();
+        uze_testkit::process::install_executable(
+            &server_binary,
+            &std::fs::read("/bin/sleep").unwrap(),
+        );
         let mut named = std::process::Command::new(&server_binary)
             .arg("30")
             .spawn()
