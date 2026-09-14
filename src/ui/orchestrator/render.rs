@@ -52,15 +52,14 @@ pub(super) struct WorkspaceLayout {
 /// Only two areas span the full frame height — menu (sidebar) and main
 /// container — there is no separate global header/footer row; the brand
 /// and health chrome that used to live in a titlebar now opens the sidebar
-/// itself (see [`render_sidebar`]), and this mode never shows the help
-/// toolbar (see [`ui::render_footer`](crate::ui::render_footer) — that
-/// stays exclusive to the management TUI).
+/// itself (see [`render_sidebar`]), and this client never shows the help
+/// toolbar — that stays exclusive to the management modal.
 pub(super) fn compute_layout(
     frame_area: Rect,
     sidebar_width_override: Option<u16>,
 ) -> WorkspaceLayout {
-    // Flush against the top row, not inset by one — the mode toggle is
-    // this TUI's own top edge, and floating it a row down from the real
+    // Flush against the top row, not inset by one — the sidebar header is
+    // this client's own top edge, and floating it a row down from the real
     // terminal top just read as wasted vertical space. One blank row is
     // still kept at the *bottom* (`saturating_sub(1)`, not `2`), matching
     // `management::compute_layout`'s identical rationale there: unlike the
@@ -113,7 +112,7 @@ pub(super) fn compute_layout(
 /// Beside `hits` for the same reason those are: only the render knows how
 /// the column came out, and the wheel over the sidebar has to stay inside
 /// what it found there.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Debug, Default)]
 pub(super) struct FrameMetrics {
     /// Rows of the space tree the sidebar could not show — how far the
     /// tree may be scrolled, and zero when it fits.
@@ -122,6 +121,17 @@ pub(super) struct FrameMetrics {
     /// settled, and the scrollbars it drew — see
     /// `extension_view::Rendered`.
     pub(super) code: Option<crate::ui::extension_view::Rendered>,
+    /// What the management modal's frame left behind, when it was open.
+    pub(super) manage: Option<ManageFrame>,
+}
+
+/// One frame of the management modal: where it was drawn, and the hit
+/// list its own surface produced — in the modal's vocabulary, not this
+/// client's, since its clicks are resolved by its own model.
+#[derive(Debug)]
+pub(super) struct ManageFrame {
+    pub(super) chrome: crate::ui::management::ModalChrome,
+    pub(super) hits: Vec<(Rect, crate::ui::hit::Hit)>,
 }
 
 pub(super) fn render(
@@ -188,7 +198,7 @@ pub(super) fn render(
     render_tab_strip(frame, layout.tab_strip, model, identities, hits);
     render_pane(frame, layout.pane, model);
     // Drawn last so it sits on top of the pane — same ordering the
-    // management TUI's overlays use in its own `render`. Anchored to
+    // management modal's dialogs use in its own `render`. Anchored to
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
@@ -196,8 +206,8 @@ pub(super) fn render(
     // that answers while they are open. Everything below them is a
     // dropdown hanging off the control that opened it, which stays beside
     // a screen that is still live — so the scrim covers these two and
-    // nothing else. Same placement as the management TUI's: between what
-    // was drawn and what is drawn over it.
+    // nothing else. Same placement as the management modal's: between
+    // what was drawn and what is drawn over it.
     if model.preserved.is_some() || model.action_index.is_some() {
         crate::ui::scrim::render(frame, frame.area());
     }
@@ -226,14 +236,35 @@ pub(super) fn render(
     if let Some(menu) = &model.context_menu {
         render_context_menu(frame, frame.area(), menu, hits);
     }
+    // Last of all, over everything: the management modal seals the whole
+    // client, so the whole frame recedes under it — the popups above
+    // included, which is why it is not drawn among them.
+    if let Some(manage) = &model.manage {
+        crate::ui::scrim::render(frame, frame.area());
+        let mut manage_hits = Vec::new();
+        let chrome =
+            crate::ui::management::render_modal(frame, frame.area(), manage, &mut manage_hits);
+        metrics.manage = Some(ManageFrame {
+            chrome,
+            hits: manage_hits,
+        });
+        // Prepended: what is underneath must not answer a click meant here.
+        hits.splice(
+            0..0,
+            [
+                (chrome.close, WorkspaceHit::CloseManage),
+                (chrome.area, WorkspaceHit::ManageSurface),
+            ],
+        );
+    }
 }
 
 /// A small popup listing `agent_options`, opened by the tab strip's "✦"
 /// button — a dropdown anchored just below it, creating the
 /// picked agent as a new tab in the currently selected space. Not built on
-/// the management TUI's `render_modal`/`modal_block` (those are shaped for
-/// static text, not a selectable, hit-testable list) — this is
-/// self-contained, styled by hand to match the same palette.
+/// the management modal's dialog helpers (those are shaped for static
+/// text, not a selectable, hit-testable list) — this is self-contained,
+/// styled by hand to match the same palette.
 pub(super) fn render_agent_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -286,10 +317,10 @@ pub(super) fn render_agent_picker(
         }
         let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
         let selected = index == picker.selected;
-        // A filled bar for the selected row, not just bold text — the same
+        // A filled bar for the selected row, not just bold text — a
         // narrowly-scoped exception to this design's usual no-filled-
-        // surfaces rule the Work/Manage toggle already makes, for the same
-        // reason: a keyboard-navigable menu needs the affordance.
+        // surfaces rule, for one reason: a keyboard-navigable menu needs
+        // the affordance.
         let (style, text) = if selected {
             let style = Style::default()
                 .bg(theme::color(Token::Accent))
@@ -381,6 +412,38 @@ pub(super) fn render_context_menu(
 /// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
 /// is; the slot is where the agent is, which every agent has and none
 /// needs announced.
+/// The column's account of itself: what there is, then where — the count
+/// carries the weight and its whereabouts recede behind it.
+fn sidebar_account(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Line<'static> {
+    let Some(session) = &model.session else {
+        return Line::default();
+    };
+    let agent_count = session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| space.tabs.iter())
+        .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+        .count();
+    let space_count = session.workspace.spaces.len();
+    Line::from(vec![
+        Span::styled(
+            format!(
+                "{agent_count} agent{}",
+                if agent_count == 1 { "" } else { "s" }
+            ),
+            theme::fg(Token::TextPrimary),
+        ),
+        Span::styled(
+            format!(
+                " in {space_count} space{}",
+                if space_count == 1 { "" } else { "s" }
+            ),
+            theme::fg(Token::TextMuted),
+        ),
+    ])
+}
+
 fn caption_path(cwd: &Path) -> String {
     match uze_application::isolated_checkout(cwd) {
         Some(checkout) => crate::ui::display_project_path(checkout.primary),
@@ -487,14 +550,35 @@ pub(super) fn render_sidebar(
 
     let mut rows = Rows::over(inner);
 
-    // Mode toggle, one line: this used to be a global titlebar (brand +
-    // status + Ctrl+O hint + path) spanning the whole frame; with only menu
-    // + main container left, the menu opens with just enough chrome to
-    // match the tab strip's height on the other TUI mode — a centered
-    // segmented control stands in for the Ctrl+O keybinding.
+    // The header names the surface and ends in the control that opens the
+    // other one — the management modal. No top padding: it lands on the
+    // exact row the tab strip's own content does.
     if let Some(rect) = rows.next(1) {
-        let (_work_rect, manage_rect) = crate::ui::render_mode_toggle(frame, rect, true);
-        hits.push((manage_rect, WorkspaceHit::SwitchToManagement));
+        frame.render_widget(
+            Paragraph::new(Span::styled("work", theme::fg_bold(Token::TextMuted))),
+            rect,
+        );
+        let more = theme::glyph(Symbol::Manage);
+        let more_width = theme::width(Symbol::Manage);
+        let more_rect = Rect::new(
+            rect.right().saturating_sub(more_width),
+            rect.y,
+            more_width,
+            1,
+        );
+        // Never a button: only the mark's own colour answers the pointer
+        // — muted at rest, beside a label of the same weight, brighter
+        // under the hover and brightest while pressed.
+        let more_hue = match chip_state(model, Some(WorkspaceHit::OpenManage)) {
+            ChipState::Pressed => Token::TextBright,
+            ChipState::Hovered => Token::TextPrimary,
+            ChipState::Resting | ChipState::Static => Token::TextMuted,
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(more, theme::fg_bold(more_hue))),
+            more_rect,
+        );
+        hits.push((more_rect, WorkspaceHit::OpenManage));
     }
     if let Some(error) = &model.error
         && let Some(rect) = rows.next(1)
@@ -509,6 +593,9 @@ pub(super) fn render_sidebar(
             rect,
         );
     }
+
+    // The hairline under the header lands on the row the tab strip's own
+    // bottom border does, so the two columns share one divider line.
     if let Some(rect) = rows.next(1) {
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -523,36 +610,24 @@ pub(super) fn render_sidebar(
         return;
     };
 
-    // The summary and creation action share the row directly below the
-    // header divider: the quiet count gives the workspace scope, while the
-    // right-aligned action remains the primary affordance.
+    // The account and the creation action share the row under the
+    // divider: what there is on the left, while the right-aligned action —
+    // with the key that reaches it when one is bound — remains the
+    // primary affordance.
     if let Some(rect) = rows.next(1) {
-        let agent_count = session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| space.tabs.iter())
-            .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
-            .count();
-        let count_label = format!(
-            "{agent_count} agent{}",
-            if agent_count == 1 { "" } else { "s" }
-        );
-        frame.render_widget(
-            Paragraph::new(Span::styled(count_label, theme::fg(Token::TextDim))),
-            rect,
-        );
-        let label = "+ new";
-        let label_x = rect.x + rect.width.saturating_sub(label.len() as u16);
-        frame.render_widget(
-            Paragraph::new(Span::styled(label, theme::fg(Token::Accent)))
-                .alignment(Alignment::Right),
-            rect,
-        );
-        hits.push((
-            Rect::new(label_x, rect.y, label.len() as u16, 1),
-            WorkspaceHit::NewSpace,
-        ));
+        frame.render_widget(Paragraph::new(sidebar_account(model, identities)), rect);
+        let mut line = crate::ui::hint_for(FIRST_STEP_SCOPES, &[Action::NewSpace]);
+        line.spans
+            .insert(0, Span::styled("+ new", theme::fg_bold(Token::Accent)));
+        if line.spans.len() > 1 {
+            line.spans.insert(1, Span::raw(" "));
+            // The hint names the action; the label already did.
+            line.spans.truncate(3);
+        }
+        let width = line.width() as u16;
+        let label_x = rect.x + rect.width.saturating_sub(width);
+        frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), rect);
+        hits.push((Rect::new(label_x, rect.y, width, 1), WorkspaceHit::NewSpace));
     }
     rows.gap();
     // While the root picker is open it owns the column: the listing it

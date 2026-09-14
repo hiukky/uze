@@ -510,9 +510,9 @@ pub(crate) struct TuiModel {
     pub(crate) doctor: Option<DoctorReport>,
 
     /// When the state above was last resolved, or `None` while the
-    /// session's first resolution is still on its way. Opening the
-    /// management client reads it to decide whether it is looking at an
-    /// answer or at nothing yet — see `management::RESOLUTION_STANDS_FOR`.
+    /// session's first resolution is still on its way. Opening the modal
+    /// reads it to decide whether it is looking at an answer or at
+    /// nothing yet — see `management::RESOLUTION_STANDS_FOR`.
     pub(crate) resolved_at: Option<Instant>,
 
     /// Plugins updated automatically this session, badged as "Updated" on
@@ -571,8 +571,8 @@ pub(crate) struct TuiModel {
     /// every step has been taken.
     pub(crate) first_steps_closed: bool,
     /// The steps already taken, by action name — shared with the workspace
-    /// client through `ClientLayout`, because it is one list drawn at the
-    /// foot of both sidebars and a step taken in one mode is taken.
+    /// client, because it is one list drawn at the foot of both sidebars
+    /// and a step taken in one surface is taken.
     pub(crate) steps_taken: std::collections::BTreeSet<String>,
     /// What the sidebar's foot says about releases, as of `release_revision`.
     pub(crate) release: Option<crate::self_update::Notice>,
@@ -678,8 +678,8 @@ impl Default for TuiModel {
 /// *process*, and live in the `ManagementLayout` every visit is shaped
 /// from (see [`TuiModel::recall`]).
 ///
-/// Management is entered and left every time the operator presses Ctrl+O,
-/// and rebuilding a default model each time meant an empty screen — no
+/// The modal is opened and closed constantly, and rebuilding a default
+/// model each time meant an empty screen — no
 /// plugins, no harnesses — under a "Refreshing environment…" line, for as
 /// long as a full resolution took. What the last visit resolved is still
 /// the truth about the machine, so it is what the next one draws while a
@@ -704,7 +704,7 @@ pub(crate) struct Remembered {
 }
 
 impl TuiModel {
-    /// A model opening the management client shaped as `layout` says —
+    /// A model opening the management modal shaped as `layout` says —
     /// the screen, the drawers, the folds — with what the previous visit
     /// left behind. `None` is the first visit of the process, which has
     /// nothing resolved yet and starts from the default model.
@@ -764,7 +764,7 @@ impl TuiModel {
         model
     }
 
-    /// The shape this visit leaves the management client in, for the
+    /// The shape this opening leaves the management modal in, for the
     /// next visit and the next run alike.
     pub(crate) fn management_layout(&self) -> ManagementLayout {
         ManagementLayout {
@@ -1459,7 +1459,7 @@ impl TuiModel {
     /// The read the Appearance screen is missing, or `Intent::None`.
     ///
     /// Arriving asks for it (see [`Self::set_route`]), but arriving is not
-    /// the only way onto the screen: the management client reopens on the
+    /// the only way onto the screen: the management modal reopens on the
     /// screen it was left on, restored without passing through a route
     /// change, and that screen used to stay empty until clicked again.
     pub(crate) fn appearance_intent(&self) -> super::worker::Intent {

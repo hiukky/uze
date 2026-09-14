@@ -1,63 +1,67 @@
-//! Management client for the TUI (routes: Overview, Plugins, Extensions,
-//! Harnesses and Profiles) — this mode's counterpart to
-//! `super::orchestrator`'s terminal workspace. Presentation deliberately
-//! shares the workspace's palette and layout conventions (menu + main
-//! container, the Work/Manage toggle, hairline dividers, sidebar
-//! drag-resize with the same bounds) so switching between the two with
-//! Ctrl+O reads as one product, not two.
+//! The management surface — Overview, Plugins, Extensions, Harnesses,
+//! Profiles, Keys and Appearance — drawn as a modal over the workspace
+//! client (`super::orchestrator`) rather than as a mode beside it. The
+//! workspace owns the frame, the event loop and the terminal session; this
+//! module owns what the modal keeps between openings
+//! ([`ManagementMemory`]), what one opening is ([`TuiModel`]), and how it
+//! is drawn into the rectangle the workspace hands it ([`render_modal`]).
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 
-use uze_application::{ClientLayout, Result, UzeHome};
+use uze_application::{FirstStepsLayout, ManagementLayout, UzeHome};
 
 use super::hit::Hit;
+use super::keys::KeyboardSupport;
 use super::model::{self, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
 use super::worker::{
     Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
     spawn_startup,
 };
-use super::{TerminalSession, overlay, scrim, small_caps, small_digits, view};
+use super::{overlay, scrim, small_caps, small_digits, view};
 use crate::ui::theme::{self, Symbol, Token};
 
-/// How long a resolution of the machine stands for before opening this
-/// screen re-resolves it. The window exists for one case: the session's
-/// own warm-up has just answered and the operator presses Ctrl+O right
+/// How long a resolution of the machine stands for before opening the
+/// modal re-resolves it. The window exists for one case: the session's
+/// own warm-up has just answered and the operator opens the modal right
 /// after it, which should show that answer rather than immediately ask
-/// the same question again. Past it, opening the screen is a claim about
+/// the same question again. Past it, opening the modal is a claim about
 /// the machine *now* — a `uze add` run in one of the workspace's own panes
 /// happened outside anything this client would hear about.
 pub(crate) const RESOLUTION_STANDS_FOR: Duration = Duration::from_secs(30);
 
-/// What the management client keeps between visits to it, owned by
-/// `super::run` for the whole session the way the workspace's own
-/// [`super::orchestrator::WorkspaceMemory`] is. Ctrl+O leaves this mode
-/// and comes back to it constantly; without this, each return started
-/// from nothing. The screen and the drawers are not here: they outlive
-/// the process, in the `ClientLayout` `super::run` owns.
+/// What the modal keeps between openings, owned by `super::run` for the
+/// whole session the way the workspace's own
+/// [`super::orchestrator::WorkspaceMemory`] is. The modal opens and closes
+/// constantly; without this, each opening started from nothing. The
+/// screen and the drawers are not here: they outlive the process, in the
+/// `ClientLayout` `super::run` owns.
 pub(crate) struct ManagementMemory {
     /// The channel every management worker answers on. Session-lived
-    /// rather than per-visit, which is what lets the resolution start
-    /// before the screen exists and lets an answer outlive the visit that
-    /// asked for it, instead of dying with a dropped receiver.
+    /// rather than per-opening, which is what lets the resolution start
+    /// before the modal exists and lets an answer outlive the opening
+    /// that asked for it, instead of dying with a dropped receiver.
     sender: Sender<WorkerResult>,
     receiver: Receiver<WorkerResult>,
-    /// The last visit's resolved machine state and place in it, or `None`
-    /// before the first visit.
+    /// The last opening's resolved machine state and place in it, or
+    /// `None` before the first.
     remembered: Option<Remembered>,
     /// Whether a worker still owes this session an answer. Carried across
-    /// visits because the channel is: a refresh the operator walked out on
-    /// still lands, and re-entering must not ask a second time.
+    /// openings because the channel is: a refresh the operator closed the
+    /// modal on still lands, and reopening must not ask a second time.
     in_flight: bool,
+    /// Where the modal's own menu column was last dragged to. The modal
+    /// has a width of its own, so this is not the workspace sidebar's
+    /// value and is not written to the layout file with it.
+    menu_width: Option<u16>,
 }
 
 impl ManagementMemory {
@@ -66,18 +70,131 @@ impl ManagementMemory {
     ///
     /// Seeding the default plugins and applying the official snapshot's
     /// pending updates is what *opening uze* does — once, here, rather
-    /// than on the first Ctrl+O into this screen. Started before the
+    /// than on the first opening of the modal. Started before the
     /// workspace client even attaches, so the answer is normally waiting
-    /// by the time anyone asks for the screen, and the work never sits in
-    /// front of the operator as an empty list under a "refreshing" line.
+    /// by the time anyone asks for it, and the work never sits in front
+    /// of the operator as an empty list under a "refreshing" line.
     pub(crate) fn warming(home: &UzeHome) -> Self {
+        let memory = Self::unresolved();
+        spawn_startup(home.clone(), memory.sender.clone(), context_root());
+        Self {
+            in_flight: true,
+            ..memory
+        }
+    }
+
+    /// A memory nothing has asked the machine on behalf of — what a test
+    /// starts from, so opening the modal never spawns a real resolution.
+    pub(crate) fn unresolved() -> Self {
         let (sender, receiver) = mpsc::channel();
-        spawn_startup(home.clone(), sender.clone(), context_root());
         Self {
             sender,
             receiver,
             remembered: None,
-            in_flight: true,
+            in_flight: false,
+            menu_width: None,
+        }
+    }
+
+    pub(crate) fn sender(&self) -> &Sender<WorkerResult> {
+        &self.sender
+    }
+
+    /// One opening of the modal, picking up where the last one left off.
+    ///
+    /// `first_steps` is the workspace's, handed in rather than read from
+    /// the layout file: the two surfaces share the one list, and the
+    /// workspace may have ticked a step off since the file was written.
+    pub(crate) fn open(
+        &mut self,
+        home: &UzeHome,
+        layout: &ManagementLayout,
+        first_steps: &FirstStepsLayout,
+        keyboard: KeyboardSupport,
+    ) -> TuiModel {
+        let mut model = TuiModel {
+            sidebar_width: self.menu_width,
+            first_steps_collapsed: first_steps.collapsed,
+            first_steps_closed: first_steps.closed,
+            steps_taken: first_steps.taken.clone(),
+            // Asked of the terminal once, at startup: whether a chord can
+            // reach uze at all is a property of the host, and the Keys
+            // screen says so rather than letting a binding look alive and
+            // do nothing.
+            keyboard,
+            ..TuiModel::recall(self.remembered.take(), layout)
+        };
+        if opening_re_resolves(model.resolved_at) && !self.in_flight {
+            // Behind the frame: every list is already on screen, so
+            // nothing about this reads as the plugins having gone away.
+            spawn_refresh(
+                home.clone(),
+                self.sender.clone(),
+                model.context_root.clone(),
+            );
+            self.in_flight = true;
+        }
+        model.maintenance_in_flight = self.in_flight;
+        if model.resolved_at.is_none() {
+            // The one case where the operator arrives before any answer
+            // does: opening the modal within the first moments of the
+            // session. Nothing to draw yet, so the wait is at least named
+            // — and the queued answer, if it landed while the modal was
+            // closed, replaces this on the first tick.
+            model.status = Status::Working("Refreshing environment…".to_owned());
+            // Read here rather than waited on from the startup worker,
+            // which reaches it only after seeding plugins and
+            // auto-updating (see `worker::recent_prompts`): one small
+            // file, and the Overview otherwise says "no history yet" —
+            // the same words it uses when there genuinely is none.
+            model.prompt_history = recent_prompts(home.clone(), &model.context_root);
+        }
+        model
+    }
+
+    /// Keeps what an opening resolved and arranged for the next one, and
+    /// hands back what the workspace owns of it: the shape the layout
+    /// file keeps, and the first-steps list the two surfaces share.
+    pub(crate) fn close(&mut self, model: TuiModel) -> (ManagementLayout, FirstStepsLayout) {
+        self.menu_width = model.sidebar_width;
+        self.in_flight = model.maintenance_in_flight;
+        let layout = model.management_layout();
+        let first_steps = FirstStepsLayout {
+            collapsed: model.first_steps_collapsed,
+            closed: model.first_steps_closed,
+            taken: model.steps_taken.clone(),
+        };
+        self.remembered = Some(model.remember());
+        (layout, first_steps)
+    }
+
+    /// One turn of the modal's own clock, taken by the workspace loop
+    /// before each frame it draws the modal in: the spinner advances,
+    /// transient status expires, every answer that arrived is absorbed,
+    /// and whatever the screen now shows that has not been fetched yet is
+    /// asked for.
+    ///
+    /// Answers are drained *before* the frame on purpose: one that
+    /// arrived while the modal was closed is already in the channel when
+    /// it opens, and draining first is what makes the very first frame
+    /// show it.
+    pub(crate) fn tick(&mut self, model: &mut TuiModel, home: &UzeHome) {
+        model.tick = model.tick.wrapping_add(1);
+        model.expire_status();
+        model.expire_update_badges();
+        if let Some((revision, notice)) = crate::self_update::since(model.release_revision) {
+            model.release = notice;
+            model.release_revision = revision;
+        }
+        drain_worker_results(model, &self.receiver);
+        for missing in [
+            model.drawer_inspect_intent(),
+            model.profile_preview_intent(),
+            model.appearance_intent(),
+        ] {
+            if missing != Intent::None {
+                dispatch(missing, home, &self.sender, model);
+            }
         }
     }
 }
@@ -96,139 +213,116 @@ fn context_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-pub(crate) fn run_management(
-    terminal: &mut TerminalSession,
-    home: UzeHome,
-    layout: &mut ClientLayout,
-    memory: &mut ManagementMemory,
-) -> Result<ManagementExit> {
-    let sender = memory.sender.clone();
-    let mut model = TuiModel {
-        // Carries over whatever the user last dragged the sidebar to — in
-        // this mode or the workspace's — so switching modes never resets
-        // it back to the responsive default.
-        sidebar_width: layout.sidebar.width,
-        first_steps_collapsed: layout.first_steps.collapsed,
-        first_steps_closed: layout.first_steps.closed,
-        steps_taken: layout.first_steps.taken.clone(),
-        // Asked of the terminal once, at startup: whether a chord can
-        // reach uze at all is a property of the host, and the Keys screen
-        // says so rather than letting a binding look alive and do nothing.
-        keyboard: terminal.keyboard(),
-        ..TuiModel::recall(memory.remembered.take(), &layout.management)
-    };
-    if opening_re_resolves(model.resolved_at) && !memory.in_flight {
-        // Behind the frame: every list is already on screen, so nothing
-        // about this reads as the plugins having gone away.
-        spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
-        memory.in_flight = true;
-    }
-    model.maintenance_in_flight = memory.in_flight;
-    if model.resolved_at.is_none() {
-        // The one case where the operator arrives before any answer does:
-        // Ctrl+O within the first moments of the session. Nothing to draw
-        // yet, so the wait is at least named — and the queued answer, if
-        // it landed while the workspace had the screen, replaces this in
-        // the same frame (the loop drains before it draws).
-        model.status = Status::Working("Refreshing environment…".to_owned());
-        // Read here rather than waited on from the startup worker, which
-        // reaches it only after seeding plugins and auto-updating (see
-        // `worker::recent_prompts`): one small file, and the Overview
-        // otherwise says "no history yet" — the same words it uses when
-        // there genuinely is none.
-        model.prompt_history = recent_prompts(home.clone(), &model.context_root);
-    }
-    let exit = loop {
-        model.tick = model.tick.wrapping_add(1);
-        model.expire_status();
-        model.expire_update_badges();
-        if let Some((revision, notice)) = crate::self_update::since(model.release_revision) {
-            model.release = notice;
-            model.release_revision = revision;
-        }
-        // Before the frame, not after it: an answer that arrived while the
-        // workspace had the screen is already in the channel when this
-        // mode opens, and draining it first is what makes the very first
-        // frame show it.
-        drain_worker_results(&mut model, &memory.receiver);
-        let mut hits = Vec::new();
-        terminal.draw(|frame| render(frame, &model, &mut hits))?;
-        model.hits = hits;
-        for missing in [
-            model.drawer_inspect_intent(),
-            model.profile_preview_intent(),
-            model.appearance_intent(),
-        ] {
-            if missing != Intent::None {
-                dispatch(missing, &home, &sender, &mut model);
-            }
-        }
-        if event::poll(super::POLL_INTERVAL).map_err(super::io_error)? {
-            match event::read().map_err(super::io_error)? {
-                Event::Key(key) => {
-                    // Switching modes is an action like any other now: the
-                    // keymap resolves it, `leaving_management` recognises
-                    // the intent, and this loop no longer holds a key of
-                    // its own that the help could not know about.
-                    let intent = model.apply_key(key);
-                    if intent == Intent::Quit {
-                        break ManagementExit::Quit;
-                    }
-                    if let Some(exit) = leaving_management(&intent) {
-                        break exit;
-                    }
-                    dispatch(intent, &home, &sender, &mut model);
-                }
-                Event::Mouse(mouse) => {
-                    // The sidebar-resize clamp needs the terminal's current
-                    // total width (its dynamic max shrinks as the terminal
-                    // narrows) — the one thing the model can't already know
-                    // on its own, unlike everything else `apply_mouse`
-                    // decides from `self`.
-                    let total_width = terminal.size()?.width;
-                    let intent = model.apply_mouse(mouse, total_width);
-                    if let Some(exit) = leaving_management(&intent) {
-                        break exit;
-                    }
-                    dispatch(intent, &home, &sender, &mut model);
-                }
-                Event::Resize(..) => {}
-                _ => {}
-            }
-        }
-    };
-    // Handed back to the shared layout rather than kept on `model`, so a
-    // Ctrl+O switch to the workspace picks up a drag made here at once,
-    // and the next run opens on the screen this visit left.
-    layout.sidebar.width = model.sidebar_width;
-    layout.first_steps.collapsed = model.first_steps_collapsed;
-    layout.first_steps.closed = model.first_steps_closed;
-    layout.first_steps.taken = model.steps_taken.clone();
-    layout.management = model.management_layout();
-    memory.in_flight = model.maintenance_in_flight;
-    memory.remembered = Some(model.remember());
-    Ok(exit)
-}
-
-pub(crate) enum ManagementExit {
-    Workspace,
-    /// Back to the workspace with this tab selected.
-    WorkspaceTab(u64),
+/// Where an intent takes the operator out of the modal rather than
+/// being performed inside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Leaving {
+    Close,
+    /// Closed, with this workspace tab selected.
+    CloseToTab(u64),
     Quit,
 }
 
-/// The intents that end this mode rather than being dispatched in it.
-fn leaving_management(intent: &Intent) -> Option<ManagementExit> {
+/// The intents that end the modal rather than being dispatched in it.
+pub(crate) fn leaving(intent: &Intent) -> Option<Leaving> {
     match intent {
-        Intent::SwitchToWorkspace => Some(ManagementExit::Workspace),
-        Intent::SwitchToWorkspaceTab(tab) => Some(ManagementExit::WorkspaceTab(*tab)),
+        Intent::Quit => Some(Leaving::Quit),
+        Intent::SwitchToWorkspace => Some(Leaving::Close),
+        Intent::SwitchToWorkspaceTab(tab) => Some(Leaving::CloseToTab(*tab)),
         _ => None,
     }
 }
 
+// --- Geometry -----------------------------------------------------------
+
+/// Where the modal sits in `frame`: wide, because it holds whole screens
+/// with a menu, a list and a drawer side by side, but inset on every side
+/// so the workspace is visibly still there behind it. The inset scales
+/// down with the terminal rather than being a fixed margin — on a small
+/// one the screens need the columns more than the backdrop needs to show.
+pub(crate) fn modal_area(frame: Rect) -> Rect {
+    let horizontal = (frame.width / 16).min(6);
+    let vertical = (frame.height / 12).min(2);
+    Rect::new(
+        frame.x + horizontal,
+        frame.y + vertical,
+        frame.width.saturating_sub(2 * horizontal),
+        frame.height.saturating_sub(2 * vertical),
+    )
+}
+
+/// Where the management surface is drawn inside a modal at `area`: inside
+/// the border, and one blank row under the title, so the menu's first
+/// route never sits against it. The workspace measures a drag inside the
+/// modal against the same rectangle.
+pub(crate) fn modal_surface(area: Rect) -> Rect {
+    Rect::new(
+        area.x + 1,
+        area.y + 2,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(3),
+    )
+}
+
+/// The rectangles a frame of the modal leaves for the workspace's input
+/// handling: the modal itself, and the mark on its title that closes it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ModalChrome {
+    pub(crate) area: Rect,
+    pub(crate) close: Rect,
+}
+
+/// The modal, over a frame the scrim has already pushed back: its border,
+/// its title row, and the management surface inside.
+pub(crate) fn render_modal(
+    frame: &mut ratatui::Frame<'_>,
+    frame_area: Rect,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) -> ModalChrome {
+    let area = modal_area(frame_area);
+    frame.render_widget(Clear, area);
+    // The same border every popup of the workspace draws, so the modal
+    // reads as one more of its surfaces rather than a different product.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::on(Token::TextPrimary, Token::SurfaceBackground));
+    frame.render_widget(block, area);
+
+    // The title row is drawn by hand rather than through the block's own
+    // titles so the close mark has a rect the click can be tested against.
+    // Its name is set the way `super::title_row` sets every popup's.
+    let title = Rect::new(area.x + 2, area.y, area.width.saturating_sub(4), 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(" manage ", theme::fg_bold(Token::TextBright))),
+        title,
+    );
+    // Only the close mark on the right: the key that closes the modal is
+    // the one that opened it, and the index lists it for anyone asking.
+    let mark = theme::glyph(Symbol::MarkClose);
+    let mark_width = theme::width(Symbol::MarkClose);
+    let close = Rect::new(
+        title.right().saturating_sub(mark_width + 1),
+        title.y,
+        mark_width + 2,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {mark} "),
+            theme::fg(Token::TextMuted),
+        )),
+        close,
+    );
+
+    render(frame, modal_surface(area), model, hits);
+    ModalChrome { area, close }
+}
+
 // --- Layout ------------------------------------------------------------
 
-struct ManagementLayout {
+struct Geometry {
     sidebar: Rect,
     content: Rect,
     footer: Rect,
@@ -237,9 +331,9 @@ struct ManagementLayout {
 /// The one source of truth for management geometry, mirroring
 /// `orchestrator::compute_layout`'s shape and reusing its exact
 /// `clamp_sidebar_width`/`sidebar_width_for` (see `super`) — the sidebar
-/// drag-resize behaves identically in both TUIs because both call the
-/// literal same width math, not just similarly-shaped code.
-fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> ManagementLayout {
+/// drag-resize behaves identically in the modal and the workspace because
+/// both call the literal same width math, not just similarly-shaped code.
+fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Geometry {
     // Flush against the top row, not inset by one — see
     // `orchestrator::compute_layout`'s identical change and rationale; kept
     // mirrored here for the same reason the rest of this function is.
@@ -260,7 +354,7 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Mana
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(2)])
         .split(columns[1]);
-    ManagementLayout {
+    Geometry {
         sidebar: columns[0],
         content: content_rows[0],
         footer: content_rows[1],
@@ -269,30 +363,31 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Mana
 
 // --- Rendering ----------------------------------------------------------
 
+/// The management surface, filling `area` — the inside of the modal, or a
+/// whole test frame.
+///
+/// Edge to edge within it (no left/right inset — matches the design's
+/// `width:100%`) and flush against its top row; one blank row is still
+/// kept at the bottom (see `compute_layout`), so the last row doesn't read
+/// as clipped the way a top-row title would if it sat with nothing above
+/// it. One flat backdrop for the entire area — no panel ever paints its
+/// own background; every division is a hairline border or padding, never
+/// a filled slab.
 pub(crate) fn render(
     frame: &mut ratatui::Frame<'_>,
+    area: Rect,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    // Edge to edge horizontally (no left/right inset — matches the design's
-    // `width:100%`) and flush against the top row; one blank row is still
-    // kept at the bottom (see `compute_layout`), so the last row doesn't
-    // read as clipped the way a top-row title would if it sat with nothing
-    // above it. One flat backdrop for the entire frame — no panel ever
-    // paints its own background; every division is a hairline border or
-    // padding, never a filled slab.
     frame.render_widget(
         Block::default().style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
-        frame.area(),
+        area,
     );
-    // Only two areas span the full frame height — menu (sidebar) and main
-    // container — there is no separate global header/footer row. The brand
-    // and health chrome that used to live in a titlebar now opens the
-    // sidebar instead (see `render_sidebar`); the help toolbar stays,
-    // scoped to the container column, since this is the one TUI it belongs
-    // in (the workspace/terminal mode never shows it).
-    let narrow = frame.area().width < 90;
-    let layout = compute_layout(frame.area(), model.sidebar_width);
+    // Only two columns span the full height — menu (sidebar) and main
+    // container — there is no separate global header/footer row. The help
+    // toolbar stays, scoped to the container column.
+    let narrow = area.width < 90;
+    let layout = compute_layout(area, model.sidebar_width);
     render_sidebar(frame, layout.sidebar, model, narrow, hits);
     // The sidebar's own hairline right border doubles as a drag handle —
     // same shape as `orchestrator::render`'s equivalent push, so both
@@ -323,13 +418,14 @@ pub(crate) fn render(
 
     render_footer(frame, layout.footer, model);
 
-    // Every arm below is a modal: drawn in the middle of the frame, and
-    // the only thing on screen that answers until it is dealt with. The
-    // scrim is what says so — it goes here rather than inside each arm
-    // because what recedes is the screen underneath, which no dialog
-    // knows anything about.
+    // Every arm below is a dialog: drawn in the middle of the surface, and
+    // the only thing in it that answers until it is dealt with. The scrim
+    // is what says so — it goes here rather than inside each arm because
+    // what recedes is the screen underneath, which no dialog knows
+    // anything about. Only this surface recedes: the workspace behind the
+    // modal already has.
     if !matches!(model.overlay, Overlay::None) {
-        scrim::render(frame, frame.area());
+        scrim::render(frame, area);
     }
 
     match &model.overlay {
@@ -338,44 +434,30 @@ pub(crate) fn render(
             scopes,
             filter,
             selected,
-        } => overlay::render_action_index(
-            frame,
-            frame.area(),
-            model,
-            scopes,
-            filter,
-            *selected,
-            hits,
-        ),
-        Overlay::HarnessHelp => overlay::render_harness_help(frame, frame.area()),
+        } => overlay::render_action_index(frame, area, model, scopes, filter, *selected, hits),
+        Overlay::HarnessHelp => overlay::render_harness_help(frame, area),
         Overlay::ConfirmRemove { id, focus } => {
-            overlay::render_confirm_remove(frame, frame.area(), id, *focus, hits)
+            overlay::render_confirm_remove(frame, area, id, *focus, hits)
         }
-        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, frame.area(), id, hits),
+        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, area, id, hits),
         Overlay::ConfirmInstall { name, marketplace } => {
-            overlay::render_confirm_install(frame, frame.area(), name, marketplace, hits)
+            overlay::render_confirm_install(frame, area, name, marketplace, hits)
         }
-        Overlay::ConfirmContextApply => {
-            overlay::render_confirm_context_apply(frame, frame.area(), hits)
-        }
+        Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, area, hits),
         Overlay::ConfirmClearPromptHistory => {
-            overlay::render_confirm_clear_prompt_history(frame, frame.area(), hits)
+            overlay::render_confirm_clear_prompt_history(frame, area, hits)
         }
-        Overlay::ProtectedPlugin(id) => {
-            overlay::render_protected_plugin(frame, frame.area(), id, hits)
-        }
-        Overlay::AddMarketplace(input) => {
-            overlay::render_add_marketplace(frame, frame.area(), input)
-        }
+        Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, area, id, hits),
+        Overlay::AddMarketplace(input) => overlay::render_add_marketplace(frame, area, input),
         Overlay::ThemePicker { themes, selected } => {
-            overlay::render_theme_picker(frame, frame.area(), themes, *selected)
+            overlay::render_theme_picker(frame, area, themes, *selected)
         }
-        Overlay::NewProfile(input) => overlay::render_new_profile(frame, frame.area(), input),
+        Overlay::NewProfile(input) => overlay::render_new_profile(frame, area, input),
         Overlay::ConfirmDeleteProfile { id, focus } => {
-            overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus, hits)
+            overlay::render_confirm_delete_profile(frame, area, id, *focus, hits)
         }
         Overlay::TrustRequired { plugin, detail, .. } => {
-            overlay::render_trust_required(frame, frame.area(), plugin, detail, hits)
+            overlay::render_trust_required(frame, area, plugin, detail, hits)
         }
     }
 }
@@ -401,8 +483,7 @@ fn route_subtitle(route: Route) -> &'static str {
 /// done to it and searching a list were here for exactly that reason and
 /// are not any more — both are offered where they apply, by the drawer's
 /// buttons and by the search field.
-pub(crate) const FIRST_STEPS: [uze_keys::Action; 5] = [
-    uze_keys::Action::SwitchMode,
+pub(crate) const FIRST_STEPS: [uze_keys::Action; 4] = [
     uze_keys::Action::NextScreen,
     uze_keys::Action::OpenThemePicker,
     uze_keys::Action::Refresh,
@@ -463,14 +544,13 @@ fn render_sidebar(
 ) {
     // No fill, just a hairline right border — the sidebar sits on the same
     // backdrop as everything else; only a thin divider marks the edge. No
-    // top padding either: the mode toggle must land on the exact row the
-    // content column's own header does, or the two panes' dividers drift
-    // out of alignment by one row. No right padding either — mirrors the
-    // workspace sidebar's own `Padding::new(1, 0, 0, 0)`, content flush
-    // against the divider rather than floating a column away from it. The
-    // border itself is the drag handle (see the `Hit::ResizeSidebar` push
-    // in `render`), so it picks up the same accent-while-dragging feedback
-    // the workspace sidebar uses.
+    // top padding either: the first route must land on the exact row the
+    // content column's own header does. No right padding either — mirrors
+    // the workspace sidebar's own `Padding::new(1, 0, 0, 0)`, content
+    // flush against the divider rather than floating a column away from
+    // it. The border itself is the drag handle (see the `Hit::ResizeSidebar`
+    // push in `render`), so it picks up the same accent-while-dragging
+    // feedback the workspace sidebar uses.
     let border_color = if model.dragging_sidebar {
         theme::color(Token::Accent)
     } else {
@@ -550,25 +630,6 @@ fn render_sidebar(
         y += height;
         Some(rect)
     };
-
-    // Mode toggle, one line: this used to be a global titlebar (brand +
-    // health + path/branch) spanning the whole frame; with only menu + main
-    // container left, the menu opens with just enough chrome to match the
-    // tab strip's height on the other TUI mode — a centered segmented
-    // control stands in for the Ctrl+O keybinding.
-    if let Some(rect) = row(1) {
-        let (work_rect, _manage_rect) = super::render_mode_toggle(frame, rect, false);
-        hits.push((work_rect, Hit::SwitchToWorkspace));
-    }
-    if let Some(rect) = row(1) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                theme::glyph(Symbol::TreeDivider).repeat(rect.width as usize),
-                theme::fg(Token::BorderFaint),
-            )),
-            rect,
-        );
-    }
 
     for route in ROUTES {
         let selected = route == model.route;
@@ -775,8 +836,8 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     // The way into the index is at the foot of the sidebar now, with the
     // other chrome that belongs to uze rather than to a screen — one place
-    // in both modes, rather than a button here and a chip on the tab strip
-    // over there. This row is the hint line and the version.
+    // in both surfaces, rather than a button here and a chip on the tab
+    // strip over there. This row is the hint line and the version.
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([

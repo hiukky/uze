@@ -9,28 +9,26 @@
 //! comes back.
 //!
 //! Module map — start at [`run`], the entry point:
-//! - `ui.rs` (this file): the entry point, plus chrome shared by both TUI
-//!   modes — the color palette, [`TerminalSession`] (the one alternate-screen
-//!   lifecycle both modes draw into), the Work/Manage toggle, and the
-//!   sidebar-geometry math (`clamp_sidebar_width`/`sidebar_width_for`) both
-//!   sidebars resize by.
-//! - [`orchestrator`]: the terminal workspace mode (ADR-038) — tabs, panes,
-//!   the persistent runtime client. Self-contained: owns its own model, hit
-//!   type, and render loop in one file.
-//! - `management`: the management mode (routes below) — this mode's
-//!   counterpart to `orchestrator`, same shape (model loop + render loop in
-//!   one file).
+//! - `ui.rs` (this file): the entry point, plus chrome both surfaces
+//!   share — the color palette, [`TerminalSession`] (the one
+//!   alternate-screen lifecycle), and the sidebar-geometry math
+//!   (`clamp_sidebar_width`/`sidebar_width_for`) both menus resize by.
+//! - [`orchestrator`]: the terminal workspace client (ADR-038) — tabs,
+//!   panes, the persistent runtime client, and the one event loop. Owns
+//!   its own model, hit type and render.
+//! - `management`: the management surface (routes below), drawn as a
+//!   modal over the workspace and driven by its loop: what it keeps
+//!   between openings, how one opening is made, and how it is drawn.
 //! - [`model`]/[`input`]/[`hit`]/[`worker`]: management's MVU pieces —
 //!   `TuiModel` (state), key/mouse handling, hit-testing, and the
 //!   intent/worker dispatch that runs product operations off-thread.
 //! - [`view`]: one file per management route (Overview, Plugins,
-//!   Extensions, Harnesses, Profiles, Doctor).
-//! - `overlay`: modal dialogs shared across management routes.
+//!   Extensions, Harnesses, Profiles, Keys, Appearance).
+//! - `overlay`: the dialogs shared across management routes.
 
 use std::{
     io::{self, Stdout},
     path::PathBuf,
-    time::Duration,
 };
 
 use crossterm::{
@@ -71,8 +69,6 @@ use theme::{Symbol, Token};
 pub mod view;
 mod worker;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
-
 /// Forces every process the TUI spawns to run silently, regardless of
 /// whether the integration asked for inherited output. The TUI owns the
 /// terminal's alternate screen for its own rendering; a vendor installer's
@@ -106,21 +102,17 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
 pub fn run(home: UzeHome) -> Result<()> {
     let session = tracing::info_span!("tui.session");
     let _entered = session.enter();
-    // Once per process rather than per attach: a Ctrl+O round trip is not
-    // a reason to ask GitHub again, and both modes read the one answer.
+    // Once per process rather than per attach: attaching again is not a
+    // reason to ask GitHub again, and both surfaces read the one answer.
     crate::self_update::watch(home.clone());
     let mut terminal = TerminalSession::start()?;
     // Immediately after the screen is entered and before anything draws
     // into it: from here on, every panic — this thread's or any of the
     // background reads' — leaves a terminal a message can be read on.
     report_panics_on_a_restored_terminal(terminal.keyboard());
-    // The client's shape as this user last left it — read once, here,
-    // and owned by neither mode: both draw the same sidebar column, and a
-    // fold, a drag or a screen chosen in one must still be there when
-    // Ctrl+O switches to the other, not reset back to the defaults every
-    // round trip (see `uze_application::ClientLayout`). Each mode writes
-    // its own section back on the way out, so what the file gets is
-    // always the live shape of both.
+    // The client's shape as this user last left it — read once, here, and
+    // handed to the attach, which writes every section of it back as it
+    // changes (see `uze_application::ClientLayout`).
     let mut layout = tui_application(home.clone())
         .map(|app| app.workspace().client_layout())
         .unwrap_or_default();
@@ -129,21 +121,18 @@ pub fn run(home: UzeHome) -> Result<()> {
     // takes over from the last instead of deriving again in front of the
     // user (see `orchestrator::WorkspaceMemory`).
     let mut workspace_memory = orchestrator::WorkspaceMemory::default();
-    // The management client's own half of the same idea, started here
-    // rather than on the first Ctrl+O into it: the machine resolves on a
-    // thread while the workspace attaches, so that screen is already
+    // The management modal's own half of the same idea, started here
+    // rather than on the first opening of the modal: the machine resolves
+    // on a thread while the workspace attaches, so the modal is already
     // answered when the operator asks for it, and what it resolved is
     // still there the next time they do (see
     // `management::ManagementMemory`).
     let mut management_memory = management::ManagementMemory::warming(&home);
-    // Set when management asks to return to a specific tab (activating a
-    // prompt-history row); consumed by the next attach.
-    let mut pending_tab: Option<uze_terminal::TabId> = None;
     // Only the first attach lands the client in a space for the directory
-    // `uze` was started in; every Ctrl+O round trip after it takes the
-    // session as it stands (see `orchestrator::Landing`).
+    // `uze` was started in; an attach after the runtime went away takes
+    // the session as it stands (see `orchestrator::Landing`).
     let mut landing = orchestrator::Landing::AtLaunchDirectory;
-    loop {
+    let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         match orchestrator::attach_workspace(
             &mut terminal,
@@ -151,32 +140,22 @@ pub fn run(home: UzeHome) -> Result<()> {
             &mut layout,
             &mut workspace_memory,
             &home,
-            pending_tab.take(),
+            &mut management_memory,
             landing,
-        )? {
-            orchestrator::WorkspaceExit::Quit => return Ok(()),
-            orchestrator::WorkspaceExit::Management => {
+        ) {
+            Ok(orchestrator::WorkspaceExit::Quit) => break Ok(()),
+            Ok(orchestrator::WorkspaceExit::Disconnected) => {
                 landing = orchestrator::Landing::WhereItLeftOff;
-                let exit = management::run_management(
-                    &mut terminal,
-                    home.clone(),
-                    &mut layout,
-                    &mut management_memory,
-                )?;
-                // The workspace client writes its own changes as they
-                // happen; management has no such sink, so its screen and
-                // drawers are kept on the way out of it.
-                remember_layout(&home, &layout);
-                match exit {
-                    management::ManagementExit::Quit => return Ok(()),
-                    management::ManagementExit::Workspace => {}
-                    management::ManagementExit::WorkspaceTab(tab) => {
-                        pending_tab = Some(uze_terminal::TabId(tab));
-                    }
-                }
             }
+            Err(error) => break Err(error),
         }
-    }
+    };
+    // The attach writes its shape as it changes, on a thread that may not
+    // have caught up with the last change by now; one synchronous write
+    // on the way out is what makes the last drag or fold survive the
+    // process ending a moment later.
+    remember_layout(&home, &layout);
+    outcome
 }
 
 /// Keeps the client's shape for the next run. Best-effort: a layout that
@@ -189,13 +168,12 @@ fn remember_layout(home: &UzeHome, layout: &uze_application::ClientLayout) {
 // --- Terminal lifecycle ------------------------------------------------------
 
 /// Owns the raw-mode/alternate-screen/mouse-capture lifecycle for the whole
-/// `run()` call, not per mode: management and the terminal workspace used to
-/// each open and tear down their own alternate screen on every Ctrl+O round
-/// trip, which — even done back-to-back with no perceptible gap — is two
-/// consecutive full-screen buffer swaps most terminal emulators render as a
-/// visible flash, reading as uze itself closing and reopening. One session,
-/// entered once and left once (on quit), makes switching modes just a
-/// different `draw` call into the same already-open screen.
+/// `run()` call, not per attach: a client that opens and tears down its
+/// own alternate screen on every attach makes two consecutive full-screen
+/// buffer swaps most terminal emulators render as a visible flash, reading
+/// as uze itself closing and reopening. One session, entered once and left
+/// once (on quit), makes an attach after the runtime went away just
+/// another `draw` into the same already-open screen.
 pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// What this terminal turned out to be able to deliver — read by the
@@ -430,8 +408,9 @@ const MAX_SIDEBAR_WIDTH: u16 = 40;
 /// this many columns.
 const MIN_CONTENT_WIDTH: u16 = 30;
 
-/// Shared by both TUIs' sidebar drag-resize — same bounds, so the two feel
-/// identical to drag rather than just similarly shaped.
+/// Shared by both sidebars' drag-resize — the workspace's and the modal's
+/// menu — same bounds, so the two feel identical to drag rather than just
+/// similarly shaped.
 fn clamp_sidebar_width(width: u16, total_width: u16) -> u16 {
     let max = total_width
         .saturating_sub(MIN_CONTENT_WIDTH)
@@ -440,7 +419,7 @@ fn clamp_sidebar_width(width: u16, total_width: u16) -> u16 {
 }
 
 /// Shared responsive default sidebar width (no user drag override yet) for
-/// both TUIs. Every bucket stays at or above `MIN_SIDEBAR_WIDTH` — this
+/// both sidebars. Every bucket stays at or above `MIN_SIDEBAR_WIDTH` — this
 /// path isn't run through `clamp_sidebar_width`, so a bucket smaller than
 /// the drag floor would reintroduce the same overflow on a narrow terminal
 /// that raising the floor was meant to fix.
@@ -452,56 +431,6 @@ fn sidebar_width_for(total_width: u16) -> u16 {
     } else {
         32
     }
-}
-
-/// The shared Work / Manage segmented control for both TUIs. The active
-/// mode is a filled chip so the compact menu preserves a clear, clickable
-/// indication of which surface is open. Returns both segment hit rects so
-/// each caller can map the inactive side to its own switch intent.
-fn render_mode_toggle(
-    frame: &mut ratatui::Frame<'_>,
-    rect: Rect,
-    workspace_active: bool,
-) -> (Rect, Rect) {
-    let filled = Style::default()
-        .bg(theme::color(Token::Accent))
-        .fg(theme::color(Token::SurfaceBackground))
-        .add_modifier(Modifier::BOLD);
-    let ghost = theme::on(Token::TextInactive, Token::SurfaceRecessed);
-    let button_width = "Manage".len() as u16 + 2;
-    let centered = |label: &str| {
-        let extra = button_width.saturating_sub(label.len() as u16);
-        let left = extra / 2;
-        let right = extra - left;
-        format!(
-            "{}{label}{}",
-            " ".repeat(left as usize),
-            " ".repeat(right as usize)
-        )
-    };
-    let work = Span::styled(
-        centered("Work"),
-        if workspace_active { filled } else { ghost },
-    );
-    let gap = Span::raw(" ");
-    let manage = Span::styled(
-        centered("Manage"),
-        if workspace_active { ghost } else { filled },
-    );
-    let work_width = work.width() as u16;
-    let gap_width = gap.width() as u16;
-    let manage_width = manage.width() as u16;
-    let total_width = work_width + gap_width + manage_width;
-    let start_x = rect.x + rect.width.saturating_sub(total_width) / 2;
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![work, gap, manage]))
-            .alignment(ratatui::layout::Alignment::Center),
-        rect,
-    );
-    (
-        Rect::new(start_x, rect.y, work_width, 1),
-        Rect::new(start_x + work_width + gap_width, rect.y, manage_width, 1),
-    )
 }
 
 /// The inset [`content_area`] keeps on each side of a screen's content.
@@ -644,7 +573,7 @@ pub(crate) fn render_screen_header(
 // --- Row chrome ----------------------------------------------------------
 //
 // One column, one row at a time: what both sidebars and every extension
-// section are laid out with. Here rather than in either mode's own
+// section are laid out with. Here rather than in either surface's own
 // renderer because an extension's section is drawn by `extension_view`,
 // which is a sibling of both — and two modules deriving the same trailing
 // column independently is what this file already exists to prevent.

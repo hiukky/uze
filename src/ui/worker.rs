@@ -33,8 +33,8 @@ pub(crate) enum TrustGrant {
 pub(crate) enum Intent {
     None,
     Quit,
-    /// Mirrors the Ctrl+O keybinding — clicking the sidebar's "work" mode
-    /// label detaches from management the same way pressing the key does.
+    /// Closes the modal — the same action that opened it, or the close
+    /// mark on its title.
     SwitchToWorkspace,
     /// Leave management and re-select this tab in the workspace. Carries
     /// no space id: `Session::select_tab` moves the selected space along
@@ -78,8 +78,8 @@ pub(crate) enum Intent {
     /// it spawns a process, which is not something the render thread
     /// should be doing.
     OpenLink(String),
-    /// Put the release notice about this version away, in both modes and
-    /// every run after — a write, so not on the render thread.
+    /// Put the release notice about this version away, in both surfaces
+    /// and every run after — a write, so not on the render thread.
     AcknowledgeRelease(String),
     ContextAnalyze(PathBuf),
     ContextApply(PathBuf),
@@ -554,7 +554,7 @@ pub(crate) fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context
 /// for that whole stretch.
 ///
 /// Started once per session by [`super::management::ManagementMemory::warming`],
-/// at launch rather than on the first Ctrl+O into the management client:
+/// at launch rather than on the first opening of the management modal:
 /// bootstrap and refresh share one worker, so the one answer it composes
 /// is normally waiting by the time that screen is asked for. Every
 /// subsequent refresh (`Intent::Refresh`) goes through `spawn_refresh` and

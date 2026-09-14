@@ -34,7 +34,7 @@ use uze_keys::{Action, Resolution, Scope};
 pub(super) enum Flow {
     /// Keep going — almost everything.
     Continue,
-    /// Ctrl+O to management, or Ctrl+Q out.
+    /// Ctrl+Q out, or the terminal runtime gone.
     Exit(WorkspaceExit),
 }
 
@@ -93,6 +93,13 @@ pub(super) struct Attach<'a> {
     /// "did that land?" is asked, and the step was never ticked off
     /// however many times it was taken.
     pub(super) asked_for_a_tab: bool,
+    /// What the management modal keeps between openings — session-lived,
+    /// like the workspace's own memory, so an answer still in flight when
+    /// the modal closes lands when it opens again.
+    pub(super) manage_memory: &'a mut crate::ui::management::ManagementMemory,
+    /// What the host terminal's keyboard can deliver, asked once at
+    /// startup and handed to the modal's Keys screen on every opening.
+    pub(super) keyboard: crate::ui::keys::KeyboardSupport,
 }
 
 /// What a code door does when it is pressed.
@@ -130,11 +137,165 @@ impl Attach<'_> {
             }
         )
         .entered();
+        // The modal seals the client: while it is open every key and every
+        // click is its own, resolved against its own scopes and its own
+        // hit list, and the workspace behind it answers nothing. One
+        // guard here rather than one at the head of each handler, so
+        // nothing below can be reached around it.
+        if self.model.manage.is_some() {
+            return match event {
+                Event::Key(key) => self.manage_key(key, viewport),
+                Event::Mouse(mouse) => self.manage_mouse(mouse, viewport),
+                _ => Flow::Continue,
+            };
+        }
         match event {
             Event::Key(key) => self.key(key, viewport),
             Event::Paste(text) => self.paste(text),
             Event::Mouse(mouse) => self.mouse(mouse, viewport),
             _ => Flow::Continue,
+        }
+    }
+
+    // --- The management modal --------------------------------------------
+
+    /// Opens the modal over whatever is on screen. The action index is
+    /// the one surface put away first: it is how the modal is most often
+    /// reached, and a list of everything you can do has no business
+    /// staying open under a surface that seals it.
+    fn open_manage(&mut self) {
+        if self.model.manage.is_some() {
+            return;
+        }
+        self.model.action_index = None;
+        let first_steps = uze_application::FirstStepsLayout {
+            collapsed: self.model.first_steps_collapsed,
+            closed: self.model.first_steps_closed,
+            taken: self.model.steps_taken.clone(),
+        };
+        self.model.manage = Some(self.manage_memory.open(
+            self.home,
+            &self.model.management_layout,
+            &first_steps,
+            self.keyboard,
+        ));
+        self.model.dirty = true;
+    }
+
+    /// Closes the modal, keeping what it arranged: its own shape for the
+    /// layout file, and the first-steps list the two surfaces share.
+    pub(super) fn close_manage(&mut self) {
+        let Some(manage) = self.model.manage.take() else {
+            return;
+        };
+        let (layout, first_steps) = self.manage_memory.close(manage);
+        self.model.management_layout = layout;
+        self.model.first_steps_collapsed = first_steps.collapsed;
+        self.model.first_steps_closed = first_steps.closed;
+        self.model.steps_taken = first_steps.taken;
+        self.model.manage_chrome = None;
+        self.model.remember_sidebar();
+        self.model.dirty = true;
+    }
+
+    fn manage_key(&mut self, key: KeyEvent, viewport: &Viewport) -> Flow {
+        let intent = self
+            .model
+            .manage
+            .as_mut()
+            .map_or(crate::ui::worker::Intent::None, |manage| {
+                manage.apply_key(key)
+            });
+        self.manage_intent(intent, viewport)
+    }
+
+    /// A click inside the modal is the modal's; one beside it closes it,
+    /// the way a click outside any other open surface discards that
+    /// surface. Every other gesture — a hover, a drag, the wheel — goes to
+    /// the modal wherever the pointer is, so a drag that starts on its
+    /// edge and leaves it still lands.
+    fn manage_mouse(&mut self, mouse: MouseEvent, viewport: &Viewport) -> Flow {
+        let chrome = self.model.manage_chrome;
+        let inside = chrome.is_some_and(|chrome| {
+            chrome
+                .area
+                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+        });
+        let on_close = chrome.is_some_and(|chrome| {
+            chrome
+                .close
+                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+        });
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) && (!inside || on_close) {
+            self.close_manage();
+            return Flow::Continue;
+        }
+        let surface = chrome.map_or(
+            crate::ui::management::modal_area(Rect::new(
+                0,
+                0,
+                viewport.size.width,
+                viewport.size.height,
+            )),
+            |chrome| chrome.area,
+        );
+        // A width dragged inside the modal is measured against the
+        // rectangle its contents were drawn in.
+        let inner = crate::ui::management::modal_surface(surface);
+        let intent = self
+            .model
+            .manage
+            .as_mut()
+            .map_or(crate::ui::worker::Intent::None, |manage| {
+                manage.apply_mouse(mouse, inner)
+            });
+        self.manage_intent(intent, viewport)
+    }
+
+    /// What the modal answered a gesture with: a way out of it, or work
+    /// for one of its own workers.
+    fn manage_intent(&mut self, intent: crate::ui::worker::Intent, viewport: &Viewport) -> Flow {
+        use crate::ui::management::Leaving;
+        self.model.dirty = true;
+        match crate::ui::management::leaving(&intent) {
+            Some(Leaving::Quit) => {
+                let _ = send_request(&mut self.stream, &ClientRequest::Detach);
+                Flow::Exit(WorkspaceExit::Quit)
+            }
+            Some(Leaving::Close) => {
+                self.close_manage();
+                Flow::Continue
+            }
+            Some(Leaving::CloseToTab(tab)) => {
+                self.close_manage();
+                // `select_tab` moves the selected space too when the tab
+                // lives in another one, so the space needs no separate
+                // request. A tab closed since its prompt was logged
+                // simply selects nothing.
+                let tab = TabId(tab);
+                let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
+                if let Some(pane) = self.model.pane_for_tab(tab) {
+                    resize_pane(
+                        &mut self.stream,
+                        &mut self.model,
+                        pane,
+                        viewport.columns,
+                        viewport.rows,
+                    );
+                }
+                Flow::Continue
+            }
+            None => {
+                if let Some(manage) = self.model.manage.as_mut() {
+                    crate::ui::worker::dispatch(
+                        intent,
+                        self.home,
+                        self.manage_memory.sender(),
+                        manage,
+                    );
+                }
+                Flow::Continue
+            }
         }
     }
 
@@ -266,7 +427,7 @@ impl Attach<'_> {
         self.model.dirty = true;
     }
 
-    /// Performs one action. The two that leave the client answer first,
+    /// Performs one action. The two that leave the screen answer first,
     /// wherever they were asked from — which is what makes sealing a
     /// surface safe.
     /// One action, performed, and noted if it was a first step that landed.
@@ -301,8 +462,8 @@ impl Attach<'_> {
         let Viewport { columns, rows, .. } = *viewport;
         match action {
             Action::SwitchMode => {
-                let _ = send_request(&mut self.stream, &ClientRequest::Detach);
-                return Flow::Exit(WorkspaceExit::Management);
+                self.open_manage();
+                return Flow::Continue;
             }
             Action::Quit => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
@@ -867,7 +1028,7 @@ impl Attach<'_> {
     /// than it does about the palette.
     ///
     /// Two actions are the host's rather than the surface's — the doors,
-    /// which once it is open mean "show me the other mode" instead of
+    /// which once it is open mean "show me the other half" instead of
     /// opening anything.
     fn code_action(&mut self, action: Action) {
         match action {
@@ -1081,7 +1242,7 @@ impl Attach<'_> {
                 }
             }
             _ if self.model.renaming.is_some() => {
-                // Same rule the management TUI's overlays use: a click
+                // Same rule the management modal's dialogs use: a click
                 // outside the thing being edited discards it rather
                 // than silently confirming or acting on the click.
                 self.model.renaming = None;
@@ -1990,10 +2151,10 @@ impl Attach<'_> {
                 | ViewHit::DragContentScrollbar
                 | ViewHit::Close => {}
             },
-            WorkspaceHit::SwitchToManagement => {
-                let _ = send_request(&mut self.stream, &ClientRequest::Detach);
-                return Flow::Exit(WorkspaceExit::Management);
-            }
+            WorkspaceHit::OpenManage => self.open_manage(),
+            // Only reachable while the modal is open, which `handle` routes
+            // to `manage_mouse` before any hit is looked up.
+            WorkspaceHit::ManageSurface | WorkspaceHit::CloseManage => {}
             WorkspaceHit::ResizeSidebar => {
                 self.model.dragging_sidebar = true;
             }
@@ -2218,9 +2379,18 @@ impl Attach<'_> {
                     self.model
                         .set_notice("terminal runtime disconnected".to_owned());
                     self.model.dirty = true;
-                    return Flow::Exit(WorkspaceExit::Management);
+                    return Flow::Exit(WorkspaceExit::Disconnected);
                 }
             }
+        }
+        // The modal has a clock of its own — a spinner, a status that
+        // expires, answers to absorb — turned here, before the frame, for
+        // as long as it is open. Every tick redraws: the workspace behind
+        // it is still live, and the modal's own animation has no other
+        // way to advance.
+        if let Some(manage) = self.model.manage.as_mut() {
+            self.manage_memory.tick(manage, self.home);
+            self.model.dirty = true;
         }
         for request in adopt_task_names(&mut self.model) {
             let _ = send_request(&mut self.stream, &request);

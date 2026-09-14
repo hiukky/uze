@@ -9,11 +9,11 @@
 //! like [`profile_state`](crate::profile_state) rather than keyed by
 //! workspace.
 //!
-//! One file, one struct, sectioned by who owns each part: the two modes are
-//! one product to the person switching between them with Ctrl+O, and a
-//! preference is remembered by the product, not by whichever screen
-//! happened to write it. A mode adds a field to its own section; nothing
-//! here decides what a section means.
+//! One file, one struct, sectioned by who owns each part: the workspace
+//! and the management modal over it are one product to the person moving
+//! between them, and a preference is remembered by the product, not by
+//! whichever surface happened to write it. A surface adds a field to its
+//! own section; nothing here decides what a section means.
 //!
 //! Best-effort by construction: an unreadable or malformed file answers
 //! with the defaults. Nothing derives from this, so a TUI that refused to
