@@ -133,7 +133,7 @@ actions! {
     OpenActionIndex => "open-action-index", Mode::Both, false,
         "Everything you can do", "List every action available here, with the key that reaches it";
     SwitchMode => "switch-mode", Mode::Both, false,
-        "Switch mode", "Move between the workspace and management";
+        "Manage", "Open or close the management modal over the workspace";
     Quit => "quit", Mode::Both, false,
         "Quit", "Leave uze, detaching from the session rather than ending it";
 

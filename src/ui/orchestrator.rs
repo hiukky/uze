@@ -1,9 +1,8 @@
 //! Workspace client for the persistent local terminal runtime (ADR-038).
 //!
-//! Presentation deliberately reuses the management TUI's palette and layout
-//! conventions (`theme::color(Token::SurfaceBackground)`/`theme::color(Token::Accent)`/`theme::color(Token::BorderDefault)`/…, hairline dividers, no
-//! filled panels) so switching between the workspace and management
-//! contexts with Ctrl+O reads as one product, not two.
+//! Presentation deliberately shares the management surface's palette and
+//! layout conventions (hairline dividers, no filled panels) so the modal
+//! it opens over itself reads as one product, not two.
 
 use super::tui_application;
 use crate::ui::extension_host::WorkspaceHost;
@@ -132,8 +131,11 @@ use input::*;
 use render::*;
 use session::*;
 
+/// Why an attach ended.
 pub(crate) enum WorkspaceExit {
-    Management,
+    /// The terminal runtime stopped answering. `super::run` attaches
+    /// again rather than leaving the operator with a frozen session.
+    Disconnected,
     Quit,
 }
 
@@ -307,7 +309,7 @@ struct DeliveryResolution {
 /// Everything reachable with `scopes` open, each with the key that
 /// reaches it. The workspace's counterpart to the management model's own
 /// `action_index_rows` — the same question, read from the same keymap, so
-/// the two modes cannot describe themselves differently.
+/// the two surfaces cannot describe themselves differently.
 fn action_index_rows(
     scopes: &[uze_keys::Scope],
     filter: &str,
@@ -837,17 +839,17 @@ fn spawn_changes_refresh(
 /// Whether this attach asks the server for a space rooted at the launch
 /// directory.
 ///
-/// Only the process's first attach does. A Ctrl+O round trip to management
-/// is a detach and a fresh attach of the *same* run, and asking again there
-/// would reopen a space the operator closed in between — the launch
-/// directory would resurrect it every trip, and closing it would look
-/// broken rather than deliberate.
+/// Only the process's first attach does. An attach after the runtime went
+/// away is a fresh attach of the *same* run, and asking again there would
+/// reopen a space the operator closed in between — the launch directory
+/// would resurrect it, and closing it would look broken rather than
+/// deliberate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Landing {
     /// The run's first attach: the directory `uze` was started in gets a
     /// space, created when none is open for it.
     AtLaunchDirectory,
-    /// A return from management: the session already knows where the
+    /// An attach after the first: the session already knows where the
     /// operator was, and a space they closed stays closed.
     WhereItLeftOff,
 }
@@ -873,7 +875,7 @@ pub(crate) fn attach_workspace(
     layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
-    pending_tab: Option<TabId>,
+    manage: &mut super::management::ManagementMemory,
     landing: Landing,
 ) -> Result<WorkspaceExit> {
     // The handshake below must ship the real terminal size: it sizes the PTY
@@ -883,9 +885,8 @@ pub(crate) fn attach_workspace(
     // A placeholder here previously left a stale-selected pane pinned to a
     // wrong fixed size until something happened to trigger a fresh resize.
     // `layout.sidebar.width` carries over whatever the user last dragged
-    // it to — in this mode or the management one, they share the one value
-    // (see `super::run`) — so the pane starts at its real width
-    // immediately instead of assuming the sidebar's responsive default.
+    // it to, so the pane starts at its real width immediately instead of
+    // assuming the sidebar's responsive default.
     let size = terminal.size()?;
     let geometry = compute_layout(
         Rect::new(0, 0, size.width, size.height),
@@ -953,9 +954,9 @@ pub(crate) fn attach_workspace(
     });
     // This client's own shape, written the same way and for the same
     // reason: folding a section is a click, and a click never waits on the
-    // filesystem. The thread writes the whole layout, management's section
-    // included, from the copy it was handed: that section cannot change
-    // while this mode has the screen, so the copy is exact.
+    // filesystem. The thread writes the whole layout from the copy it was
+    // handed, and every section of it — the modal's included — arrives
+    // in the shape, so the copy is exact.
     let (layout_recorder, remembered_layouts) = mpsc::channel::<WorkspaceShape>();
     let parent = tracing::Span::current();
     thread::spawn({
@@ -982,6 +983,7 @@ pub(crate) fn attach_workspace(
         timeline_rows: layout.workspace.timeline_rows,
         prompt_recorder: Some(prompt_recorder),
         layout_recorder: Some(layout_recorder),
+        management_layout: layout.management.clone(),
         ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
     };
     // A registered harness set doesn't change mid-session, so this is built
@@ -1001,9 +1003,9 @@ pub(crate) fn attach_workspace(
     // the selection names an agent whose answer is not already in hand —
     // the same moment the "✦" badge appears.
     // The answer channels outlive this attach with the rest of the memory:
-    // a read still running when the user leaves for management lands after
-    // they come back, instead of vanishing with a receiver that was dropped
-    // and leaving its key reserved forever.
+    // a read still running when the runtime goes away lands after the
+    // client attaches again, instead of vanishing with a receiver that was
+    // dropped and leaving its key reserved forever.
     let support_sender = memory.support.sender.clone();
     let support_receiver = &memory.support.receiver;
     let task_sender = memory.tasks.sender.clone();
@@ -1030,20 +1032,19 @@ pub(crate) fn attach_workspace(
     let activity_ticks: Vec<&str> = activity_frames.iter().map(String::as_str).collect();
     activity_spinner.set_style(ProgressStyle::default_spinner().tick_strings(&activity_ticks));
     let next_activity_tick = Instant::now();
-    // The server's session/pane state is persistent — reattaching after a
-    // Ctrl+O round trip to management finds the same shells exactly as they
-    // were left. But the client's view of that session and its panes always
-    // starts empty (only what it resolved on its own carries over, see
-    // `WorkspaceMemory`), so without this wait the very first frame renders
-    // before the server's initial `Attached`/`Snapshot` reply lands,
-    // flashing the "starting shell…" placeholder and repainting the whole
-    // pane a moment later — reading as a lost/reset session even though
-    // nothing server-side ever was. A
+    // The server's session/pane state is persistent — attaching again
+    // finds the same shells exactly as they were left. But the client's
+    // view of that session and its panes always starts empty (only what it
+    // resolved on its own carries over, see `WorkspaceMemory`), so without
+    // this wait the very first frame renders before the server's initial
+    // `Attached`/`Snapshot` reply lands, flashing the "starting shell…"
+    // placeholder and repainting the whole pane a moment later — reading
+    // as a lost/reset session even though nothing server-side ever was. A
     // generous timeout is still a safety net, not the expected path: this
     // is a local Unix socket round trip, normally sub-millisecond, and the
-    // shared `TerminalSession` (see `super::TerminalSession`) is already
-    // showing the same open alternate screen management just used, so this
-    // blocks inside a continuously open uze, not a flash back to the shell.
+    // alternate screen is already open (see `super::TerminalSession`), so
+    // this blocks inside a continuously open uze, not a flash back to the
+    // shell.
     while model.session.is_none() || model.panes.is_empty() {
         match receiver.recv_timeout(Duration::from_millis(500)) {
             Ok(event) => model.apply(event, &identities),
@@ -1055,18 +1056,6 @@ pub(crate) fn attach_workspace(
     // None of that is an agent starting a turn, which is what made every
     // open agent spin for a few seconds each time uze was reopened.
     model.note_attach_redraw();
-    // `select_tab` moves the selected space too when the tab lives in
-    // another one, so the space needs no separate request. A tab closed
-    // since its prompt was logged simply selects nothing.
-    if let Some(tab) = pending_tab {
-        let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
-        // Resize the newly selected pane to the current layout size, same as
-        // the manual SelectTab handler does, so the PTY size matches the
-        // visible rect immediately.
-        if let Some(pane) = model.pane_for_tab(tab) {
-            resize_pane(&mut stream, &mut model, pane, columns, rows);
-        }
-    }
     // The loop's own state, gathered into one value so an event handler
     // reaches for a field instead of closing over a dozen locals — see
     // `session::Attach`.
@@ -1090,6 +1079,8 @@ pub(crate) fn attach_workspace(
         spinner: activity_spinner,
         next_tick: next_activity_tick,
         asked_for_a_tab: false,
+        manage_memory: manage,
+        keyboard: terminal.keyboard(),
     };
     let inbox = AttachInbox {
         events: &receiver,
@@ -1104,9 +1095,9 @@ pub(crate) fn attach_workspace(
         occupancy: occupancy_receiver,
         placements: placement_receiver,
     };
-    // Every way out of the loop — Ctrl+O, Ctrl+Q, an error — must hand the
-    // model's memory back, so the loop runs inside one call whose result is
-    // read only after that handover.
+    // Every way out of the loop — a quit, a runtime gone, an error — must
+    // hand the model's memory back, so the loop runs inside one call whose
+    // result is read only after that handover.
     let outcome: Result<WorkspaceExit> = (|| loop {
         if let Flow::Exit(exit) = attach.pump(&inbox) {
             return Ok(exit);
@@ -1147,6 +1138,7 @@ pub(crate) fn attach_workspace(
                 attach.model.code_tree_scroll = rendered.navigator_scroll;
                 attach.model.code_scrollbars = rendered;
             }
+            attach.model.absorb_manage_frame(metrics.manage);
             attach.model.dirty = false;
         }
         if event::poll(POLL).map_err(io_error)?
@@ -1155,22 +1147,25 @@ pub(crate) fn attach_workspace(
             return Ok(exit);
         }
     })();
-    // The shape is shared with management (see `super::run`), so a drag
-    // or a fold in this mode is there on the next Ctrl+O rather than only
-    // on the next run.
+    // The modal is closed on the way out so what it arranged is in the
+    // shape, and the shape is handed back so the next attach — or the
+    // next run — opens on it.
+    attach.close_manage();
     attach.model.shape().apply_to(layout);
     memory.remembered = attach.model.remember();
     outcome
 }
 
-/// What this client owns of the shared layout: the column both modes
-/// draw, and its own section. Sent to the recorder thread on every
-/// change and handed back to `super::run` when the attach ends.
+/// The client's layout as it stands: the sidebar column, the workspace's
+/// own section, the first-steps list, and the management modal's. Sent to
+/// the recorder thread on every change and handed back to `super::run`
+/// when the attach ends.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkspaceShape {
     pub(crate) sidebar: uze_application::SidebarLayout,
     pub(crate) workspace: uze_application::WorkspaceLayout,
     pub(crate) first_steps: uze_application::FirstStepsLayout,
+    pub(crate) management: uze_application::ManagementLayout,
 }
 
 impl WorkspaceShape {
@@ -1178,6 +1173,7 @@ impl WorkspaceShape {
         layout.sidebar = self.sidebar;
         layout.workspace = self.workspace;
         layout.first_steps = self.first_steps;
+        layout.management = self.management;
     }
 }
 
@@ -1249,7 +1245,15 @@ pub(super) enum WorkspaceHit {
     /// today owns every `ExtensionHit` variant that exists; a second
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
-    SwitchToManagement,
+    /// The sidebar header's trailing control — opens the management
+    /// modal (`WorkspaceModel::manage`), the same as the `SwitchMode`
+    /// action does.
+    OpenManage,
+    /// The open management modal itself. A click inside it is the
+    /// modal's to answer against its own hit list; one outside closes it.
+    ManageSurface,
+    /// The mark on the modal's title that closes it.
+    CloseManage,
     /// The first-steps section's header, which folds it.
     ToggleFirstSteps,
     /// The mark on that header, which puts the section away for good.
@@ -1821,10 +1825,10 @@ impl<T> Default for Answers<T> {
 /// What the workspace client keeps between attaches.
 ///
 /// Owned by `super::run` for the life of the process, not by one call to
-/// [`attach_workspace`]: a Ctrl+O round trip to management and back is a
-/// detach and a fresh attach, and everything this client had resolved on
-/// its own — every task, branch, badge and agent status in the sidebar —
-/// used to leave with the model that held it. The trip back then redrew
+/// [`attach_workspace`]: an attach after the runtime went away is a fresh
+/// attach, and everything this client had resolved on its own — every
+/// task, branch, badge and agent status in the sidebar — used to leave
+/// with the model that held it. The next attach then redrew
 /// every agent row from its bare working directory and filled the captions
 /// in again one answer at a time, reading as the whole workspace being
 /// resolved from scratch. What comes from the server (the session, the
@@ -1832,7 +1836,7 @@ impl<T> Default for Answers<T> {
 /// stale copy would be worse than a short wait for the real one. Nor is
 /// the client's own shape — the sidebar's width, the timeline's fold —
 /// which is a preference rather than a resolution, and lives in the
-/// `uze_application::ClientLayout` both modes share.
+/// `uze_application::ClientLayout` both surfaces share.
 #[derive(Default)]
 pub(crate) struct WorkspaceMemory {
     /// The model's own remembered half, taken by the attach and handed
@@ -2051,15 +2055,14 @@ struct WorkspaceModel {
     /// every step has been taken.
     first_steps_closed: bool,
     /// The steps already taken, by action name — shared with the
-    /// management client through `ClientLayout`, because it is one list
-    /// drawn at the foot of both sidebars and a step taken in one mode is
-    /// taken.
+    /// management modal, because it is one list drawn at the foot of both
+    /// sidebars and a step taken in one surface is taken.
     steps_taken: std::collections::BTreeSet<String>,
     dragging_sidebar: bool,
     /// What's being renamed (a tab or a space) and its live edit buffer.
     /// While set, all keyboard input edits this instead of reaching the
     /// pane, and any click elsewhere cancels it (same "click outside
-    /// discards" rule the management TUI's overlays use).
+    /// discards" rule the management modal's dialogs use).
     renaming: Option<(RenameTarget, String)>,
     /// Open state of the sidebar's "+ new" prompt — the directory the next
     /// space is born from, chosen from a live listing that narrows as it is
@@ -2233,7 +2236,7 @@ struct WorkspaceModel {
     /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
     /// one line wide and a path is the one thing on it that can be any
     /// length. Remembered across attaches like any other sidebar
-    /// resolution, so a Ctrl+O round trip does not flip it back.
+    /// resolution, so an attach does not flip it back.
     roots_shown: BTreeSet<SpaceId>,
     /// Whether the sidebar's timeline section shows only its header —
     /// folded by clicking that header (see `ViewHit::ToggleSection`).
@@ -2272,6 +2275,17 @@ struct WorkspaceModel {
     /// `ViewHit::SelectItem`). Informational and anchored like
     /// `support_dropdown`: any click or key dismisses it.
     commit_detail: Option<CommitDetailPopup>,
+    /// The management modal, while it is open. Sealed: every key and
+    /// every click inside it is the modal's, and the workspace behind it
+    /// keeps drawing but answers nothing.
+    manage: Option<super::model::TuiModel>,
+    /// Where the last frame drew the modal, for the click that lands
+    /// beside it — or on its close mark — to be told apart from one
+    /// inside.
+    manage_chrome: Option<super::management::ModalChrome>,
+    /// The modal's shape as it was last closed, kept here so the layout
+    /// file is written from this model alone (see `shape`).
+    management_layout: uze_application::ManagementLayout,
 }
 
 /// What [`WorkspaceModel::commit_detail`] holds while a commit is open —
@@ -2546,6 +2560,7 @@ impl WorkspaceModel {
             && self.context_menu.is_none()
             && self.code.is_none()
             && self.action_index.is_none()
+            && self.manage.is_none()
             && !self.commit_detail_open()
     }
 
@@ -2759,6 +2774,26 @@ impl WorkspaceModel {
                 closed: self.first_steps_closed,
                 taken: self.steps_taken.clone(),
             },
+            // Live while the modal is open, last-closed otherwise: a
+            // drawer dragged in the modal is in the file the moment the
+            // next fold or drag anywhere sends a shape.
+            management: self.manage.as_ref().map_or_else(
+                || self.management_layout.clone(),
+                |manage| manage.management_layout(),
+            ),
+        }
+    }
+
+    /// What the last frame drew of the modal — its hit list goes to the
+    /// modal's own model, where its clicks are resolved, and its geometry
+    /// stays here, where the click beside it is.
+    fn absorb_manage_frame(&mut self, frame: Option<ManageFrame>) {
+        match (frame, self.manage.as_mut()) {
+            (Some(frame), Some(manage)) => {
+                manage.hits = frame.hits;
+                self.manage_chrome = Some(frame.chrome);
+            }
+            _ => self.manage_chrome = None,
         }
     }
 

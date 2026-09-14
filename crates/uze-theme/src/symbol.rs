@@ -246,6 +246,9 @@ vocabulary! {
         Prompt = "prompt",
         /// Opens a menu.
         Menu = "menu",
+        /// Opens the management modal — the control a column's header
+        /// ends in.
+        Manage = "manage",
         /// The code of a checkout — what the code surface opens onto.
         Code = "code",
 

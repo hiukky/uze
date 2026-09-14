@@ -8,6 +8,7 @@
 //! and `super::keys`'s; nothing here names one.
 
 use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 
 use uze_application::application::ContextPlan;
 use uze_keys::{Action, Resolution, Scope};
@@ -118,8 +119,8 @@ impl TuiModel {
     /// the steps need an answer; everything else is never noted.
     ///
     /// Some of them leave their evidence on the model and some of them
-    /// leave it in the intent they answer with — an action that hands the
-    /// screen over to the other mode changes nothing here to look at.
+    /// leave it in the intent they answer with — an action that closes the
+    /// modal changes nothing here to look at.
     fn step_landed(&self, action: Action, intent: &Intent) -> bool {
         match action {
             Action::SwitchMode => *intent == Intent::SwitchToWorkspace,
@@ -408,6 +409,10 @@ impl TuiModel {
         Intent::None
     }
 
+    /// Closes the innermost thing that is open — a capture, a filter, a
+    /// preview, a drawer — and, when nothing is, the modal itself: the
+    /// key that backs out of everything else backs out of the surface
+    /// too, which is what makes it read as one.
     fn dismiss(&mut self) -> Intent {
         if self.keys_capture {
             self.keys_capture = false;
@@ -425,20 +430,29 @@ impl TuiModel {
             // drawer, doesn't touch focus" rule.
             if self.profile_preview_open {
                 self.profile_preview_open = false;
-            } else {
-                self.profile_panel = ProfilePanel::List;
+                return Intent::None;
             }
-            return Intent::None;
+            if self.profile_panel != ProfilePanel::List {
+                self.profile_panel = ProfilePanel::List;
+                return Intent::None;
+            }
+            return Intent::SwitchToWorkspace;
         }
         // Slides the open drawer away — the fetched detail stays cached, so
         // reopening the same selection is instant.
-        match self.route {
-            Route::Plugins => self.marketplace_drawer_open = false,
-            Route::Extensions => self.extension_drawer_open = false,
-            Route::Harnesses => self.harnesses_drawer_open = false,
-            _ => {}
+        let drawer = match self.route {
+            Route::Plugins => Some(&mut self.marketplace_drawer_open),
+            Route::Extensions => Some(&mut self.extension_drawer_open),
+            Route::Harnesses => Some(&mut self.harnesses_drawer_open),
+            _ => None,
+        };
+        match drawer {
+            Some(open) if *open => {
+                *open = false;
+                Intent::None
+            }
+            _ => Intent::SwitchToWorkspace,
         }
-        Intent::None
     }
 
     /// Enter's meaning depends on the route: open a plugin row's delivery
@@ -485,20 +499,27 @@ impl TuiModel {
     /// for the sidebar-drag arm below (`clamp_sidebar_width`'s dynamic max
     /// shrinks as the terminal narrows), which is otherwise the one mouse
     /// gesture this method can't resolve from `self` alone.
-    pub(crate) fn apply_mouse(&mut self, event: MouseEvent, total_width: u16) -> Intent {
+    /// One mouse event over the surface drawn in `surface` — the inside
+    /// of the modal, or a whole test frame.
+    ///
+    /// Clicks and hovers resolve against the hit list, which is in frame
+    /// coordinates like the event; only the drags measure a *width* from
+    /// the pointer, and a width is measured from the surface's own left
+    /// edge, not the frame's.
+    pub(crate) fn apply_mouse(&mut self, event: MouseEvent, surface: Rect) -> Intent {
+        let total_width = surface.width;
+        let column = event.column.saturating_sub(surface.x);
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(event.column, event.row),
-            // The sidebar always starts at column 0 — the frame this TUI
-            // draws into is always the full terminal — the same fact
-            // `orchestrator::compute_layout`'s drag arm relies on via its
-            // own `layout.sidebar.x`. This used to read the *previous*
-            // frame's `ResizeSidebar` hit rect instead (its right edge, not
-            // its left) as that reference point: each drag step measured
-            // from a stale, moving position, so the edge fought the mouse
-            // instead of tracking it — hence no layout recomputation
-            // needed here, just the mouse's own absolute column.
+            // The sidebar starts at the surface's own left edge. This used
+            // to read the *previous* frame's `ResizeSidebar` hit rect
+            // instead (its right edge, not its left) as that reference
+            // point: each drag step measured from a stale, moving
+            // position, so the edge fought the mouse instead of tracking
+            // it — hence no layout recomputation needed here, just the
+            // pointer's own column.
             MouseEventKind::Drag(MouseButton::Left) if self.dragging_sidebar => {
-                let new_width = super::clamp_sidebar_width(event.column, total_width);
+                let new_width = super::clamp_sidebar_width(column, total_width);
                 if self.sidebar_width != Some(new_width) {
                     self.sidebar_width = Some(new_width);
                 }
@@ -517,40 +538,40 @@ impl TuiModel {
                 let content_width = total_width.saturating_sub(sidebar_width);
                 let min_panel_width = 24;
                 let max_panel_width = content_width.saturating_sub(min_panel_width);
-                let pointer_in_content = event.column.saturating_sub(sidebar_width);
+                let pointer_in_content = column.saturating_sub(sidebar_width);
                 match self.dragging_panel {
                     Some(ResizablePanel::MarketplaceDrawer) => {
                         self.marketplace_drawer_width = Some(
                             total_width
-                                .saturating_sub(event.column)
+                                .saturating_sub(column)
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
                     Some(ResizablePanel::ExtensionDrawer) => {
                         self.extension_drawer_width = Some(
                             total_width
-                                .saturating_sub(event.column)
+                                .saturating_sub(column)
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
                     Some(ResizablePanel::HarnessDrawer) => {
                         self.harness_drawer_width = Some(
                             total_width
-                                .saturating_sub(event.column)
+                                .saturating_sub(column)
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
                     Some(ResizablePanel::KeysDrawer) => {
                         self.keys_drawer_width = Some(
                             total_width
-                                .saturating_sub(event.column)
+                                .saturating_sub(column)
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
                     Some(ResizablePanel::AppearanceDrawer) => {
                         self.appearance_drawer_width = Some(
                             total_width
-                                .saturating_sub(event.column)
+                                .saturating_sub(column)
                                 .clamp(min_panel_width, max_panel_width),
                         );
                     }
@@ -608,6 +629,8 @@ impl TuiModel {
 mod tests {
     use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+    use ratatui::layout::Rect;
+
     use super::super::keys::press;
     use super::super::model::{Overlay, ResizablePanel, Route, TuiModel};
 
@@ -624,7 +647,7 @@ mod tests {
                 row: 4,
                 modifiers: KeyModifiers::NONE,
             },
-            120,
+            Rect::new(0, 0, 120, 40),
         );
 
         assert_eq!(model.harness_drawer_width, Some(40));

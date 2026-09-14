@@ -48,7 +48,7 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     );
     put(
         Action::SwitchMode,
-        Control("the sidebar's work/manage control, in both modes"),
+        Control("the sidebar header's trailing control, and the modal's close mark"),
     );
     put(
         Action::Quit,

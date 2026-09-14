@@ -2357,7 +2357,7 @@ impl Read for Handshake {
 /// encoding of that (a `Snapshot`/`Damage` this size fires on every PTY
 /// repaint — scrolling an agent's own transcript, not just resizes) was
 /// measured spending hundreds of milliseconds in encode+decode alone on a
-/// realistic multi-tab session, which is what made switching Work/Manage
+/// realistic multi-tab session, which is what made attaching a client
 /// and scrolling inside a pane both feel slow. Framing can't be
 /// newline-delimited any more since the payload is binary and may contain
 /// a literal `0x0A` byte anywhere in it.
@@ -3164,9 +3164,9 @@ mod tests {
     /// closed comes back.
     ///
     /// This is the server half of what makes closing a space stick: the
-    /// workspace client detaches and attaches again on every Ctrl+O round
-    /// trip to management, and an attach that named the launch directory
-    /// every time reopened the space closed just before it.
+    /// workspace client attaches again after the runtime went away, and an
+    /// attach that named the launch directory every time reopened the
+    /// space closed just before it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {

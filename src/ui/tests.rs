@@ -216,7 +216,7 @@ fn every_route_renders_without_panicking() {
         };
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, &model, &mut hits))
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
             .unwrap();
     }
 }
@@ -272,7 +272,7 @@ fn every_overlay_renders_without_panicking() {
         };
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, &model, &mut hits))
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
             .unwrap();
     }
 }
@@ -626,7 +626,7 @@ fn mouse_click_on_sidebar_route_switches_route_and_focus() {
             row: 1,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(intent, Intent::None);
     assert_eq!(model.route, Route::Plugins);
@@ -654,7 +654,7 @@ fn mouse_click_on_extension_row_selects_and_opens_drawer_without_fetch() {
             row: 1,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(model.extensions_selected, 1);
     assert!(model.extension_drawer_open);
@@ -671,7 +671,7 @@ fn scroll_moves_selection_without_mutating_anything() {
             row: 0,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     // Scroll on the Plugins tree is read-only navigation: it moves the
     // selection and fetches the newly selected (installed, local) row's
@@ -695,7 +695,7 @@ fn click_outside_overlay_dismisses_without_confirming() {
             row: 0,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         intent,
@@ -1224,7 +1224,7 @@ fn a_preference_steps_through_its_values_from_its_arrows() {
     let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     let next = crate::ui::theme::glyph(crate::ui::theme::Symbol::StepNext);
@@ -1282,7 +1282,7 @@ fn a_profile_row_carries_no_action_of_its_own() {
     let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     let row = rows
@@ -1322,7 +1322,7 @@ fn the_preview_shows_each_key_as_it_is_and_as_it_will_be() {
     let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     let row = |needle: &str| {
@@ -1472,7 +1472,7 @@ fn d_on_the_list_panel_opens_a_delete_confirmation_that_a_stray_click_cannot_con
             row: 0,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         intent,
@@ -1776,7 +1776,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     let rows = buffer_rows(&terminal);
@@ -1838,7 +1838,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
 
@@ -1890,7 +1890,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     let rect = model
@@ -1911,7 +1911,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
             row: rect.y,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert!(
         model.source_link_hovered,
@@ -1924,7 +1924,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
             row: rect.y + 1,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert!(!model.source_link_hovered, "muted again once it leaves");
 }
@@ -1963,7 +1963,7 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     assert!(
@@ -1986,7 +1986,7 @@ fn the_sidebar_announces_a_release_above_the_steps() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert!(
         !hits
@@ -2003,7 +2003,7 @@ fn the_sidebar_announces_a_release_above_the_steps() {
     ));
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let drawn = buffer_rows(&terminal);
     let (mark, _) = hits
@@ -2062,7 +2062,7 @@ fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let drawn = buffer_rows(&terminal);
 
@@ -2103,7 +2103,7 @@ fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
     assert!(model.first_steps_collapsed);
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert!(
         hits.iter().any(|(_, hit)| *hit == Hit::ToggleFirstSteps),
@@ -2125,7 +2125,7 @@ fn a_finished_list_offers_to_leave() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert!(
         !hits.iter().any(|(_, hit)| *hit == Hit::CloseFirstSteps),
@@ -2138,7 +2138,7 @@ fn a_finished_list_offers_to_leave() {
         .collect();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let (close, _) = hits
         .iter()
@@ -2150,7 +2150,7 @@ fn a_finished_list_offers_to_leave() {
 
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert!(
         !hits.iter().any(|(_, hit)| *hit == Hit::ToggleFirstSteps),
@@ -2304,33 +2304,6 @@ fn a_hint_line_reads_its_keys_off_the_keymap() {
 }
 
 #[test]
-fn sidebar_work_toggle_click_mirrors_ctrl_o() {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-    let mut model = TuiModel::default();
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    model.hits = hits;
-    let intent = model.apply_mouse(
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 8,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        },
-        100,
-    );
-    assert_eq!(
-        intent,
-        Intent::SwitchToWorkspace,
-        "clicking the sidebar's 'work' segment must mirror the Ctrl+O keybinding"
-    );
-}
-
-#[test]
 fn sidebar_resize_drag_updates_width() {
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -2338,7 +2311,7 @@ fn sidebar_resize_drag_updates_width() {
     let mut model = TuiModel::default();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
 
@@ -2352,7 +2325,7 @@ fn sidebar_resize_drag_updates_width() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert!(model.dragging_sidebar);
 
@@ -2365,7 +2338,7 @@ fn sidebar_resize_drag_updates_width() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         model.sidebar_width,
@@ -2383,7 +2356,7 @@ fn sidebar_resize_drag_updates_width() {
     // the column dragged to, not drift from where the border now sits.
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     model.apply_mouse(
@@ -2393,7 +2366,7 @@ fn sidebar_resize_drag_updates_width() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         model.sidebar_width,
@@ -2410,7 +2383,7 @@ fn sidebar_resize_drag_clamps_to_bounds() {
     let mut model = TuiModel::default();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     model.apply_mouse(
@@ -2420,7 +2393,7 @@ fn sidebar_resize_drag_clamps_to_bounds() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
 
     model.apply_mouse(
@@ -2430,7 +2403,7 @@ fn sidebar_resize_drag_clamps_to_bounds() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         model.sidebar_width,
@@ -2445,7 +2418,7 @@ fn sidebar_resize_drag_clamps_to_bounds() {
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(
         model.sidebar_width,
@@ -2665,7 +2638,7 @@ fn drawn(model: &TuiModel) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), model, &mut hits))
         .unwrap();
     terminal.backend().buffer().clone()
 }
@@ -2697,13 +2670,18 @@ fn a_modal_pushes_the_screen_it_interrupts_behind_it() {
         ..model_with_plugins(&["flow"])
     });
 
-    // A cell in the sidebar: far from any centred dialog, and written in a
-    // colour the theme answers for, so both halves of the claim are about
-    // the same drawn thing rather than about whatever happened to be there.
+    // A cell in the sidebar: far from any centred dialog, written in a
+    // colour the theme answers for, and visibly so — an unselected
+    // route's edge bar is drawn in the backdrop's own colour, and a cell
+    // already on the backdrop has nowhere to recede to — so both halves of
+    // the claim are about the same drawn thing rather than about whatever
+    // happened to be there.
     let (column, row) = (0..40u16)
         .flat_map(|row| (0..24u16).map(move |column| (column, row)))
         .find(|position| {
-            quiet[*position].symbol().trim() != "" && theme::token_of(quiet[*position].fg).is_some()
+            quiet[*position].symbol().trim() != ""
+                && theme::token_of(quiet[*position].fg).is_some()
+                && distance_from_the_backdrop(quiet[*position].fg) > 0
         })
         .expect("the sidebar drew something");
 
@@ -2763,7 +2741,7 @@ fn overview_does_not_render_project_context() {
     };
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     for forbidden in [
@@ -2811,7 +2789,7 @@ fn overview_render_does_not_mutate_project_state() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
 
@@ -2859,7 +2837,7 @@ fn no_workspace_render_creates_nothing() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     assert!(rows.iter().any(|row| row.contains("Overview")));
@@ -3168,7 +3146,7 @@ fn a_prompt_row_is_clickable_and_hoverable_at_the_same_rect() {
     let mut model = overview_with_prompts(3);
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
 
@@ -3186,7 +3164,7 @@ fn a_prompt_row_is_clickable_and_hoverable_at_the_same_rect() {
             row,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
     assert_eq!(model.overview_prompt_hovered, Some(1));
 
@@ -3200,7 +3178,7 @@ fn moving_off_every_row_drops_the_hover() {
     let mut model = overview_with_prompts(2);
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     model.overview_prompt_hovered = Some(0);
@@ -3212,7 +3190,7 @@ fn moving_off_every_row_drops_the_hover() {
             row: 39,
             modifiers: KeyModifiers::NONE,
         },
-        100,
+        Rect::new(0, 0, 100, 40),
     );
 
     assert_eq!(model.overview_prompt_hovered, None);
@@ -3258,7 +3236,7 @@ fn the_prompt_table_groups_rows_by_age_and_marks_the_selection() {
     };
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
 
@@ -3317,7 +3295,7 @@ fn a_selection_below_the_fold_scrolls_the_prompt_table() {
     model.overview_prompt_selected = 30;
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
 
     assert!(
@@ -3339,7 +3317,7 @@ fn an_overview_with_no_room_for_the_history_still_renders() {
     let model = overview_with_prompts(40);
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
 }
 
@@ -3429,7 +3407,7 @@ fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
             };
             let mut hits = Vec::new();
             terminal
-                .draw(|frame| render(frame, &model, &mut hits))
+                .draw(|frame| render(frame, frame.area(), &model, &mut hits))
                 .unwrap();
             let badged: Vec<_> = buffer_rows(&terminal)
                 .into_iter()
@@ -3473,7 +3451,7 @@ fn the_keys_route_carries_no_count() {
     };
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let nav = buffer_rows(&terminal)
         .into_iter()
@@ -3515,7 +3493,7 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     let buttons: Vec<_> = model
@@ -3559,12 +3537,12 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
             row: remove.y,
             modifiers: KeyModifiers::NONE,
         },
-        120,
+        Rect::new(0, 0, 120, 40),
     );
     assert_eq!(model.hovered_offer, Some(uze_keys::Action::RemovePlugin));
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert_eq!(
         theme::token_of(terminal.backend().buffer()[(remove.x, remove.y)].bg),
@@ -3621,7 +3599,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
 
@@ -3649,7 +3627,7 @@ fn clicking_the_search_field_starts_a_search() {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, &model, &mut hits))
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
             .unwrap();
         model.hits = hits;
         let (rect, _) = model
@@ -3693,7 +3671,7 @@ fn the_keys_screen_rebinds_from_a_click_and_a_keystroke() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     let (rect, _) = model
@@ -3751,7 +3729,7 @@ fn the_keys_list_follows_the_selection_past_the_fold() {
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let drawn = buffer_rows(&terminal);
     assert!(
@@ -3836,7 +3814,7 @@ fn the_selected_key_is_a_band_across_the_list() {
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
 
     let (rect, _) = hits
@@ -3883,7 +3861,7 @@ fn the_track_can_be_dragged() {
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
     let track = model
@@ -3907,7 +3885,7 @@ fn the_track_can_be_dragged() {
                 row,
                 modifiers: KeyModifiers::NONE,
             },
-            140,
+            Rect::new(0, 0, 140, 40),
         );
     };
     drag(&mut model, track.y);
@@ -3927,7 +3905,7 @@ fn the_track_can_be_dragged() {
             row: track.y,
             modifiers: KeyModifiers::NONE,
         },
-        140,
+        Rect::new(0, 0, 140, 40),
     );
     let settled = model.keys_selected;
     drag(&mut model, track.bottom() - 1);
@@ -3960,14 +3938,14 @@ fn a_list_taller_than_the_screen_says_where_the_window_is() {
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let top = column(&terminal);
     assert!(!top.is_empty(), "the track is drawn at all");
 
     model.keys_selected = model.key_rows().len() - 1;
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let bottom = column(&terminal);
     assert!(
@@ -3988,7 +3966,7 @@ fn a_list_taller_than_the_screen_says_where_the_window_is() {
     };
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     terminal
-        .draw(|frame| render(frame, &short, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &short, &mut hits))
         .unwrap();
     assert!(column(&terminal).is_empty());
 }
@@ -4014,7 +3992,7 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
                 row: 10,
                 modifiers: KeyModifiers::NONE,
             },
-            100,
+            Rect::new(0, 0, 100, 40),
         );
     };
 
@@ -4028,7 +4006,7 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     assert!(
         buffer_rows(&terminal)
@@ -4071,7 +4049,7 @@ fn a_group_of_keys_is_set_apart_from_the_one_above_it() {
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let drawn = buffer_rows(&terminal);
     // Columns rather than byte offsets: these rows carry the sidebar's own
@@ -4124,26 +4102,26 @@ fn a_key_is_listed_with_the_sentence_that_explains_it() {
     let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let drawn = buffer_rows(&terminal);
     let row = drawn
         .iter()
-        .find(|row| row.contains("Switch mode"))
+        .find(|row| row.contains("Manage"))
         .expect("the mode key is on screen");
-    assert!(row.contains("Move between the"), "{row:?}");
+    assert!(row.contains("Open or close the"), "{row:?}");
 
     // Narrow enough and the sentence goes rather than being cut to a stub.
     let mut narrow = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     narrow
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let row = buffer_rows(&narrow)
         .into_iter()
-        .find(|row| row.contains("Switch mode"))
+        .find(|row| row.contains("Manage"))
         .expect("the mode key is still on screen");
-    assert!(!row.contains("Move between"), "{row:?}");
+    assert!(!row.contains("Open or close"), "{row:?}");
 }
 
 /// Everything that could be wrong with a key is said before anything is
@@ -4254,7 +4232,7 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
         let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, &model, &mut hits))
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
             .unwrap();
         for action in available {
             assert!(
@@ -4300,7 +4278,7 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
         let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, &model, &mut hits))
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
             .unwrap();
         let rule = hits
             .iter()
@@ -4332,7 +4310,7 @@ fn a_question_is_answered_with_the_pointer_too() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
 
@@ -4389,7 +4367,7 @@ fn each_glyph_set_is_previewed_in_its_own_glyphs() {
     };
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
 
@@ -4468,7 +4446,7 @@ fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
     let mut terminal = Terminal::new(TestBackend::new(190, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
 
     let card = hits
@@ -4593,7 +4571,7 @@ fn every_way_of_reaching_appearance_carries_the_ask() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &clicked, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &clicked, &mut hits))
         .unwrap();
     clicked.hits = hits;
     let (rect, _) = clicked
@@ -4623,7 +4601,7 @@ fn clicking_a_glyph_set_chooses_it() {
     };
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     model.hits = hits;
 
@@ -4660,7 +4638,7 @@ fn a_confirmation_dialog_reads_as_heading_subject_body_and_answers() {
     let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
     let mut hits = Vec::new();
     terminal
-        .draw(|frame| render(frame, &model, &mut hits))
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
     let position = |needle: &str| {

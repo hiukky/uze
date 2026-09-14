@@ -60,8 +60,8 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "Manage"
-        say: cross to the management side by its own control
+      - click: "="
+        say: cross to the management modal by the sidebar's own control
         in: sidebar
         expect: Overview
         expect_timeout: 20

@@ -9,9 +9,6 @@ use super::worker::Intent;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Hit {
     Route(Route),
-    /// The sidebar's "work" mode label — mirrors Ctrl+O, detaching from
-    /// management back to the terminal workspace.
-    SwitchToWorkspace,
     MarketplaceRow(usize),
     /// A marketplace group's header row — clicking it expands/collapses
     /// that group instead of selecting a plugin.
@@ -141,7 +138,6 @@ impl TuiModel {
                 self.focus = Focus::Content;
                 entering
             }
-            Hit::SwitchToWorkspace => Intent::SwitchToWorkspace,
             Hit::MarketplaceRow(index) => {
                 self.marketplace_selected = index;
                 self.marketplace_drawer_open = true;
@@ -225,8 +221,8 @@ impl TuiModel {
                 Intent::None
             }
             // Kept for the next run the way every other shape this
-            // client remembers is: written once on the way out (see
-            // `run_management`), never on the input path.
+            // client remembers is: written once when the modal closes
+            // (see `ManagementMemory::close`), never on the input path.
             Hit::ToggleFirstSteps => {
                 self.first_steps_collapsed = !self.first_steps_collapsed;
                 Intent::None

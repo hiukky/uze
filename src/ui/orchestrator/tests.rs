@@ -469,18 +469,14 @@ mod workspace_tests {
         let area = Rect::new(0, 0, 80, 24);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         let mut hits = Vec::new();
+        let mut metrics = render::FrameMetrics::default();
         terminal
             .draw(|frame| {
-                render::render(
-                    frame,
-                    model,
-                    &identities_fixture(),
-                    &mut hits,
-                    &mut render::FrameMetrics::default(),
-                )
+                render::render(frame, model, &identities_fixture(), &mut hits, &mut metrics)
             })
             .unwrap();
         model.hits = hits;
+        model.absorb_manage_frame(metrics.manage);
         compute_layout(area, model.sidebar_width)
     }
 
@@ -1458,7 +1454,10 @@ mod workspace_tests {
         driven.runtime_gone();
 
         assert!(
-            matches!(driven.pump(), Flow::Exit(super::WorkspaceExit::Management)),
+            matches!(
+                driven.pump(),
+                Flow::Exit(super::WorkspaceExit::Disconnected)
+            ),
             "the client leaves rather than spinning against a dead socket"
         );
         let notice = driven
@@ -1906,8 +1905,10 @@ mod workspace_tests {
             .expect("the space header has its toggle");
         assert_eq!(mark.x, toggle.x, "one right-hand column: {rows:#?}");
         let alias = crate::ui::small_caps("agent");
+        // Past the header block — its label and its count name the column,
+        // not a harness.
         assert!(
-            !rows.iter().any(|row| row.contains(&alias)),
+            !rows.iter().skip(3).any(|row| row.contains(&alias)),
             "the harness is not named in the sidebar: {rows:#?}"
         );
     }
@@ -3482,6 +3483,251 @@ mod workspace_tests {
             "and the history took the rows back: {rows:?}"
         );
         assert!(model.shape().first_steps.closed);
+    }
+
+    // --- The management modal --------------------------------------------
+
+    fn manage_chord() -> uze_keys::Chord {
+        uze_keys::active()
+            .chord_for(
+                uze_keys::Action::SwitchMode,
+                &[uze_keys::Scope::Global, uze_keys::Scope::Workspace],
+            )
+            .expect("the modal is reachable from the keyboard")
+    }
+
+    fn manage_route(driven: &Driven<'_>) -> crate::ui::model::Route {
+        driven
+            .attach
+            .model
+            .manage
+            .as_ref()
+            .expect("the modal is open")
+            .route
+    }
+
+    /// The management surface is a modal over the workspace, not a mode
+    /// beside it: the action that opens it closes it again, the frame
+    /// draws it over everything, and the client behind it stays attached.
+    #[test]
+    fn the_manage_action_opens_the_modal_and_closes_it_again() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-toggle"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+
+        driven.press_key(key_event(manage_chord()));
+        assert!(driven.attach.model.manage.is_some(), "the modal opened");
+        driven.frame();
+        let chrome = driven
+            .attach
+            .model
+            .manage_chrome
+            .expect("the frame drew the modal");
+        assert!(
+            driven.attach.model.hits[..2]
+                .iter()
+                .any(|(rect, hit)| *hit == WorkspaceHit::ManageSurface && *rect == chrome.area),
+            "the modal answers for its own rectangle ahead of everything under it"
+        );
+        assert!(
+            driven.attach.model.session.is_some(),
+            "the workspace behind it is still attached"
+        );
+
+        driven.press_key(key_event(manage_chord()));
+        assert!(
+            driven.attach.model.manage.is_none(),
+            "the same key closes it"
+        );
+        driven.frame();
+        assert!(driven.attach.model.manage_chrome.is_none());
+    }
+
+    /// The header's trailing control opens the modal; a click inside it
+    /// is the modal's own, a click beside it closes it.
+    #[test]
+    fn the_header_control_opens_the_modal_and_a_click_beside_it_closes_it() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-click"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        driven.frame();
+        let more = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| (*hit == WorkspaceHit::OpenManage).then_some(*rect))
+            .expect("the header offers the modal");
+        driven.press(more.x, more.y);
+        assert!(
+            driven.attach.model.manage.is_some(),
+            "the control opened it"
+        );
+        assert_eq!(manage_route(&driven), crate::ui::model::Route::Overview);
+
+        driven.frame();
+        let plugins = driven
+            .attach
+            .model
+            .manage
+            .as_ref()
+            .expect("open")
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| {
+                matches!(
+                    hit,
+                    crate::ui::hit::Hit::Route(crate::ui::model::Route::Plugins)
+                )
+                .then_some(*rect)
+            })
+            .expect("the modal's menu lists Plugins");
+        driven.press(plugins.x, plugins.y);
+        assert_eq!(
+            manage_route(&driven),
+            crate::ui::model::Route::Plugins,
+            "a click inside the modal reaches the modal"
+        );
+
+        let chrome = driven.attach.model.manage_chrome.expect("drawn");
+        assert!(
+            chrome.area.x > 0,
+            "the modal leaves the workspace visible beside it"
+        );
+        driven.press(0, 0);
+        assert!(
+            driven.attach.model.manage.is_none(),
+            "a click beside the modal closes it"
+        );
+        assert!(
+            driven.attach.model.root_picker.is_none(),
+            "and reaches nothing underneath"
+        );
+    }
+
+    /// The mark on the modal's title closes it.
+    #[test]
+    fn the_close_mark_on_the_modal_closes_it() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-close-mark"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        driven.press_key(key_event(manage_chord()));
+        driven.frame();
+        let close = driven.attach.model.manage_chrome.expect("drawn").close;
+        driven.press(close.x, close.y);
+        assert!(driven.attach.model.manage.is_none());
+    }
+
+    /// Inside the modal the keyboard is the modal's: a key that moves its
+    /// screens moves them, and one that backs out of everything backs out
+    /// of the modal when nothing inside it is open.
+    #[test]
+    fn keys_inside_the_modal_are_the_modals() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-keys"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        driven.press_key(key_event(manage_chord()));
+        let keymap = uze_keys::active();
+        let next = keymap
+            .chord_for(
+                uze_keys::Action::NextScreen,
+                &[uze_keys::Scope::Global, uze_keys::Scope::Management],
+            )
+            .expect("screens are walked from the keyboard");
+        driven.press_key(key_event(next));
+        assert_ne!(
+            manage_route(&driven),
+            crate::ui::model::Route::Overview,
+            "the modal's own screen moved"
+        );
+        assert!(
+            driven.attach.model.action_index.is_none()
+                && driven.attach.model.agent_picker.is_none()
+                && driven.attach.model.root_picker.is_none(),
+            "nothing of the workspace answered"
+        );
+
+        // Esc backs out one layer at a time: the screen's open drawer
+        // first, then — with nothing inside the modal left to close — the
+        // modal itself.
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let drawer_open = |driven: &Driven<'_>| {
+            let manage = driven.attach.model.manage.as_ref().expect("open");
+            match manage.route {
+                crate::ui::model::Route::Plugins => manage.marketplace_drawer_open,
+                crate::ui::model::Route::Extensions => manage.extension_drawer_open,
+                crate::ui::model::Route::Harnesses => manage.harnesses_drawer_open,
+                _ => false,
+            }
+        };
+        if drawer_open(&driven) {
+            driven.press_key(esc);
+            assert!(
+                driven.attach.model.manage.is_some() && !drawer_open(&driven),
+                "the first Esc closes the drawer, not the modal"
+            );
+        }
+        driven.press_key(esc);
+        assert!(
+            driven.attach.model.manage.is_none(),
+            "with nothing inside it open, Esc closes the modal"
+        );
+    }
+
+    /// The modal reopens on the screen it was closed on, and the layout
+    /// the client hands back carries that screen for the next run.
+    #[test]
+    fn the_modal_reopens_where_it_was_closed() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-memory"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        driven.press_key(key_event(manage_chord()));
+        let next = uze_keys::active()
+            .chord_for(
+                uze_keys::Action::NextScreen,
+                &[uze_keys::Scope::Global, uze_keys::Scope::Management],
+            )
+            .expect("bound");
+        driven.press_key(key_event(next));
+        let moved_to = manage_route(&driven);
+        driven.press_key(key_event(manage_chord()));
+        assert_eq!(
+            driven.attach.model.management_layout.route.as_deref(),
+            Some(moved_to.id()),
+            "closing keeps the screen in the layout the client owns"
+        );
+        assert_eq!(
+            driven.attach.model.shape().management.route.as_deref(),
+            Some(moved_to.id()),
+            "and it is what the layout file is written from"
+        );
+
+        driven.press_key(key_event(manage_chord()));
+        assert_eq!(manage_route(&driven), moved_to, "reopening lands on it");
+    }
+
+    /// The sidebar opens with the surface's name and the way into the other
+    /// one, then the column's account beside the way to grow it.
+    #[test]
+    fn the_sidebar_header_names_the_column_and_offers_the_modal() {
+        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let rows = frame_rows(&mut model);
+        let header = &rows[0];
+        assert!(header.contains("work"), "the surface is named: {header:?}");
+        assert!(
+            header.contains(&theme::glyph(crate::ui::theme::Symbol::Manage)),
+            "the control that opens the modal ends the row: {header:?}"
+        );
+        assert!(
+            rows[1]
+                .trim_start()
+                .starts_with(&theme::glyph(crate::ui::theme::Symbol::TreeDivider).repeat(4)),
+            "a hairline closes the header: {:?}",
+            rows[1]
+        );
+        assert!(
+            rows[2].contains("agent in 1 space") && rows[2].contains("+ new"),
+            "the account and creation share the row under it: {:?}",
+            rows[2]
+        );
     }
 
     /// The keystroke a chord is: the inverse of `keys::chord_of`, so a test
@@ -5234,6 +5480,13 @@ mod workspace_tests {
                 spinner: indicatif::ProgressBar::hidden(),
                 next_tick: Instant::now(),
                 asked_for_a_tab: false,
+                // Leaked on purpose: the attach borrows the memory for as
+                // long as it lives, and a test's lives until the process
+                // does.
+                manage_memory: Box::leak(Box::new(
+                    crate::ui::management::ManagementMemory::unresolved(),
+                )),
+                keyboard: crate::ui::keys::KeyboardSupport::default(),
             },
             server,
             events: events_rx,
