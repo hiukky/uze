@@ -14,6 +14,7 @@ use super::{
     CodeView, ContentMode, Focus, NavigatorMode,
     changes_tree::{FileTreeItem, file_tree_items, selected_tree_row},
     diff::content_line,
+    editor::OpenFile,
 };
 use crate::view::{
     Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon, Size,
@@ -276,30 +277,14 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
 /// something being edited shows what was typed, which is the whole point
 /// of previewing while you write.
 fn preview_content(code: &CodeView, space: Size) -> Content {
-    let Some(open) = code.open.as_ref() else {
-        return Content::Message {
-            text: "No document selected".to_owned(),
-            hint: Some(
-                "Pick a file on the left. This shows it rendered; Source shows what is in it."
-                    .to_owned(),
-            ),
-            role: Role::Muted,
-        };
+    let open = match readable_open_file(
+        code,
+        "No document selected",
+        "Pick a file on the left. This shows it rendered; Source shows what is in it.",
+    ) {
+        Ok(open) => open,
+        Err(message) => return message,
     };
-    if let Some(message) = &open.error {
-        return Content::Message {
-            text: message.clone(),
-            hint: None,
-            role: Role::Danger,
-        };
-    }
-    if open.loading {
-        return Content::Message {
-            text: "reading…".to_owned(),
-            hint: None,
-            role: Role::Muted,
-        };
-    }
     let lines = super::markdown::render(&open.contents(), &open.theme);
     Content::Lines {
         caret: None,
@@ -319,30 +304,47 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
     }
 }
 
-fn contents_content(code: &CodeView, space: Size) -> Content {
+/// The open file, once there is one and it has been read — or the message
+/// that stands where it would be: nothing open (`empty` and its `hint`), a
+/// file that could not be read, or one still being read.
+fn readable_open_file<'a>(
+    code: &'a CodeView,
+    empty: &str,
+    hint: &str,
+) -> Result<&'a OpenFile, Content> {
     let Some(open) = code.open.as_ref() else {
-        return Content::Message {
-            text: "No file selected".to_owned(),
-            hint: Some(
-                "Pick one on the left to read it, or press e to edit it in place.".to_owned(),
-            ),
+        return Err(Content::Message {
+            text: empty.to_owned(),
+            hint: Some(hint.to_owned()),
             role: Role::Muted,
-        };
+        });
     };
     if let Some(message) = &open.error {
-        return Content::Message {
+        return Err(Content::Message {
             text: message.clone(),
             hint: None,
             role: Role::Danger,
-        };
+        });
     }
     if open.loading {
-        return Content::Message {
+        return Err(Content::Message {
             text: "reading…".to_owned(),
             hint: None,
             role: Role::Muted,
-        };
+        });
     }
+    Ok(open)
+}
+
+fn contents_content(code: &CodeView, space: Size) -> Content {
+    let open = match readable_open_file(
+        code,
+        "No file selected",
+        "Pick one on the left to read it, or press e to edit it in place.",
+    ) {
+        Ok(open) => open,
+        Err(message) => return message,
+    };
     Content::Lines {
         total: open.lines.len(),
         heading: format!(

@@ -800,6 +800,28 @@ fn a_reread_never_overwrites_keystrokes_typed_while_it_was_out() {
     );
 }
 
+/// Moving to another file in the tree points every mode at it: the diff
+/// read for the file left behind is not left standing under the new one,
+/// by the arrows or by a click.
+#[test]
+fn moving_to_another_file_in_the_tree_asks_for_its_diff() {
+    let machine = FakeMachine::default()
+        .with_file("/w/a.txt", "aaa\n")
+        .with_file("/w/b.txt", "bbb\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    view.changes.diff_pending = false;
+
+    press(&mut view, Command::SelectNext);
+    assert_eq!(view.selected.as_deref(), Some(Path::new("/w/b.txt")));
+    assert!(view.diff_pending(), "the arrows moved to another file");
+
+    view.changes.diff_pending = false;
+    handle_mouse(&mut view, Some(ViewHit::SelectItem(0)));
+    assert_eq!(view.selected.as_deref(), Some(Path::new("/w/a.txt")));
+    assert!(view.diff_pending(), "and so did the click");
+}
+
 /// An answer names the file it is about, so one that lands after the
 /// viewer opened something else is dropped.
 #[test]

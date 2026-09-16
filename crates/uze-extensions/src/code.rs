@@ -293,11 +293,7 @@ impl CodeView {
         let branch = current_branch(host, &root);
         let changes = match host.repository_root(&root) {
             Ok(resolved) => Changes::read(host, &resolved, placement.path.as_deref()),
-            Err(message) => Changes {
-                error: Some(message),
-                refreshed_at: Some(std::time::Instant::now()),
-                ..Changes::default()
-            },
+            Err(message) => Changes::failed(message),
         };
         RefreshedChanges {
             placement,
@@ -572,10 +568,11 @@ impl CodeView {
                 // A tree row may be a directory, which nothing else in
                 // this surface can be selected on — moving to it is still
                 // right, it just has no diff and no contents.
-                self.selected = Some(rows[next].path.clone());
-                if !rows[next].directory {
-                    let path = rows[next].path.clone();
-                    self.select(path);
+                let row = &rows[next];
+                if row.directory {
+                    self.selected = Some(row.path.clone());
+                } else {
+                    self.select(row.path.clone());
                 }
             }
         }
@@ -634,11 +631,7 @@ impl RefreshedChanges {
         Self {
             placement,
             branch: String::new(),
-            changes: Changes {
-                error: Some(reason),
-                refreshed_at: Some(std::time::Instant::now()),
-                ..Changes::default()
-            },
+            changes: Changes::failed(reason),
         }
     }
 }
@@ -872,7 +865,6 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>) -> CodeOutcome {
             }
             NavigatorMode::Files => {
                 if let Some(row) = view.files.rows(&view.root).into_iter().nth(index) {
-                    view.selected = Some(row.path.clone());
                     view.select(row.path);
                     view.load_selection(None);
                     view.focus = Focus::Content;

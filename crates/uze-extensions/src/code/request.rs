@@ -1,4 +1,4 @@
-//! What the explorer needs the machine to do, and what came back.
+//! What the files half needs the machine to do, and what came back.
 //!
 //! Its own module because it is the whole of this extension's contact with
 //! the outside: everything else here is a pure function of what these
@@ -13,8 +13,8 @@ use crate::{DirEntry, Host, view::Rgb};
 /// One thing the view needs done to the filesystem.
 ///
 /// Named rather than performed: see the module doc. The host takes these
-/// one at a time from [`ExplorerView::take_request`], runs [`fulfill`]
-/// wherever it likes, and hands the result to [`ExplorerView::absorb`].
+/// one at a time from [`super::CodeView::take_request`], runs [`fulfill`]
+/// wherever it likes, and hands the result to [`super::CodeView::absorb`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileRequest {
     /// Read a directory's entries — on opening it, and again after a

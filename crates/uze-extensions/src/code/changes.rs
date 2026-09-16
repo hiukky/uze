@@ -69,13 +69,7 @@ impl Changes {
     pub(super) fn read(host: &dyn Host, root: &Path, selected: Option<&Path>) -> Self {
         let status = match host.git(root, STATUS_ARGS, &[]) {
             Ok(output) => output,
-            Err(message) => {
-                return Self {
-                    error: Some(message),
-                    refreshed_at: Some(Instant::now()),
-                    ..Self::default()
-                };
-            }
+            Err(message) => return Self::failed(message),
         };
         let mut changes = Self {
             files: parse_porcelain_status(&status, root),
@@ -84,6 +78,16 @@ impl Changes {
         };
         changes.load_diff(host, root, selected);
         changes
+    }
+
+    /// A read that could not answer, and why — drawn where the diff would
+    /// be, while the files half carries on.
+    pub(super) fn failed(message: String) -> Self {
+        Self {
+            error: Some(message),
+            refreshed_at: Some(Instant::now()),
+            ..Self::default()
+        }
     }
 
     /// Where `path` sits in the changed-file list, if it changed at all.
