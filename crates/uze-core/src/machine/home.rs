@@ -94,10 +94,6 @@ impl UzeHome {
         self.state_dir().join("marketplaces.json")
     }
 
-    pub fn plugin_marketplaces_path(&self) -> PathBuf {
-        self.state_dir().join("plugin_marketplaces.json")
-    }
-
     /// UZE-owned Profiles/Preferences (durable user intent, never
     /// reconstructable from a harness's own config — hence `state_dir()`,
     /// not `cache_dir()`). Harness-specific files are projections of this,

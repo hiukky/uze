@@ -127,20 +127,14 @@ impl Marketplace<'_> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let materialized =
             UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
-        let report = self.0.plugins().install_materialized_from_marketplace(
+        self.0.plugins().install_materialized_from_marketplace(
             materialized,
             &marketplace_name,
             authority,
             &[],
             false,
             name_authority,
-        )?;
-        uze_core::state::plugin_marketplace_record(
-            &self.0.home,
-            &report.plugin.id,
-            &marketplace_name,
-        )?;
-        Ok(report)
+        )
     }
 
     /// Every plugin from every marketplace this Store knows about — the

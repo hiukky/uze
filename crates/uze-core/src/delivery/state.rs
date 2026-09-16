@@ -211,11 +211,6 @@ struct MarketplaceRegistry {
     marketplaces: BTreeMap<String, MarketplaceRecord>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct PluginMarketplaceRegistry {
-    plugins: BTreeMap<String, String>,
-}
-
 /// Registers a marketplace under `name`. Idempotent, mirroring
 /// `UzeStore::install_materialized`'s same-origin check: adding a
 /// marketplace already registered from the exact same source is a no-op
@@ -258,20 +253,12 @@ pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {
             "marketplace `{name}` not found"
         )));
     }
-    // `plugin_marketplaces.json` is written at exactly one call site
-    // (a successful non-official install) and only cleared on remove — it
-    // is a cache of the Store's own ids, not the source of truth, and can
-    // drift (a plugin's entry never gets backfilled by, say, `update`). The
-    // Store's `PackageId` is already marketplace-qualified (ADR-036: every
-    // id ends `@<marketplace>`), so it is checked directly here rather than
-    // trusted to have mirrored every install into the ledger.
-    let plugin_map = load_plugin_marketplace_registry(home)?;
-    let store = crate::store::UzeStore::new(home.clone());
-    let still_installed = plugin_map.plugins.values().any(|m| m == name)
-        || store
-            .package_ids()?
-            .iter()
-            .any(|id| id.marketplace() == name);
+    // Every Store id is marketplace-qualified (ADR-036), so the Store alone
+    // answers whether this marketplace still has installed plugins.
+    let still_installed = crate::store::UzeStore::new(home.clone())
+        .package_ids()?
+        .iter()
+        .any(|id| id.marketplace() == name);
     if still_installed {
         return Err(UzeError::ExposureUnavailable(format!(
             "marketplace `{name}` still has installed plugins; remove them first"
@@ -292,21 +279,6 @@ pub fn marketplace_get(home: &UzeHome, name: &str) -> Result<Option<MarketplaceR
         .cloned())
 }
 
-pub fn plugin_marketplace_record(home: &UzeHome, plugin_id: &str, marketplace: &str) -> Result<()> {
-    home.ensure_layout()?;
-    let mut registry = load_plugin_marketplace_registry(home)?;
-    registry
-        .plugins
-        .insert(plugin_id.to_owned(), marketplace.to_owned());
-    save_plugin_marketplace_registry(home, &registry)
-}
-
-pub fn plugin_marketplace_remove(home: &UzeHome, plugin_id: &str) -> Result<()> {
-    let mut registry = load_plugin_marketplace_registry(home)?;
-    registry.plugins.remove(plugin_id);
-    save_plugin_marketplace_registry(home, &registry)
-}
-
 fn load_marketplace_registry(home: &UzeHome) -> Result<MarketplaceRegistry> {
     let path = home.marketplaces_path();
     if !path.exists() {
@@ -322,28 +294,6 @@ fn load_marketplace_registry(home: &UzeHome) -> Result<MarketplaceRegistry> {
 fn save_marketplace_registry(home: &UzeHome, registry: &MarketplaceRegistry) -> Result<()> {
     let path = home.marketplaces_path();
     let payload = serde_json::to_vec_pretty(registry).expect("marketplace registry serializable");
-    crate::persistence::write_atomic(&path, &payload)
-}
-
-fn load_plugin_marketplace_registry(home: &UzeHome) -> Result<PluginMarketplaceRegistry> {
-    let path = home.plugin_marketplaces_path();
-    if !path.exists() {
-        return Ok(PluginMarketplaceRegistry::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
-}
-
-fn save_plugin_marketplace_registry(
-    home: &UzeHome,
-    registry: &PluginMarketplaceRegistry,
-) -> Result<()> {
-    let path = home.plugin_marketplaces_path();
-    let payload =
-        serde_json::to_vec_pretty(registry).expect("plugin marketplace registry serializable");
     crate::persistence::write_atomic(&path, &payload)
 }
 

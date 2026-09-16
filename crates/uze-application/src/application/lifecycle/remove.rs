@@ -22,11 +22,7 @@ impl Plugins<'_> {
         // Removal changes vendor-visible state; cached inspection verdicts
         // must not outlive it (ADR 018).
         self.0.inspection_cache.invalidate();
-        let report = self.detach_and_remove(id, false)?;
-        if matches!(report, RemovePluginReport::Removed { .. }) {
-            let _ = uze_core::state::plugin_marketplace_remove(&self.0.home, id);
-        }
-        Ok(report)
+        self.detach_and_remove(id, false)
     }
 
     pub(crate) fn is_protected_package(package: &StoredPackage) -> bool {

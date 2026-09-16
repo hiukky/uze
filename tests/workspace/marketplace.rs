@@ -62,15 +62,12 @@ fn agents_json_only_root_is_rejected() {
     );
 }
 
-/// A marketplace with an installed plugin must never be removable — even
-/// if `plugin_marketplaces.json` (a cache populated only at install time,
-/// never repaired) has lost its entry for that plugin. Production hit
-/// exactly this: a plugin (`git@ai`) stayed installed and healthy while its
-/// marketplace (`ai`) vanished from `market list`, because the removal
-/// guard trusted only that cache. The Store's own package id is already
-/// marketplace-qualified (ADR-036) and must be checked directly too.
+/// A marketplace with an installed plugin must never be removable. Production
+/// once lost a marketplace (`ai`) from `market list` while its plugin
+/// (`git@ai`) stayed installed, because the guard trusted a side ledger; the
+/// Store's marketplace-qualified package ids (ADR-036) are the answer.
 #[test]
-fn removing_a_marketplace_is_blocked_even_if_the_plugin_ledger_is_stale() {
+fn removing_a_marketplace_with_an_installed_plugin_is_blocked() {
     let env = TestEnvironment::isolated();
     let scenario = Scenario::new()
         .marketplace(
@@ -92,14 +89,6 @@ fn removing_a_marketplace_is_blocked_even_if_the_plugin_ledger_is_stale() {
     std::fs::write(env.project.join("agents.lock"), "version: 1\n").unwrap();
 
     env.run_ok(uze_bin(), &["flow@stale-ledger-market"]);
-
-    // Simulate the ledger losing its entry for this plugin — the exact gap
-    // that let `git@ai` survive in production while its marketplace did not.
-    std::fs::write(
-        env.uze_home.join("state/plugin_marketplaces.json"),
-        r#"{"plugins":{}}"#,
-    )
-    .unwrap();
 
     let remove = env.run(uze_bin(), &["market", "remove", "stale-ledger-market"]);
     assert!(
