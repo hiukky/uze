@@ -364,7 +364,11 @@ impl TuiModel {
             }
             Route::Keys => {
                 let last = self.key_rows().len().saturating_sub(1);
-                self.keys_selected = self.keys_selected.saturating_add_signed(delta).min(last);
+                self.key_screen.selected = self
+                    .key_screen
+                    .selected
+                    .saturating_add_signed(delta)
+                    .min(last);
                 self.keys_capture = false;
                 self.keys_problem = None;
                 Intent::None
@@ -439,15 +443,9 @@ impl TuiModel {
         }
         // Slides the open drawer away — the fetched detail stays cached, so
         // reopening the same selection is instant.
-        let drawer = match self.route {
-            Route::Plugins => Some(&mut self.marketplace_drawer_open),
-            Route::Extensions => Some(&mut self.extension_drawer_open),
-            Route::Harnesses => Some(&mut self.harnesses_drawer_open),
-            _ => None,
-        };
-        match drawer {
-            Some(open) if *open => {
-                *open = false;
+        match self.list_mut(self.route) {
+            Some(screen) if screen.drawer_open => {
+                screen.drawer_open = false;
                 Intent::None
             }
             _ => Intent::SwitchToWorkspace,
@@ -464,14 +462,14 @@ impl TuiModel {
                 if self.selected_marketplace_plugin().is_none() {
                     return Intent::None;
                 }
-                self.marketplace_drawer_open = true;
+                self.plugin_screen.drawer_open = true;
                 self.marketplace_inspect_intent()
             }
             Route::Extensions => {
                 if self.selected_extension().is_none() {
                     return Intent::None;
                 }
-                self.extension_drawer_open = true;
+                self.extension_screen.drawer_open = true;
                 Intent::None
             }
             // List: jump straight into editing, the same way Enter opens a
@@ -526,56 +524,20 @@ impl TuiModel {
                 self.scroll_keys_to(track, event.row);
                 Intent::None
             }
-            MouseEventKind::Drag(MouseButton::Left) if self.dragging_panel.is_some() => {
+            MouseEventKind::Drag(MouseButton::Left) if let Some(panel) = self.dragging_panel => {
                 let sidebar_width = self
                     .sidebar_width
                     .unwrap_or_else(|| super::sidebar_width_for(total_width));
                 let content_width = total_width.saturating_sub(sidebar_width);
                 let min_panel_width = 24;
                 let max_panel_width = content_width.saturating_sub(min_panel_width);
-                let pointer_in_content = column.saturating_sub(sidebar_width);
-                match self.dragging_panel {
-                    Some(ResizablePanel::MarketplaceDrawer) => {
-                        self.marketplace_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::ExtensionDrawer) => {
-                        self.extension_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::HarnessDrawer) => {
-                        self.harness_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::KeysDrawer) => {
-                        self.keys_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::AppearanceDrawer) => {
-                        self.appearance_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::ProfileColumns) => {
-                        self.profile_columns_width =
-                            Some(pointer_in_content.clamp(min_panel_width, max_panel_width));
-                    }
-                    None => {}
-                }
+                // A drawer grows leftwards from the right edge; the profile
+                // columns' divider is measured from the content's left.
+                let width = match panel {
+                    ResizablePanel::ProfileColumns => column.saturating_sub(sidebar_width),
+                    _ => total_width.saturating_sub(column),
+                };
+                *panel.width_mut(self) = Some(width.min(max_panel_width).max(min_panel_width));
                 Intent::None
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -645,7 +607,7 @@ mod tests {
             Rect::new(0, 0, 120, 40),
         );
 
-        assert_eq!(model.harness_drawer_width, Some(40));
+        assert_eq!(model.harness_screen.drawer_width, Some(40));
     }
 
     #[test]
@@ -657,7 +619,7 @@ mod tests {
         };
         // `r` removes a plugin on this screen when nobody is typing.
         model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(model.marketplace_filter, "r");
+        assert_eq!(model.plugin_screen.filter, "r");
         assert_eq!(model.overlay, Overlay::None);
     }
 

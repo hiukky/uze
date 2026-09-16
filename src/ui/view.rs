@@ -4,10 +4,12 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::ui::hit::Hit;
+use crate::ui::model::{ResizablePanel, TuiModel};
+use crate::ui::side_panel_area;
 use crate::ui::theme::{self, Symbol, Token};
 use uze_application::application::offers::ActionOffer;
 
@@ -21,6 +23,111 @@ pub mod plugins;
 pub mod profiles;
 
 pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
+/// The narrowest a drawer, or the list beside it, is ever drawn.
+const DRAWER_MIN_WIDTH: u16 = 24;
+
+/// How wide `panel`'s drawer is drawn over `content`: where it was dragged
+/// to, or the default, never squeezing itself or the list beside it past
+/// the minimum.
+pub(crate) fn drawer_width(panel: ResizablePanel, model: &TuiModel, content: Rect) -> u16 {
+    panel.width(model).unwrap_or(DRAWER_DEFAULT_WIDTH).clamp(
+        DRAWER_MIN_WIDTH,
+        content
+            .width
+            .saturating_sub(DRAWER_MIN_WIDTH)
+            .max(DRAWER_MIN_WIDTH),
+    )
+}
+
+/// A detail drawer's shell off the right of `content`: a recessed slab
+/// behind a left rule that is its drag handle, lit while it is dragged.
+/// Returns the padded rectangle its content goes in.
+pub(crate) fn drawer(
+    frame: &mut ratatui::Frame<'_>,
+    content: Rect,
+    panel: ResizablePanel,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) -> Rect {
+    let area = side_panel_area(content, drawer_width(panel, model, content));
+    frame.render_widget(Clear, area);
+    let rule = if model.dragging_panel == Some(panel) {
+        Token::Accent
+    } else {
+        Token::SurfaceRecessed
+    };
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(theme::fg(rule))
+            .style(theme::bg(Token::SurfaceRecessed)),
+        area,
+    );
+    // First, so the rule answers the pointer before the rows behind it do.
+    hits.insert(
+        0,
+        (
+            Rect::new(area.x, area.y, 1, area.height),
+            Hit::ResizePanel(panel),
+        ),
+    );
+    Rect::new(
+        area.x + 2,
+        area.y + 1,
+        area.width.saturating_sub(3),
+        area.height.saturating_sub(2),
+    )
+}
+
+/// A drawer's content split into its body and the footer
+/// [`render_drawer_footer`] draws beneath it.
+pub(crate) fn drawer_body_and_footer(inner: Rect, offers: &[ActionOffer]) -> (Rect, Rect) {
+    let footer_height = drawer_footer_height(offers);
+    let body = Rect {
+        height: inner.height.saturating_sub(footer_height),
+        ..inner
+    };
+    (
+        body,
+        Rect::new(inner.x, body.bottom(), inner.width, footer_height),
+    )
+}
+
+/// A list's search field: what has been typed, or `placeholder` when
+/// nothing has, over a rule that takes the accent while it is `active`.
+pub(crate) fn filter_box(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    text: &str,
+    placeholder: &str,
+    active: bool,
+) {
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(theme::fg(if active {
+            Token::Accent
+        } else {
+            Token::BorderDefault
+        }));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let line = if text.is_empty() {
+        Line::from(Span::styled(
+            placeholder.to_owned(),
+            theme::fg(Token::TextMuted),
+        ))
+    } else {
+        let mut spans = vec![Span::styled(text.to_owned(), theme::fg(Token::TextPrimary))];
+        if active {
+            spans.push(Span::styled(
+                theme::glyph(Symbol::BarThin),
+                theme::fg(Token::Accent),
+            ));
+        }
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(line), inner);
+}
 
 /// Where a detail drawer's selected thing stands, in the words its footer
 /// prints: a coloured headline and a muted note beneath it.

@@ -11,8 +11,8 @@ use uze_application::application::{
 use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
-    Confirmation, Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route,
-    Status, TrustedRetry, TuiModel,
+    Confirmation, Focus, ListScreen, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES,
+    RefreshData, Route, Status, TrustedRetry, TuiModel,
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
@@ -169,7 +169,7 @@ fn model_with_data() -> TuiModel {
             "AGENTS.md carries a region for a plugin that is no longer installed".to_owned(),
         ],
     });
-    model.harnesses_selected = 0;
+    model.harness_screen.selected = 0;
     model.profiles = vec![
         uze_application::application::ProfileSummary {
             id: "dev-autonomous".to_owned(),
@@ -208,7 +208,7 @@ fn every_route_renders_without_panicking() {
             marketplaces: base.marketplaces.clone(),
             marketplace_plugins: base.marketplace_plugins.clone(),
             doctor: base.doctor.clone(),
-            harnesses_selected: base.harnesses_selected,
+            harness_screen: base.harness_screen.clone(),
             profiles: base.profiles.clone(),
             profile_harness_selection: base.profile_harness_selection.clone(),
             focus: Focus::Content,
@@ -326,7 +326,7 @@ fn tab_toggles_focus_between_sidebar_and_content() {
 fn content_navigation_and_inspect_intent() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.plugin_screen.selected, 1);
     assert_eq!(
         model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         Intent::InspectPlugin("two".to_owned())
@@ -356,13 +356,13 @@ fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
         "moving the selection wants the new row's detail even mid-flight"
     );
 
-    model.marketplace_drawer_open = false;
+    model.plugin_screen.drawer_open = false;
     assert_eq!(
         model.drawer_inspect_intent(),
         Intent::None,
         "a closed drawer needs nothing"
     );
-    model.marketplace_drawer_open = true;
+    model.plugin_screen.drawer_open = true;
     model.route = Route::Overview;
     assert_eq!(
         model.drawer_inspect_intent(),
@@ -461,8 +461,8 @@ fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
 fn a_return_visit_draws_what_the_last_one_resolved() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.resolved_at = Some(std::time::Instant::now());
-    model.marketplace_selected = 1;
-    model.marketplace_drawer_open = false;
+    model.plugin_screen.selected = 1;
+    model.plugin_screen.drawer_open = false;
     model.prompt_history = Vec::new();
     // What one visit ends holding — including work it was in the middle
     // of, which the next visit must not inherit.
@@ -488,9 +488,9 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
         "and so is when it was resolved — the next visit decides on it"
     );
     assert_eq!(model.route, Route::Plugins);
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.plugin_screen.selected, 1);
     assert!(
-        !model.marketplace_drawer_open,
+        !model.plugin_screen.drawer_open,
         "a drawer stays as it was left"
     );
     assert!(matches!(model.status, Status::Idle));
@@ -528,7 +528,9 @@ fn a_first_visit_starts_from_the_default_model() {
     assert!(model.plugins.is_empty());
     assert_eq!(model.route, Route::Overview);
     assert!(
-        model.marketplace_drawer_open && model.extension_drawer_open && model.harnesses_drawer_open,
+        model.plugin_screen.drawer_open
+            && model.extension_screen.drawer_open
+            && model.harness_screen.drawer_open,
         "the drawers a screen opens with are stated once, by Default"
     );
 }
@@ -539,7 +541,7 @@ fn a_first_visit_starts_from_the_default_model() {
 fn the_next_run_opens_on_the_screen_the_last_one_left() {
     let mut model = TuiModel::default();
     model.set_route(Route::Profiles);
-    model.harnesses_drawer_open = false;
+    model.harness_screen.drawer_open = false;
     model.profile_columns_width = Some(28);
     model
         .collapsed_marketplaces
@@ -551,7 +553,7 @@ fn the_next_run_opens_on_the_screen_the_last_one_left() {
     let model = TuiModel::recall(None, &layout);
     assert_eq!(model.route, Route::Profiles);
     assert!(
-        !model.harnesses_drawer_open,
+        !model.harness_screen.drawer_open,
         "a drawer stays as it was left"
     );
     assert_eq!(model.profile_columns_width, Some(28));
@@ -677,8 +679,8 @@ fn mouse_click_on_extension_row_selects_and_opens_drawer_without_fetch() {
         },
         Rect::new(0, 0, 100, 40),
     );
-    assert_eq!(model.extensions_selected, 1);
-    assert!(model.extension_drawer_open);
+    assert_eq!(model.extension_screen.selected, 1);
+    assert!(model.extension_screen.drawer_open);
     assert_eq!(intent, Intent::None);
 }
 
@@ -698,7 +700,7 @@ fn scroll_moves_selection_without_mutating_anything() {
     // selection and fetches the newly selected (installed, local) row's
     // detail — never a mutation.
     assert_eq!(intent, Intent::InspectPlugin("two".to_owned()));
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.plugin_screen.selected, 1);
 }
 
 #[test]
@@ -828,7 +830,7 @@ fn empty_marketplace_and_no_harness_states_do_not_panic_rendering() {
         route: Route::Plugins,
         ..TuiModel::default()
     };
-    assert_eq!(model.list_len(), 0);
+    assert_eq!(model.list_len(model.route), 0);
     assert!(model.selected_marketplace_plugin().is_none());
     let model = TuiModel {
         route: Route::Harnesses,
@@ -1647,7 +1649,7 @@ fn marketplace_filter_narrows_visible_selection() {
 
     model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!model.filtering);
-    assert!(model.marketplace_filter.is_empty());
+    assert!(model.plugin_screen.filter.is_empty());
     assert_eq!(model.marketplace_visible_indices(), vec![0, 1]);
 }
 
@@ -1685,7 +1687,7 @@ fn extension_filter_narrows_visible_selection() {
     assert_eq!(model.selected_extension().unwrap().name, "Task List");
 
     model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(model.extension_filter.is_empty());
+    assert!(model.extension_screen.filter.is_empty());
     assert_eq!(model.extension_visible_indices(), vec![0, 1]);
 }
 
@@ -1696,12 +1698,12 @@ fn marketplace_group_collapse_hides_its_plugins() {
         marketplace_plugins: vec![marketplace_plugin("ai", "std", false)],
         ..TuiModel::default()
     };
-    assert_eq!(model.list_len(), 1);
+    assert_eq!(model.list_len(model.route), 1);
     model.marketplace_toggle_group("ai");
-    assert_eq!(model.list_len(), 0);
+    assert_eq!(model.list_len(model.route), 0);
     assert!(model.selected_marketplace_plugin().is_none());
     model.marketplace_toggle_group("ai");
-    assert_eq!(model.list_len(), 1);
+    assert_eq!(model.list_len(model.route), 1);
 }
 
 #[test]
@@ -1779,7 +1781,7 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
 fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
+    model.plugin_screen.drawer_open = true;
     model.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1836,7 +1838,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
 fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
+    model.plugin_screen.drawer_open = true;
     model.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1893,7 +1895,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
 fn the_source_link_lights_up_only_under_the_pointer() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
+    model.plugin_screen.drawer_open = true;
     model.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1960,7 +1962,7 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     // real health from it instead of the masked "unknown" placeholder.
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
+    model.plugin_screen.drawer_open = true;
     model.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home"),
         store: uze_application::application::StoreHealth::Ready,
@@ -2275,7 +2277,7 @@ fn the_keys_screen_is_searchable_by_its_own_key() {
     for character in "quit".chars() {
         model.type_character(character);
     }
-    assert_eq!(model.keys_filter, "quit");
+    assert_eq!(model.key_screen.filter, "quit");
     assert!(
         !model.key_rows().is_empty(),
         "and the list narrowed to something"
@@ -3515,7 +3517,10 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
-        marketplace_drawer_open: true,
+        plugin_screen: ListScreen {
+            drawer_open: true,
+            ..ListScreen::default()
+        },
         marketplace_plugins: vec![summary],
         ..TuiModel::default()
     };
@@ -3612,7 +3617,10 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
-        marketplace_drawer_open: true,
+        plugin_screen: ListScreen {
+            drawer_open: true,
+            ..ListScreen::default()
+        },
         marketplace_plugins: vec![summary.clone()],
         marketplace_detail: Some(MarketplacePluginDetail {
             summary,
@@ -3624,7 +3632,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
         }),
         ..TuiModel::default()
     };
-    model.marketplace_drawer_width = Some(52);
+    model.plugin_screen.drawer_width = Some(52);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -3695,7 +3703,7 @@ fn the_keys_screen_rebinds_from_a_click_and_a_keystroke() {
         .iter()
         .position(|row| row.action == uze_keys::Action::NewShellTab)
         .expect("the workspace's new-shell key is listed");
-    model.keys_selected = row;
+    model.key_screen.selected = row;
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
@@ -3752,7 +3760,7 @@ fn the_keys_list_follows_the_selection_past_the_fold() {
         "the premise: this list is far taller than any terminal"
     );
     let last = rows.len() - 1;
-    model.keys_selected = last;
+    model.key_screen.selected = last;
     let wanted = rows[last].action.label();
 
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
@@ -3839,7 +3847,7 @@ fn the_selected_key_is_a_band_across_the_list() {
         focus: Focus::Content,
         ..TuiModel::default()
     };
-    model.keys_selected = 2;
+    model.key_screen.selected = 2;
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -3902,7 +3910,7 @@ fn the_track_can_be_dragged() {
     // The bottom of the track is the bottom of the list, whatever it is.
     let last = model.key_rows().len() - 1;
     model.click(track.x, track.bottom() - 1);
-    assert_eq!(model.keys_selected, last);
+    assert_eq!(model.key_screen.selected, last);
 
     // And it keeps answering while the button is held, without the row
     // under the pointer having to be a target of its own.
@@ -3918,12 +3926,12 @@ fn the_track_can_be_dragged() {
         );
     };
     drag(&mut model, track.y);
-    assert_eq!(model.keys_selected, 0, "back to the top");
+    assert_eq!(model.key_screen.selected, 0, "back to the top");
     drag(&mut model, track.y + track.height / 2);
     assert!(
-        model.keys_selected > 0 && model.keys_selected < last,
+        model.key_screen.selected > 0 && model.key_screen.selected < last,
         "and to the middle: {}",
-        model.keys_selected
+        model.key_screen.selected
     );
 
     // Releasing ends the gesture — a later move must not still scroll.
@@ -3936,9 +3944,9 @@ fn the_track_can_be_dragged() {
         },
         Rect::new(0, 0, 140, 40),
     );
-    let settled = model.keys_selected;
+    let settled = model.key_screen.selected;
     drag(&mut model, track.bottom() - 1);
-    assert_eq!(model.keys_selected, settled, "the drag was let go of");
+    assert_eq!(model.key_screen.selected, settled, "the drag was let go of");
 }
 
 /// A long list that gives no sign of being long is a list nobody scrolls.
@@ -3972,7 +3980,7 @@ fn a_list_taller_than_the_screen_says_where_the_window_is() {
     let top = column(&terminal);
     assert!(!top.is_empty(), "the track is drawn at all");
 
-    model.keys_selected = model.key_rows().len() - 1;
+    model.key_screen.selected = model.key_rows().len() - 1;
     terminal
         .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
@@ -4028,7 +4036,7 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
     for _ in 0..40 {
         wheel(&mut model, MouseEventKind::ScrollDown);
     }
-    assert_eq!(model.keys_selected, 40, "the wheel walks the list");
+    assert_eq!(model.key_screen.selected, 40, "the wheel walks the list");
 
     let rows = model.key_rows();
     let wanted = rows[40].action.label();
@@ -4047,7 +4055,10 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
     for _ in 0..80 {
         wheel(&mut model, MouseEventKind::ScrollUp);
     }
-    assert_eq!(model.keys_selected, 0, "and back, stopping at the top");
+    assert_eq!(
+        model.key_screen.selected, 0,
+        "and back, stopping at the top"
+    );
 
     // Profiles was the other screen the wheel could not move, for the same
     // reason: its selection is three panels rather than one list, and the
@@ -4172,7 +4183,7 @@ fn a_key_that_would_break_something_is_refused_with_the_reason() {
         .iter()
         .position(|row| row.action == uze_keys::Action::NewShellTab)
         .expect("listed");
-    model.keys_selected = row;
+    model.key_screen.selected = row;
     model.keys_capture = true;
 
     // `ctrl+g` already opens the changes in this same keyboard.
@@ -4243,8 +4254,8 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.marketplace_drawer_open = true;
-        model.harnesses_drawer_open = true;
+        model.plugin_screen.drawer_open = true;
+        model.harness_screen.drawer_open = true;
         let available: Vec<_> = model
             .selected_offers()
             .into_iter()
@@ -4290,9 +4301,9 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.marketplace_drawer_open = true;
-        model.harnesses_drawer_open = true;
-        model.extension_drawer_open = true;
+        model.plugin_screen.drawer_open = true;
+        model.harness_screen.drawer_open = true;
+        model.extension_screen.drawer_open = true;
         model.appearance_themes = vec![uze_application::application::ThemeSummary {
             id: "default".to_owned(),
             active: true,

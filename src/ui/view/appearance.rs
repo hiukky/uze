@@ -27,12 +27,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
 use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
+use super::super::{content_area, render_screen_header};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// The marks a preview shows. Chosen to be the ones that differ most
@@ -59,9 +59,7 @@ pub(crate) fn render_appearance(
     let area = content_area(area);
     let content = render_screen_header(frame, area, Route::Appearance, None);
 
-    let drawer_width = model
-        .appearance_drawer_width
-        .unwrap_or(super::DRAWER_DEFAULT_WIDTH);
+    let drawer_width = super::drawer_width(ResizablePanel::AppearanceDrawer, model, area);
     let list_width = content.width.saturating_sub(drawer_width);
     let list_area = Rect::new(content.x, content.y, list_width, content.height);
 
@@ -69,7 +67,7 @@ pub(crate) fn render_appearance(
     // The whole content area, not what the header left: a drawer runs the
     // frame's full height on every other screen, and one that starts below
     // the title reads as a panel that failed to open.
-    render_drawer(frame, area, drawer_width, model, hits);
+    render_drawer(frame, area, model, hits);
 }
 
 /// A card in the catalogue. Wide enough for a glyph set's whole preview
@@ -310,42 +308,15 @@ fn preview_spans(id: &str, room: usize) -> Vec<Span<'static>> {
 fn render_drawer(
     frame: &mut ratatui::Frame<'_>,
     content: Rect,
-    width: u16,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let drawer = side_panel_area(content, width);
-    if drawer.width < 8 {
-        return;
-    }
-    frame.render_widget(Clear, drawer);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(
-                if model.dragging_panel == Some(ResizablePanel::AppearanceDrawer) {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::SurfaceRecessed)
-                },
-            ))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        drawer,
-    );
-    // First, so the rule answers the pointer before the rows behind it do.
-    hits.insert(
-        0,
-        (
-            Rect::new(drawer.x, drawer.y, 1, drawer.height),
-            Hit::ResizePanel(ResizablePanel::AppearanceDrawer),
-        ),
-    );
-
-    let inner = Rect::new(
-        drawer.x + 2,
-        drawer.y + 1,
-        drawer.width.saturating_sub(3),
-        drawer.height.saturating_sub(2),
+    let inner = super::drawer(
+        frame,
+        content,
+        ResizablePanel::AppearanceDrawer,
+        model,
+        hits,
     );
     let block = |label: &str| {
         Line::from(Span::styled(

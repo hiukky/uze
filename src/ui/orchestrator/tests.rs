@@ -4221,12 +4221,9 @@ mod workspace_tests {
         );
         let drawer_open = |driven: &Driven<'_>| {
             let manage = driven.attach.model.manage.as_ref().expect("open");
-            match manage.route {
-                crate::ui::model::Route::Plugins => manage.marketplace_drawer_open,
-                crate::ui::model::Route::Extensions => manage.extension_drawer_open,
-                crate::ui::model::Route::Harnesses => manage.harnesses_drawer_open,
-                _ => false,
-            }
+            manage
+                .list(manage.route)
+                .is_some_and(|screen| screen.drawer_open)
         };
         if drawer_open(&driven) {
             driven.press_key(esc);

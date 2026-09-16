@@ -13,15 +13,15 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use uze_keys::CaveatKind;
 
 use super::super::hit::Hit;
 use super::super::model::{KeyRow, ResizablePanel, Route, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
+use super::super::{content_area, render_screen_header};
+use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_keys(
@@ -35,11 +35,15 @@ pub(crate) fn render_keys(
 
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     hits.push((filter_area, Hit::FocusFilter));
-    render_filter_box(frame, filter_area, model);
+    super::filter_box(
+        frame,
+        filter_area,
+        &model.key_screen.filter,
+        "Filter keys and actions…",
+        model.filtering,
+    );
 
-    let drawer_width = model
-        .keys_drawer_width
-        .unwrap_or(super::DRAWER_DEFAULT_WIDTH);
+    let drawer_width = super::drawer_width(ResizablePanel::KeysDrawer, model, area);
     let list_width = content.width.saturating_sub(drawer_width);
     let list_area = Rect::new(
         content.x,
@@ -52,7 +56,7 @@ pub(crate) fn render_keys(
     if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                format!("Nothing matches \"{}\".", model.keys_filter.trim()),
+                format!("Nothing matches \"{}\".", model.key_screen.filter.trim()),
                 theme::fg(Token::TextMuted),
             )),
             list_area,
@@ -128,7 +132,7 @@ pub(crate) fn render_keys(
         let anchor = entries
             .iter()
             .position(
-                |entry| matches!(entry, Entry::Row(index, _) if *index == model.keys_selected),
+                |entry| matches!(entry, Entry::Row(index, _) if *index == model.key_screen.selected),
             )
             .unwrap_or(0);
         let first = anchor
@@ -177,7 +181,7 @@ pub(crate) fn render_keys(
     }
 
     if let Some(row) = model.selected_key_row() {
-        render_drawer(frame, area, drawer_width, model, &row, hits);
+        render_drawer(frame, area, model, &row, hits);
     }
 }
 
@@ -197,7 +201,7 @@ enum Entry {
 /// a screen whose whole subject is keys.
 fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> Line<'static> {
     let key_width = columns.key;
-    let selected = index == model.keys_selected;
+    let selected = index == model.key_screen.selected;
     let capturing = selected && model.keys_capture;
     let key = if capturing {
         format!("{:<key_width$}", "press…")
@@ -319,77 +323,19 @@ fn marker_width() -> usize {
     usize::from(theme::width(Symbol::Prompt)) + 1
 }
 
-fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(if model.filtering {
-            theme::color(Token::Accent)
-        } else {
-            theme::color(Token::BorderDefault)
-        }));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let text = if model.keys_filter.is_empty() {
-        Line::from(Span::styled(
-            "Filter keys and actions…",
-            theme::fg(Token::TextMuted),
-        ))
-    } else {
-        let mut spans = vec![Span::styled(
-            model.keys_filter.clone(),
-            theme::fg(Token::TextPrimary),
-        )];
-        if model.filtering {
-            spans.push(Span::styled(
-                theme::glyph(Symbol::BarThin),
-                theme::fg(Token::Accent),
-            ));
-        }
-        Line::from(spans)
-    };
-    frame.render_widget(Paragraph::new(text), inner);
-}
-
 /// The detail half: what this action does, what its key costs, and what
 /// this particular terminal will do with it.
 fn render_drawer(
     frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    width: u16,
+    content: Rect,
     model: &TuiModel,
     row: &KeyRow,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let drawer = side_panel_area(area, width);
-    frame.render_widget(Clear, drawer);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(
-                if model.dragging_panel == Some(ResizablePanel::KeysDrawer) {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::SurfaceRecessed)
-                },
-            ))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        drawer,
-    );
-    hits.insert(
-        0,
-        (
-            Rect::new(drawer.x, drawer.y, 1, drawer.height),
-            Hit::ResizePanel(ResizablePanel::KeysDrawer),
-        ),
-    );
-
     let offers = uze_application::application::offers::key_offers(row.custom());
-    let footer_height = drawer_footer_height(&offers);
-    let inner = Rect::new(
-        drawer.x + 2,
-        drawer.y + 1,
-        drawer.width.saturating_sub(3),
-        drawer.height.saturating_sub(2 + footer_height),
+    let (inner, footer) = super::drawer_body_and_footer(
+        super::drawer(frame, content, ResizablePanel::KeysDrawer, model, hits),
+        &offers,
     );
     let shipped = match row.default_chord {
         Some(chord) => format!("uze ships with {chord}"),
@@ -425,7 +371,7 @@ fn render_drawer(
     };
     render_drawer_footer(
         frame,
-        Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
+        footer,
         status,
         &offers,
         model.hovered_offer,

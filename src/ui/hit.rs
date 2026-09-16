@@ -134,8 +134,8 @@ impl TuiModel {
                 entering
             }
             Hit::MarketplaceRow(index) => {
-                self.marketplace_selected = index;
-                self.marketplace_drawer_open = true;
+                self.plugin_screen.selected = index;
+                self.plugin_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
@@ -151,9 +151,9 @@ impl TuiModel {
                     .iter()
                     .position(|&raw| self.marketplace_rows()[raw].marketplace == marketplace)
                 {
-                    self.marketplace_selected = position;
+                    self.plugin_screen.selected = position;
                 }
-                self.marketplace_drawer_open = true;
+                self.plugin_screen.drawer_open = true;
                 let _ = self.set_route(Route::Plugins);
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
@@ -169,14 +169,14 @@ impl TuiModel {
                 // does the same for keyboard navigation, so both input
                 // paths agree. No intent: the drawer's content is static
                 // catalog metadata, nothing to fetch.
-                self.extensions_selected = index;
-                self.extension_drawer_open = true;
+                self.extension_screen.selected = index;
+                self.extension_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }
             Hit::HarnessRow(index) => {
-                self.harnesses_selected = index;
-                self.harnesses_drawer_open = true;
+                self.harness_screen.selected = index;
+                self.harness_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }
@@ -251,7 +251,7 @@ impl TuiModel {
                 Intent::None
             }
             Hit::KeyRow(index) => {
-                self.keys_selected = index;
+                self.key_screen.selected = index;
                 self.keys_capture = false;
                 self.keys_problem = None;
                 self.focus = Focus::Content;

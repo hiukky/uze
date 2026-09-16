@@ -1,14 +1,14 @@
 //! TUI view — Harnesses route.
 //!
 //! A responsive integration catalog on the left; a detail drawer slides in
-//! from the right once a harness is selected (`TuiModel::harnesses_drawer_open`),
+//! from the right once a harness is selected (`ListScreen::drawer_open`),
 //! with a draggable left edge to balance the detail against the cards.
 
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use uze_application::{
@@ -18,8 +18,8 @@ use uze_application::{
 
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
+use super::super::{content_area, render_screen_header};
+use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// A harness's state collapses onto exactly one of three buckets for this
@@ -117,12 +117,9 @@ pub(crate) fn render_harnesses(
     // under the drawer and gets clipped mid-word by its Clear. Its initial
     // width is an even split; dragging the divider lets either panel take
     // priority for the task at hand.
-    let drawer_open = model.harnesses_drawer_open && model.selected_harness().is_some();
+    let drawer_open = model.harness_screen.drawer_open && model.selected_harness().is_some();
     let drawer_width = if drawer_open {
-        model
-            .harness_drawer_width
-            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
-            .clamp(24, area.width.saturating_sub(24).max(24))
+        super::drawer_width(ResizablePanel::HarnessDrawer, model, area)
     } else {
         0
     };
@@ -150,36 +147,13 @@ pub(crate) fn render_harnesses(
     if y + 2 <= bottom {
         let filter_area = Rect::new(content.x, y, content.width, 2);
         hits.push((filter_area, Hit::FocusFilter));
-        let block = Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(
-                if model.filtering && model.route == Route::Harnesses {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::BorderDefault)
-                },
-            ));
-        let inner = block.inner(filter_area);
-        frame.render_widget(block, filter_area);
-        let text = if model.harnesses_filter.is_empty() {
-            Line::from(Span::styled(
-                "Filter integrations…",
-                theme::fg(Token::TextMuted),
-            ))
-        } else {
-            let mut spans = vec![Span::styled(
-                model.harnesses_filter.clone(),
-                theme::fg(Token::TextPrimary),
-            )];
-            if model.filtering && model.route == Route::Harnesses {
-                spans.push(Span::styled(
-                    theme::glyph(Symbol::BarThin),
-                    theme::fg(Token::Accent),
-                ));
-            }
-            Line::from(spans)
-        };
-        frame.render_widget(Paragraph::new(text), inner);
+        super::filter_box(
+            frame,
+            filter_area,
+            &model.harness_screen.filter,
+            "Filter integrations…",
+            model.filtering,
+        );
         y += 3;
     }
 
@@ -200,7 +174,7 @@ pub(crate) fn render_harnesses(
                         Paragraph::new(Span::styled(
                             format!(
                                 "No integrations match \"{}\".",
-                                model.harnesses_filter.trim()
+                                model.harness_screen.filter.trim()
                             ),
                             theme::fg(Token::TextMuted),
                         )),
@@ -225,7 +199,7 @@ pub(crate) fn render_harnesses(
                     if rect.y + rect.height > bottom {
                         break;
                     }
-                    let selected = position == model.harnesses_selected;
+                    let selected = position == model.harness_screen.selected;
                     let status = HarnessStatus::from(harness);
                     render_harness_card(frame, rect, harness, status, selected, hits, position);
                 }
@@ -256,7 +230,7 @@ pub(crate) fn render_harnesses(
     }
 
     if drawer_open && let Some(harness) = model.selected_harness() {
-        render_harness_drawer(frame, area, drawer_width, model, harness, hits);
+        render_harness_drawer(frame, area, model, harness, hits);
     }
 }
 
@@ -329,48 +303,20 @@ fn render_harness_card(
 
 fn render_harness_drawer(
     frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    width: u16,
+    content: Rect,
     model: &TuiModel,
     harness: &HarnessHealth,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let status = HarnessStatus::from(harness);
-    // Receives the exact width already used by `render_harnesses`, so the
-    // list and drawer always agree about the draggable boundary.
-    let drawer = side_panel_area(area, width);
-    frame.render_widget(Clear, drawer);
-    frame.render_widget(
-        Block::default()
-            .borders(ratatui::widgets::Borders::LEFT)
-            .border_style(Style::default().fg(
-                if model.dragging_panel == Some(ResizablePanel::HarnessDrawer) {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::SurfaceRecessed)
-                },
-            ))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        drawer,
-    );
-    hits.insert(
-        0,
-        (
-            Rect::new(drawer.x, drawer.y, 1, drawer.height),
-            Hit::ResizePanel(ResizablePanel::HarnessDrawer),
-        ),
-    );
     let offers = harness.offers();
-    let footer_height = drawer_footer_height(&offers);
-    let inner = Rect::new(
-        drawer.x + 2,
-        drawer.y + 1,
-        drawer.width.saturating_sub(3),
-        drawer.height.saturating_sub(2 + footer_height),
+    let (inner, footer) = super::drawer_body_and_footer(
+        super::drawer(frame, content, ResizablePanel::HarnessDrawer, model, hits),
+        &offers,
     );
     render_drawer_footer(
         frame,
-        Rect::new(inner.x, inner.bottom(), inner.width, footer_height),
+        footer,
         DrawerStatus {
             color: status.color(),
             headline: status.label(),
