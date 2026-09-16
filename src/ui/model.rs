@@ -85,6 +85,19 @@ impl Route {
         }
     }
 
+    /// What the route is about, in the few words under its name.
+    pub(crate) fn subtitle(self) -> &'static str {
+        match self {
+            Route::Overview => "status & health",
+            Route::Plugins => "skills · agents · MCP",
+            Route::Extensions => "official tool extensions",
+            Route::Harnesses => "detected agents",
+            Route::Profiles => "autonomy · sandbox · model",
+            Route::Keys => "what each key does",
+            Route::Appearance => "theme & glyphs",
+        }
+    }
+
     /// The badge a route carries beside its name in the sidebar, or
     /// `None` for one that is finished. The sidebar is where someone
     /// decides which screen to open, so it is where "not settled yet" has
@@ -99,6 +112,14 @@ impl Route {
 
     pub(crate) fn index(self) -> usize {
         ROUTES.iter().position(|route| *route == self).unwrap()
+    }
+
+    /// The route one step along the sidebar, wrapping at either end. Only
+    /// the direction of `delta` counts.
+    pub(crate) fn neighbour(self, delta: isize) -> Self {
+        let count = ROUTES.len();
+        let step = if delta > 0 { 1 } else { count - 1 };
+        ROUTES[(self.index() + step) % count]
     }
 
     /// The name this route is remembered by between runs (see
@@ -145,6 +166,56 @@ pub(crate) enum ResizablePanel {
     ProfileColumns,
     KeysDrawer,
     AppearanceDrawer,
+}
+
+impl ResizablePanel {
+    /// Where this divider was last dragged to, or `None` for its default.
+    pub(crate) fn width(self, model: &TuiModel) -> Option<u16> {
+        match self {
+            Self::MarketplaceDrawer => model.remembered.plugin_screen.drawer_width,
+            Self::ExtensionDrawer => model.remembered.extension_screen.drawer_width,
+            Self::HarnessDrawer => model.remembered.harness_screen.drawer_width,
+            Self::KeysDrawer => model.key_screen.drawer_width,
+            Self::AppearanceDrawer => model.appearance_drawer_width,
+            Self::ProfileColumns => model.profile_columns_width,
+        }
+    }
+
+    pub(crate) fn width_mut(self, model: &mut TuiModel) -> &mut Option<u16> {
+        match self {
+            Self::MarketplaceDrawer => &mut model.remembered.plugin_screen.drawer_width,
+            Self::ExtensionDrawer => &mut model.remembered.extension_screen.drawer_width,
+            Self::HarnessDrawer => &mut model.remembered.harness_screen.drawer_width,
+            Self::KeysDrawer => &mut model.key_screen.drawer_width,
+            Self::AppearanceDrawer => &mut model.appearance_drawer_width,
+            Self::ProfileColumns => &mut model.profile_columns_width,
+        }
+    }
+}
+
+/// One list screen's own state: its search, where its selection is, and
+/// its detail drawer.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ListScreen {
+    /// Live substring filter, typed while `TuiModel::filtering` is true.
+    pub(crate) filter: String,
+    /// A position in the list as it is filtered now.
+    pub(crate) selected: usize,
+    /// Whether the detail drawer is slid into view. Opens on selection,
+    /// closes on `Esc` — the list reclaims the full width while it's closed.
+    pub(crate) drawer_open: bool,
+    /// Where the drawer's edge was dragged to; `None` for its default.
+    pub(crate) drawer_width: Option<u16>,
+}
+
+impl ListScreen {
+    /// The screen as a new visit finds it: its drawer as the layout left
+    /// it, and no search — leaving a search puts the list back.
+    fn reopen(&mut self, drawer_open: bool, drawer_width: Option<u16>) {
+        self.filter.clear();
+        self.drawer_open = drawer_open;
+        self.drawer_width = drawer_width;
+    }
 }
 
 impl ProfilePanel {
@@ -216,7 +287,6 @@ fn cycle_model(current: ModelPreference, forward: bool) -> ModelPreference {
 pub(crate) enum Focus {
     Sidebar,
     Content,
-    Overlay,
 }
 
 /// One rebindable line of the Keys screen.
@@ -281,31 +351,18 @@ pub(crate) enum Overlay {
     /// done here, so it is a surface of its own rather than a section of
     /// the index.
     HarnessHelp,
-    ConfirmRemove {
-        id: String,
-        focus: usize,
+    /// A question the operator answers, or a notice they dismiss. `focus`
+    /// is which answer the keyboard is on — 0 the way out, 1 the
+    /// affirmative — for the destructive questions that let it move.
+    Confirm {
+        kind: Confirmation,
+        focus: Option<usize>,
     },
-    ConfirmUpdate(String),
-    ConfirmInstall {
-        name: String,
-        marketplace: String,
-    },
-    ConfirmContextApply,
-    ProtectedPlugin(String),
     /// Free-text input, appended to on every character key and popped on
     /// backspace — see `TuiModel::overlay_key`'s `AddMarketplace` arms.
     AddMarketplace(String),
     /// A new profile's id, typed the same way as `AddMarketplace`.
     NewProfile(String),
-    /// Mirrors `ConfirmRemove` exactly, as its own variant rather than an
-    /// overload — `ConfirmRemove` is plugin-specific today.
-    ConfirmDeleteProfile {
-        id: String,
-        focus: usize,
-    },
-    /// Deleting the workspace's recorded prompts. Destructive and not
-    /// undoable, so it is confirmed like any other removal.
-    ConfirmClearPromptHistory,
     /// Choosing what UZE looks like. Carries the list rather than reading
     /// it per frame: it is a directory listing, and a list that changed
     /// under the cursor between two frames would move the selection out
@@ -317,10 +374,29 @@ pub(crate) enum Overlay {
         themes: Vec<(String, bool)>,
         selected: usize,
     },
+}
+
+/// What a confirmation is about, and so what agreeing to it does.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Confirmation {
+    RemovePlugin(String),
+    UpdatePlugin(String),
+    InstallPlugin {
+        name: String,
+        marketplace: String,
+    },
+    ApplyContext,
+    /// Deleting the workspace's recorded prompts. Destructive and not
+    /// undoable, so it is confirmed like any other removal.
+    ClearPromptHistory,
+    /// Why a plugin from the embedded official snapshot cannot be removed.
+    /// Nothing to agree to: it explains a refusal.
+    ProtectedPlugin(String),
+    DeleteProfile(String),
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
-    TrustRequired {
+    Trust {
         plugin: String,
         detail: String,
         retry: TrustedRetry,
@@ -389,23 +465,12 @@ pub(crate) struct TuiModel {
     /// competing inspections against the same receipt ledger.
     pub(crate) maintenance_in_flight: bool,
 
-    pub(crate) plugins: Vec<PluginSummary>,
+    /// What the last visit resolved and where in it the operator was.
+    pub(crate) remembered: Remembered,
     pub(crate) plugin_detail: Option<PluginInspection>,
 
-    /// Every registered marketplace, by the name its plugins carry —
-    /// what the plugin drawer resolves a source link through.
-    pub(crate) marketplaces: Vec<MarketplaceSummary>,
-    pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
-    /// An index into the *visible* (filtered, group-expanded) sequence —
-    /// see `marketplace_visible_indices` — not directly into
-    /// `marketplace_plugins`. Resolve through `selected_marketplace_plugin`.
-    pub(crate) marketplace_selected: usize,
-    /// The Keys screen's selected row, filter, and what it is waiting
-    /// for. Capture is its own state because it is the one moment the
-    /// keyboard means nothing at all: every keystroke is the answer.
-    pub(crate) keys_drawer_width: Option<u16>,
-    pub(crate) keys_selected: usize,
-    pub(crate) keys_filter: String,
+    /// The Keys list. Its drawer is always open, so only its width is read.
+    pub(crate) key_screen: ListScreen,
     /// The Appearance screen's selected row, and the lists it is choosing
     /// from. Carried rather than read per frame for the reason
     /// [`Overlay::ThemePicker`] carries its own: the themes are a directory
@@ -424,7 +489,6 @@ pub(crate) struct TuiModel {
     /// read found nothing, so an empty machine is not asked again every
     /// frame.
     pub(crate) appearance_read: bool,
-    pub(crate) keys_capture: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
     pub(crate) keys_problem: Option<String>,
@@ -432,21 +496,19 @@ pub(crate) struct TuiModel {
     /// multiplexer and connection; pressing a key and being told what
     /// arrived is the answer for the machine in front of you.
     pub(crate) keys_probe: Option<String>,
+    /// Whether a rebinding is waiting for its key. Its own state because it
+    /// is the one moment the keyboard means nothing at all: every keystroke
+    /// is the answer.
+    pub(crate) keys_capture: bool,
     /// What this terminal turned out to be able to deliver.
     pub(crate) keyboard: super::keys::KeyboardSupport,
     pub(crate) marketplace_detail: Option<MarketplacePluginDetail>,
-    /// Whether the plugin-detail drawer is currently slid into view. Opens
-    /// on selection, closes on `Esc` — the list panel reclaims the full
-    /// width while it's closed, mirroring the design's slide-in drawer.
-    pub(crate) marketplace_drawer_open: bool,
     /// The inspection the worker is currently answering for the drawer,
     /// so the per-frame `drawer_inspect_intent` check cannot queue the
     /// same fetch again while it is still running. Cleared when its
     /// answer, success or failure, lands.
     pub(crate) inspection_in_flight: Option<super::worker::Intent>,
-    /// Live substring filter over plugin/marketplace name, typed while
-    /// `filtering` is true (`/` in the Plugins route).
-    pub(crate) marketplace_filter: String,
+    /// Whether the active list screen's filter is taking text.
     pub(crate) filtering: bool,
     /// Marketplace group names currently collapsed in the tree — absence
     /// means expanded, so a freshly registered marketplace starts open.
@@ -455,21 +517,7 @@ pub(crate) struct TuiModel {
     /// The official uze extensions catalog, from
     /// `uze_extensions::registry::ExtensionRegistry`.
     pub(crate) extensions: Vec<BuiltinExtension>,
-    /// Live substring filter over extension metadata, typed with `/` while
-    /// the Extensions route is focused.
-    pub(crate) extension_filter: String,
-    /// Position within `extension_visible_indices`, rather than a raw catalog
-    /// index, so filtered cards and keyboard navigation always agree.
-    pub(crate) extensions_selected: usize,
-    /// Whether the Extensions detail drawer is currently slid into view.
-    pub(crate) extension_drawer_open: bool,
 
-    pub(crate) harnesses_selected: usize,
-    pub(crate) harnesses_drawer_open: bool,
-    pub(crate) harnesses_filter: String,
-
-    pub(crate) profiles: Vec<ProfileSummary>,
-    pub(crate) profiles_selected: usize,
     pub(crate) profile_panel: ProfilePanel,
     pub(crate) profile_editor_selected: usize,
     pub(crate) profile_harness_selected: usize,
@@ -507,31 +555,7 @@ pub(crate) struct TuiModel {
     /// configuration may have changed underneath it.
     pub(crate) profile_preview_asked: Option<PreviewQuestion>,
 
-    pub(crate) doctor: Option<DoctorReport>,
-
-    /// When the state above was last resolved, or `None` while the
-    /// session's first resolution is still on its way. Opening the modal
-    /// reads it to decide whether it is looking at an answer or at
-    /// nothing yet — see `management::RESOLUTION_STANDS_FOR`.
-    pub(crate) resolved_at: Option<Instant>,
-
-    /// Plugins updated automatically this session, badged as "Updated" on
-    /// the Plugins screen until [`UPDATE_BADGE_TTL`] after the operator has
-    /// actually had that screen in front of them.
-    pub(crate) update_badges: Vec<UpdateBadge>,
-
     pub(crate) context_root: PathBuf,
-    pub(crate) context_status: Option<ProjectContextStatus>,
-    pub(crate) context_plan: Option<ContextPlan>,
-
-    /// The detected UZE workspace (`agents.lock`/`marketplace.json`), loaded on
-    /// the first refresh. `None` only before the startup worker returns.
-    pub(crate) workspace: Option<OverviewWorkspaceSummary>,
-
-    /// Recent prompts for the detected workspace, newest first. Read-only
-    /// here: the workspace client owns writing them.
-    pub(crate) prompt_history: Vec<uze_application::PromptEntry>,
-    pub(crate) overview_prompt_selected: usize,
     pub(crate) overview_prompt_hovered: Option<usize>,
 
     /// Whether the pointer is on the plugin drawer's source address.
@@ -556,9 +580,6 @@ pub(crate) struct TuiModel {
     /// same resize bounds, so the two sidebars feel identical to drag.
     pub(crate) sidebar_width: Option<u16>,
     pub(crate) dragging_sidebar: bool,
-    pub(crate) marketplace_drawer_width: Option<u16>,
-    pub(crate) extension_drawer_width: Option<u16>,
-    pub(crate) harness_drawer_width: Option<u16>,
     pub(crate) profile_columns_width: Option<u16>,
     pub(crate) dragging_panel: Option<ResizablePanel>,
     /// The Keys list's scroll track while it is being dragged, kept from
@@ -583,14 +604,78 @@ impl Default for TuiModel {
     /// A model with nothing resolved, shaped as `ManagementLayout`'s own
     /// default — the drawers a screen opens with are stated once, there.
     fn default() -> Self {
-        let layout = ManagementLayout::default();
-        Self {
-            route: Route::Overview,
+        Self::recall(None, &ManagementLayout::default())
+    }
+}
+
+/// The fields of [`TuiModel`] that outlive one visit to the management
+/// client — the machine state it resolved and where in it the operator
+/// was. Everything not here belongs to one visit: the open overlay, the
+/// status line, work in flight, and per-frame transients such as hit rects
+/// and the spinner tick. The screen that was open and how its drawers were
+/// left outlive the *process*, and every visit is shaped from the
+/// `ManagementLayout` that keeps them (see [`TuiModel::recall`]).
+///
+/// The modal is opened and closed constantly, and rebuilding a default
+/// model each time meant an empty screen — no plugins, no harnesses —
+/// under a "Refreshing environment…" line, for as long as a full
+/// resolution took. What the last visit resolved is still the truth about
+/// the machine, so it is what the next one draws while a refresh confirms
+/// it behind the frame.
+#[derive(Default)]
+pub(crate) struct Remembered {
+    pub(crate) plugins: Vec<PluginSummary>,
+    pub(crate) doctor: Option<DoctorReport>,
+    /// When the state here was last resolved, or `None` while the
+    /// session's first resolution is still on its way. Opening the modal
+    /// reads it to decide whether it is looking at an answer or at
+    /// nothing yet — see `management::RESOLUTION_STANDS_FOR`.
+    pub(crate) resolved_at: Option<Instant>,
+    /// Every registered marketplace, by the name its plugins carry —
+    /// what the plugin drawer resolves a source link through.
+    pub(crate) marketplaces: Vec<MarketplaceSummary>,
+    pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
+    pub(crate) profiles: Vec<ProfileSummary>,
+    pub(crate) context_status: Option<ProjectContextStatus>,
+    pub(crate) context_plan: Option<ContextPlan>,
+    /// The detected UZE workspace (`agents.lock`/`marketplace.json`), loaded on
+    /// the first refresh. `None` only before the startup worker returns.
+    pub(crate) workspace: Option<OverviewWorkspaceSummary>,
+    /// Recent prompts for the detected workspace, newest first. Read-only
+    /// here: the workspace client owns writing them.
+    pub(crate) prompt_history: Vec<uze_application::PromptEntry>,
+    /// Plugins updated automatically this session, badged as "Updated" on
+    /// the Plugins screen until [`UPDATE_BADGE_TTL`] after the operator has
+    /// actually had that screen in front of them.
+    pub(crate) update_badges: Vec<UpdateBadge>,
+    /// The Plugins tree. Its selection indexes the *visible* (filtered,
+    /// group-expanded) sequence — see `marketplace_visible_indices` — not
+    /// `marketplace_plugins`; resolve through `selected_marketplace_plugin`.
+    pub(crate) plugin_screen: ListScreen,
+    /// The Extensions catalog. Its selection is a position within
+    /// `extension_visible_indices`, rather than a raw catalog index, so
+    /// filtered cards and keyboard navigation always agree.
+    pub(crate) extension_screen: ListScreen,
+    pub(crate) harness_screen: ListScreen,
+    pub(crate) profiles_selected: usize,
+    pub(crate) overview_prompt_selected: usize,
+}
+
+impl TuiModel {
+    /// A model opening the management modal shaped as `layout` says —
+    /// the screen, the drawers, the folds — with what the previous visit
+    /// left behind. `None` is the first visit of the process, which has
+    /// nothing resolved yet.
+    pub(crate) fn recall(remembered: Option<Remembered>, layout: &ManagementLayout) -> Self {
+        let mut model = Self {
+            route: layout
+                .route
+                .as_deref()
+                .and_then(Route::from_id)
+                .unwrap_or(Route::Overview),
             focus: Focus::Sidebar,
             overlay: Overlay::None,
-            keys_drawer_width: None,
-            keys_selected: 0,
-            keys_filter: String::new(),
+            key_screen: ListScreen::default(),
             appearance_drawer_width: None,
             appearance_selected: 0,
             appearance_themes: Vec::new(),
@@ -604,28 +689,15 @@ impl Default for TuiModel {
             status: Status::Idle,
             status_expires_at: None,
             maintenance_in_flight: false,
-            plugins: Vec::new(),
+            remembered: remembered.unwrap_or_default(),
             plugin_detail: None,
-            marketplaces: Vec::new(),
-            marketplace_plugins: Vec::new(),
-            marketplace_selected: 0,
             marketplace_detail: None,
-            marketplace_drawer_open: layout.marketplace_drawer_open,
             inspection_in_flight: None,
-            marketplace_filter: String::new(),
             filtering: false,
-            collapsed_marketplaces: layout.collapsed_marketplaces,
+            collapsed_marketplaces: layout.collapsed_marketplaces.clone(),
             extensions: uze_extensions::registry::ExtensionRegistry::builtin()
                 .all()
                 .to_vec(),
-            extension_filter: String::new(),
-            extensions_selected: 0,
-            extension_drawer_open: layout.extension_drawer_open,
-            harnesses_selected: 0,
-            harnesses_drawer_open: layout.harnesses_drawer_open,
-            harnesses_filter: String::new(),
-            profiles: Vec::new(),
-            profiles_selected: 0,
             profile_panel: ProfilePanel::List,
             profile_editor_selected: 0,
             profile_harness_selected: 0,
@@ -638,15 +710,7 @@ impl Default for TuiModel {
             profile_preview: None,
             profile_preview_epoch: 0,
             profile_preview_asked: None,
-            doctor: None,
-            resolved_at: None,
-            update_badges: Vec::new(),
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            context_status: None,
-            context_plan: None,
-            workspace: None,
-            prompt_history: Vec::new(),
-            overview_prompt_selected: 0,
             overview_prompt_hovered: None,
             source_link_hovered: false,
             hovered_offer: None,
@@ -654,9 +718,6 @@ impl Default for TuiModel {
             hits: Vec::new(),
             sidebar_width: None,
             dragging_sidebar: false,
-            marketplace_drawer_width: layout.marketplace_drawer_width,
-            extension_drawer_width: layout.extension_drawer_width,
-            harness_drawer_width: layout.harness_drawer_width,
             profile_columns_width: layout.profile_columns_width,
             dragging_panel: None,
             dragging_keys_track: None,
@@ -665,116 +726,33 @@ impl Default for TuiModel {
             steps_taken: std::collections::BTreeSet::new(),
             release: None,
             release_revision: 0,
-        }
-    }
-}
-
-/// The fields of [`TuiModel`] that outlive one visit to the management
-/// client — the machine state it resolved and where in it the operator
-/// was. Everything not listed here belongs to one visit: the open
-/// overlay, the status line, work in flight, and per-frame transients
-/// such as hit rects and the spinner tick. The screen that was open and
-/// how its drawers were left are not here either: those outlive the
-/// *process*, and live in the `ManagementLayout` every visit is shaped
-/// from (see [`TuiModel::recall`]).
-///
-/// The modal is opened and closed constantly, and rebuilding a default
-/// model each time meant an empty screen — no
-/// plugins, no harnesses — under a "Refreshing environment…" line, for as
-/// long as a full resolution took. What the last visit resolved is still
-/// the truth about the machine, so it is what the next one draws while a
-/// refresh confirms it behind the frame.
-pub(crate) struct Remembered {
-    plugins: Vec<PluginSummary>,
-    doctor: Option<DoctorReport>,
-    resolved_at: Option<Instant>,
-    marketplaces: Vec<MarketplaceSummary>,
-    marketplace_plugins: Vec<MarketplacePluginSummary>,
-    profiles: Vec<ProfileSummary>,
-    context_status: Option<ProjectContextStatus>,
-    context_plan: Option<ContextPlan>,
-    workspace: Option<OverviewWorkspaceSummary>,
-    prompt_history: Vec<uze_application::PromptEntry>,
-    update_badges: Vec<UpdateBadge>,
-    marketplace_selected: usize,
-    extensions_selected: usize,
-    harnesses_selected: usize,
-    profiles_selected: usize,
-    overview_prompt_selected: usize,
-}
-
-impl TuiModel {
-    /// A model opening the management modal shaped as `layout` says —
-    /// the screen, the drawers, the folds — with what the previous visit
-    /// left behind. `None` is the first visit of the process, which has
-    /// nothing resolved yet and starts from the default model.
-    pub(crate) fn recall(remembered: Option<Remembered>, layout: &ManagementLayout) -> Self {
-        let mut model = remembered.map_or_else(Self::default, |remembered| {
-            let Remembered {
-                plugins,
-                doctor,
-                resolved_at,
-                marketplaces,
-                marketplace_plugins,
-                profiles,
-                context_status,
-                context_plan,
-                workspace,
-                prompt_history,
-                update_badges,
-                marketplace_selected,
-                extensions_selected,
-                harnesses_selected,
-                profiles_selected,
-                overview_prompt_selected,
-            } = remembered;
-            Self {
-                plugins,
-                doctor,
-                resolved_at,
-                marketplaces,
-                marketplace_plugins,
-                profiles,
-                context_status,
-                context_plan,
-                workspace,
-                prompt_history,
-                update_badges,
-                marketplace_selected,
-                extensions_selected,
-                harnesses_selected,
-                profiles_selected,
-                overview_prompt_selected,
-                ..Self::default()
-            }
-        });
-        model.route = layout
-            .route
-            .as_deref()
-            .and_then(Route::from_id)
-            .unwrap_or(Route::Overview);
-        model.marketplace_drawer_open = layout.marketplace_drawer_open;
-        model.extension_drawer_open = layout.extension_drawer_open;
-        model.harnesses_drawer_open = layout.harnesses_drawer_open;
-        model.marketplace_drawer_width = layout.marketplace_drawer_width;
-        model.extension_drawer_width = layout.extension_drawer_width;
-        model.harness_drawer_width = layout.harness_drawer_width;
-        model.profile_columns_width = layout.profile_columns_width;
-        model.collapsed_marketplaces = layout.collapsed_marketplaces.clone();
+        };
+        let remembered = &mut model.remembered;
+        remembered.plugin_screen.reopen(
+            layout.marketplace_drawer_open,
+            layout.marketplace_drawer_width,
+        );
+        remembered
+            .extension_screen
+            .reopen(layout.extension_drawer_open, layout.extension_drawer_width);
+        remembered
+            .harness_screen
+            .reopen(layout.harnesses_drawer_open, layout.harness_drawer_width);
         model
     }
 
     /// The shape this opening leaves the management modal in, for the
     /// next visit and the next run alike.
     pub(crate) fn management_layout(&self) -> ManagementLayout {
+        let remembered = &self.remembered;
         ManagementLayout {
             route: Some(self.route.id().to_owned()),
-            marketplace_drawer_open: self.marketplace_drawer_open,
-            extension_drawer_open: self.extension_drawer_open,
-            harnesses_drawer_open: self.harnesses_drawer_open,
-            marketplace_drawer_width: self.marketplace_drawer_width,
-            extension_drawer_width: self.extension_drawer_width,
-            harness_drawer_width: self.harness_drawer_width,
+            marketplace_drawer_open: remembered.plugin_screen.drawer_open,
+            extension_drawer_open: remembered.extension_screen.drawer_open,
+            harnesses_drawer_open: remembered.harness_screen.drawer_open,
+            marketplace_drawer_width: remembered.plugin_screen.drawer_width,
+            extension_drawer_width: remembered.extension_screen.drawer_width,
+            harness_drawer_width: remembered.harness_screen.drawer_width,
             profile_columns_width: self.profile_columns_width,
             collapsed_marketplaces: self.collapsed_marketplaces.clone(),
         }
@@ -782,24 +760,7 @@ impl TuiModel {
 
     /// What this visit leaves for the next one.
     pub(crate) fn remember(self) -> Remembered {
-        Remembered {
-            plugins: self.plugins,
-            doctor: self.doctor,
-            resolved_at: self.resolved_at,
-            marketplaces: self.marketplaces,
-            marketplace_plugins: self.marketplace_plugins,
-            profiles: self.profiles,
-            context_status: self.context_status,
-            context_plan: self.context_plan,
-            workspace: self.workspace,
-            prompt_history: self.prompt_history,
-            update_badges: self.update_badges,
-            marketplace_selected: self.marketplace_selected,
-            extensions_selected: self.extensions_selected,
-            harnesses_selected: self.harnesses_selected,
-            profiles_selected: self.profiles_selected,
-            overview_prompt_selected: self.overview_prompt_selected,
-        }
+        self.remembered
     }
 
     /// Says something for a few seconds and then goes quiet. For the
@@ -831,16 +792,16 @@ impl TuiModel {
     /// still on Overview, so a badge timed from the update would routinely
     /// expire before the screen carrying it was ever opened.
     pub(crate) fn expire_update_badges(&mut self) {
-        if self.update_badges.is_empty() {
+        if self.remembered.update_badges.is_empty() {
             return;
         }
         let now = Instant::now();
         if self.route == Route::Plugins {
-            for badge in &mut self.update_badges {
+            for badge in &mut self.remembered.update_badges {
                 badge.seen_at.get_or_insert(now);
             }
         }
-        self.update_badges.retain(|badge| {
+        self.remembered.update_badges.retain(|badge| {
             badge
                 .seen_at
                 .is_none_or(|seen| now - seen < UPDATE_BADGE_TTL)
@@ -852,7 +813,8 @@ impl TuiModel {
     /// (`marketplace_plugin_id`), so a local-group row and a catalog row
     /// for the same package answer identically.
     pub(crate) fn was_just_updated(&self, plugin_id: &str) -> bool {
-        self.update_badges
+        self.remembered
+            .update_badges
             .iter()
             .any(|badge| badge.plugin == plugin_id)
     }
@@ -862,10 +824,12 @@ impl TuiModel {
     /// "local" group, so a direct install never disappears from the TUI
     /// when the catalog screen absorbs the old installed list.
     fn local_marketplace_rows(&self) -> Vec<MarketplacePluginSummary> {
-        self.plugins
+        self.remembered
+            .plugins
             .iter()
             .filter(|plugin| {
                 !self
+                    .remembered
                     .marketplace_plugins
                     .iter()
                     .any(|m| format!("{}@{}", m.name, m.marketplace) == plugin.id)
@@ -888,7 +852,7 @@ impl TuiModel {
     /// (visible indices, selection, rendering) resolves through this one
     /// list so the local group is a group like any other.
     pub(crate) fn marketplace_rows(&self) -> Vec<MarketplacePluginSummary> {
-        let mut rows = self.marketplace_plugins.clone();
+        let mut rows = self.remembered.marketplace_plugins.clone();
         rows.extend(self.local_marketplace_rows());
         rows
     }
@@ -901,7 +865,8 @@ impl TuiModel {
         if plugin.marketplace != "local" {
             return format!("{}@{}", plugin.name, plugin.marketplace);
         }
-        self.plugins
+        self.remembered
+            .plugins
             .iter()
             .find(|p| p.active_name == plugin.name)
             .map(|p| p.id.clone())
@@ -914,7 +879,7 @@ impl TuiModel {
     /// truth both the list renderer and selection/navigation resolve
     /// through, so a hidden row is never selectable and vice versa.
     pub(crate) fn marketplace_visible_indices(&self) -> Vec<usize> {
-        let needle = self.marketplace_filter.trim().to_lowercase();
+        let needle = self.remembered.plugin_screen.filter.trim().to_lowercase();
         self.marketplace_rows()
             .iter()
             .enumerate()
@@ -928,13 +893,13 @@ impl TuiModel {
             .collect()
     }
 
-    /// Resolves `marketplace_selected` (a position in the visible sequence)
+    /// Resolves the Plugins selection (a position in the visible sequence)
     /// back to the plugin it points at — an owned clone, since the merged
     /// row list is computed on demand (`marketplace_rows`).
     pub(crate) fn selected_marketplace_plugin(&self) -> Option<MarketplacePluginSummary> {
         let raw_index = *self
             .marketplace_visible_indices()
-            .get(self.marketplace_selected)?;
+            .get(self.remembered.plugin_screen.selected)?;
         self.marketplace_rows().get(raw_index).cloned()
     }
 
@@ -942,12 +907,17 @@ impl TuiModel {
         self.extensions.get(
             *self
                 .extension_visible_indices()
-                .get(self.extensions_selected)?,
+                .get(self.remembered.extension_screen.selected)?,
         )
     }
 
     pub(crate) fn extension_visible_indices(&self) -> Vec<usize> {
-        let needle = self.extension_filter.trim().to_lowercase();
+        let needle = self
+            .remembered
+            .extension_screen
+            .filter
+            .trim()
+            .to_lowercase();
         self.extensions
             .iter()
             .enumerate()
@@ -1003,7 +973,7 @@ impl TuiModel {
     /// every frame so the drawer never sits on "loading…" waiting for a
     /// click that would only re-request what it already needs.
     pub(crate) fn drawer_inspect_intent(&self) -> super::worker::Intent {
-        if self.route != Route::Plugins || !self.marketplace_drawer_open {
+        if self.route != Route::Plugins || !self.remembered.plugin_screen.drawer_open {
             return super::worker::Intent::None;
         }
         let intent = self.marketplace_inspect_intent();
@@ -1019,29 +989,12 @@ impl TuiModel {
         if !self.collapsed_marketplaces.remove(marketplace) {
             self.collapsed_marketplaces.insert(marketplace.to_owned());
         }
-        self.clamp_marketplace_selection();
-    }
-
-    fn clamp_marketplace_selection(&mut self) {
-        let visible = self.marketplace_visible_indices().len();
-        self.marketplace_selected = self.marketplace_selected.min(visible.saturating_sub(1));
-    }
-
-    fn clamp_extension_selection(&mut self) {
-        self.extensions_selected = self
-            .extensions_selected
-            .min(self.extension_visible_indices().len().saturating_sub(1));
-    }
-
-    fn clamp_harness_selection(&mut self) {
-        self.harnesses_selected = self
-            .harnesses_selected
-            .min(self.harness_visible_indices().len().saturating_sub(1));
+        self.clamp_list_selection(Route::Plugins);
     }
 
     pub(crate) fn harness_visible_indices(&self) -> Vec<usize> {
-        let needle = self.harnesses_filter.trim().to_lowercase();
-        let Some(doctor) = &self.doctor else {
+        let needle = self.remembered.harness_screen.filter.trim().to_lowercase();
+        let Some(doctor) = &self.remembered.doctor else {
             return Vec::new();
         };
         doctor
@@ -1071,19 +1024,7 @@ impl TuiModel {
                 *selected = 0;
             }
             Overlay::AddMarketplace(input) | Overlay::NewProfile(input) => input.push(character),
-            _ => {
-                match self.route {
-                    Route::Plugins => self.marketplace_filter.push(character),
-                    Route::Extensions => self.extension_filter.push(character),
-                    Route::Harnesses => self.harnesses_filter.push(character),
-                    Route::Keys => {
-                        self.keys_filter.push(character);
-                        self.keys_selected = 0;
-                    }
-                    _ => return super::worker::Intent::None,
-                }
-                self.clamp_filtered_selection();
-            }
+            _ => self.edit_filter(|filter| filter.push(character)),
         }
         super::worker::Intent::None
     }
@@ -1100,20 +1041,9 @@ impl TuiModel {
             Overlay::AddMarketplace(input) | Overlay::NewProfile(input) => {
                 input.pop();
             }
-            _ => {
-                match self.route {
-                    Route::Plugins => self.marketplace_filter.pop(),
-                    Route::Extensions => self.extension_filter.pop(),
-                    Route::Harnesses => self.harnesses_filter.pop(),
-                    Route::Keys => {
-                        self.keys_filter.pop();
-                        self.keys_selected = 0;
-                        return super::worker::Intent::None;
-                    }
-                    _ => return super::worker::Intent::None,
-                };
-                self.clamp_filtered_selection();
-            }
+            _ => self.edit_filter(|filter| {
+                filter.pop();
+            }),
         }
         super::worker::Intent::None
     }
@@ -1121,53 +1051,65 @@ impl TuiModel {
     /// Forgets the active route's filter. Leaving a search puts the list
     /// back the way it was found.
     pub(crate) fn clear_filter(&mut self) {
-        match self.route {
-            Route::Plugins => self.marketplace_filter.clear(),
-            Route::Extensions => self.extension_filter.clear(),
-            Route::Harnesses => self.harnesses_filter.clear(),
-            Route::Keys => {
-                self.keys_filter.clear();
-                self.keys_selected = 0;
-                return;
-            }
-            _ => return,
-        }
-        self.clamp_filtered_selection();
+        self.edit_filter(String::clear);
     }
 
-    /// A narrowed list can be shorter than wherever the selection was.
-    fn clamp_filtered_selection(&mut self) {
-        match self.route {
-            Route::Plugins => self.clamp_marketplace_selection(),
-            Route::Extensions => self.clamp_extension_selection(),
-            Route::Harnesses => self.clamp_harness_selection(),
-            _ => {}
+    /// Changes the active list screen's filter, and keeps its selection on
+    /// the list the filter leaves — a narrowed list can be shorter than
+    /// wherever the selection was.
+    fn edit_filter(&mut self, edit: impl FnOnce(&mut String)) {
+        let route = self.route;
+        let Some(screen) = self.list_mut(route) else {
+            return;
+        };
+        edit(&mut screen.filter);
+        self.clamp_list_selection(route);
+    }
+
+    fn clamp_list_selection(&mut self, route: Route) {
+        let len = self.list_len(route);
+        if let Some(screen) = self.list_mut(route) {
+            screen.selected = screen.selected.min(len.saturating_sub(1));
         }
     }
 
-    /// Takes a keystroke as the new binding for the selected line.
-    ///
-    /// Everything that could be wrong with it is said before anything is
-    /// written: a chord that is another key on a terminal, one this
-    /// terminal cannot send, and one that already means something else in
-    /// the same keyboard. A screen that let you lock yourself out would be
-    /// worse than one that had no rebinding at all.
-    /// Where in the Keys list a point on its scroll track lands.
-    ///
-    /// The track is a picture of the whole list, so a position on it is a
-    /// position in the list — the top row is the first key, the bottom row
-    /// the last. The window itself is derived from the selection rather
-    /// than stored, so moving the selection is how the track moves the
-    /// page; there is no second notion of "where the page is" that could
-    /// disagree with the first.
-    /// Whether this screen has a search field. Plugins, Extensions and
-    /// Integrations filter their lists; Keys filters its own; the Overview
-    /// is a report and Profiles is three panels rather than a list.
+    /// The list screen `route` is, if it is one: Plugins, Extensions,
+    /// Integrations and Keys. The Overview is a report, Profiles is three
+    /// panels and Appearance a catalogue with headings.
+    pub(crate) fn list(&self, route: Route) -> Option<&ListScreen> {
+        match route {
+            Route::Plugins => Some(&self.remembered.plugin_screen),
+            Route::Extensions => Some(&self.remembered.extension_screen),
+            Route::Harnesses => Some(&self.remembered.harness_screen),
+            Route::Keys => Some(&self.key_screen),
+            Route::Overview | Route::Profiles | Route::Appearance => None,
+        }
+    }
+
+    pub(crate) fn list_mut(&mut self, route: Route) -> Option<&mut ListScreen> {
+        match route {
+            Route::Plugins => Some(&mut self.remembered.plugin_screen),
+            Route::Extensions => Some(&mut self.remembered.extension_screen),
+            Route::Harnesses => Some(&mut self.remembered.harness_screen),
+            Route::Keys => Some(&mut self.key_screen),
+            Route::Overview | Route::Profiles | Route::Appearance => None,
+        }
+    }
+
+    /// How many rows `route`'s list shows as it is filtered now.
+    pub(crate) fn list_len(&self, route: Route) -> usize {
+        match route {
+            Route::Plugins => self.marketplace_visible_indices().len(),
+            Route::Extensions => self.extension_visible_indices().len(),
+            Route::Harnesses => self.harness_visible_indices().len(),
+            Route::Keys => self.key_rows().len(),
+            Route::Overview | Route::Profiles | Route::Appearance => 0,
+        }
+    }
+
+    /// Whether this screen has a search field.
     pub(crate) fn has_filter(&self) -> bool {
-        matches!(
-            self.route,
-            Route::Plugins | Route::Extensions | Route::Harnesses | Route::Keys
-        )
+        self.list(self.route).is_some()
     }
 
     /// The list at the foot of the sidebar, as it stands.
@@ -1190,6 +1132,14 @@ impl TuiModel {
         }
     }
 
+    /// Where in the Keys list a point on its scroll track lands.
+    ///
+    /// The track is a picture of the whole list, so a position on it is a
+    /// position in the list — the top row is the first key, the bottom row
+    /// the last. The window itself is derived from the selection rather
+    /// than stored, so moving the selection is how the track moves the
+    /// page; there is no second notion of "where the page is" that could
+    /// disagree with the first.
     pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
         let rows = self.key_rows().len();
         let Some(bar) =
@@ -1200,11 +1150,18 @@ impl TuiModel {
         // `item_at`, not `first_at`: this list's window is derived from
         // its selection, so a position on the track is a position in the
         // whole list — see `super::scrollbar`.
-        self.keys_selected = bar.item_at(row);
+        self.key_screen.selected = bar.item_at(row);
         self.keys_capture = false;
         self.keys_problem = None;
     }
 
+    /// Takes a keystroke as the new binding for the selected line.
+    ///
+    /// Everything that could be wrong with it is said before anything is
+    /// written: a chord that is another key on a terminal, one this
+    /// terminal cannot send, and one that already means something else in
+    /// the same keyboard. A screen that let you lock yourself out would be
+    /// worse than one that had no rebinding at all.
     pub(crate) fn capture_chord(&mut self, chord: uze_keys::Chord) -> super::worker::Intent {
         let Some(row) = self.selected_key_row() else {
             self.keys_capture = false;
@@ -1264,12 +1221,6 @@ impl TuiModel {
         }
     }
 
-    /// One line of the Keys screen: an action, where it is live, and the
-    /// key that reaches it there.
-    ///
-    /// Built from the keymap in force rather than from the default, so an
-    /// unbinding leaves the row rather than the row disappearing with the
-    /// key — you have to be able to see what you turned off.
     /// The Appearance screen's lines, both groups in reading order.
     pub(crate) fn appearance_rows(&self) -> Vec<AppearanceRow> {
         let mut rows = vec![AppearanceRow::Heading("Theme")];
@@ -1303,6 +1254,12 @@ impl TuiModel {
             .cloned()
     }
 
+    /// One line of the Keys screen: an action, where it is live, and the
+    /// key that reaches it there.
+    ///
+    /// Built from the keymap in force rather than from the default, so an
+    /// unbinding leaves the row rather than the row disappearing with the
+    /// key — you have to be able to see what you turned off.
     pub(crate) fn key_rows(&self) -> Vec<KeyRow> {
         let active = uze_keys::active();
         let default = uze_keys::default_keymap();
@@ -1332,7 +1289,7 @@ impl TuiModel {
                 .find(|binding| binding.scope == scope && binding.action == action)
                 .map(|binding| binding.chord)
         };
-        let needle = self.keys_filter.trim().to_lowercase();
+        let needle = self.key_screen.filter.trim().to_lowercase();
         pairs
             .into_iter()
             .map(|(scope, action)| KeyRow {
@@ -1354,7 +1311,7 @@ impl TuiModel {
     }
 
     pub(crate) fn selected_key_row(&self) -> Option<KeyRow> {
-        self.key_rows().get(self.keys_selected).copied()
+        self.key_rows().get(self.key_screen.selected).copied()
     }
 
     /// Everything reachable from here, each with the key that reaches it.
@@ -1421,19 +1378,22 @@ impl TuiModel {
     pub(crate) fn selected_harness(&self) -> Option<&HarnessHealth> {
         let index = *self
             .harness_visible_indices()
-            .get(self.harnesses_selected)?;
-        self.doctor.as_ref()?.harnesses.get(index)
+            .get(self.remembered.harness_screen.selected)?;
+        self.remembered.doctor.as_ref()?.harnesses.get(index)
     }
 
     pub(crate) fn selected_profile(&self) -> Option<&ProfileSummary> {
-        self.profiles.get(self.profiles_selected)
+        self.remembered
+            .profiles
+            .get(self.remembered.profiles_selected)
     }
 
     /// Every harness on this machine, in the order the screen lists them.
     /// The preview covers the unchecked ones too, so checking a box never
     /// has to wait on a read.
     pub(crate) fn detected_harness_ids(&self) -> Vec<String> {
-        self.doctor
+        self.remembered
+            .doctor
             .as_ref()
             .map(|doctor| {
                 doctor
@@ -1582,10 +1542,6 @@ impl TuiModel {
         self.profile_preview_epoch = self.profile_preview_epoch.wrapping_add(1);
     }
 
-    /// Profiles has three independently-scrolled sub-panels rather than one
-    /// list, so it bypasses the generic `move_selection`/`list_len`/
-    /// `selected_mut` dispatch (designed for exactly one selection per
-    /// route) and clamps whichever panel is currently focused.
     /// Walks the Appearance list, stepping over headings rather than
     /// landing on them: a selection sitting on a label has nothing to
     /// activate, and pressing Enter there would do nothing with no reason
@@ -1647,6 +1603,9 @@ impl TuiModel {
         }
     }
 
+    /// Profiles has three independently-scrolled sub-panels rather than one
+    /// list, so it is no [`ListScreen`] and clamps whichever panel is
+    /// currently focused.
     pub(crate) fn move_profile_selection(&mut self, delta: isize) {
         let clamp = |current: usize, len: usize| -> usize {
             if len == 0 {
@@ -1657,25 +1616,36 @@ impl TuiModel {
         };
         match self.profile_panel {
             ProfilePanel::List => {
-                self.profiles_selected = clamp(self.profiles_selected, self.profiles.len());
+                self.remembered.profiles_selected = clamp(
+                    self.remembered.profiles_selected,
+                    self.remembered.profiles.len(),
+                );
             }
             ProfilePanel::Editor => {
                 self.profile_editor_selected =
                     clamp(self.profile_editor_selected, PREFERENCE_ROW_COUNT);
             }
             ProfilePanel::Harnesses => {
-                let len = self.doctor.as_ref().map_or(0, |d| d.harnesses.len());
+                let len = self
+                    .remembered
+                    .doctor
+                    .as_ref()
+                    .map_or(0, |d| d.harnesses.len());
                 self.profile_harness_selected = clamp(self.profile_harness_selected, len);
             }
         }
     }
 
     /// Cycles the Editor panel's currently-highlighted preference value and
-    /// returns the `Intent` that persists it. Mutates `self.profiles`
+    /// returns the `Intent` that persists it. Mutates `self.remembered.profiles`
     /// optimistically so the row reflects the new value immediately, without
     /// waiting on the (silent, fire-and-forget) background write.
     pub(crate) fn cycle_selected_preference(&mut self, forward: bool) -> super::worker::Intent {
-        let Some(profile) = self.profiles.get_mut(self.profiles_selected) else {
+        let Some(profile) = self
+            .remembered
+            .profiles
+            .get_mut(self.remembered.profiles_selected)
+        else {
             return super::worker::Intent::None;
         };
         match self.profile_editor_selected {
@@ -1696,6 +1666,7 @@ impl TuiModel {
     /// position in `doctor.harnesses` (the Harnesses panel's row index).
     pub(crate) fn toggle_profile_harness_at(&mut self, index: usize) {
         let Some(id) = self
+            .remembered
             .doctor
             .as_ref()
             .and_then(|doctor| doctor.harnesses.get(index))
@@ -1708,98 +1679,80 @@ impl TuiModel {
         }
     }
 
-    pub(crate) fn list_len(&self) -> usize {
-        match self.route {
-            Route::Plugins => self.marketplace_visible_indices().len(),
-            Route::Extensions => self.extension_visible_indices().len(),
-            Route::Harnesses => self.harness_visible_indices().len(),
-            _ => 0,
-        }
-    }
-
-    fn selected_mut(&mut self) -> Option<&mut usize> {
-        match self.route {
-            Route::Plugins => Some(&mut self.marketplace_selected),
-            Route::Extensions => Some(&mut self.extensions_selected),
-            Route::Harnesses => Some(&mut self.harnesses_selected),
-            _ => None,
-        }
-    }
-
     pub(crate) fn move_selection(&mut self, delta: isize) {
-        let len = self.list_len();
         let route = self.route;
-        let Some(selected) = self.selected_mut() else {
+        let len = self.list_len(route);
+        let Some(screen) = self.list_mut(route) else {
             return;
         };
         if len == 0 {
-            *selected = 0;
+            screen.selected = 0;
             return;
         }
-        *selected = (*selected as isize + delta).clamp(0, len as isize - 1) as usize;
-        // Plugins/Harnesses reveal their drawer as soon as something is
-        // selected — matches the design's click-to-select-and-open (the
-        // Plugins drawer is bookended by install/update/remove, so a
-        // selection there always has an action in reach). Extensions'
-        // drawer is static catalog detail, opened the same way.
-        match route {
-            Route::Plugins => self.marketplace_drawer_open = true,
-            Route::Extensions => self.extension_drawer_open = true,
-            Route::Harnesses => self.harnesses_drawer_open = true,
-            _ => {}
-        }
+        screen.selected = (screen.selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        // A list's drawer opens as soon as something is selected — matches
+        // the design's click-to-select-and-open (the Plugins drawer is
+        // bookended by install/update/remove, so a selection there always
+        // has an action in reach). Extensions' drawer is static catalog
+        // detail, opened the same way.
+        screen.drawer_open = true;
     }
 
     fn clamp_prompt_selection(&mut self) {
-        self.overview_prompt_selected = self
+        self.remembered.overview_prompt_selected = self
+            .remembered
             .overview_prompt_selected
-            .min(self.prompt_history.len().saturating_sub(1));
+            .min(self.remembered.prompt_history.len().saturating_sub(1));
         self.overview_prompt_hovered = self
             .overview_prompt_hovered
-            .filter(|index| *index < self.prompt_history.len());
+            .filter(|index| *index < self.remembered.prompt_history.len());
     }
 
     pub(crate) fn move_prompt_selection(&mut self, delta: isize) {
-        let len = self.prompt_history.len();
+        let len = self.remembered.prompt_history.len();
         if len == 0 {
             return;
         }
-        self.overview_prompt_selected =
-            (self.overview_prompt_selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        self.remembered.overview_prompt_selected =
+            (self.remembered.overview_prompt_selected as isize + delta).clamp(0, len as isize - 1)
+                as usize;
     }
 
     /// Leaves management for the tab the selected prompt was typed into.
     pub(crate) fn activate_selected_prompt(&mut self) -> super::worker::Intent {
-        self.prompt_history
-            .get(self.overview_prompt_selected)
-            .map(|entry| super::worker::Intent::SwitchToWorkspaceTab(entry.tab_id))
+        self.remembered
+            .prompt_history
+            .get(self.remembered.overview_prompt_selected)
+            .map(|entry| super::worker::Intent::CloseToTab(entry.tab_id))
             .unwrap_or(super::worker::Intent::None)
     }
 
     pub(crate) fn refreshed(&mut self, data: RefreshData) {
-        self.plugins = data.plugins;
-        self.doctor = data.doctor;
-        self.resolved_at = Some(Instant::now());
-        self.clamp_harness_selection();
-        self.marketplace_plugins = data.marketplace_plugins;
-        self.marketplaces = data.marketplaces;
-        self.clamp_marketplace_selection();
-        self.clamp_extension_selection();
-        self.profiles = data.profiles;
+        self.remembered.plugins = data.plugins;
+        self.remembered.doctor = data.doctor;
+        self.remembered.resolved_at = Some(Instant::now());
+        self.clamp_list_selection(Route::Harnesses);
+        self.remembered.marketplace_plugins = data.marketplace_plugins;
+        self.remembered.marketplaces = data.marketplaces;
+        self.clamp_list_selection(Route::Plugins);
+        self.clamp_list_selection(Route::Extensions);
+        self.remembered.profiles = data.profiles;
         // A refresh is the operator asking to see the machine as it is;
         // a harness configuration edited by hand is part of that.
         self.invalidate_profile_preview();
-        self.profiles_selected = self
+        self.remembered.profiles_selected = self
+            .remembered
             .profiles_selected
-            .min(self.profiles.len().saturating_sub(1));
+            .min(self.remembered.profiles.len().saturating_sub(1));
         self.profile_harness_selected = self.profile_harness_selected.min(
-            self.doctor
+            self.remembered
+                .doctor
                 .as_ref()
                 .map_or(0, |d| d.harnesses.len())
                 .saturating_sub(1),
         );
         if !self.profile_harness_defaulted
-            && let Some(doctor) = &self.doctor
+            && let Some(doctor) = &self.remembered.doctor
         {
             self.profile_harness_selection = doctor
                 .harnesses
@@ -1810,19 +1763,19 @@ impl TuiModel {
             self.profile_harness_defaulted = true;
         }
         if data.context_status.is_some() {
-            self.context_status = data.context_status;
+            self.remembered.context_status = data.context_status;
         }
         if data.workspace.is_some() {
-            self.workspace = data.workspace;
+            self.remembered.workspace = data.workspace;
         }
-        self.prompt_history = data.prompt_history;
+        self.remembered.prompt_history = data.prompt_history;
         self.clamp_prompt_selection();
         // Additive, never a replacement: only the startup refresh carries
         // auto-updates, so an ordinary reload (or a mutation's own refresh)
         // must leave badges already raised exactly where they are.
         for plugin in data.auto_updated {
             if !self.was_just_updated(&plugin) {
-                self.update_badges.push(UpdateBadge {
+                self.remembered.update_badges.push(UpdateBadge {
                     plugin,
                     seen_at: None,
                 });
@@ -1841,7 +1794,8 @@ impl TuiModel {
     /// workspace summary lands (see `worker::recent_prompts`). Reached
     /// only from a key press, never from a frame.
     pub(crate) fn workspace_root(&self) -> PathBuf {
-        self.workspace
+        self.remembered
+            .workspace
             .as_ref()
             .map(|workspace| workspace.root.clone())
             .unwrap_or_else(|| uze_application::workspace_root_or_self(&self.context_root))
@@ -1852,7 +1806,7 @@ impl TuiModel {
     /// offer `i install` in. The state is the Application's verdict, never
     /// re-derived here from lock bytes.
     pub(crate) fn overview_install_path(&self) -> Option<PathBuf> {
-        let workspace = self.workspace.as_ref()?;
+        let workspace = self.remembered.workspace.as_ref()?;
         if workspace.project.environment == ProjectEnvironmentState::InstallRequired {
             Some(workspace.root.clone())
         } else {
@@ -1861,7 +1815,7 @@ impl TuiModel {
     }
 
     pub(crate) fn alerts(&self) -> Vec<Alert> {
-        actionable_alerts(self.doctor.as_ref())
+        actionable_alerts(self.remembered.doctor.as_ref())
     }
 
     pub(crate) fn set_route(&mut self, route: Route) -> crate::ui::worker::Intent {
@@ -1871,8 +1825,8 @@ impl TuiModel {
         // Marketplace/Plugins, which need typing/browsing before a
         // selection means anything.
         if route == Route::Harnesses {
-            self.harnesses_selected = 0;
-            self.harnesses_drawer_open = true;
+            self.remembered.harness_screen.selected = 0;
+            self.remembered.harness_screen.drawer_open = true;
         }
         if route == Route::Profiles {
             self.profile_panel = ProfilePanel::List;

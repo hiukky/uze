@@ -15,7 +15,7 @@ use uze_keys::{Action, Resolution, Scope};
 
 use super::hit::Hit;
 use super::keys;
-use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
+use super::model::{Confirmation, Focus, Overlay, ProfilePanel, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -58,14 +58,11 @@ impl TuiModel {
     }
 
     pub(crate) fn apply_key(&mut self, key: KeyEvent) -> Intent {
-        // Reference material closes on anything, which is a property of a
-        // surface that has nothing to do but be read — not a binding, and
-        // so not the keymap's to hold.
         // A glossary has nothing to answer — it is read, and then gone —
         // so any keystroke closes it. That is a property of the surface,
         // not a binding, and so not the keymap's to hold.
         if self.overlay == Overlay::HarnessHelp {
-            self.overlay = Overlay::None;
+            self.close_overlay();
             return Intent::None;
         }
         let Some(chord) = keys::chord_of(key) else {
@@ -96,8 +93,6 @@ impl TuiModel {
         }
     }
 
-    /// Performs one action. Every arm is a meaning, so this reads as what
-    /// the product does rather than as what a keyboard is wired to.
     /// One action, performed, and noted if it was a first step that landed.
     ///
     /// Every action this client performs passes through here, whichever way
@@ -123,7 +118,7 @@ impl TuiModel {
     /// modal changes nothing here to look at.
     fn step_landed(&self, action: Action, intent: &Intent) -> bool {
         match action {
-            Action::SwitchMode => *intent == Intent::SwitchToWorkspace,
+            Action::SwitchMode => *intent == Intent::CloseModal,
             // Wraps, so it always moves.
             Action::NextScreen | Action::PreviousScreen => true,
             Action::OpenThemePicker => *intent == Intent::OpenThemePicker,
@@ -133,6 +128,8 @@ impl TuiModel {
         }
     }
 
+    /// Performs one action. Every arm is a meaning, so this reads as what
+    /// the product does rather than as what a keyboard is wired to.
     fn perform(&mut self, action: Action) -> Intent {
         if self.overlay != Overlay::None {
             return self.overlay_action(action);
@@ -144,15 +141,13 @@ impl TuiModel {
                     filter: String::new(),
                     selected: 0,
                 };
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::OpenGlossary => {
                 self.overlay = Overlay::HarnessHelp;
-                self.focus = Focus::Overlay;
                 Intent::None
             }
-            Action::SwitchMode => Intent::SwitchToWorkspace,
+            Action::SwitchMode => Intent::CloseModal,
             Action::Quit => Intent::Quit,
             Action::Refresh => Intent::Refresh,
             // Appearance is machine-wide, so it is not a route's own
@@ -181,7 +176,7 @@ impl TuiModel {
                     self.focus = Focus::Content;
                     return Intent::None;
                 }
-                if self.route == Route::Overview && !self.prompt_history.is_empty() {
+                if self.route == Route::Overview && !self.remembered.prompt_history.is_empty() {
                     return self.activate_selected_prompt();
                 }
                 if self.route == Route::Keys {
@@ -233,8 +228,10 @@ impl TuiModel {
                     .filter(|plugin| !plugin.installed)
                     .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
                 {
-                    self.overlay = Overlay::ConfirmInstall { name, marketplace };
-                    self.focus = Focus::Overlay;
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::InstallPlugin { name, marketplace },
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -244,8 +241,10 @@ impl TuiModel {
                     .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
                     .map(|plugin| self.marketplace_plugin_id(&plugin))
                 {
-                    self.overlay = Overlay::ConfirmUpdate(id);
-                    self.focus = Focus::Overlay;
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::UpdatePlugin(id),
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -257,17 +256,21 @@ impl TuiModel {
                         // protected — remove is blocked with an explanation
                         // instead of silently offering a destructive (and
                         // pointless, it re-seeds) operation.
-                        Overlay::ProtectedPlugin(id)
+                        Overlay::Confirm {
+                            kind: Confirmation::ProtectedPlugin(id),
+                            focus: None,
+                        }
                     } else {
-                        Overlay::ConfirmRemove { id, focus: 1 }
+                        Overlay::Confirm {
+                            kind: Confirmation::RemovePlugin(id),
+                            focus: Some(1),
+                        }
                     };
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
             Action::AddMarketplace => {
                 self.overlay = Overlay::AddMarketplace(String::new());
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::InstallProjectEnvironment => {
@@ -280,9 +283,11 @@ impl TuiModel {
                     .unwrap_or(Intent::None)
             }
             Action::ClearPromptHistory => {
-                if !self.prompt_history.is_empty() {
-                    self.overlay = Overlay::ConfirmClearPromptHistory;
-                    self.focus = Focus::Overlay;
+                if !self.remembered.prompt_history.is_empty() {
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::ClearPromptHistory,
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -292,29 +297,30 @@ impl TuiModel {
             Action::AnalyzeContext => Intent::ContextAnalyze(self.workspace_root()),
             Action::ApplyContextPlan => {
                 if self
+                    .remembered
                     .context_plan
                     .as_ref()
                     .is_some_and(ContextPlan::has_changes)
                 {
-                    self.overlay = Overlay::ConfirmContextApply;
-                    self.focus = Focus::Overlay;
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::ApplyContext,
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
             Action::NewProfile => {
                 self.overlay = Overlay::NewProfile(String::new());
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::DeleteProfile => {
                 if self.profile_panel == ProfilePanel::List
                     && let Some(profile) = self.selected_profile()
                 {
-                    self.overlay = Overlay::ConfirmDeleteProfile {
-                        id: profile.id.clone(),
-                        focus: 1,
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::DeleteProfile(profile.id.clone()),
+                        focus: Some(1),
                     };
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
@@ -336,9 +342,7 @@ impl TuiModel {
     /// dropped — and stays empty, because arriving is the only moment it
     /// asks.
     fn step_route(&mut self, delta: isize) -> Intent {
-        let count = ROUTES.len();
-        let step = if delta > 0 { 1 } else { count - 1 };
-        let entering = self.set_route(ROUTES[(self.route.index() + step) % count]);
+        let entering = self.set_route(self.route.neighbour(delta));
         self.focus = Focus::Content;
         entering
     }
@@ -348,9 +352,7 @@ impl TuiModel {
     /// profile's three panels, or the ordinary content rows.
     fn move_by(&mut self, delta: isize) -> Intent {
         if self.focus == Focus::Sidebar {
-            let count = ROUTES.len();
-            let step = if delta > 0 { 1 } else { count - 1 };
-            return self.set_route(ROUTES[(self.route.index() + step) % count]);
+            return self.set_route(self.route.neighbour(delta));
         }
         match self.route {
             Route::Profiles if self.profile_preview_open => {
@@ -363,7 +365,11 @@ impl TuiModel {
             }
             Route::Keys => {
                 let last = self.key_rows().len().saturating_sub(1);
-                self.keys_selected = self.keys_selected.saturating_add_signed(delta).min(last);
+                self.key_screen.selected = self
+                    .key_screen
+                    .selected
+                    .saturating_add_signed(delta)
+                    .min(last);
                 self.keys_capture = false;
                 self.keys_problem = None;
                 Intent::None
@@ -373,7 +379,7 @@ impl TuiModel {
                 Intent::None
             }
             // The Overview's only navigable list is its prompt history.
-            Route::Overview if !self.prompt_history.is_empty() => {
+            Route::Overview if !self.remembered.prompt_history.is_empty() => {
                 self.move_prompt_selection(delta);
                 Intent::None
             }
@@ -400,11 +406,9 @@ impl TuiModel {
             };
             return Intent::None;
         }
-        self.focus = match (self.focus, forward) {
-            (Focus::Sidebar, true) => Focus::Content,
-            (Focus::Content, false) => Focus::Sidebar,
-            (Focus::Content, true) => Focus::Sidebar,
-            (_, _) => Focus::Content,
+        self.focus = match self.focus {
+            Focus::Sidebar => Focus::Content,
+            Focus::Content => Focus::Sidebar,
         };
         Intent::None
     }
@@ -436,22 +440,16 @@ impl TuiModel {
                 self.profile_panel = ProfilePanel::List;
                 return Intent::None;
             }
-            return Intent::SwitchToWorkspace;
+            return Intent::CloseModal;
         }
         // Slides the open drawer away — the fetched detail stays cached, so
         // reopening the same selection is instant.
-        let drawer = match self.route {
-            Route::Plugins => Some(&mut self.marketplace_drawer_open),
-            Route::Extensions => Some(&mut self.extension_drawer_open),
-            Route::Harnesses => Some(&mut self.harnesses_drawer_open),
-            _ => None,
-        };
-        match drawer {
-            Some(open) if *open => {
-                *open = false;
+        match self.list_mut(self.route) {
+            Some(screen) if screen.drawer_open => {
+                screen.drawer_open = false;
                 Intent::None
             }
-            _ => Intent::SwitchToWorkspace,
+            _ => Intent::CloseModal,
         }
     }
 
@@ -465,14 +463,14 @@ impl TuiModel {
                 if self.selected_marketplace_plugin().is_none() {
                     return Intent::None;
                 }
-                self.marketplace_drawer_open = true;
+                self.remembered.plugin_screen.drawer_open = true;
                 self.marketplace_inspect_intent()
             }
             Route::Extensions => {
                 if self.selected_extension().is_none() {
                     return Intent::None;
                 }
-                self.extension_drawer_open = true;
+                self.remembered.extension_screen.drawer_open = true;
                 Intent::None
             }
             // List: jump straight into editing, the same way Enter opens a
@@ -495,10 +493,6 @@ impl TuiModel {
         }
     }
 
-    /// `total_width` is the terminal's current column count — needed only
-    /// for the sidebar-drag arm below (`clamp_sidebar_width`'s dynamic max
-    /// shrinks as the terminal narrows), which is otherwise the one mouse
-    /// gesture this method can't resolve from `self` alone.
     /// One mouse event over the surface drawn in `surface` — the inside
     /// of the modal, or a whole test frame.
     ///
@@ -531,56 +525,20 @@ impl TuiModel {
                 self.scroll_keys_to(track, event.row);
                 Intent::None
             }
-            MouseEventKind::Drag(MouseButton::Left) if self.dragging_panel.is_some() => {
+            MouseEventKind::Drag(MouseButton::Left) if let Some(panel) = self.dragging_panel => {
                 let sidebar_width = self
                     .sidebar_width
                     .unwrap_or_else(|| super::sidebar_width_for(total_width));
                 let content_width = total_width.saturating_sub(sidebar_width);
                 let min_panel_width = 24;
                 let max_panel_width = content_width.saturating_sub(min_panel_width);
-                let pointer_in_content = column.saturating_sub(sidebar_width);
-                match self.dragging_panel {
-                    Some(ResizablePanel::MarketplaceDrawer) => {
-                        self.marketplace_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::ExtensionDrawer) => {
-                        self.extension_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::HarnessDrawer) => {
-                        self.harness_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::KeysDrawer) => {
-                        self.keys_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::AppearanceDrawer) => {
-                        self.appearance_drawer_width = Some(
-                            total_width
-                                .saturating_sub(column)
-                                .clamp(min_panel_width, max_panel_width),
-                        );
-                    }
-                    Some(ResizablePanel::ProfileColumns) => {
-                        self.profile_columns_width =
-                            Some(pointer_in_content.clamp(min_panel_width, max_panel_width));
-                    }
-                    None => {}
-                }
+                // A drawer grows leftwards from the right edge; the profile
+                // columns' divider is measured from the content's left.
+                let width = match panel {
+                    ResizablePanel::ProfileColumns => column.saturating_sub(sidebar_width),
+                    _ => total_width.saturating_sub(column),
+                };
+                *panel.width_mut(self) = Some(width.min(max_panel_width).max(min_panel_width));
                 Intent::None
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -632,7 +590,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::super::keys::press;
-    use super::super::model::{Overlay, ResizablePanel, Route, TuiModel};
+    use super::super::model::{Confirmation, Overlay, ResizablePanel, Route, TuiModel};
 
     #[test]
     fn dragging_a_content_divider_records_its_route_local_width() {
@@ -650,7 +608,7 @@ mod tests {
             Rect::new(0, 0, 120, 40),
         );
 
-        assert_eq!(model.harness_drawer_width, Some(40));
+        assert_eq!(model.remembered.harness_screen.drawer_width, Some(40));
     }
 
     #[test]
@@ -662,7 +620,7 @@ mod tests {
         };
         // `r` removes a plugin on this screen when nobody is typing.
         model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(model.marketplace_filter, "r");
+        assert_eq!(model.remembered.plugin_screen.filter, "r");
         assert_eq!(model.overlay, Overlay::None);
     }
 
@@ -670,11 +628,20 @@ mod tests {
     fn a_question_on_screen_answers_before_the_screen_does() {
         let mut model = TuiModel {
             route: Route::Plugins,
-            overlay: Overlay::ConfirmClearPromptHistory,
+            overlay: Overlay::Confirm {
+                kind: Confirmation::ClearPromptHistory,
+                focus: None,
+            },
             ..TuiModel::default()
         };
         // `r` reaches the confirmation, not the plugin list behind it.
         model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
+        assert!(matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::ClearPromptHistory,
+                ..
+            }
+        ));
     }
 }

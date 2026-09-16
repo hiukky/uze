@@ -270,18 +270,18 @@ impl Attach<'_> {
     /// What the modal answered a gesture with: a way out of it, or work
     /// for one of its own workers.
     fn manage_intent(&mut self, intent: crate::ui::worker::Intent, viewport: &Viewport) -> Flow {
-        use crate::ui::management::Leaving;
+        use crate::ui::worker::Intent;
         self.model.dirty = true;
-        match crate::ui::management::leaving(&intent) {
-            Some(Leaving::Quit) => {
+        match intent {
+            Intent::Quit => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
                 Flow::Exit(WorkspaceExit::Quit)
             }
-            Some(Leaving::Close) => {
+            Intent::CloseModal => {
                 self.close_manage();
                 Flow::Continue
             }
-            Some(Leaving::CloseToTab(tab)) => {
+            Intent::CloseToTab(tab) => {
                 self.close_manage();
                 // `select_tab` moves the selected space too when the tab
                 // lives in another one, so the space needs no separate
@@ -300,7 +300,7 @@ impl Attach<'_> {
                 }
                 Flow::Continue
             }
-            None => {
+            intent => {
                 if let Some(manage) = self.model.manage.as_mut() {
                     crate::ui::worker::dispatch(
                         intent,

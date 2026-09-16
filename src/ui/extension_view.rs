@@ -142,15 +142,10 @@ pub(crate) fn scroll_target(
     row: u16,
 ) -> Option<ScrollTarget> {
     let (navigator, content, _) = content_columns(frame_area, navigator_width_override);
-    let inside = |rect: Rect| {
-        rect.x <= column
-            && column < rect.x + rect.width
-            && rect.y <= row
-            && row < rect.y + rect.height
-    };
-    if inside(navigator) {
+    let pointer = ratatui::layout::Position::new(column, row);
+    if navigator.contains(pointer) {
         Some(ScrollTarget::Navigator)
-    } else if inside(content) {
+    } else if content.contains(pointer) {
         Some(ScrollTarget::Content)
     } else {
         None
@@ -329,10 +324,12 @@ fn render_navigator(
             .fg(theme::color(Token::TextSecondary))
             .add_modifier(Modifier::BOLD),
     )];
-    push_right_aligned(
+    // The panel's own right padding is the gap a trailing caption keeps
+    // off the divider, so the row is measured as if it were the pad.
+    crate::ui::push_trailing(
         &mut heading,
+        inner.width + crate::ui::TRAILING_PAD,
         navigator.badge.clone(),
-        inner.width,
         theme::color(Token::TextMuted),
     );
     frame.render_widget(
@@ -624,7 +621,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     } else {
         text.to_owned()
     };
-    let mut lines: Vec<Line<'static>> = crate::ui::wrap_words(&title, measure)
+    let mut lines: Vec<Line<'static>> = crate::ui::fold(&title, measure)
         .into_iter()
         .map(|line| {
             Line::from(TextSpan::styled(
@@ -636,7 +633,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     if let Some(hint) = hint {
         lines.push(Line::from(""));
         lines.extend(
-            crate::ui::wrap_words(hint, measure)
+            crate::ui::fold(hint, measure)
                 .into_iter()
                 .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
         );
@@ -950,16 +947,6 @@ fn action_of(command: Command) -> uze_keys::Action {
         // Typing has no single key to name, so a footer never lists it.
         Command::Type(_) => uze_keys::Action::EraseBack,
         Command::ScrollPageDown => uze_keys::Action::ScrollPageDown,
-    }
-}
-
-fn push_right_aligned(spans: &mut Vec<TextSpan<'static>>, value: String, width: u16, color: Color) {
-    let used: usize = spans.iter().map(TextSpan::width).sum();
-    let value_width = value.chars().count();
-    let gap = (width as usize).saturating_sub(used + value_width);
-    if gap > 0 {
-        spans.push(TextSpan::raw(" ".repeat(gap)));
-        spans.push(TextSpan::styled(value, Style::default().fg(color)));
     }
 }
 

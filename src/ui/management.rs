@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 
 use uze_application::{FirstStepsLayout, ManagementLayout, UzeHome};
@@ -124,7 +124,7 @@ impl ManagementMemory {
             keyboard,
             ..TuiModel::recall(self.remembered.take(), layout)
         };
-        if opening_re_resolves(model.resolved_at) && !self.in_flight {
+        if opening_re_resolves(model.remembered.resolved_at) && !self.in_flight {
             // Behind the frame: every list is already on screen, so
             // nothing about this reads as the plugins having gone away.
             spawn_refresh(
@@ -135,7 +135,7 @@ impl ManagementMemory {
             self.in_flight = true;
         }
         model.maintenance_in_flight = self.in_flight;
-        if model.resolved_at.is_none() {
+        if model.remembered.resolved_at.is_none() {
             // The one case where the operator arrives before any answer
             // does: opening the modal within the first moments of the
             // session. Nothing to draw yet, so the wait is at least named
@@ -147,7 +147,7 @@ impl ManagementMemory {
             // auto-updating (see `worker::recent_prompts`): one small
             // file, and the Overview otherwise says "no history yet" —
             // the same words it uses when there genuinely is none.
-            model.prompt_history = recent_prompts(home.clone(), &model.context_root);
+            model.remembered.prompt_history = recent_prompts(home.clone(), &model.context_root);
         }
         model
     }
@@ -211,26 +211,6 @@ pub(crate) fn opening_re_resolves(resolved_at: Option<Instant>) -> bool {
 /// model exists must ask the same question it would.
 fn context_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-/// Where an intent takes the operator out of the modal rather than
-/// being performed inside it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Leaving {
-    Close,
-    /// Closed, with this workspace tab selected.
-    CloseToTab(u64),
-    Quit,
-}
-
-/// The intents that end the modal rather than being dispatched in it.
-pub(crate) fn leaving(intent: &Intent) -> Option<Leaving> {
-    match intent {
-        Intent::Quit => Some(Leaving::Quit),
-        Intent::SwitchToWorkspace => Some(Leaving::Close),
-        Intent::SwitchToWorkspaceTab(tab) => Some(Leaving::CloseToTab(*tab)),
-        _ => None,
-    }
 }
 
 // --- Geometry -----------------------------------------------------------
@@ -436,41 +416,23 @@ pub(crate) fn render(
             selected,
         } => overlay::render_action_index(frame, area, model, scopes, filter, *selected, hits),
         Overlay::HarnessHelp => overlay::render_harness_help(frame, area),
-        Overlay::ConfirmRemove { id, focus } => {
-            overlay::render_confirm_remove(frame, area, id, *focus, hits)
+        Overlay::Confirm { kind, focus } => {
+            overlay::render_confirmation(frame, area, kind, *focus, hits)
         }
-        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, area, id, hits),
-        Overlay::ConfirmInstall { name, marketplace } => {
-            overlay::render_confirm_install(frame, area, name, marketplace, hits)
-        }
-        Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, area, hits),
-        Overlay::ConfirmClearPromptHistory => {
-            overlay::render_confirm_clear_prompt_history(frame, area, hits)
-        }
-        Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, area, id, hits),
-        Overlay::AddMarketplace(input) => overlay::render_add_marketplace(frame, area, input),
+        Overlay::AddMarketplace(input) => overlay::render_text_prompt(
+            frame,
+            area,
+            "Add marketplace",
+            "Local path or https://... source",
+            input,
+            "add",
+        ),
         Overlay::ThemePicker { themes, selected } => {
             overlay::render_theme_picker(frame, area, themes, *selected)
         }
-        Overlay::NewProfile(input) => overlay::render_new_profile(frame, area, input),
-        Overlay::ConfirmDeleteProfile { id, focus } => {
-            overlay::render_confirm_delete_profile(frame, area, id, *focus, hits)
+        Overlay::NewProfile(input) => {
+            overlay::render_text_prompt(frame, area, "New profile", "Profile name", input, "create")
         }
-        Overlay::TrustRequired { plugin, detail, .. } => {
-            overlay::render_trust_required(frame, area, plugin, detail, hits)
-        }
-    }
-}
-
-fn route_subtitle(route: Route) -> &'static str {
-    match route {
-        Route::Overview => "status & health",
-        Route::Plugins => "skills · agents · MCP",
-        Route::Extensions => "official tool extensions",
-        Route::Harnesses => "detected agents",
-        Route::Profiles => "autonomy · sandbox · model",
-        Route::Keys => "what each key does",
-        Route::Appearance => "theme & glyphs",
     }
 }
 
@@ -508,10 +470,16 @@ pub(crate) const FIRST_STEP_SCOPES: &[uze_keys::Scope] =
 fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
     match route {
         Route::Overview => None,
-        Route::Plugins => Some(model.marketplaces.len()),
+        Route::Plugins => Some(model.remembered.marketplaces.len()),
         Route::Extensions => Some(model.extensions.len()),
-        Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
-        Route::Profiles => Some(model.profiles.len()),
+        Route::Harnesses => Some(
+            model
+                .remembered
+                .doctor
+                .as_ref()
+                .map_or(0, |d| d.harnesses.len()),
+        ),
+        Route::Profiles => Some(model.remembered.profiles.len()),
         Route::Keys => None,
         Route::Appearance => None,
     }
@@ -602,7 +570,6 @@ fn render_sidebar(
         }
     }
 
-    let mut y = inner.y;
     let mut bottom = strip.map_or(inner.bottom(), |rect| rect.y);
     // The release notice sits on the steps rather than under them — the
     // workspace's sidebar says why.
@@ -622,206 +589,109 @@ fn render_sidebar(
         );
         bottom = rect.y;
     }
-    let mut row = |height: u16| -> Option<Rect> {
-        if y + height > bottom {
-            return None;
-        }
-        let rect = Rect::new(inner.x, y, inner.width, height);
-        y += height;
-        Some(rect)
-    };
-
+    let mut rows = super::Rows::over(Rect {
+        height: bottom - inner.y,
+        ..inner
+    });
     for route in ROUTES {
-        let selected = route == model.route;
-
-        if narrow {
-            let Some(rect) = row(1) else { break };
-            let fg = if selected {
-                theme::color(Token::TextBright)
-            } else {
-                theme::color(Token::TextInactive)
-            };
-            let mut style = Style::default().fg(fg);
-            if selected {
-                style = style
-                    .add_modifier(Modifier::BOLD)
-                    .bg(theme::color(Token::SurfaceRaised));
-            }
-            if selected {
-                frame.render_widget(
-                    Block::default().style(theme::bg(Token::SurfaceRaised)),
-                    rect,
-                );
-            }
-            let bar_fg = if selected {
-                theme::color(Token::Accent)
-            } else {
-                theme::color(Token::SurfaceBackground)
-            };
-            let bar_bg = if selected {
-                theme::color(Token::SurfaceRaised)
-            } else {
-                theme::color(Token::SurfaceBackground)
-            };
-            let bar = Rect::new(rect.x, rect.y, 1, rect.height);
-            for dy in 0..bar.height {
-                let cell = Rect::new(bar.x, bar.y + dy, 1, 1);
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        theme::glyph(Symbol::BarMedium),
-                        Style::default().fg(bar_fg).bg(bar_bg),
-                    )),
-                    cell,
-                );
-            }
-            let text_rect = Rect::new(
-                rect.x + 2,
-                rect.y,
-                rect.width.saturating_sub(3),
-                rect.height,
-            );
-            if let Some(count) = route_count(route, model) {
-                let count_str = small_digits(count);
-                let count_w = count_str.len() as u16;
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
-                    .split(text_rect);
-                let count_style = if selected {
-                    Style::default()
-                        .fg(theme::color(Token::Accent))
-                        .bg(theme::color(Token::SurfaceRaised))
-                } else {
-                    theme::fg(Token::Accent)
-                };
-                frame.render_widget(Paragraph::new(route_label_line(route, style)), cols[0]);
-                frame.render_widget(
-                    Paragraph::new(Span::styled(count_str, count_style))
-                        .alignment(ratatui::layout::Alignment::Right),
-                    cols[1],
-                );
-            } else {
-                frame.render_widget(Paragraph::new(route_label_line(route, style)), text_rect);
-            }
-            hits.push((rect, Hit::Route(route)));
-            continue;
-        }
-
-        let Some(label_rect) = row(1) else { break };
-        let subtitle_rect = row(1);
-        row(1); // breathing room between items
-
-        let height = if subtitle_rect.is_some() { 2 } else { 1 };
-        let block_rect = Rect::new(label_rect.x, label_rect.y, label_rect.width, height);
-        if selected {
-            frame.render_widget(
-                Block::default().style(theme::bg(Token::SurfaceRaised)),
-                block_rect,
-            );
-        }
-        let bar_fg = if selected {
-            theme::color(Token::Accent)
+        let rect = if narrow {
+            let Some(rect) = rows.next(1) else { break };
+            rect
         } else {
-            theme::color(Token::SurfaceBackground)
+            let Some(label) = rows.next(1) else { break };
+            let has_subtitle = rows.next(1).is_some();
+            rows.gap();
+            Rect {
+                height: if has_subtitle { 2 } else { 1 },
+                ..label
+            }
         };
-        let bar_bg = if selected {
-            theme::color(Token::SurfaceRaised)
-        } else {
-            theme::color(Token::SurfaceBackground)
-        };
-        for dy in 0..height {
-            let cell = Rect::new(block_rect.x, block_rect.y + dy, 1, 1);
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    theme::glyph(Symbol::BarMedium),
-                    Style::default().fg(bar_fg).bg(bar_bg),
-                )),
-                cell,
-            );
-        }
-        let text_x = block_rect.x + 2;
-        let text_w = block_rect.width.saturating_sub(3);
+        route_row(
+            frame,
+            rect,
+            route,
+            route == model.route,
+            route_count(route, model),
+        );
+        hits.push((rect, Hit::Route(route)));
+    }
+}
+
+/// One route in the sidebar: a bar at its edge, its name with the count
+/// pinned right, and — on a row two tall — its subtitle beneath. The
+/// selected route is a raised band the bar lights up on.
+fn route_row(
+    frame: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    route: Route,
+    selected: bool,
+    count: Option<usize>,
+) {
+    let ground = if selected {
+        Token::SurfaceRaised
+    } else {
+        Token::SurfaceBackground
+    };
+    if selected {
+        frame.render_widget(Block::default().style(theme::bg(ground)), rect);
+    }
+    let bar_hue = if selected {
+        Token::Accent
+    } else {
+        Token::SurfaceBackground
+    };
+    for dy in 0..rect.height {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                theme::glyph(Symbol::BarMedium),
+                theme::on(bar_hue, ground),
+            )),
+            Rect::new(rect.x, rect.y + dy, 1, 1),
+        );
+    }
+
+    let text_x = rect.x + 2;
+    let text_width = rect.width.saturating_sub(3);
+    let raised = |style: Style| {
         if selected {
-            let label_style = Style::default()
-                .fg(theme::color(Token::TextBright))
-                .add_modifier(Modifier::BOLD)
-                .bg(theme::color(Token::SurfaceRaised));
-            let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
-            if let Some(count) = route_count(route, model) {
-                let count_str = small_digits(count);
-                let count_w = count_str.len() as u16;
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
-                    .split(inner_label);
-                let count_style = Style::default()
-                    .fg(theme::color(Token::Accent))
-                    .bg(theme::color(Token::SurfaceRaised));
-                frame.render_widget(
-                    Paragraph::new(route_label_line(route, label_style)),
-                    cols[0],
-                );
-                frame.render_widget(
-                    Paragraph::new(Span::styled(count_str, count_style))
-                        .alignment(ratatui::layout::Alignment::Right),
-                    cols[1],
-                );
-            } else {
-                frame.render_widget(
-                    Paragraph::new(route_label_line(route, label_style)),
-                    inner_label,
-                );
-            }
-            hits.push((label_rect, Hit::Route(route)));
-            if let Some(sub_rect) = subtitle_rect {
-                let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
-                let sub_style = Style::default()
-                    .fg(theme::color(Token::TextDim))
-                    .bg(theme::color(Token::SurfaceRaised));
-                frame.render_widget(
-                    Paragraph::new(Span::styled(route_subtitle(route), sub_style))
-                        .style(theme::bg(Token::SurfaceRaised)),
-                    inner_sub,
-                );
-                hits.push((sub_rect, Hit::Route(route)));
-            }
+            style.bg(theme::color(Token::SurfaceRaised))
         } else {
-            let label_style = theme::fg(Token::TextInactive);
-            let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
-            if let Some(count) = route_count(route, model) {
-                let count_str = small_digits(count);
-                let count_w = count_str.len() as u16;
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
-                    .split(inner_label);
-                let count_style = theme::fg(Token::Accent);
-                frame.render_widget(
-                    Paragraph::new(route_label_line(route, label_style)),
-                    cols[0],
-                );
-                frame.render_widget(
-                    Paragraph::new(Span::styled(count_str, count_style))
-                        .alignment(ratatui::layout::Alignment::Right),
-                    cols[1],
-                );
-            } else {
-                frame.render_widget(
-                    Paragraph::new(route_label_line(route, label_style)),
-                    inner_label,
-                );
-            }
-            hits.push((label_rect, Hit::Route(route)));
-            if let Some(sub_rect) = subtitle_rect {
-                let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
-                let line = Line::from(vec![Span::styled(
-                    route_subtitle(route),
-                    theme::fg(Token::TextDim),
-                )]);
-                frame.render_widget(Paragraph::new(line), inner_sub);
-                hits.push((sub_rect, Hit::Route(route)));
-            }
+            style
         }
+    };
+    let label_style = if selected {
+        raised(theme::fg_bold(Token::TextBright))
+    } else {
+        theme::fg(Token::TextInactive)
+    };
+    let label_rect = Rect::new(text_x, rect.y, text_width, 1);
+    let label_rect = match count {
+        Some(count) => {
+            let count = small_digits(count);
+            let [label, count_rect] =
+                Layout::horizontal([Constraint::Min(1), Constraint::Length(count.len() as u16)])
+                    .areas(label_rect);
+            frame.render_widget(
+                Paragraph::new(Span::styled(count, raised(theme::fg(Token::Accent))))
+                    .alignment(ratatui::layout::Alignment::Right),
+                count_rect,
+            );
+            label
+        }
+        None => label_rect,
+    };
+    frame.render_widget(
+        Paragraph::new(route_label_line(route, label_style)),
+        label_rect,
+    );
+    if rect.height > 1 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                route.subtitle(),
+                raised(theme::fg(Token::TextDim)),
+            )),
+            Rect::new(text_x, rect.y + 1, text_width, 1),
+        );
     }
 }
 
@@ -846,18 +716,11 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
-    let mut text = footer(model);
-    // Operation messages (install roots, marketplace paths) can exceed the
-    // hint column; clip the status line to the column instead of letting it
-    // wrap into a second row — the footer is exactly one row tall and the
-    // second virtual line would be clipped mid-word, which is worse than an
-    // ellipsis.
-    if !matches!(model.status, model::Status::Idle)
-        && let Some(line) = text.lines.first_mut()
-    {
-        clip_line(line, columns[0].width as usize);
-    }
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), columns[0]);
+    // One row: a line that does not fit is elided rather than wrapped into
+    // a second row the footer does not have.
+    let mut line = footer_line(model);
+    clip_line(&mut line, columns[0].width as usize);
+    frame.render_widget(Paragraph::new(line), columns[0]);
     frame.render_widget(
         Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
             .alignment(ratatui::layout::Alignment::Right),
@@ -883,13 +746,8 @@ pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
     let Some(i) = cut else {
         return;
     };
-    // Room for however wide this theme's elision marker actually is.
-    let keep = max
-        .saturating_sub(used)
-        .saturating_sub(theme::width(Symbol::Ellipsis) as usize);
-    let mut truncated: String = line.spans[i].content.chars().take(keep).collect();
-    truncated.push_str(&theme::glyph(Symbol::Ellipsis));
-    line.spans[i].content = std::borrow::Cow::Owned(truncated);
+    line.spans[i].content =
+        std::borrow::Cow::Owned(crate::ui::elide_tail(&line.spans[i].content, max - used));
     line.spans.truncate(i + 1);
 }
 
@@ -919,47 +777,20 @@ fn hint_line(model: &TuiModel) -> Line<'static> {
 /// still read rather than scanned past.
 const FOOTER_HINTS: usize = 4;
 
-fn footer(model: &TuiModel) -> Text<'static> {
-    let hint = hint_line(model);
-    match &model.status {
-        model::Status::Idle => Text::from(hint),
-        model::Status::Working(value) => {
-            let frame = theme::frame(theme::Symbol::StatusWorking, model.tick);
-            Text::from(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("{frame} "),
-                        Style::default()
-                            .fg(theme::color(Token::StateWarning))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        value.clone(),
-                        Style::default()
-                            .fg(theme::color(Token::StateWarning))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                hint,
-            ])
-        }
-        model::Status::Success(value) => Text::from(vec![
-            Line::from(Span::styled(
-                value.clone(),
-                Style::default()
-                    .fg(theme::color(Token::StateSuccess))
-                    .add_modifier(Modifier::BOLD),
-            )),
-            hint,
-        ]),
-        model::Status::Error(value) => Text::from(vec![
-            Line::from(Span::styled(
-                value.clone(),
-                Style::default()
-                    .fg(theme::color(Token::StateDanger))
-                    .add_modifier(Modifier::BOLD),
-            )),
-            hint,
-        ]),
-    }
+/// What the footer says: how the last thing went while there is anything
+/// to say about it, and otherwise what can be done here.
+fn footer_line(model: &TuiModel) -> Line<'static> {
+    let (hue, text) = match &model.status {
+        model::Status::Idle => return hint_line(model),
+        model::Status::Working(value) => (
+            Token::StateWarning,
+            format!(
+                "{} {value}",
+                theme::frame(theme::Symbol::StatusWorking, model.tick)
+            ),
+        ),
+        model::Status::Success(value) => (Token::StateSuccess, value.clone()),
+        model::Status::Error(value) => (Token::StateDanger, value.clone()),
+    };
+    Line::from(Span::styled(text, theme::fg_bold(hue)))
 }

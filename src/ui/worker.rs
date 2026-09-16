@@ -20,7 +20,7 @@ use uze_application::{
     },
 };
 
-use super::model::{Focus, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
+use super::model::{Confirmation, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
 use super::tui_application;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,11 +35,11 @@ pub(crate) enum Intent {
     Quit,
     /// Closes the modal — the same action that opened it, or the close
     /// mark on its title.
-    SwitchToWorkspace,
+    CloseModal,
     /// Leave management and re-select this tab in the workspace. Carries
     /// no space id: `Session::select_tab` moves the selected space along
     /// with the tab when they differ.
-    SwitchToWorkspaceTab(u64),
+    CloseToTab(u64),
     /// Delete the current workspace's recorded prompts.
     ClearPromptHistory,
     /// Write the operator's keyboard to `keys.json`. The keymap is already
@@ -114,8 +114,8 @@ impl Intent {
         match self {
             Self::None => "none",
             Self::Quit => "quit",
-            Self::SwitchToWorkspace => "switch_to_workspace",
-            Self::SwitchToWorkspaceTab(_) => "switch_to_workspace_tab",
+            Self::CloseModal => "close_modal",
+            Self::CloseToTab(_) => "close_to_tab",
             Self::ClearPromptHistory => "clear_prompt_history",
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
@@ -178,10 +178,7 @@ pub(crate) fn dispatch(
     // parent, so a refresh's spans belong to the press that asked for it.
     let _span = tracing::info_span!("tui.intent", intent = intent.name()).entered();
     match intent {
-        Intent::None
-        | Intent::Quit
-        | Intent::SwitchToWorkspace
-        | Intent::SwitchToWorkspaceTab(_) => {}
+        Intent::None | Intent::Quit | Intent::CloseModal | Intent::CloseToTab(_) => {}
         Intent::OpenThemePicker => {
             // Cheap enough to read here rather than on a thread: a JSON
             // read and a directory listing, the same work `uze theme list`
@@ -244,8 +241,8 @@ pub(crate) fn dispatch(
                 .and_then(|app| app.workspace().clear_prompt_history(&root))
             {
                 Ok(()) => {
-                    model.prompt_history.clear();
-                    model.overview_prompt_selected = 0;
+                    model.remembered.prompt_history.clear();
+                    model.remembered.overview_prompt_selected = 0;
                     model.overview_prompt_hovered = None;
                     model.status = Status::Success("Prompt history cleared".to_owned());
                 }
@@ -765,17 +762,19 @@ pub(crate) fn drain_worker_results(
                 detail,
                 retry,
             } => {
-                model.overlay = Overlay::TrustRequired {
-                    plugin,
-                    detail,
-                    retry,
+                model.overlay = Overlay::Confirm {
+                    kind: Confirmation::Trust {
+                        plugin,
+                        detail,
+                        retry,
+                    },
+                    focus: None,
                 };
-                model.focus = Focus::Overlay;
                 model.status = Status::Idle;
             }
             WorkerResult::ContextAnalyzed(Ok((status, plan))) => {
-                model.context_status = Some(status);
-                model.context_plan = Some(plan);
+                model.remembered.context_status = Some(status);
+                model.remembered.context_plan = Some(plan);
                 model.status = Status::Idle;
             }
             WorkerResult::ContextApplied(Ok((message, report))) => {

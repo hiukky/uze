@@ -14,13 +14,13 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
-use super::super::model::{ResizablePanel, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
+use super::super::model::{ResizablePanel, Route, TuiModel};
+use super::super::{content_area, render_screen_header};
+use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_extensions(
@@ -30,13 +30,10 @@ pub(crate) fn render_extensions(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let outer = content_area(area);
-    let drawer_open = model.extension_drawer_open && model.selected_extension().is_some();
-    let drawer_width = drawer_open.then(|| {
-        model
-            .extension_drawer_width
-            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
-            .clamp(24, outer.width.saturating_sub(24).max(24))
-    });
+    let drawer_open =
+        model.remembered.extension_screen.drawer_open && model.selected_extension().is_some();
+    let drawer_width =
+        drawer_open.then(|| super::drawer_width(ResizablePanel::ExtensionDrawer, model, outer));
     let header_width = outer
         .width
         .saturating_sub(drawer_width.unwrap_or(0))
@@ -45,15 +42,20 @@ pub(crate) fn render_extensions(
     let content = render_screen_header(
         frame,
         header_area,
-        "Extensions",
-        "official tool extensions",
+        Route::Extensions,
         Some(Span::styled(
             format!("{} bundled", model.extensions.len()),
             theme::fg(Token::TextMuted),
         )),
     );
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
-    render_filter_box(frame, filter_area, model);
+    super::filter_box(
+        frame,
+        filter_area,
+        &model.remembered.extension_screen.filter,
+        "Filter extensions…",
+        model.filtering,
+    );
     hits.push((filter_area, Hit::FocusFilter));
     let catalog_area = Rect::new(
         content.x,
@@ -75,7 +77,10 @@ pub(crate) fn render_extensions(
         if visible.is_empty() {
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    format!("No extensions match \"{}\".", model.extension_filter.trim()),
+                    format!(
+                        "No extensions match \"{}\".",
+                        model.remembered.extension_screen.filter.trim()
+                    ),
                     theme::fg(Token::TextMuted),
                 )),
                 catalog_area,
@@ -103,7 +108,7 @@ pub(crate) fn render_extensions(
             if rect.y + rect.height > catalog_area.y + catalog_area.height {
                 break;
             }
-            let selected = position == model.extensions_selected;
+            let selected = position == model.remembered.extension_screen.selected;
             render_extension_card(
                 frame,
                 rect,
@@ -116,46 +121,8 @@ pub(crate) fn render_extensions(
     }
 
     if drawer_open && let Some(extension) = model.selected_extension() {
-        render_extension_drawer(
-            frame,
-            outer,
-            drawer_width.unwrap_or_default(),
-            model,
-            extension,
-            hits,
-        );
+        render_extension_drawer(frame, outer, model, extension, hits);
     }
-}
-
-fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(if model.filtering {
-            theme::color(Token::Accent)
-        } else {
-            theme::color(Token::BorderDefault)
-        }));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let text = if model.extension_filter.is_empty() {
-        Line::from(Span::styled(
-            "Filter extensions…",
-            theme::fg(Token::TextMuted),
-        ))
-    } else {
-        let mut spans = vec![Span::styled(
-            model.extension_filter.clone(),
-            theme::fg(Token::TextPrimary),
-        )];
-        if model.filtering {
-            spans.push(Span::styled(
-                theme::glyph(Symbol::BarThin),
-                theme::fg(Token::Accent),
-            ));
-        }
-        Line::from(spans)
-    };
-    frame.render_widget(Paragraph::new(text), inner);
 }
 
 fn render_extension_card(
@@ -225,53 +192,14 @@ fn render_extension_card(
 
 fn render_extension_drawer(
     frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    width: u16,
+    content: Rect,
     model: &TuiModel,
     extension: &uze_extensions::registry::BuiltinExtension,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let drawer = side_panel_area(area, width);
-    frame.render_widget(Clear, drawer);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(
-                if model.dragging_panel == Some(ResizablePanel::ExtensionDrawer) {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::SurfaceRecessed)
-                },
-            ))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        drawer,
-    );
-    hits.insert(
-        0,
-        (
-            Rect::new(drawer.x, drawer.y, 1, drawer.height),
-            Hit::ResizePanel(ResizablePanel::ExtensionDrawer),
-        ),
-    );
-    // Same sectioning as the Plugins drawer: a body that scrolls/clips
-    // naturally and a fixed 3-row status block beneath it, so the two can
-    // never overlap regardless of terminal height.
-    let sections_x = drawer.x + 2;
-    let sections_width = drawer.width.saturating_sub(3);
+    let inner = super::drawer(frame, content, ResizablePanel::ExtensionDrawer, model, hits);
     let offers = uze_application::application::offers::extension_offers();
-    let status_height = drawer_footer_height(&offers);
-    let body = Rect::new(
-        sections_x,
-        drawer.y + 1,
-        sections_width,
-        drawer.height.saturating_sub(2 + status_height),
-    );
-    let status = Rect::new(
-        sections_x,
-        body.y + body.height,
-        sections_width,
-        status_height,
-    );
+    let (body, status) = super::drawer_body_and_footer(inner, &offers);
 
     let lines = vec![
         Line::from(Span::styled("EXTENSION", theme::fg_bold(Token::TextMuted))),

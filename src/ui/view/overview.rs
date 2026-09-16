@@ -25,10 +25,14 @@ pub(crate) fn render_overview(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, "Overview", "status & health", None);
+    let content = render_screen_header(frame, area, Route::Overview, None);
 
-    let harness_total = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
-    let harness_detected = model.doctor.as_ref().map_or(0, |d| {
+    let harness_total = model
+        .remembered
+        .doctor
+        .as_ref()
+        .map_or(0, |d| d.harnesses.len());
+    let harness_detected = model.remembered.doctor.as_ref().map_or(0, |d| {
         d.harnesses.iter().filter(|h| h.detection.present).count()
     });
     let alerts = model.alerts();
@@ -76,12 +80,13 @@ pub(crate) fn render_overview(
         ),
         (
             "Plugins installed",
-            model.plugins.len().to_string(),
+            model.remembered.plugins.len().to_string(),
             theme::color(Token::TextBright),
         ),
         (
             "Active profile",
             model
+                .remembered
                 .profiles
                 .iter()
                 .find(|profile| profile.active)
@@ -206,7 +211,7 @@ fn render_prompt_history(
     reserved: u16,
 ) -> u16 {
     let bottom = area.y + area.height;
-    let entries = &model.prompt_history;
+    let entries = &model.remembered.prompt_history;
     let mut y = area.y;
 
     let mut title = Line::from(vec![
@@ -278,7 +283,7 @@ fn render_prompt_history(
     y += 2;
 
     let budget = bottom.saturating_sub(y).saturating_sub(reserved) as usize;
-    let selected_index = model.overview_prompt_selected;
+    let selected_index = model.remembered.overview_prompt_selected;
     let rows = rows_keeping_selection_visible(&ages, selected_index, budget);
 
     for (position, row) in rows.iter().enumerate() {
@@ -439,7 +444,7 @@ impl PromptColumns {
         style: Style,
     ) -> Line<'static> {
         let gap = " ".repeat(COLUMN_GAP);
-        let workspace = clip_chars(workspace, self.workspace);
+        let workspace = crate::ui::elide_tail(workspace, self.workspace);
         Line::from(vec![
             marker,
             Span::styled(
@@ -454,15 +459,6 @@ impl PromptColumns {
             Span::styled(prompt.to_owned(), style),
         ])
     }
-}
-
-fn clip_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        return value.to_owned();
-    }
-    let mut clipped: String = value.chars().take(max.saturating_sub(1)).collect();
-    clipped.push('…');
-    clipped
 }
 
 /// Lays the listing out newest-first within `budget` lines. When the

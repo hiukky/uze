@@ -11,8 +11,8 @@ use uze_application::application::{
 use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
-    Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route, Status,
-    TrustedRetry, TuiModel,
+    Confirmation, Focus, ListScreen, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES,
+    RefreshData, Remembered, Route, Status, TrustedRetry, TuiModel,
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
@@ -31,9 +31,12 @@ fn plugin(id: &str) -> PluginSummary {
 
 fn model_with_plugins(ids: &[&str]) -> TuiModel {
     TuiModel {
-        plugins: ids.iter().map(|id| plugin(id)).collect(),
         focus: Focus::Content,
         route: Route::Plugins,
+        remembered: Remembered {
+            plugins: ids.iter().map(|id| plugin(id)).collect(),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     }
 }
@@ -52,14 +55,14 @@ fn model_with_data() -> TuiModel {
     use uze_core::router::HarnessCapabilities;
 
     let mut model = model_with_plugins(&["one", "two"]);
-    model.plugins[0].update_available = Some(true);
-    model.marketplaces = vec![MarketplaceSummary {
+    model.remembered.plugins[0].update_available = Some(true);
+    model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
     }];
-    model.marketplace_plugins = vec![MarketplacePluginSummary {
+    model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "flow".to_owned(),
         description: Some("A flow plugin".to_owned()),
@@ -70,14 +73,14 @@ fn model_with_data() -> TuiModel {
     }];
     // Renders the "Updated" badge branch on every route that shows plugin
     // rows, alongside the "Update available" one `plugins[0]` carries.
-    model.update_badges = vec![super::model::UpdateBadge {
+    model.remembered.update_badges = vec![super::model::UpdateBadge {
         plugin: "flow@uze-official".to_owned(),
         seen_at: None,
     }];
-    model.doctor = Some(DoctorReport {
+    model.remembered.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home/uze"),
         store: StoreHealth::Ready,
-        plugins: model.plugins.clone(),
+        plugins: model.remembered.plugins.clone(),
         harnesses: vec![
             HarnessHealth {
                 integration: "claude-code".to_owned(),
@@ -135,7 +138,7 @@ fn model_with_data() -> TuiModel {
         provisioning_state_error: None,
         maintenance: MaintenanceReport::default(),
     });
-    model.context_status = Some(ProjectContextStatus {
+    model.remembered.context_status = Some(ProjectContextStatus {
         root: PathBuf::from("/home/project"),
         canonical: PathBuf::from("/home/project/AGENTS.md"),
         sources: Vec::new(),
@@ -169,8 +172,8 @@ fn model_with_data() -> TuiModel {
             "AGENTS.md carries a region for a plugin that is no longer installed".to_owned(),
         ],
     });
-    model.harnesses_selected = 0;
-    model.profiles = vec![
+    model.remembered.harness_screen.selected = 0;
+    model.remembered.profiles = vec![
         uze_application::application::ProfileSummary {
             id: "dev-autonomous".to_owned(),
             description: Some("My daily autonomous coding setup.".to_owned()),
@@ -204,14 +207,17 @@ fn every_route_renders_without_panicking() {
     for route in ROUTES {
         let model = TuiModel {
             route,
-            plugins: base.plugins.clone(),
-            marketplaces: base.marketplaces.clone(),
-            marketplace_plugins: base.marketplace_plugins.clone(),
-            doctor: base.doctor.clone(),
-            harnesses_selected: base.harnesses_selected,
-            profiles: base.profiles.clone(),
             profile_harness_selection: base.profile_harness_selection.clone(),
             focus: Focus::Content,
+            remembered: Remembered {
+                plugins: base.remembered.plugins.clone(),
+                marketplaces: base.remembered.marketplaces.clone(),
+                marketplace_plugins: base.remembered.marketplace_plugins.clone(),
+                doctor: base.remembered.doctor.clone(),
+                harness_screen: base.remembered.harness_screen.clone(),
+                profiles: base.remembered.profiles.clone(),
+                ..TuiModel::default().remembered
+            },
             ..TuiModel::default()
         };
         let mut hits = Vec::new();
@@ -234,40 +240,60 @@ fn every_overlay_renders_without_panicking() {
             selected: 0,
         },
         Overlay::HarnessHelp,
-        Overlay::ConfirmRemove {
-            id: "one".to_owned(),
-            focus: 1,
+        Overlay::Confirm {
+            kind: Confirmation::RemovePlugin("one".to_owned()),
+            focus: Some(1),
         },
-        Overlay::ConfirmUpdate("one".to_owned()),
-        Overlay::ConfirmInstall {
-            name: "flow".to_owned(),
-            marketplace: "uze-official".to_owned(),
+        Overlay::Confirm {
+            kind: Confirmation::UpdatePlugin("one".to_owned()),
+            focus: None,
         },
-        Overlay::ConfirmContextApply,
-        Overlay::ConfirmClearPromptHistory,
-        Overlay::ProtectedPlugin("one".to_owned()),
-        Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
-        Overlay::NewProfile("dev-autonomous".to_owned()),
-        Overlay::ConfirmDeleteProfile {
-            id: "default".to_owned(),
-            focus: 1,
-        },
-        Overlay::TrustRequired {
-            plugin: "one".to_owned(),
-            detail: "one -> mcp-server".to_owned(),
-            retry: TrustedRetry::Install {
-                name: "one".to_owned(),
+        Overlay::Confirm {
+            kind: Confirmation::InstallPlugin {
+                name: "flow".to_owned(),
                 marketplace: "uze-official".to_owned(),
             },
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ApplyContext,
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ClearPromptHistory,
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ProtectedPlugin("one".to_owned()),
+            focus: None,
+        },
+        Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
+        Overlay::NewProfile("dev-autonomous".to_owned()),
+        Overlay::Confirm {
+            kind: Confirmation::DeleteProfile("default".to_owned()),
+            focus: Some(1),
+        },
+        Overlay::Confirm {
+            kind: Confirmation::Trust {
+                plugin: "one".to_owned(),
+                detail: "one -> mcp-server".to_owned(),
+                retry: TrustedRetry::Install {
+                    name: "one".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
+            },
+            focus: None,
         },
     ];
     for overlay in overlays {
         let model = TuiModel {
             overlay,
-            plugins: base.plugins.clone(),
-            marketplace_plugins: base.marketplace_plugins.clone(),
-            doctor: base.doctor.clone(),
-            focus: Focus::Overlay,
+            remembered: Remembered {
+                plugins: base.remembered.plugins.clone(),
+                marketplace_plugins: base.remembered.marketplace_plugins.clone(),
+                doctor: base.remembered.doctor.clone(),
+                ..TuiModel::default().remembered
+            },
             ..TuiModel::default()
         };
         let mut hits = Vec::new();
@@ -309,7 +335,7 @@ fn tab_toggles_focus_between_sidebar_and_content() {
 fn content_navigation_and_inspect_intent() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.remembered.plugin_screen.selected, 1);
     assert_eq!(
         model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         Intent::InspectPlugin("two".to_owned())
@@ -339,13 +365,13 @@ fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
         "moving the selection wants the new row's detail even mid-flight"
     );
 
-    model.marketplace_drawer_open = false;
+    model.remembered.plugin_screen.drawer_open = false;
     assert_eq!(
         model.drawer_inspect_intent(),
         Intent::None,
         "a closed drawer needs nothing"
     );
-    model.marketplace_drawer_open = true;
+    model.remembered.plugin_screen.drawer_open = true;
     model.route = Route::Overview;
     assert_eq!(
         model.drawer_inspect_intent(),
@@ -358,8 +384,9 @@ fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
 fn remove_confirmation_flow() {
     let mut model = model_with_plugins(&["one"]);
     model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-    assert!(matches!(model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
-    assert_eq!(model.focus, Focus::Overlay);
+    assert!(
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::RemovePlugin(ref id), .. } if id == "one")
+    );
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
     assert_eq!(model.overlay, Overlay::None);
@@ -383,9 +410,11 @@ fn update_only_offered_when_available() {
         Overlay::None,
         "no update available, no overlay"
     );
-    model.plugins[0].update_available = Some(true);
+    model.remembered.plugins[0].update_available = Some(true);
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    assert!(matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"));
+    assert!(
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id == "one")
+    );
 }
 
 #[test]
@@ -406,17 +435,17 @@ fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
         model.expire_update_badges();
     }
     assert!(
-        model.update_badges[0].seen_at.is_none(),
+        model.remembered.update_badges[0].seen_at.is_none(),
         "the countdown starts on sight, not on the update"
     );
     assert!(model.was_just_updated("one"));
 
     model.route = Route::Plugins;
     model.expire_update_badges();
-    assert!(model.update_badges[0].seen_at.is_some());
+    assert!(model.remembered.update_badges[0].seen_at.is_some());
 
     // Once seen, it comes down on its own.
-    model.update_badges[0].seen_at = Some(std::time::Instant::now() - UPDATE_BADGE_TTL);
+    model.remembered.update_badges[0].seen_at = Some(std::time::Instant::now() - UPDATE_BADGE_TTL);
     model.expire_update_badges();
     assert!(
         !model.was_just_updated("one"),
@@ -425,7 +454,7 @@ fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
 
     // An ordinary refresh reports no auto-updates and must not re-raise
     // a badge that already had its moment.
-    model.update_badges.push(UpdateBadge {
+    model.remembered.update_badges.push(UpdateBadge {
         plugin: "two".to_owned(),
         seen_at: None,
     });
@@ -440,18 +469,17 @@ fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
 #[test]
 fn a_return_visit_draws_what_the_last_one_resolved() {
     let mut model = model_with_plugins(&["one", "two"]);
-    model.resolved_at = Some(std::time::Instant::now());
-    model.marketplace_selected = 1;
-    model.marketplace_drawer_open = false;
-    model.prompt_history = Vec::new();
+    model.remembered.resolved_at = Some(std::time::Instant::now());
+    model.remembered.plugin_screen.selected = 1;
+    model.remembered.plugin_screen.drawer_open = false;
+    model.remembered.prompt_history = Vec::new();
     // What one visit ends holding — including work it was in the middle
     // of, which the next visit must not inherit.
     model.status = Status::Working("Inspecting one…".to_owned());
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 0,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(0),
     };
-    model.focus = Focus::Overlay;
     model.maintenance_in_flight = true;
     model.inspection_in_flight = Some(Intent::InspectPlugin("one".to_owned()));
     model.hits = vec![(Rect::new(0, 0, 1, 1), Hit::Route(Route::Plugins))];
@@ -460,18 +488,18 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
     let model = TuiModel::recall(Some(model.remember()), &layout);
 
     assert_eq!(
-        model.plugins.len(),
+        model.remembered.plugins.len(),
         2,
         "the machine state the last visit resolved is still the truth about the machine"
     );
     assert!(
-        model.resolved_at.is_some(),
+        model.remembered.resolved_at.is_some(),
         "and so is when it was resolved — the next visit decides on it"
     );
     assert_eq!(model.route, Route::Plugins);
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.remembered.plugin_screen.selected, 1);
     assert!(
-        !model.marketplace_drawer_open,
+        !model.remembered.plugin_screen.drawer_open,
         "a drawer stays as it was left"
     );
     assert!(matches!(model.status, Status::Idle));
@@ -506,10 +534,12 @@ fn a_resolution_the_session_just_made_is_not_asked_for_again() {
 #[test]
 fn a_first_visit_starts_from_the_default_model() {
     let model = TuiModel::recall(None, &uze_application::ManagementLayout::default());
-    assert!(model.plugins.is_empty());
+    assert!(model.remembered.plugins.is_empty());
     assert_eq!(model.route, Route::Overview);
     assert!(
-        model.marketplace_drawer_open && model.extension_drawer_open && model.harnesses_drawer_open,
+        model.remembered.plugin_screen.drawer_open
+            && model.remembered.extension_screen.drawer_open
+            && model.remembered.harness_screen.drawer_open,
         "the drawers a screen opens with are stated once, by Default"
     );
 }
@@ -520,7 +550,7 @@ fn a_first_visit_starts_from_the_default_model() {
 fn the_next_run_opens_on_the_screen_the_last_one_left() {
     let mut model = TuiModel::default();
     model.set_route(Route::Profiles);
-    model.harnesses_drawer_open = false;
+    model.remembered.harness_screen.drawer_open = false;
     model.profile_columns_width = Some(28);
     model
         .collapsed_marketplaces
@@ -532,7 +562,7 @@ fn the_next_run_opens_on_the_screen_the_last_one_left() {
     let model = TuiModel::recall(None, &layout);
     assert_eq!(model.route, Route::Profiles);
     assert!(
-        !model.harnesses_drawer_open,
+        !model.remembered.harness_screen.drawer_open,
         "a drawer stays as it was left"
     );
     assert_eq!(model.profile_columns_width, Some(28));
@@ -578,11 +608,11 @@ fn appearance_reopened_where_it_was_left_still_reads_its_lists() {
 #[test]
 fn a_route_action_key_works_from_the_sidebar_too() {
     let mut model = model_with_plugins(&["one"]);
-    model.plugins[0].update_available = Some(true);
+    model.remembered.plugins[0].update_available = Some(true);
     model.focus = Focus::Sidebar;
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     assert!(
-        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"),
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id == "one"),
         "`u` must not be swallowed just because the sidebar holds focus"
     );
 }
@@ -590,15 +620,17 @@ fn a_route_action_key_works_from_the_sidebar_too() {
 #[test]
 fn trust_required_overlay_confirm_regrants_with_trust() {
     let mut model = TuiModel {
-        overlay: Overlay::TrustRequired {
-            plugin: "acme".to_owned(),
-            detail: "acme -> mcp-server".to_owned(),
-            retry: TrustedRetry::Install {
-                name: "acme".to_owned(),
-                marketplace: "uze-official".to_owned(),
+        overlay: Overlay::Confirm {
+            kind: Confirmation::Trust {
+                plugin: "acme".to_owned(),
+                detail: "acme -> mcp-server".to_owned(),
+                retry: TrustedRetry::Install {
+                    name: "acme".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
             },
+            focus: None,
         },
-        focus: Focus::Overlay,
         ..TuiModel::default()
     };
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -656,8 +688,8 @@ fn mouse_click_on_extension_row_selects_and_opens_drawer_without_fetch() {
         },
         Rect::new(0, 0, 100, 40),
     );
-    assert_eq!(model.extensions_selected, 1);
-    assert!(model.extension_drawer_open);
+    assert_eq!(model.remembered.extension_screen.selected, 1);
+    assert!(model.remembered.extension_screen.drawer_open);
     assert_eq!(intent, Intent::None);
 }
 
@@ -677,17 +709,16 @@ fn scroll_moves_selection_without_mutating_anything() {
     // selection and fetches the newly selected (installed, local) row's
     // detail — never a mutation.
     assert_eq!(intent, Intent::InspectPlugin("two".to_owned()));
-    assert_eq!(model.marketplace_selected, 1);
+    assert_eq!(model.remembered.plugin_screen.selected, 1);
 }
 
 #[test]
 fn click_outside_overlay_dismisses_without_confirming() {
     let mut model = model_with_plugins(&["one"]);
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
-    model.focus = Focus::Overlay;
     let intent = model.apply_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -790,7 +821,13 @@ fn the_index_narrows_as_you_type_and_performs_what_you_choose() {
     );
     model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(model.overlay, Overlay::ConfirmRemove { .. }),
+        matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::RemovePlugin(_),
+                ..
+            }
+        ),
         "choosing from the index performs it: {:?}",
         model.overlay
     );
@@ -802,7 +839,7 @@ fn empty_marketplace_and_no_harness_states_do_not_panic_rendering() {
         route: Route::Plugins,
         ..TuiModel::default()
     };
-    assert_eq!(model.list_len(), 0);
+    assert_eq!(model.list_len(model.route), 0);
     assert!(model.selected_marketplace_plugin().is_none());
     let model = TuiModel {
         route: Route::Harnesses,
@@ -815,7 +852,7 @@ fn empty_marketplace_and_no_harness_states_do_not_panic_rendering() {
 fn read_only_navigation_never_produces_a_mutating_intent() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.set_route(Route::Plugins);
-    model.marketplace_plugins = vec![MarketplacePluginSummary {
+    model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "uze".to_owned(),
         description: None,
@@ -890,17 +927,17 @@ fn left_right_cycle_the_selected_preference_value_and_persist_it() {
     model.focus = Focus::Content;
     model.profile_panel = ProfilePanel::Editor;
     model.profile_editor_selected = 0; // autonomy
-    let before = model.profiles[0].preferences.autonomy;
+    let before = model.remembered.profiles[0].preferences.autonomy;
     let intent = model.apply_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
     assert_ne!(
-        model.profiles[0].preferences.autonomy, before,
+        model.remembered.profiles[0].preferences.autonomy, before,
         "cycling must mutate optimistically"
     );
     assert!(matches!(intent, Intent::UpdatePreferences { .. }));
-    let after_right = model.profiles[0].preferences.autonomy;
+    let after_right = model.remembered.profiles[0].preferences.autonomy;
     model.apply_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
     assert_eq!(
-        model.profiles[0].preferences.autonomy, before,
+        model.remembered.profiles[0].preferences.autonomy, before,
         "left must undo right's cycle step"
     );
     let _ = after_right;
@@ -922,7 +959,7 @@ fn space_toggles_harness_selection_only_in_the_harnesses_panel() {
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
     model.profile_harness_selected = 0;
-    let harness_id = model.doctor.as_ref().unwrap().harnesses[0]
+    let harness_id = model.remembered.doctor.as_ref().unwrap().harnesses[0]
         .integration
         .clone();
     let was_selected = model.profile_harness_selection.contains(&harness_id);
@@ -950,7 +987,6 @@ fn n_opens_new_profile_overlay_and_submitting_creates_it() {
     model.focus = Focus::Content;
     model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
-    assert_eq!(model.focus, Focus::Overlay);
     for ch in "Team Backend".chars() {
         model.apply_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -962,18 +998,20 @@ fn n_opens_new_profile_overlay_and_submitting_creates_it() {
 #[test]
 fn clicking_new_profile_opens_the_profile_overlay() {
     let mut model = model_with_data();
-    model.hits = vec![(Rect::new(10, 4, 5, 1), Hit::NewProfile)];
+    model.hits = vec![(
+        Rect::new(10, 4, 5, 1),
+        Hit::OfferedAction(uze_keys::Action::NewProfile),
+    )];
 
     assert_eq!(model.click(12, 4), Intent::None);
     assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
-    assert_eq!(model.focus, Focus::Overlay);
 }
 
 #[test]
 fn the_drawers_delete_button_opens_the_delete_confirmation() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
-    let id = model.profiles[0].id.clone();
+    let id = model.remembered.profiles[0].id.clone();
     model.hits = vec![(
         Rect::new(10, 4, 8, 1),
         Hit::OfferedAction(uze_keys::Action::DeleteProfile),
@@ -982,17 +1020,16 @@ fn the_drawers_delete_button_opens_the_delete_confirmation() {
     assert_eq!(model.click(12, 4), Intent::None);
     assert!(matches!(
         &model.overlay,
-        Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+        Overlay::Confirm { kind: Confirmation::DeleteProfile(confirmed_id), .. } if *confirmed_id == id
     ));
-    assert_eq!(model.focus, Focus::Overlay);
 }
 
 #[test]
 fn the_drawers_apply_button_targets_checked_harnesses() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
-    model.profiles[0].active = false;
-    let id = model.profiles[0].id.clone();
+    model.remembered.profiles[0].active = false;
+    let id = model.remembered.profiles[0].id.clone();
     model.hits = vec![(
         Rect::new(18, 4, 9, 1),
         Hit::OfferedAction(uze_keys::Action::ApplyProfile),
@@ -1007,7 +1044,7 @@ fn the_drawers_apply_button_targets_checked_harnesses() {
         panic!("expected ApplyProfile");
     };
     assert_eq!(applied_id, id);
-    assert_eq!(preferences, model.profiles[0].preferences);
+    assert_eq!(preferences, model.remembered.profiles[0].preferences);
     assert_eq!(
         harness_ids,
         vec!["claude-code".to_owned(), "codex".to_owned()]
@@ -1020,11 +1057,11 @@ fn the_drawers_apply_button_targets_checked_harnesses() {
 fn the_active_profile_can_be_applied_again() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
-    assert!(model.profiles[0].active);
+    assert!(model.remembered.profiles[0].active);
     model.profile_panel = ProfilePanel::Editor;
     model.profile_editor_selected = 2;
     model.cycle_selected_preference(true);
-    let edited = model.profiles[0].preferences;
+    let edited = model.remembered.profiles[0].preferences;
 
     let Intent::ApplyProfile { preferences, .. } = model.act(uze_keys::Action::ApplyProfile) else {
         panic!("expected ApplyProfile");
@@ -1092,7 +1129,7 @@ fn preview_fixture(model: &TuiModel) -> uze_application::application::ProfilePre
         ],
     };
     uze_application::application::ProfilePreview {
-        preferences: model.profiles[0].preferences,
+        preferences: model.remembered.profiles[0].preferences,
         harnesses: vec![
             HarnessPreview {
                 integration: "claude-code".to_owned(),
@@ -1118,7 +1155,10 @@ fn the_profiles_screen_asks_for_its_preview_once_and_again_after_an_edit() {
     let Intent::PreviewProfile(question) = model.profile_preview_intent() else {
         panic!("the preview is read without being asked for");
     };
-    assert_eq!(question.preferences, model.profiles[0].preferences);
+    assert_eq!(
+        question.preferences,
+        model.remembered.profiles[0].preferences
+    );
     assert_eq!(question.harness_ids, vec!["claude-code", "codex"]);
 
     model.profile_preview_asked = Some(question);
@@ -1144,7 +1184,7 @@ fn a_preview_of_other_preferences_is_never_shown_as_this_ones() {
     model.set_route(Route::Profiles);
     answer_preview(&mut model);
     assert!(model.current_profile_preview().is_some());
-    model.profiles_selected = 1;
+    model.remembered.profiles_selected = 1;
     assert!(
         model.current_profile_preview().is_none(),
         "safe-mode's preferences are not dev-autonomous's"
@@ -1258,7 +1298,10 @@ fn a_preference_steps_through_its_values_from_its_arrows() {
     };
     let (next_x, next_y) = target(true);
     let (previous_x, previous_y) = target(false);
-    assert_eq!(model.profiles[0].preferences.autonomy, Autonomy::Auto);
+    assert_eq!(
+        model.remembered.profiles[0].preferences.autonomy,
+        Autonomy::Auto
+    );
     let Intent::UpdatePreferences { preferences, .. } = model.click(next_x, next_y) else {
         panic!("the next arrow changes the value");
     };
@@ -1456,14 +1499,13 @@ fn d_on_the_list_panel_opens_a_delete_confirmation_that_a_stray_click_cannot_con
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
     model.profile_panel = ProfilePanel::List;
-    model.profiles_selected = 0;
-    let id = model.profiles[0].id.clone();
+    model.remembered.profiles_selected = 0;
+    let id = model.remembered.profiles[0].id.clone();
     model.apply_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(matches!(
         &model.overlay,
-        Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+        Overlay::Confirm { kind: Confirmation::DeleteProfile(confirmed_id), .. } if *confirmed_id == id
     ));
-    assert_eq!(model.focus, Focus::Overlay);
 
     let intent = model.apply_mouse(
         MouseEvent {
@@ -1488,8 +1530,8 @@ fn confirming_delete_with_y_emits_delete_profile_intent() {
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
     model.profile_panel = ProfilePanel::List;
-    model.profiles_selected = 0;
-    let id = model.profiles[0].id.clone();
+    model.remembered.profiles_selected = 0;
+    let id = model.remembered.profiles[0].id.clone();
     model.apply_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::DeleteProfile(id));
@@ -1502,8 +1544,8 @@ fn applying_a_profile_is_offered_without_a_key() {
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
     model.profile_panel = ProfilePanel::List;
-    model.profiles_selected = 1;
-    let id = model.profiles[1].id.clone();
+    model.remembered.profiles_selected = 1;
+    let id = model.remembered.profiles[1].id.clone();
     // `s` sets up a harness and nothing else; applying a profile is
     // offered by its row's own actions and its drawer's button — and it
     // writes, rather than only marking the profile active.
@@ -1516,7 +1558,7 @@ fn a_is_inert_on_the_profiles_screen() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
-    model.profiles_selected = 0;
+    model.remembered.profiles_selected = 0;
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
 }
@@ -1607,10 +1649,13 @@ fn marketplace_filter_narrows_visible_selection() {
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
-        marketplace_plugins: vec![
-            marketplace_plugin("ai", "std", false),
-            marketplace_plugin("ai", "flow", true),
-        ],
+        remembered: Remembered {
+            marketplace_plugins: vec![
+                marketplace_plugin("ai", "std", false),
+                marketplace_plugin("ai", "flow", true),
+            ],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     assert_eq!(model.marketplace_visible_indices(), vec![0, 1]);
@@ -1625,7 +1670,7 @@ fn marketplace_filter_narrows_visible_selection() {
 
     model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!model.filtering);
-    assert!(model.marketplace_filter.is_empty());
+    assert!(model.remembered.plugin_screen.filter.is_empty());
     assert_eq!(model.marketplace_visible_indices(), vec![0, 1]);
 }
 
@@ -1663,7 +1708,7 @@ fn extension_filter_narrows_visible_selection() {
     assert_eq!(model.selected_extension().unwrap().name, "Task List");
 
     model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(model.extension_filter.is_empty());
+    assert!(model.remembered.extension_screen.filter.is_empty());
     assert_eq!(model.extension_visible_indices(), vec![0, 1]);
 }
 
@@ -1671,15 +1716,18 @@ fn extension_filter_narrows_visible_selection() {
 fn marketplace_group_collapse_hides_its_plugins() {
     let mut model = TuiModel {
         route: Route::Plugins,
-        marketplace_plugins: vec![marketplace_plugin("ai", "std", false)],
+        remembered: Remembered {
+            marketplace_plugins: vec![marketplace_plugin("ai", "std", false)],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
-    assert_eq!(model.list_len(), 1);
+    assert_eq!(model.list_len(model.route), 1);
     model.marketplace_toggle_group("ai");
-    assert_eq!(model.list_len(), 0);
+    assert_eq!(model.list_len(model.route), 0);
     assert!(model.selected_marketplace_plugin().is_none());
     model.marketplace_toggle_group("ai");
-    assert_eq!(model.list_len(), 1);
+    assert_eq!(model.list_len(model.route), 1);
 }
 
 #[test]
@@ -1706,7 +1754,6 @@ fn add_marketplace_overlay_types_and_submits() {
 fn add_marketplace_overlay_esc_cancels_without_intent() {
     let mut model = TuiModel {
         overlay: Overlay::AddMarketplace("abc".to_owned()),
-        focus: Focus::Overlay,
         ..TuiModel::default()
     };
     let intent = model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1737,7 +1784,9 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
 
     let mut plugins_model = model_with_plugins(&["one"]);
     let intent = plugins_model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-    assert!(matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
+    assert!(
+        matches!(plugins_model.overlay, Overlay::Confirm { kind: Confirmation::RemovePlugin(ref id), .. } if id == "one")
+    );
     assert_eq!(intent, Intent::None);
     assert_eq!(
         model_with_plugins(&["one"])
@@ -1756,14 +1805,14 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
 fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
-    model.marketplaces = vec![MarketplaceSummary {
+    model.remembered.plugin_screen.drawer_open = true;
+    model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
     }];
-    model.marketplace_plugins = vec![MarketplacePluginSummary {
+    model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "flow".to_owned(),
         description: Some("A flow plugin".to_owned()),
@@ -1813,14 +1862,14 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
 fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
-    model.marketplaces = vec![MarketplaceSummary {
+    model.remembered.plugin_screen.drawer_open = true;
+    model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
     }];
-    model.marketplace_plugins = vec![MarketplacePluginSummary {
+    model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "flow".to_owned(),
         description: Some(
@@ -1870,14 +1919,14 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
 fn the_source_link_lights_up_only_under_the_pointer() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
-    model.marketplaces = vec![MarketplaceSummary {
+    model.remembered.plugin_screen.drawer_open = true;
+    model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
     }];
-    model.marketplace_plugins = vec![MarketplacePluginSummary {
+    model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "flow".to_owned(),
         description: Some("A flow plugin".to_owned()),
@@ -1937,8 +1986,8 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     // real health from it instead of the masked "unknown" placeholder.
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.marketplace_drawer_open = true;
-    model.doctor = Some(DoctorReport {
+    model.remembered.plugin_screen.drawer_open = true;
+    model.remembered.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home"),
         store: uze_application::application::StoreHealth::Ready,
         plugins: vec![plugin("one")],
@@ -2252,7 +2301,7 @@ fn the_keys_screen_is_searchable_by_its_own_key() {
     for character in "quit".chars() {
         model.type_character(character);
     }
-    assert_eq!(model.keys_filter, "quit");
+    assert_eq!(model.key_screen.filter, "quit");
     assert!(
         !model.key_rows().is_empty(),
         "and the list narrowed to something"
@@ -2543,13 +2592,16 @@ fn installing_the_projects_environment_carries_the_workspace_root() {
     let mut model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::InstallRequired,
-            4,
-            3,
-            &["flow"],
-            &root,
-        )),
+        remembered: Remembered {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                4,
+                3,
+                &["flow"],
+                &root,
+            )),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     // Offered by the Overview's own card and by the index, with no letter
@@ -2565,13 +2617,16 @@ fn installing_the_projects_environment_is_inert_when_it_is_ready() {
     let mut model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::Ready,
-            2,
-            2,
-            &[],
-            &root,
-        )),
+        remembered: Remembered {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                2,
+                2,
+                &[],
+                &root,
+            )),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let intent = model.act(uze_keys::Action::InstallProjectEnvironment);
@@ -2584,7 +2639,10 @@ fn overview_install_key_is_inert_outside_consumer_workspaces() {
     let mut model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        workspace: Some(marketplace_workspace(&root)),
+        remembered: Remembered {
+            workspace: Some(marketplace_workspace(&root)),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -2602,7 +2660,7 @@ fn refreshed_updates_workspace_state() {
         route: Route::Overview,
         ..TuiModel::default()
     };
-    assert!(model.workspace.is_none());
+    assert!(model.remembered.workspace.is_none());
     model.refreshed(RefreshData {
         workspace: Some(consumer_workspace(
             ProjectEnvironmentState::InstallRequired,
@@ -2663,9 +2721,9 @@ fn distance_from_the_backdrop(color: ratatui::style::Color) -> u32 {
 fn a_modal_pushes_the_screen_it_interrupts_behind_it() {
     let quiet = drawn(&model_with_plugins(&["flow"]));
     let asked = drawn(&TuiModel {
-        overlay: Overlay::ConfirmRemove {
-            id: "flow".to_owned(),
-            focus: 0,
+        overlay: Overlay::Confirm {
+            kind: Confirmation::RemovePlugin("flow".to_owned()),
+            focus: Some(0),
         },
         ..model_with_plugins(&["flow"])
     });
@@ -2730,13 +2788,16 @@ fn overview_does_not_render_project_context() {
     let model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::InstallRequired,
-            4,
-            3,
-            &["flow"],
-            std::path::Path::new("/tmp/project"),
-        )),
+        remembered: Remembered {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                4,
+                3,
+                &["flow"],
+                std::path::Path::new("/tmp/project"),
+            )),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let mut hits = Vec::new();
@@ -2777,13 +2838,16 @@ fn overview_render_does_not_mutate_project_state() {
     let model = TuiModel {
         route: Route::Overview,
         context_root: root.clone(),
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::Ready,
-            2,
-            2,
-            &[],
-            &root,
-        )),
+        remembered: Remembered {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                2,
+                2,
+                &[],
+                &root,
+            )),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
@@ -2817,21 +2881,24 @@ fn no_workspace_render_creates_nothing() {
     let model = TuiModel {
         route: Route::Overview,
         context_root: root.clone(),
-        workspace: Some(OverviewWorkspaceSummary {
-            cwd: root.clone(),
-            root: root.clone(),
-            kind: WorkspaceKind::NoWorkspace,
-            agents_directory_present: false,
-            project: ProjectOverview {
-                drift: Default::default(),
-                environment: ProjectEnvironmentState::NotConfigured,
-                memory: MemoryState::None,
-                declared_plugins: 0,
-                installed_plugins: 0,
-                missing_plugins: Vec::new(),
-            },
-            marketplace: None,
-        }),
+        remembered: Remembered {
+            workspace: Some(OverviewWorkspaceSummary {
+                cwd: root.clone(),
+                root: root.clone(),
+                kind: WorkspaceKind::NoWorkspace,
+                agents_directory_present: false,
+                project: ProjectOverview {
+                    drift: Default::default(),
+                    environment: ProjectEnvironmentState::NotConfigured,
+                    memory: MemoryState::None,
+                    declared_plugins: 0,
+                    installed_plugins: 0,
+                    missing_plugins: Vec::new(),
+                },
+                marketplace: None,
+            }),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
@@ -2945,13 +3012,16 @@ fn overview_install_intent_reaches_install_project_environment() {
     let mut model = TuiModel {
         route: Route::Overview,
         context_root: project.clone(),
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::InstallRequired,
-            1,
-            0,
-            &["flow"],
-            &project,
-        )),
+        remembered: Remembered {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                1,
+                0,
+                &["flow"],
+                &project,
+            )),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let (sender, receiver) = mpsc::channel();
@@ -3054,9 +3124,12 @@ fn overview_with_prompts(count: u64) -> TuiModel {
     TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        prompt_history: (0..count)
-            .map(|index| prompt(index + 1, &format!("prompt {index}")))
-            .collect(),
+        remembered: Remembered {
+            prompt_history: (0..count)
+                .map(|index| prompt(index + 1, &format!("prompt {index}")))
+                .collect(),
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     }
 }
@@ -3068,12 +3141,12 @@ fn overview_arrows_move_the_prompt_selection_within_bounds() {
     for _ in 0..5 {
         model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    assert_eq!(model.overview_prompt_selected, 2);
+    assert_eq!(model.remembered.overview_prompt_selected, 2);
 
     for _ in 0..5 {
         model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     }
-    assert_eq!(model.overview_prompt_selected, 0);
+    assert_eq!(model.remembered.overview_prompt_selected, 0);
 }
 
 #[test]
@@ -3081,24 +3154,27 @@ fn overview_arrows_still_navigate_routes_from_the_sidebar() {
     let mut model = TuiModel {
         route: Route::Overview,
         focus: Focus::Sidebar,
-        prompt_history: vec![prompt(1, "prompt")],
+        remembered: Remembered {
+            prompt_history: vec![prompt(1, "prompt")],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
 
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
 
     assert_eq!(model.route, Route::Plugins);
-    assert_eq!(model.overview_prompt_selected, 0);
+    assert_eq!(model.remembered.overview_prompt_selected, 0);
 }
 
 #[test]
 fn activating_a_prompt_returns_to_its_tab() {
     let mut model = overview_with_prompts(3);
-    model.overview_prompt_selected = 2;
+    model.remembered.overview_prompt_selected = 2;
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(intent, Intent::SwitchToWorkspaceTab(3));
+    assert_eq!(intent, Intent::CloseToTab(3));
 }
 
 #[test]
@@ -3111,7 +3187,7 @@ fn an_empty_history_leaves_enter_to_the_routes_own_action() {
 
     assert_ne!(
         model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Intent::SwitchToWorkspaceTab(0)
+        Intent::CloseToTab(0)
     );
 }
 
@@ -3121,7 +3197,13 @@ fn clearing_the_history_is_confirmed_before_it_happens() {
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
-    assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
+    assert_eq!(
+        model.overlay,
+        Overlay::Confirm {
+            kind: Confirmation::ClearPromptHistory,
+            focus: None,
+        }
+    );
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::ClearPromptHistory);
@@ -3137,7 +3219,7 @@ fn declining_the_clear_confirmation_does_nothing() {
 
     assert_eq!(intent, Intent::None);
     assert_eq!(model.overlay, Overlay::None);
-    assert_eq!(model.prompt_history.len(), 2);
+    assert_eq!(model.remembered.prompt_history.len(), 2);
 }
 
 #[test]
@@ -3168,8 +3250,8 @@ fn a_prompt_row_is_clickable_and_hoverable_at_the_same_rect() {
     );
     assert_eq!(model.overview_prompt_hovered, Some(1));
 
-    assert_eq!(model.click(column, row), Intent::SwitchToWorkspaceTab(2));
-    assert_eq!(model.overview_prompt_selected, 1);
+    assert_eq!(model.click(column, row), Intent::CloseToTab(2));
+    assert_eq!(model.remembered.overview_prompt_selected, 1);
 }
 
 #[test]
@@ -3199,7 +3281,7 @@ fn moving_off_every_row_drops_the_hover() {
 #[test]
 fn a_refresh_that_shrinks_the_history_clamps_selection_and_hover() {
     let mut model = overview_with_prompts(5);
-    model.overview_prompt_selected = 4;
+    model.remembered.overview_prompt_selected = 4;
     model.overview_prompt_hovered = Some(4);
 
     model.refreshed(RefreshData {
@@ -3207,7 +3289,7 @@ fn a_refresh_that_shrinks_the_history_clamps_selection_and_hover() {
         ..RefreshData::default()
     });
 
-    assert_eq!(model.overview_prompt_selected, 0);
+    assert_eq!(model.remembered.overview_prompt_selected, 0);
     assert_eq!(model.overview_prompt_hovered, None);
 }
 
@@ -3226,12 +3308,15 @@ fn the_prompt_table_groups_rows_by_age_and_marks_the_selection() {
     let model = TuiModel {
         route: Route::Overview,
         focus: Focus::Content,
-        overview_prompt_selected: 1,
-        prompt_history: vec![
-            recent(1, "claude", "first prompt"),
-            recent(2, "codex", "second prompt"),
-            prompt(3, "from long ago"),
-        ],
+        remembered: Remembered {
+            overview_prompt_selected: 1,
+            prompt_history: vec![
+                recent(1, "claude", "first prompt"),
+                recent(2, "codex", "second prompt"),
+                prompt(3, "from long ago"),
+            ],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let mut hits = Vec::new();
@@ -3292,7 +3377,7 @@ fn the_prompt_table_groups_rows_by_age_and_marks_the_selection() {
 fn a_selection_below_the_fold_scrolls_the_prompt_table() {
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let mut model = overview_with_prompts(40);
-    model.overview_prompt_selected = 30;
+    model.remembered.overview_prompt_selected = 30;
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, frame.area(), &model, &mut hits))
@@ -3486,8 +3571,14 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
-        marketplace_drawer_open: true,
-        marketplace_plugins: vec![summary],
+        remembered: Remembered {
+            plugin_screen: ListScreen {
+                drawer_open: true,
+                ..ListScreen::default()
+            },
+            marketplace_plugins: vec![summary],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -3553,7 +3644,7 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
     let (update, _) = buttons[0];
     model.click(update.x, update.y);
     assert!(
-        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id.contains("kit")),
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id.contains("kit")),
         "the button asks, the same way the menu entry does: {:?}",
         model.overlay
     );
@@ -3583,19 +3674,25 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
     let mut model = TuiModel {
         route: Route::Plugins,
         focus: Focus::Content,
-        marketplace_drawer_open: true,
-        marketplace_plugins: vec![summary.clone()],
         marketplace_detail: Some(MarketplacePluginDetail {
-            summary,
+            summary: summary.clone(),
             capabilities: vec![
                 capability("review", CapabilityKind::AgentSkill),
                 capability("guard", CapabilityKind::Hook),
                 capability("plan", CapabilityKind::AgentSkill),
             ],
         }),
+        remembered: Remembered {
+            plugin_screen: ListScreen {
+                drawer_open: true,
+                ..ListScreen::default()
+            },
+            marketplace_plugins: vec![summary],
+            ..TuiModel::default().remembered
+        },
         ..TuiModel::default()
     };
-    model.marketplace_drawer_width = Some(52);
+    model.remembered.plugin_screen.drawer_width = Some(52);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -3666,7 +3763,7 @@ fn the_keys_screen_rebinds_from_a_click_and_a_keystroke() {
         .iter()
         .position(|row| row.action == uze_keys::Action::NewShellTab)
         .expect("the workspace's new-shell key is listed");
-    model.keys_selected = row;
+    model.key_screen.selected = row;
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
@@ -3723,7 +3820,7 @@ fn the_keys_list_follows_the_selection_past_the_fold() {
         "the premise: this list is far taller than any terminal"
     );
     let last = rows.len() - 1;
-    model.keys_selected = last;
+    model.key_screen.selected = last;
     let wanted = rows[last].action.label();
 
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
@@ -3810,7 +3907,7 @@ fn the_selected_key_is_a_band_across_the_list() {
         focus: Focus::Content,
         ..TuiModel::default()
     };
-    model.keys_selected = 2;
+    model.key_screen.selected = 2;
     let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -3873,7 +3970,7 @@ fn the_track_can_be_dragged() {
     // The bottom of the track is the bottom of the list, whatever it is.
     let last = model.key_rows().len() - 1;
     model.click(track.x, track.bottom() - 1);
-    assert_eq!(model.keys_selected, last);
+    assert_eq!(model.key_screen.selected, last);
 
     // And it keeps answering while the button is held, without the row
     // under the pointer having to be a target of its own.
@@ -3889,12 +3986,12 @@ fn the_track_can_be_dragged() {
         );
     };
     drag(&mut model, track.y);
-    assert_eq!(model.keys_selected, 0, "back to the top");
+    assert_eq!(model.key_screen.selected, 0, "back to the top");
     drag(&mut model, track.y + track.height / 2);
     assert!(
-        model.keys_selected > 0 && model.keys_selected < last,
+        model.key_screen.selected > 0 && model.key_screen.selected < last,
         "and to the middle: {}",
-        model.keys_selected
+        model.key_screen.selected
     );
 
     // Releasing ends the gesture — a later move must not still scroll.
@@ -3907,9 +4004,9 @@ fn the_track_can_be_dragged() {
         },
         Rect::new(0, 0, 140, 40),
     );
-    let settled = model.keys_selected;
+    let settled = model.key_screen.selected;
     drag(&mut model, track.bottom() - 1);
-    assert_eq!(model.keys_selected, settled, "the drag was let go of");
+    assert_eq!(model.key_screen.selected, settled, "the drag was let go of");
 }
 
 /// A long list that gives no sign of being long is a list nobody scrolls.
@@ -3943,7 +4040,7 @@ fn a_list_taller_than_the_screen_says_where_the_window_is() {
     let top = column(&terminal);
     assert!(!top.is_empty(), "the track is drawn at all");
 
-    model.keys_selected = model.key_rows().len() - 1;
+    model.key_screen.selected = model.key_rows().len() - 1;
     terminal
         .draw(|frame| render(frame, frame.area(), &model, &mut hits))
         .unwrap();
@@ -3999,7 +4096,7 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
     for _ in 0..40 {
         wheel(&mut model, MouseEventKind::ScrollDown);
     }
-    assert_eq!(model.keys_selected, 40, "the wheel walks the list");
+    assert_eq!(model.key_screen.selected, 40, "the wheel walks the list");
 
     let rows = model.key_rows();
     let wanted = rows[40].action.label();
@@ -4018,7 +4115,10 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
     for _ in 0..80 {
         wheel(&mut model, MouseEventKind::ScrollUp);
     }
-    assert_eq!(model.keys_selected, 0, "and back, stopping at the top");
+    assert_eq!(
+        model.key_screen.selected, 0,
+        "and back, stopping at the top"
+    );
 
     // Profiles was the other screen the wheel could not move, for the same
     // reason: its selection is three panels rather than one list, and the
@@ -4028,9 +4128,15 @@ fn the_wheel_walks_the_keys_list_and_the_window_follows() {
         focus: Focus::Content,
         ..model_with_data()
     };
-    assert!(profiles.profiles.len() > 1, "there is somewhere to move to");
+    assert!(
+        profiles.remembered.profiles.len() > 1,
+        "there is somewhere to move to"
+    );
     wheel(&mut profiles, MouseEventKind::ScrollDown);
-    assert_eq!(profiles.profiles_selected, 1, "the wheel moved it");
+    assert_eq!(
+        profiles.remembered.profiles_selected, 1,
+        "the wheel moved it"
+    );
 }
 
 /// A group opens with a blank line and its keys sit in from its name.
@@ -4143,7 +4249,7 @@ fn a_key_that_would_break_something_is_refused_with_the_reason() {
         .iter()
         .position(|row| row.action == uze_keys::Action::NewShellTab)
         .expect("listed");
-    model.keys_selected = row;
+    model.key_screen.selected = row;
     model.keys_capture = true;
 
     // `ctrl+g` already opens the changes in this same keyboard.
@@ -4214,8 +4320,8 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.marketplace_drawer_open = true;
-        model.harnesses_drawer_open = true;
+        model.remembered.plugin_screen.drawer_open = true;
+        model.remembered.harness_screen.drawer_open = true;
         let available: Vec<_> = model
             .selected_offers()
             .into_iter()
@@ -4261,9 +4367,9 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.marketplace_drawer_open = true;
-        model.harnesses_drawer_open = true;
-        model.extension_drawer_open = true;
+        model.remembered.plugin_screen.drawer_open = true;
+        model.remembered.harness_screen.drawer_open = true;
+        model.remembered.extension_screen.drawer_open = true;
         model.appearance_themes = vec![uze_application::application::ThemeSummary {
             id: "default".to_owned(),
             active: true,
@@ -4303,9 +4409,9 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
 fn a_question_is_answered_with_the_pointer_too() {
     let mut model = model_with_plugins(&["one"]);
     model.focus = Focus::Content;
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
@@ -4329,16 +4435,16 @@ fn a_question_is_answered_with_the_pointer_too() {
     assert_eq!(model.click(0, 0), Intent::None);
     assert_eq!(model.overlay, Overlay::None);
 
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     assert_eq!(model.click(cancel.x, cancel.y), Intent::None);
     assert_eq!(model.overlay, Overlay::None);
 
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     assert_eq!(
         model.click(confirm.x, confirm.y),
@@ -4631,9 +4737,9 @@ fn a_confirmation_dialog_reads_as_heading_subject_body_and_answers() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut model = model_with_data();
-    model.overlay = Overlay::ConfirmDeleteProfile {
-        id: "default".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::DeleteProfile("default".to_owned()),
+        focus: Some(1),
     };
     let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
     let mut hits = Vec::new();
