@@ -124,7 +124,7 @@ impl ManagementMemory {
             keyboard,
             ..TuiModel::recall(self.remembered.take(), layout)
         };
-        if opening_re_resolves(model.resolved_at) && !self.in_flight {
+        if opening_re_resolves(model.remembered.resolved_at) && !self.in_flight {
             // Behind the frame: every list is already on screen, so
             // nothing about this reads as the plugins having gone away.
             spawn_refresh(
@@ -135,7 +135,7 @@ impl ManagementMemory {
             self.in_flight = true;
         }
         model.maintenance_in_flight = self.in_flight;
-        if model.resolved_at.is_none() {
+        if model.remembered.resolved_at.is_none() {
             // The one case where the operator arrives before any answer
             // does: opening the modal within the first moments of the
             // session. Nothing to draw yet, so the wait is at least named
@@ -147,7 +147,7 @@ impl ManagementMemory {
             // auto-updating (see `worker::recent_prompts`): one small
             // file, and the Overview otherwise says "no history yet" —
             // the same words it uses when there genuinely is none.
-            model.prompt_history = recent_prompts(home.clone(), &model.context_root);
+            model.remembered.prompt_history = recent_prompts(home.clone(), &model.context_root);
         }
         model
     }
@@ -470,10 +470,16 @@ pub(crate) const FIRST_STEP_SCOPES: &[uze_keys::Scope] =
 fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
     match route {
         Route::Overview => None,
-        Route::Plugins => Some(model.marketplaces.len()),
+        Route::Plugins => Some(model.remembered.marketplaces.len()),
         Route::Extensions => Some(model.extensions.len()),
-        Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
-        Route::Profiles => Some(model.profiles.len()),
+        Route::Harnesses => Some(
+            model
+                .remembered
+                .doctor
+                .as_ref()
+                .map_or(0, |d| d.harnesses.len()),
+        ),
+        Route::Profiles => Some(model.remembered.profiles.len()),
         Route::Keys => None,
         Route::Appearance => None,
     }

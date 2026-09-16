@@ -30,7 +30,8 @@ pub(crate) fn render_extensions(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let outer = content_area(area);
-    let drawer_open = model.extension_screen.drawer_open && model.selected_extension().is_some();
+    let drawer_open =
+        model.remembered.extension_screen.drawer_open && model.selected_extension().is_some();
     let drawer_width =
         drawer_open.then(|| super::drawer_width(ResizablePanel::ExtensionDrawer, model, outer));
     let header_width = outer
@@ -51,7 +52,7 @@ pub(crate) fn render_extensions(
     super::filter_box(
         frame,
         filter_area,
-        &model.extension_screen.filter,
+        &model.remembered.extension_screen.filter,
         "Filter extensions…",
         model.filtering,
     );
@@ -78,7 +79,7 @@ pub(crate) fn render_extensions(
                 Paragraph::new(Span::styled(
                     format!(
                         "No extensions match \"{}\".",
-                        model.extension_screen.filter.trim()
+                        model.remembered.extension_screen.filter.trim()
                     ),
                     theme::fg(Token::TextMuted),
                 )),
@@ -107,7 +108,7 @@ pub(crate) fn render_extensions(
             if rect.y + rect.height > catalog_area.y + catalog_area.height {
                 break;
             }
-            let selected = position == model.extension_screen.selected;
+            let selected = position == model.remembered.extension_screen.selected;
             render_extension_card(
                 frame,
                 rect,

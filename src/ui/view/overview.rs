@@ -27,8 +27,12 @@ pub(crate) fn render_overview(
     let area = content_area(area);
     let content = render_screen_header(frame, area, Route::Overview, None);
 
-    let harness_total = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
-    let harness_detected = model.doctor.as_ref().map_or(0, |d| {
+    let harness_total = model
+        .remembered
+        .doctor
+        .as_ref()
+        .map_or(0, |d| d.harnesses.len());
+    let harness_detected = model.remembered.doctor.as_ref().map_or(0, |d| {
         d.harnesses.iter().filter(|h| h.detection.present).count()
     });
     let alerts = model.alerts();
@@ -76,12 +80,13 @@ pub(crate) fn render_overview(
         ),
         (
             "Plugins installed",
-            model.plugins.len().to_string(),
+            model.remembered.plugins.len().to_string(),
             theme::color(Token::TextBright),
         ),
         (
             "Active profile",
             model
+                .remembered
                 .profiles
                 .iter()
                 .find(|profile| profile.active)
@@ -206,7 +211,7 @@ fn render_prompt_history(
     reserved: u16,
 ) -> u16 {
     let bottom = area.y + area.height;
-    let entries = &model.prompt_history;
+    let entries = &model.remembered.prompt_history;
     let mut y = area.y;
 
     let mut title = Line::from(vec![
@@ -278,7 +283,7 @@ fn render_prompt_history(
     y += 2;
 
     let budget = bottom.saturating_sub(y).saturating_sub(reserved) as usize;
-    let selected_index = model.overview_prompt_selected;
+    let selected_index = model.remembered.overview_prompt_selected;
     let rows = rows_keeping_selection_visible(&ages, selected_index, budget);
 
     for (position, row) in rows.iter().enumerate() {

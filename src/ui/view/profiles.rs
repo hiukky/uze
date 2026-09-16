@@ -229,7 +229,7 @@ fn render_profile_tree(
         Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1),
     );
 
-    if model.profile_preview_open && !model.profiles.is_empty() {
+    if model.profile_preview_open && !model.remembered.profiles.is_empty() {
         let body = Rect::new(
             inner.x,
             inner.y.saturating_add(3),
@@ -264,7 +264,7 @@ fn render_profile_tree(
         return;
     }
 
-    if model.profiles.is_empty() {
+    if model.remembered.profiles.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No profiles yet — press n",
@@ -277,11 +277,11 @@ fn render_profile_tree(
 
     let mut y = inner.y.saturating_add(4);
     let bottom = inner.y + inner.height.saturating_sub(1);
-    for (index, profile) in model.profiles.iter().enumerate() {
+    for (index, profile) in model.remembered.profiles.iter().enumerate() {
         if y >= bottom {
             break;
         }
-        let selected = index == model.profiles_selected;
+        let selected = index == model.remembered.profiles_selected;
         if selected {
             let content_h: u16 = 4;
             // 1 top + content + 1 bottom padding inside the overlay
@@ -445,6 +445,7 @@ fn render_harnesses(
 ) {
     let focused = model.profile_panel == ProfilePanel::Harnesses;
     let harnesses: Vec<_> = model
+        .remembered
         .doctor
         .as_ref()
         .map(|doctor| {
@@ -841,6 +842,7 @@ pub(crate) fn preview_lines(model: &TuiModel, width: u16) -> PreviewLines {
 
 fn harness_name(model: &TuiModel, integration: &str) -> String {
     model
+        .remembered
         .doctor
         .as_ref()
         .and_then(|doctor| {

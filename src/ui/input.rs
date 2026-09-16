@@ -176,7 +176,7 @@ impl TuiModel {
                     self.focus = Focus::Content;
                     return Intent::None;
                 }
-                if self.route == Route::Overview && !self.prompt_history.is_empty() {
+                if self.route == Route::Overview && !self.remembered.prompt_history.is_empty() {
                     return self.activate_selected_prompt();
                 }
                 if self.route == Route::Keys {
@@ -283,7 +283,7 @@ impl TuiModel {
                     .unwrap_or(Intent::None)
             }
             Action::ClearPromptHistory => {
-                if !self.prompt_history.is_empty() {
+                if !self.remembered.prompt_history.is_empty() {
                     self.overlay = Overlay::Confirm {
                         kind: Confirmation::ClearPromptHistory,
                         focus: None,
@@ -297,6 +297,7 @@ impl TuiModel {
             Action::AnalyzeContext => Intent::ContextAnalyze(self.workspace_root()),
             Action::ApplyContextPlan => {
                 if self
+                    .remembered
                     .context_plan
                     .as_ref()
                     .is_some_and(ContextPlan::has_changes)
@@ -378,7 +379,7 @@ impl TuiModel {
                 Intent::None
             }
             // The Overview's only navigable list is its prompt history.
-            Route::Overview if !self.prompt_history.is_empty() => {
+            Route::Overview if !self.remembered.prompt_history.is_empty() => {
                 self.move_prompt_selection(delta);
                 Intent::None
             }
@@ -462,14 +463,14 @@ impl TuiModel {
                 if self.selected_marketplace_plugin().is_none() {
                     return Intent::None;
                 }
-                self.plugin_screen.drawer_open = true;
+                self.remembered.plugin_screen.drawer_open = true;
                 self.marketplace_inspect_intent()
             }
             Route::Extensions => {
                 if self.selected_extension().is_none() {
                     return Intent::None;
                 }
-                self.extension_screen.drawer_open = true;
+                self.remembered.extension_screen.drawer_open = true;
                 Intent::None
             }
             // List: jump straight into editing, the same way Enter opens a
@@ -607,7 +608,7 @@ mod tests {
             Rect::new(0, 0, 120, 40),
         );
 
-        assert_eq!(model.harness_screen.drawer_width, Some(40));
+        assert_eq!(model.remembered.harness_screen.drawer_width, Some(40));
     }
 
     #[test]
@@ -619,7 +620,7 @@ mod tests {
         };
         // `r` removes a plugin on this screen when nobody is typing.
         model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(model.plugin_screen.filter, "r");
+        assert_eq!(model.remembered.plugin_screen.filter, "r");
         assert_eq!(model.overlay, Overlay::None);
     }
 

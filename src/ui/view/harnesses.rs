@@ -110,14 +110,19 @@ pub(crate) fn render_harnesses(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let count = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
+    let count = model
+        .remembered
+        .doctor
+        .as_ref()
+        .map_or(0, |d| d.harnesses.len());
     // The drawer overlays from the right rather than sharing a permanent
     // split, but the header/list still need to lay out *around* it when
     // it's open — otherwise their own right-aligned content runs straight
     // under the drawer and gets clipped mid-word by its Clear. Its initial
     // width is an even split; dragging the divider lets either panel take
     // priority for the task at hand.
-    let drawer_open = model.harness_screen.drawer_open && model.selected_harness().is_some();
+    let drawer_open =
+        model.remembered.harness_screen.drawer_open && model.selected_harness().is_some();
     let drawer_width = if drawer_open {
         super::drawer_width(ResizablePanel::HarnessDrawer, model, area)
     } else {
@@ -150,14 +155,14 @@ pub(crate) fn render_harnesses(
         super::filter_box(
             frame,
             filter_area,
-            &model.harness_screen.filter,
+            &model.remembered.harness_screen.filter,
             "Filter integrations…",
             model.filtering,
         );
         y += 3;
     }
 
-    match &model.doctor {
+    match &model.remembered.doctor {
         None => {
             if y < bottom {
                 frame.render_widget(
@@ -174,7 +179,7 @@ pub(crate) fn render_harnesses(
                         Paragraph::new(Span::styled(
                             format!(
                                 "No integrations match \"{}\".",
-                                model.harness_screen.filter.trim()
+                                model.remembered.harness_screen.filter.trim()
                             ),
                             theme::fg(Token::TextMuted),
                         )),
@@ -199,7 +204,7 @@ pub(crate) fn render_harnesses(
                     if rect.y + rect.height > bottom {
                         break;
                     }
-                    let selected = position == model.harness_screen.selected;
+                    let selected = position == model.remembered.harness_screen.selected;
                     let status = HarnessStatus::from(harness);
                     render_harness_card(frame, rect, harness, status, selected, hits, position);
                 }
@@ -207,7 +212,7 @@ pub(crate) fn render_harnesses(
                 let rows = (visible.len() as u16).div_ceil(columns);
                 y += rows * (card_height + gap);
             }
-            if let Some(status) = &model.context_status
+            if let Some(status) = &model.remembered.context_status
                 && !status.warnings.is_empty()
                 && y < bottom
             {

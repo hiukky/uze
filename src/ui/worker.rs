@@ -241,8 +241,8 @@ pub(crate) fn dispatch(
                 .and_then(|app| app.workspace().clear_prompt_history(&root))
             {
                 Ok(()) => {
-                    model.prompt_history.clear();
-                    model.overview_prompt_selected = 0;
+                    model.remembered.prompt_history.clear();
+                    model.remembered.overview_prompt_selected = 0;
                     model.overview_prompt_hovered = None;
                     model.status = Status::Success("Prompt history cleared".to_owned());
                 }
@@ -773,8 +773,8 @@ pub(crate) fn drain_worker_results(
                 model.status = Status::Idle;
             }
             WorkerResult::ContextAnalyzed(Ok((status, plan))) => {
-                model.context_status = Some(status);
-                model.context_plan = Some(plan);
+                model.remembered.context_status = Some(status);
+                model.remembered.context_plan = Some(plan);
                 model.status = Status::Idle;
             }
             WorkerResult::ContextApplied(Ok((message, report))) => {

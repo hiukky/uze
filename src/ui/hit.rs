@@ -133,8 +133,8 @@ impl TuiModel {
                 entering
             }
             Hit::MarketplaceRow(index) => {
-                self.plugin_screen.selected = index;
-                self.plugin_screen.drawer_open = true;
+                self.remembered.plugin_screen.selected = index;
+                self.remembered.plugin_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
@@ -150,14 +150,15 @@ impl TuiModel {
                     .iter()
                     .position(|&raw| self.marketplace_rows()[raw].marketplace == marketplace)
                 {
-                    self.plugin_screen.selected = position;
+                    self.remembered.plugin_screen.selected = position;
                 }
-                self.plugin_screen.drawer_open = true;
+                self.remembered.plugin_screen.drawer_open = true;
                 let _ = self.set_route(Route::Plugins);
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
             Hit::OpenLink(marketplace) => self
+                .remembered
                 .marketplaces
                 .iter()
                 .find(|entry| entry.name == marketplace)
@@ -168,14 +169,14 @@ impl TuiModel {
                 // does the same for keyboard navigation, so both input
                 // paths agree. No intent: the drawer's content is static
                 // catalog metadata, nothing to fetch.
-                self.extension_screen.selected = index;
-                self.extension_screen.drawer_open = true;
+                self.remembered.extension_screen.selected = index;
+                self.remembered.extension_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }
             Hit::HarnessRow(index) => {
-                self.harness_screen.selected = index;
-                self.harness_screen.drawer_open = true;
+                self.remembered.harness_screen.selected = index;
+                self.remembered.harness_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }
@@ -185,7 +186,7 @@ impl TuiModel {
                 Intent::None
             }
             Hit::ProfileRow(index) => {
-                self.profiles_selected = index;
+                self.remembered.profiles_selected = index;
                 self.profile_panel = super::model::ProfilePanel::List;
                 self.focus = Focus::Content;
                 Intent::None
@@ -267,7 +268,7 @@ impl TuiModel {
             }
             Hit::PromptHistory(index) => {
                 self.focus = Focus::Content;
-                self.overview_prompt_selected = index;
+                self.remembered.overview_prompt_selected = index;
                 self.activate_selected_prompt()
             }
         }

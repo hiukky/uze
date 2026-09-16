@@ -69,7 +69,7 @@ fn build_rows(model: &TuiModel) -> Vec<Row> {
         .enumerate()
         .map(|(position, &raw)| (raw, position))
         .collect();
-    let filtering_active = !model.plugin_screen.filter.trim().is_empty();
+    let filtering_active = !model.remembered.plugin_screen.filter.trim().is_empty();
 
     // Consecutive-run grouping: `marketplace_rows` already emits
     // official-first, then each registered marketplace's plugins, then the
@@ -136,7 +136,7 @@ pub(crate) fn render_plugins(
 ) {
     let outer = content_area(area);
     let drawer_open =
-        model.plugin_screen.drawer_open && model.selected_marketplace_plugin().is_some();
+        model.remembered.plugin_screen.drawer_open && model.selected_marketplace_plugin().is_some();
     let drawer_width =
         drawer_open.then(|| super::drawer_width(ResizablePanel::MarketplaceDrawer, model, outer));
     let list_area_width = outer
@@ -144,7 +144,7 @@ pub(crate) fn render_plugins(
         .saturating_sub(drawer_width.unwrap_or(0))
         .saturating_sub(if drawer_open { 1 } else { 0 });
     let header_area = Rect::new(outer.x, outer.y, list_area_width, outer.height);
-    let sources = model.marketplaces.len();
+    let sources = model.remembered.marketplaces.len();
     let trailer = (sources > 0).then(|| {
         Span::styled(
             format!("{sources} source{}", if sources == 1 { "" } else { "s" }),
@@ -156,7 +156,7 @@ pub(crate) fn render_plugins(
     super::filter_box(
         frame,
         filter_area,
-        &model.plugin_screen.filter,
+        &model.remembered.plugin_screen.filter,
         "Filter plugins…",
         model.filtering,
     );
@@ -203,7 +203,7 @@ pub(crate) fn render_plugins(
                 Paragraph::new(Span::styled(
                     format!(
                         "No plugins match \"{}\".",
-                        model.plugin_screen.filter.trim()
+                        model.remembered.plugin_screen.filter.trim()
                     ),
                     theme::fg(Token::TextMuted),
                 )),
@@ -245,7 +245,7 @@ pub(crate) fn render_plugins(
                             Paragraph::new(plugin_line(
                                 plugin,
                                 *is_last,
-                                *position == model.plugin_screen.selected,
+                                *position == model.remembered.plugin_screen.selected,
                                 model.was_just_updated(&model.marketplace_plugin_id(plugin)),
                                 name_width,
                                 label_width,
@@ -466,6 +466,7 @@ fn render_plugin_drawer(
     let source_row_y = body.y + lines.len() as u16;
     let name = group_display_name(&plugin.marketplace);
     let homepage = model
+        .remembered
         .marketplaces
         .iter()
         .find(|entry| entry.name == plugin.marketplace)
@@ -592,7 +593,7 @@ fn render_plugin_drawer(
             DrawerStatus {
                 color: theme::color(Token::Accent),
                 headline: "Installed",
-                subtitle: match plugin_health(model.doctor.as_ref(), &qualified_id) {
+                subtitle: match plugin_health(model.remembered.doctor.as_ref(), &qualified_id) {
                     "ready" => "Ready to use in your projects",
                     "missing" => "Installation is missing artifacts",
                     "needs attention" => "Managed state needs attention",
