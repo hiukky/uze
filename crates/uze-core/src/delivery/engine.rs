@@ -1,72 +1,25 @@
-// ADR-005: the Core Engine composes peer-harness inputs without named harness rules.
+//! What a package contributes, read from its bytes without named harness
+//! rules (ADR-005).
 use crate::{
     capability::{Capability, CapabilityKind},
     error::{Result, UzeError},
-    project::{EffectiveEnvironment, Resource, resolve_project_resources},
-    store::{PackageId, UzeStore},
+    project::Resource,
+    store::{PackageId, StoredPackage},
 };
 
-/// Composes the effective environment owned by the user: project resources
-/// remain project-owned and UZE-installed packages remain store-owned.
-#[derive(Clone, Debug)]
-pub struct UzeEngine {
-    store: UzeStore,
-}
-
-impl UzeEngine {
-    pub fn new(store: UzeStore) -> Self {
-        Self { store }
-    }
-
-    pub fn store(&self) -> &UzeStore {
-        &self.store
-    }
-
-    /// Compose every locally installed package with the supplied project's
-    /// portable resources. This is the product path used by the CLI.
-    pub fn compose_project(
-        &self,
-        project_root: impl AsRef<std::path::Path>,
-    ) -> Result<EffectiveEnvironment> {
-        let project = resolve_project_resources(project_root)?;
-        let mut resources = project.resources;
-        resources.extend(self.package_resources(&self.store.package_ids()?)?);
-        resources.sort_by_key(Resource::identity);
-        Ok(EffectiveEnvironment {
-            root: project.root,
-            resources,
-        })
-    }
-
-    /// Package-only composition remains available for isolated library and
-    /// conformance tests. It is not a separate product concept: callers that
-    /// have a project should use `compose_project`.
-    pub fn compose(&self, packages: &[PackageId]) -> Result<EffectiveEnvironment> {
-        let _span = tracing::debug_span!("engine.compose", packages = packages.len()).entered();
-        let resources = self.package_resources(packages)?;
-        Ok(EffectiveEnvironment {
-            root: self.store.home().root().to_path_buf(),
-            resources,
-        })
-    }
-
-    fn package_resources(&self, packages: &[PackageId]) -> Result<Vec<Resource>> {
-        let mut resources = Vec::new();
-        for id in packages {
-            let package = self.store.package(id)?;
-            resources.extend(package_resources_at(&package.id, &package.root)?);
-        }
-        resources.sort_by_key(Resource::identity);
-        Ok(resources)
-    }
+/// The resources an installed package contributes, read from its bytes in
+/// the Store.
+pub fn package_resources(package: &StoredPackage) -> Result<Vec<Resource>> {
+    let _span =
+        tracing::debug_span!("engine.package_resources", id = %package.id.as_str()).entered();
+    package_resources_at(&package.id, &package.root)
 }
 
 /// Discovers a package's capabilities from a directory on disk.
 ///
 /// Shared with acquisition, which needs the same reading *before* a package
 /// is installed in order to decide trust. Deliberately the same code path, so
-/// what an operator authorizes cannot drift from what the Engine later
-/// composes.
+/// what an operator authorizes cannot drift from what is later delivered.
 pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Vec<Resource>> {
     let mut resources = Vec::new();
     let skills_root = root.join("skills");

@@ -30,8 +30,8 @@ impl Plugins<'_> {
     #[tracing::instrument(name = "plugins.inspect", skip_all, fields(id = %id), err)]
     pub fn inspect(&self, id: &str) -> Result<PluginInspection> {
         let package = self.0.package_by_name(id)?;
-        let environment = self.0.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(&package)?;
+        let resources: Vec<_> = resources.iter().collect();
         let deliveries = self
             .0
             .integrations

@@ -70,8 +70,8 @@ impl UzeApplication {
         package: &StoredPackage,
         integration: &dyn IntegrationPort,
     ) -> Result<()> {
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(package)?;
+        let resources: Vec<_> = resources.iter().collect();
         self.deliver_package_to(package, &resources, integration, NativeDelivery::Allowed)?;
         Ok(())
     }

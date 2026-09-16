@@ -30,11 +30,8 @@ impl Plugins<'_> {
         let materialized = self.acquire(&installed.provenance.requested)?;
 
         let previous = {
-            let environment = self
-                .0
-                .engine()
-                .compose(std::slice::from_ref(&installed.id))?;
-            let resources: Vec<&uze_core::Resource> = environment.resources.iter().collect();
+            let resources = uze_core::engine::package_resources(&installed)?;
+            let resources: Vec<&uze_core::Resource> = resources.iter().collect();
             trust::executable_capabilities(&resources)
         };
         self.0

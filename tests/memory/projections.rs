@@ -19,7 +19,7 @@ use std::{
 };
 
 use uze_core::{
-    PackageId, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageId, Resource, UzeHome, UzeStore,
     exposure::ExposureMechanism,
     integration::{IntegrationPort, default_exposure_name_candidates},
 };
@@ -104,11 +104,9 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
 
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
-    let environment = UzeEngine::new(store)
-        .compose_project(&workspace)
+    let resources = uze_core::engine::package_resources(&installed)
         .expect("empty caller project composes with the installed package");
-    let resource = environment
-        .resources
+    let resource = resources
         .into_iter()
         .find(|resource| resource.package_root().is_some())
         .expect("fixture contributes one store-owned skill");
@@ -196,11 +194,9 @@ fn a_derived_mcp_entry_name_leaves_room_for_a_tool_name() {
         .expect("MCP fixture is a valid Agent Plugin 1.0 package");
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
-    let environment = UzeEngine::new(store)
-        .compose_project(&workspace)
-        .expect("MCP-only package composes");
-    let resource = environment
-        .resources
+    let resources =
+        uze_core::engine::package_resources(&installed).expect("MCP-only package composes");
+    let resource = resources
         .into_iter()
         .find(|resource| resource.package_root().is_some())
         .expect("fixture contributes one store-owned MCP resource");

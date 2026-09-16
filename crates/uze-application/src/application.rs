@@ -14,7 +14,7 @@ use std::{
 use serde::Serialize;
 
 use uze_core::{
-    PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    PackageSource, Result, UzeError, UzeHome, UzeStore,
     capability::CapabilityKind,
     context::{self as instruction_context},
     detection_cache::DetectionCache,
@@ -862,7 +862,7 @@ impl UzeApplication {
     }
 
     pub(crate) fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+        let resources = uze_core::engine::package_resources(package)?;
         let update_available = match &package.provenance.requested {
             PackageSource::Embedded { id } => bootstrap::has_update(id, &package.root).ok(),
             _ => None,
@@ -872,7 +872,7 @@ impl UzeApplication {
             active_name: package.active_name.clone(),
             source: package.provenance.requested.display(),
             store_path: package.root.clone(),
-            capability_count: environment.resources.len(),
+            capability_count: resources.len(),
             update_available,
         })
     }
@@ -1017,10 +1017,6 @@ impl UzeApplication {
                     .join("; "),
             }),
         }
-    }
-
-    pub(crate) fn engine(&self) -> UzeEngine {
-        UzeEngine::new(self.store.clone())
     }
 
     pub(crate) fn reconcile(&self, package_id: &str) -> ReconciliationReport {

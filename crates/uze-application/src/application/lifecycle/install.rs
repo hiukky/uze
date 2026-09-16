@@ -159,11 +159,8 @@ impl Plugins<'_> {
             .map(|outcome| outcome.integration.as_str())
             .collect();
 
-        let environment = self
-            .0
-            .engine()
-            .compose(std::slice::from_ref(&installed.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(&installed)?;
+        let resources: Vec<_> = resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
         for integration in &self.0.integrations {

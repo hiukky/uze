@@ -38,7 +38,7 @@ use std::{
 
 use uze_application::UzeApplication;
 use uze_core::{
-    PackageSource, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageSource, Resource, UzeHome, UzeStore,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
@@ -246,11 +246,8 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
     let installed = store
         .ingest(&uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap())
         .unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&installed.id))
-        .unwrap();
-    environment
-        .resources
+    let resources = uze_core::engine::package_resources(&installed).unwrap();
+    resources
         .into_iter()
         .find(|resource| {
             resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill

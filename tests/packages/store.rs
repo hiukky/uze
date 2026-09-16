@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use uze_core::{ResourceOrigin, UzeEngine, UzeHome, UzeStore, capability::CapabilityKind};
+use uze_core::{ResourceOrigin, UzeHome, UzeStore, capability::CapabilityKind};
 
 /// The acquisition pipeline every install now goes through: a source is
 /// acquired into a materialized package, and only then does the Store ingest
@@ -180,43 +180,16 @@ fn engine_composes_a_standard_resource_from_the_store() {
     let root = temporary_home("engine");
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, package_fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
+    let resources = uze_core::engine::package_resources(&package).unwrap();
 
-    assert_eq!(environment.resources.len(), 1);
-    let resource = &environment.resources[0];
+    assert_eq!(resources.len(), 1);
+    let resource = &resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::AgentSkill);
     assert!(matches!(
         resource.origin,
         ResourceOrigin::Package { ref id, .. } if id == &package.id
     ));
     assert!(resource.capability.path.starts_with(&package.root));
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn engine_composes_project_and_store_sources_into_one_effective_environment() {
-    let root = temporary_home("combined-environment");
-    let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("AGENTS.md"), "# Project-owned instructions\n").unwrap();
-    let store = UzeStore::new(UzeHome::at(root.join("uze-home")));
-    let package = install(&store, package_fixture()).unwrap();
-
-    let environment = UzeEngine::new(store).compose_project(&project).unwrap();
-    assert_eq!(environment.root, project.canonicalize().unwrap());
-    assert_eq!(environment.resources.len(), 2);
-    assert!(
-        environment
-            .resources
-            .iter()
-            .any(|resource| matches!(resource.origin, ResourceOrigin::Project { .. }))
-    );
-    assert!(environment.resources.iter().any(|resource| {
-        matches!(resource.origin, ResourceOrigin::Package { ref id, .. } if id == &package.id)
-    }));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -238,11 +211,9 @@ fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
         fs::read(mcp_package_fixture().join("mcp.json")).unwrap()
     );
 
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    assert_eq!(environment.resources.len(), 1);
-    let resource = &environment.resources[0];
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    assert_eq!(resources.len(), 1);
+    let resource = &resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
     assert_eq!(resource.capability.path, package.root.join("mcp.json"));
 
@@ -261,12 +232,9 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     let store = UzeStore::new(home.clone());
     let fixture = uze_testkit::fixtures::canonical("multi-mcp-plugin");
     let package = install(&store, fixture).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    assert_eq!(environment.resources.len(), 2);
-    let identities = environment
-        .resources
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    assert_eq!(resources.len(), 2);
+    let identities = resources
         .iter()
         .map(|resource| resource.identity())
         .collect::<Vec<_>>();
@@ -285,8 +253,7 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     // collision-avoidance prefix. Physical exposure naming (with
     // qualification when needed) is an Integration/Application decision
     // now, not something a Resource computes for itself.
-    let names = environment
-        .resources
+    let names = resources
         .iter()
         .map(|resource| resource.logical_capability_name().unwrap())
         .collect::<Vec<_>>();

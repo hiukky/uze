@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use uze_core::{
-    UzeEngine, UzeHome, UzeStore,
+    UzeHome, UzeStore,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
@@ -35,29 +35,29 @@ fn mcp_package_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
-fn mcp_stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
+fn mcp_stored_environment(label: &str) -> (PathBuf, Vec<uze_core::Resource>) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, mcp_package_fixture()).unwrap();
-    let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
-    (root, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (root, resources)
 }
 
 fn temporary_home(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
-fn stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
+fn stored_environment(label: &str) -> (PathBuf, Vec<uze_core::Resource>) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, package_fixture()).unwrap();
-    let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
-    (root, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (root, resources)
 }
 
 #[test]
 fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
-    let (home_root, environment) = stored_environment("integration-contract");
+    let (home_root, resources) = stored_environment("integration-contract");
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), UzeHome::at(&home_root));
     let codex = CodexIntegration::new(home_root.join("agents-home"), UzeHome::at(&home_root));
     let opencode = OpenCodeIntegration::new(
@@ -66,7 +66,7 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
         UzeHome::at(&home_root),
     );
 
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
     assert!(resource.package_root().is_some());
 
     for (id, plan) in [
@@ -125,9 +125,9 @@ fn assert_setup_required(id: &str, plan: &ExposurePlan) {
 
 #[test]
 fn a_new_peer_integration_needs_no_core_change() {
-    let (home_root, environment) = stored_environment("fake-integration");
+    let (home_root, resources) = stored_environment("fake-integration");
     let cursor = FakeIntegration { id: "cursor" };
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
     assert!(
         cursor
@@ -149,8 +149,8 @@ fn a_new_peer_integration_needs_no_core_change() {
 
 #[test]
 fn package_store_and_effective_environment_preserve_the_same_skill_bytes() {
-    let (home_root, environment) = stored_environment("byte-preservation");
-    let resource = environment.resources.first().unwrap();
+    let (home_root, resources) = stored_environment("byte-preservation");
+    let resource = resources.first().unwrap();
     let packaged_skill = package_fixture().join("skills/uze-e2e/SKILL.md");
 
     assert_eq!(
@@ -168,11 +168,11 @@ fn package_store_and_effective_environment_preserve_the_same_skill_bytes() {
 /// behavioral verification is a separate opt-in conformance concern.
 #[test]
 fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
-    let (home_root, environment) = stored_environment("claude-managed-attachment");
+    let (home_root, resources) = stored_environment("claude-managed-attachment");
     let uze_home = UzeHome::at(&home_root);
     let claude_home = home_root.join("claude-home");
     let claude = ClaudeIntegration::new(claude_home.clone(), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
     assert_setup_required("claude", &claude.exposure_plan(resource));
     assert!(claude.attach(resource).unwrap().is_none());
@@ -219,11 +219,11 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
 
 #[test]
 fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
-    let (home_root, environment) = stored_environment("codex-managed-attachment");
+    let (home_root, resources) = stored_environment("codex-managed-attachment");
     let uze_home = UzeHome::at(&home_root);
     let agents_home = home_root.join("agents-home");
     let codex = CodexIntegration::new(agents_home.clone(), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
     assert_setup_required("codex", &codex.exposure_plan(resource));
 
@@ -279,11 +279,11 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
 /// `Unsupported`, not a fabricated mechanism.
 #[test]
 fn mcp_resource_is_unsupported_before_setup_for_both_harnesses() {
-    let (home_root, environment) = mcp_stored_environment("mcp-unsupported-before-setup");
+    let (home_root, resources) = mcp_stored_environment("mcp-unsupported-before-setup");
     let uze_home = UzeHome::at(&home_root);
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), uze_home.clone());
     let codex = CodexIntegration::new(home_root.join("agents-home"), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
     assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
 
     assert!(matches!(
@@ -300,11 +300,11 @@ fn mcp_resource_is_unsupported_before_setup_for_both_harnesses() {
 
 #[test]
 fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
-    let (home_root, environment) = mcp_stored_environment("mcp-managed-vendor-config");
+    let (home_root, resources) = mcp_stored_environment("mcp-managed-vendor-config");
     let uze_home = UzeHome::at(&home_root);
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), uze_home.clone());
     let codex = CodexIntegration::new(home_root.join("agents-home"), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
     for harness in [claude.id(), codex.id()] {
         uze_core::state::record(

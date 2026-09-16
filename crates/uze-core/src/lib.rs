@@ -77,7 +77,6 @@ pub use project::{
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
-pub use engine::UzeEngine;
 pub use error::{ProjectionConflictDetails, Result, UzeError};
 pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan};
 pub use home::UzeHome;

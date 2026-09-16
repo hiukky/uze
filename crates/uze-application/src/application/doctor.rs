@@ -57,12 +57,16 @@ impl Health<'_> {
         ) else {
             return Vec::new();
         };
-        let Ok(environment) = self.0.engine().compose(std::slice::from_ref(&id)) else {
+        let Ok(resources) = self
+            .0
+            .store
+            .package(&id)
+            .and_then(|package| uze_core::engine::package_resources(&package))
+        else {
             return Vec::new();
         };
         let mut rows = Vec::new();
-        for resource in environment
-            .resources
+        for resource in resources
             .iter()
             .filter(|resource| resource.capability.kind == CapabilityKind::Hook)
         {

@@ -10,7 +10,7 @@ use std::{cell::RefCell, collections::BTreeSet, fs, path::PathBuf};
 
 use uze_application::UzeApplication;
 use uze_core::{
-    PackageExposurePlan, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageExposurePlan, Resource, UzeHome, UzeStore,
     exposure::ExposurePlan,
     integration::{
         AttachmentReceipt, HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -371,10 +371,8 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
     let home = temporary_home("suppression");
     let store = UzeStore::new(home.clone());
     let package = install(&store, native_package_fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let resources: Vec<&Resource> = environment.resources.iter().collect();
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    let resources: Vec<&Resource> = resources.iter().collect();
 
     let plan = PackageExposurePlan {
         package_id: package.id.clone(),

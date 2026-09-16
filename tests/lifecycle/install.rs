@@ -4,7 +4,7 @@
 use std::{fs, path::PathBuf};
 
 use uze_core::{
-    UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
+    UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
     integration::IntegrationPort, router::CompatibilityRoute,
 };
 
@@ -31,13 +31,11 @@ fn fixture() -> PathBuf {
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
-fn installed(home: &UzeHome) -> (uze_core::StoredPackage, uze_core::EffectiveEnvironment) {
+fn installed(home: &UzeHome) -> (uze_core::StoredPackage, Vec<uze_core::Resource>) {
     let store = UzeStore::new(home.clone());
     let package = install(&store, fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    (package, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (package, resources)
 }
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     uze_core::state::record(
@@ -55,7 +53,7 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
 fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let root = temp("shared-store");
     let home = UzeHome::at(&root);
-    let (package, environment) = installed(&home);
+    let (package, resources) = installed(&home);
     assert_eq!(package.id.as_str(), "uze-plugin-first-conformance@local");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
@@ -67,22 +65,19 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .len(),
         1
     );
-    assert_eq!(environment.resources.len(), 2);
+    assert_eq!(resources.len(), 2);
     assert!(
-        environment
-            .resources
+        resources
             .iter()
             .any(|r| r.capability.kind == CapabilityKind::AgentSkill)
     );
     assert!(
-        environment
-            .resources
+        resources
             .iter()
             .any(|r| r.capability.kind == CapabilityKind::Mcp)
     );
     assert!(
-        environment
-            .resources
+        resources
             .iter()
             .all(|r| r.package_root() == Some(package.root.as_path()))
     );
@@ -112,7 +107,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     mark_setup(&home, &claude);
     mark_setup(&home, &opencode);
 
-    let resources: Vec<_> = environment.resources.iter().collect();
+    let resources: Vec<_> = resources.iter().collect();
     let codex_package = codex
         .package_exposure_plan(&package, &resources)
         .expect("Codex consumes source-provided native envelope");

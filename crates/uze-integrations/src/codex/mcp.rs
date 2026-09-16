@@ -299,7 +299,7 @@ pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str
 }
 
 /// Parses `{"command": "...", "args": [...]}` from a payload produced by
-/// `UzeEngine`'s MCP resource discovery (one server's config object,
+/// `engine`'s MCP resource discovery (one server's config object,
 /// already extracted from `mcp.json`'s `mcpServers` map).
 fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
