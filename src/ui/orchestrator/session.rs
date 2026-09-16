@@ -1253,8 +1253,7 @@ impl Attach<'_> {
             &mut self.stream,
             &ClientRequest::CreateSpace {
                 label: None,
-                root,
-                kind,
+                seat: uze_terminal::SpaceSeat { root, kind },
                 columns,
                 rows,
             },

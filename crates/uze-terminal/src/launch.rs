@@ -88,17 +88,46 @@ impl std::fmt::Display for EnvironmentRefusal {
     }
 }
 
-/// Whether `environment` may accompany `command` on a launch.
-pub fn validate(
-    command: Option<&[String]>,
-    environment: &[(String, String)],
-) -> Result<(), EnvironmentRefusal> {
-    if environment.is_empty() {
-        return Ok(());
+/// What a pane's first process is launched as.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) enum Launch {
+    /// The user's default shell, carrying nothing beyond the pane's own
+    /// environment.
+    Shell,
+    /// A program, and what its process starts with beyond the pane's own
+    /// environment.
+    Program { argv: Vec<String>, env: Environment },
+}
+
+impl Launch {
+    pub(crate) fn argv(&self) -> &[String] {
+        match self {
+            Self::Shell => &[],
+            Self::Program { argv, .. } => argv,
+        }
     }
-    if command.is_none_or(<[String]>::is_empty) {
-        return Err(EnvironmentRefusal::WithoutCommand);
+
+    pub(crate) fn env(&self) -> &[(String, String)] {
+        match self {
+            Self::Shell => &[],
+            Self::Program { env, .. } => env,
+        }
     }
+}
+
+/// The launch a `CreateTab` asks for, or why `environment` may not
+/// accompany `command`. No command, or an empty one, is the shell.
+pub(crate) fn validate(
+    command: Option<Vec<String>>,
+    environment: Environment,
+) -> Result<Launch, EnvironmentRefusal> {
+    let Some(argv) = command.filter(|argv| !argv.is_empty()) else {
+        return if environment.is_empty() {
+            Ok(Launch::Shell)
+        } else {
+            Err(EnvironmentRefusal::WithoutCommand)
+        };
+    };
     if environment.len() > MAX_ENVIRONMENT_ENTRIES {
         return Err(EnvironmentRefusal::TooManyEntries {
             entries: environment.len(),
@@ -117,7 +146,10 @@ pub fn validate(
     {
         return Err(EnvironmentRefusal::InvalidName { name: name.clone() });
     }
-    Ok(())
+    Ok(Launch::Program {
+        argv,
+        env: environment,
+    })
 }
 
 #[cfg(test)]
@@ -133,23 +165,36 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_environment_accompanies_anything() {
-        assert_eq!(validate(None, &[]), Ok(()));
-        assert_eq!(validate(Some(&[]), &[]), Ok(()));
+    fn no_command_is_the_shell() {
+        assert_eq!(validate(None, Vec::new()), Ok(Launch::Shell));
+        assert_eq!(validate(Some(Vec::new()), Vec::new()), Ok(Launch::Shell));
+        assert_eq!(
+            validate(Some(command()), Vec::new()),
+            Ok(Launch::Program {
+                argv: command(),
+                env: Vec::new()
+            })
+        );
     }
 
     #[test]
     fn a_shell_never_carries_a_launch_environment() {
-        let stamp = [pair(AGENT_IDENTITY_VARIABLE, "abc")];
+        let stamp = vec![pair(AGENT_IDENTITY_VARIABLE, "abc")];
         assert_eq!(
-            validate(None, &stamp),
+            validate(None, stamp.clone()),
             Err(EnvironmentRefusal::WithoutCommand)
         );
         assert_eq!(
-            validate(Some(&[]), &stamp),
+            validate(Some(Vec::new()), stamp.clone()),
             Err(EnvironmentRefusal::WithoutCommand)
         );
-        assert_eq!(validate(Some(&command()), &stamp), Ok(()));
+        assert_eq!(
+            validate(Some(command()), stamp.clone()),
+            Ok(Launch::Program {
+                argv: command(),
+                env: stamp
+            })
+        );
     }
 
     #[test]
@@ -158,12 +203,12 @@ mod tests {
             .map(|index| pair(&format!("V{index}"), "x"))
             .collect();
         assert!(matches!(
-            validate(Some(&command()), &many),
+            validate(Some(command()), many),
             Err(EnvironmentRefusal::TooManyEntries { .. })
         ));
-        let large = [pair("V", &"x".repeat(MAX_ENVIRONMENT_BYTES))];
+        let large = vec![pair("V", &"x".repeat(MAX_ENVIRONMENT_BYTES))];
         assert!(matches!(
-            validate(Some(&command()), &large),
+            validate(Some(command()), large),
             Err(EnvironmentRefusal::TooLarge { .. })
         ));
     }
@@ -172,7 +217,7 @@ mod tests {
     fn a_name_is_non_empty_and_carries_no_separator() {
         for name in ["", "A=B", "A\0"] {
             assert!(matches!(
-                validate(Some(&command()), &[pair(name, "x")]),
+                validate(Some(command()), vec![pair(name, "x")]),
                 Err(EnvironmentRefusal::InvalidName { .. })
             ));
         }

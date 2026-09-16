@@ -677,8 +677,11 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         if std::env::var_os("UZE_PANE").is_some() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
-            let label = uze_terminal::open_space(&root, uze::ui::space_kind_for(&root))
-                .map_err(terminal_error)?;
+            let label = uze_terminal::open_space(uze_terminal::SpaceSeat {
+                kind: uze::ui::space_kind_for(&root),
+                root: root.clone(),
+            })
+            .map_err(terminal_error)?;
             println!(
                 "opened space `{label}` at {} in the running uze",
                 root.display()
@@ -705,20 +708,13 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         return Ok(());
     };
     if let Command::Terminal { action } = command {
-        let root = cwd()?;
         return match action {
             TerminalAction::Attach => uze::ui::run(home),
-            // Resolved the same way `ui::orchestrator` resolves it before
-            // attaching — `stop` must target the server that `attach`
-            // actually started, not one keyed on the raw cwd.
-            TerminalAction::Stop => {
-                uze_terminal::stop(&uze_application::workspace_root_or_self(&root))
-                    .map_err(terminal_error)
-            }
+            TerminalAction::Stop => uze_terminal::stop().map_err(terminal_error),
             TerminalAction::Serve { root, kind } => {
                 let kind = uze_terminal::SpaceKind::from_name(&kind)
                     .ok_or_else(|| terminal_error(format!("`{kind}` is not a kind of space")))?;
-                uze_terminal::serve(root, kind).map_err(terminal_error)
+                uze_terminal::serve(uze_terminal::SpaceSeat { root, kind }).map_err(terminal_error)
             }
         };
     }

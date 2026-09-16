@@ -1,55 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
+use crate::{PaneId, Session, SpaceId, TabId};
 
-/// Bumped for the `Space` grouping layer: the `Session`/`Workspace` shape
-/// changed (`Workspace::tabs` → `Workspace::spaces` of `Space`, each with
-/// its own `tabs`) and four requests were added. `Session` is in-memory
-/// only on the server (never persisted — see `runtime::serve`), so there is
-/// nothing to migrate; a server still running the previous shape simply
-/// fails this version check instead of desyncing.
-///
-/// Bumped again for `MouseMode` on `PaneSnapshot`/`PaneDamage`: unlike a
-/// request-shape change (rejected cleanly by the check above, on the one
-/// message a client sends once), a *pushed* shape a still-running old
-/// server keeps sending forever has no such gate — a client built against
-/// the new shape fails to deserialize every `Snapshot`/`Damage` event from
-/// an unbumped old server, which silently kills its read thread and never
-/// surfaces as more than a pane stuck on "starting shell…". Any field
-/// added to either struct needs this bumped too, for the same reason.
-///
-/// Bumped again for `bracketed_paste` on the same two structs, for the
-/// same reason.
-///
-/// Bumped again for the wire framing itself switching from newline-
-/// delimited JSON to length-prefixed bincode (see `runtime::write_message`)
-/// — an old client/server speaking the previous framing would otherwise
-/// misread a length prefix as JSON bytes or vice versa, corrupting the
-/// stream instead of failing this version check cleanly.
-///
-/// Bumped again for terminal-owned scrollback requests.
-///
-/// Bumped again for a tab belonging with an agent: `Tab` carries the agent
-/// tab a shell was born from and `CreateTab` names it, which changes both
-/// a request shape and the pushed `Session` — see the paragraph above for
-/// why the pushed half is what makes the bump mandatory rather than
-/// merely tidy.
-///
-/// Bumped again for one server per user: a `Space` carries its `root`,
-/// `Workspace` no longer does, `Attach` names the root the client wants a
-/// space for, `CreateSpace` names the new space's root, and the selection
-/// a `Session` carries is the receiving client's own.
-///
-/// Bumped again for `ReorderTab`, a new request moving a tab within its
-/// own space's `tabs` order.
-///
-/// Bumped again for a launch environment: `CreateTab` carries the
-/// variables its command starts with and `Tab` reports them back, which
-/// changes a request shape and the pushed `Session`.
-///
-/// Bumped again for a space's kind: `Attach` and `CreateSpace` name it and
-/// `Space` reports it, and `CloseSpace` names the space that replaces the
-/// last one.
+/// The wire's version, checked on `Attach`. Bumped whenever a request, an
+/// event or anything either carries changes shape — the framing included.
+/// A pushed shape is the one that makes it mandatory: a request an old
+/// server cannot read is refused on the one `Attach` a client sends, but a
+/// client decoding a `Session` or a `PaneDamage` an unbumped old server
+/// keeps pushing fails on every frame, and its read thread ends silently.
+/// [`crate::attach`] replaces a server of another build before connecting;
+/// this is what a client that connects without it — a `uze` nested in a
+/// pane, a test — still meets.
 pub const PROTOCOL_VERSION: u16 = 13;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
@@ -106,19 +67,15 @@ pub enum ClientRequest {
     SetPalette(Palette),
     Attach {
         version: u16,
-        workspace: WorkspaceId,
         /// The size of the pane this client will show first; zero in
         /// either dimension leaves every pane alone (a client that opens a
         /// space and leaves, never drawing).
         columns: u16,
         rows: u16,
-        /// The directory this client was started in, resolved to its
-        /// workspace root: the server makes sure a space rooted there
-        /// exists and selects it for this client. `None` keeps the
-        /// server's default selection.
-        root: Option<std::path::PathBuf>,
-        /// The kind of the space to make sure of, with `root`.
-        kind: crate::SpaceKind,
+        /// Where this client was started, resolved to its workspace root:
+        /// the server makes sure a space sits there and selects it for this
+        /// client. `None` keeps the server's default selection.
+        seat: Option<crate::SpaceSeat>,
     },
     Detach,
     Input {
@@ -183,8 +140,7 @@ pub enum ClientRequest {
     CreateSpace {
         /// `None` derives the label from the root.
         label: Option<String>,
-        root: std::path::PathBuf,
-        kind: crate::SpaceKind,
+        seat: crate::SpaceSeat,
         columns: u16,
         rows: u16,
     },
@@ -197,6 +153,9 @@ pub enum ClientRequest {
         /// last: the client decides where a workspace with nothing left
         /// lands, as it decides every other space's root and kind.
         replacement: crate::SpaceSeat,
+        /// The size the replacement's first pane is drawn at.
+        columns: u16,
+        rows: u16,
     },
     RenameSpace {
         space: SpaceId,
@@ -231,12 +190,11 @@ impl ClientRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientEvent {
-    Attached {
-        session: Session,
-    },
+    /// The session as the receiving client sees it, and the word to forget
+    /// every pane it holds: a whole repaint of each follows as `Damage`.
+    /// The first thing an attaching client is sent.
     Snapshot {
         session: Session,
-        panes: Vec<PaneSnapshot>,
     },
     /// Tab/selection structure changed with no pane content affected —
     /// every open pane already stays current through [`ClientEvent::Damage`]
@@ -347,11 +305,12 @@ mod tests {
     fn protocol_is_versioned_and_serializable() {
         let request = ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("w".into()),
             columns: 80,
             rows: 24,
-            root: Some(std::path::PathBuf::from("/tmp/w")),
-            kind: crate::SpaceKind::Worktree,
+            seat: Some(crate::SpaceSeat {
+                root: std::path::PathBuf::from("/tmp/w"),
+                kind: crate::SpaceKind::Worktree,
+            }),
         };
         assert_eq!(
             serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
@@ -378,8 +337,10 @@ mod tests {
         let requests = [
             ClientRequest::CreateSpace {
                 label: Some("frontend".into()),
-                root: std::path::PathBuf::from("/tmp/frontend"),
-                kind: crate::SpaceKind::Workspace,
+                seat: crate::SpaceSeat {
+                    root: std::path::PathBuf::from("/tmp/frontend"),
+                    kind: crate::SpaceKind::Workspace,
+                },
                 columns: 80,
                 rows: 24,
             },
@@ -390,6 +351,8 @@ mod tests {
                     root: std::path::PathBuf::from("/home/someone"),
                     kind: crate::SpaceKind::Workspace,
                 },
+                columns: 80,
+                rows: 24,
             },
             ClientRequest::RenameSpace {
                 space: SpaceId(1),

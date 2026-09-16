@@ -19,8 +19,8 @@ use uze_application::{
     DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
 };
 use uze_terminal::{
-    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, open_space,
-    read_event, send_request, socket_path,
+    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, open_space, read_event,
+    send_request, socket_path,
 };
 use uze_testkit::{env::ProcessEnvGuard, fake_harness::FakeHarness, temp::TestEnvironment};
 
@@ -80,7 +80,7 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()
             .expect("the real uze binary serves a terminal");
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the server's socket appears", || socket.exists());
         let (stream, reader) = connect(&project);
         let mut engine = Self {
@@ -125,8 +125,7 @@ impl Engine {
         let started = Instant::now();
         loop {
             match read_event(&mut self.reader).expect("the server keeps talking") {
-                Some(ClientEvent::Attached { session })
-                | Some(ClientEvent::Snapshot { session, .. })
+                Some(ClientEvent::Snapshot { session })
                 | Some(ClientEvent::SessionUpdated { session }) => {
                     self.session = Some(session);
                     return;
@@ -202,14 +201,9 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane)
-                    if pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot =>
-                {
-                    Some(pane.id)
-                }
-                _ => None,
-            })
+            .map(|tab| &tab.pane)
+            .find(|pane| pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot)
+            .map(|pane| pane.id)
     }
 
     /// Reads session updates until `accept` holds: the server also pushes
@@ -246,10 +240,7 @@ impl Engine {
             .into_iter()
             .flat_map(|session| &session.workspace.spaces)
             .flat_map(|space| &space.tabs)
-            .filter_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane) => Some(pane.cwd.clone()),
-                _ => None,
-            })
+            .map(|tab| tab.pane.cwd.clone())
             .collect()
     }
 
@@ -264,7 +255,7 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find(|tab| tab.focus.pane == pane)
+            .find(|tab| tab.pane.id == pane)
             .expect("the pane belongs to a tab")
             .id;
         send_request(&mut self.stream, &ClientRequest::CloseTab { tab }).unwrap();
@@ -300,7 +291,7 @@ impl Engine {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let project = self.project().to_path_buf();
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the dead server's socket is gone or stale", || {
             UnixStream::connect(&socket).is_err()
         });
@@ -335,18 +326,19 @@ impl Drop for Engine {
 fn connect(project: &Path) -> (UnixStream, UnixStream) {
     // Straight to the socket: `attach` would replace a server that is not
     // this executable, and the one started above is the real binary.
-    let mut stream = UnixStream::connect(socket_path(project).unwrap())
-        .expect("connects to the server started above");
+    let mut stream =
+        UnixStream::connect(socket_path().unwrap()).expect("connects to the server started above");
     let reader = stream.try_clone().unwrap();
     send_request(
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("engine-test".into()),
             columns: 80,
             rows: 24,
-            root: Some(project.to_path_buf()),
-            kind: uze_terminal::SpaceKind::Worktree,
+            seat: Some(uze_terminal::SpaceSeat {
+                root: project.to_path_buf(),
+                kind: uze_terminal::SpaceKind::Worktree,
+            }),
         },
     )
     .unwrap();
@@ -791,7 +783,7 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     let (mut second, mut second_reader) = connect(&other);
     let second_view = loop {
         match read_event(&mut second_reader).unwrap() {
-            Some(ClientEvent::Attached { session }) => break session,
+            Some(ClientEvent::Snapshot { session }) => break session,
             Some(ClientEvent::Error { message }) => panic!("{message}"),
             Some(_) => {}
             None => panic!("hung up"),
@@ -838,8 +830,11 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     // A nested launch: what `uze` does when UZE_PANE is set.
     let nested = engine.env.root().join("nested-project");
     fs::create_dir_all(&nested).unwrap();
-    let label = open_space(&nested, uze_terminal::SpaceKind::Worktree)
-        .expect("the running server opens a space");
+    let label = open_space(uze_terminal::SpaceSeat {
+        root: nested.clone(),
+        kind: uze_terminal::SpaceKind::Worktree,
+    })
+    .expect("the running server opens a space");
     assert_eq!(label, "nested-project");
     engine.wait_for_session_where("three spaces exist", |session| {
         session.workspace.spaces.len() == 3

@@ -73,7 +73,8 @@ so no stable key exists outside the terminal for a domain-side registry to
 hang on. `Space.kind` sits beside `label`, which the server also persists
 and never reads. The proof is a rule in `tests/architecture/layering.rs`:
 `crates/uze-terminal/src/runtime.rs` may not name the kind's vocabulary.
-`Session::open_space` becomes `space_for(root, kind)`.
+`Session::open_space` looks a space up with `space_for(seat)`, a seat
+being a root and a kind together.
 
 **Two vocabularies for the kind, translated once.** `uze-application`
 does not depend on `uze-terminal`, and `src/` may not name `uze_core`, so
@@ -218,7 +219,8 @@ existing store.
   a property of the kind. `04-an-agents-changes-are-its-own` keeps
   proving the worktree kind only.
 - [A `Session` that reuses a space by root alone silently ignores the
-  kind] → `space_for(root, kind)`; the scenario is in the spec.
+  kind] → `space_for(seat)`, a root and a kind together; the scenario is
+  in the spec.
 - [The sidebar extraction moves the foot-section tests] → Three tests
   budget the foot from `tree_rows`; they are re-derived from `measure()`
   in the extraction PR, before any behaviour changes.

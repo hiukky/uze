@@ -134,7 +134,7 @@ pub fn run(home: UzeHome) -> Result<()> {
     let mut landing = orchestrator::Landing::AtLaunchDirectory;
     let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let launch = orchestrator::LaunchSpace {
+        let launch = uze_terminal::SpaceSeat {
             kind: space_kind_for(&uze_application::space_root(&root)),
             root,
         };

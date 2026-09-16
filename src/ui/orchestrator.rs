@@ -926,18 +926,13 @@ fn active_palette() -> uze_terminal::Palette {
     }
 }
 
-/// The space the directory `uze` was started in resolves to: its root and
-/// the kind it is created as when this client is the one to create it.
-/// Decided before the attach, once per run of the loop — one Git read on
-/// the way in, never inside it.
-pub(crate) struct LaunchSpace {
-    pub(crate) root: PathBuf,
-    pub(crate) kind: uze_terminal::SpaceKind,
-}
-
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
-    launch: &LaunchSpace,
+    // The directory `uze` was started in and the kind its space is created
+    // as when this client is the one to create it — decided before the
+    // attach, once per run of the loop: one Git read on the way in, never
+    // inside it.
+    launch: &uze_terminal::SpaceSeat,
     layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
@@ -965,23 +960,22 @@ pub(crate) fn attach_workspace(
     // `Landing`). Resolving the workspace root *before* attaching is what
     // makes a repository and a subdirectory of it the same space rather
     // than two.
-    let LaunchSpace { root, kind } = launch;
-    let kind = *kind;
-    let workspace_root = uze_application::space_root(root);
-    let mut stream = attach(&workspace_root, kind, columns, rows).map_err(runtime_error)?;
+    let seat = uze_terminal::SpaceSeat {
+        root: uze_application::space_root(&launch.root),
+        kind: launch.kind,
+    };
+    let mut stream = attach(&seat).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: uze_terminal::WorkspaceId("client".into()),
             columns,
             rows,
-            root: match landing {
-                Landing::AtLaunchDirectory => Some(workspace_root.clone()),
+            seat: match landing {
+                Landing::AtLaunchDirectory => Some(seat),
                 Landing::WhereItLeftOff => None,
             },
-            kind,
         },
     )
     .map_err(runtime_error)?;
@@ -1108,7 +1102,7 @@ pub(crate) fn attach_workspace(
     // view of that session and its panes always starts empty (only what it
     // resolved on its own carries over, see `WorkspaceMemory`), so without
     // this wait the very first frame renders before the server's initial
-    // `Attached`/`Snapshot` reply lands, flashing the "starting shell…"
+    // `Snapshot` reply lands, flashing the "starting shell…"
     // placeholder and repainting the whole pane a moment later — reading
     // as a lost/reset session even though nothing server-side ever was. A
     // generous timeout is still a safety net, not the expected path: this
@@ -1664,7 +1658,7 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
 /// The harness running in `tab`, as [`agent_identity_for_tab`] recognizes
 /// it — the whole identity, for a caller that names it to a person.
 fn agent_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a AgentIdentity> {
-    let process = pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.process.as_str());
+    let process = Some(tab.pane.process.as_str());
     identities.iter().find(|identity| {
         process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
             || tab.label.eq_ignore_ascii_case(identity.display_name)
@@ -1806,7 +1800,7 @@ fn workspace_has_active_agent_operation(
             .flat_map(|space| &space.tabs)
             .any(|tab| {
                 agent_identity_for_tab(identities, tab).is_some()
-                    && model.agent_is_working(tab.focus.pane)
+                    && model.agent_is_working(tab.pane.id)
             })
     })
 }
@@ -1824,7 +1818,7 @@ fn selected_agent_context(
         .iter()
         .find(|identity| identity.binary == binary)
         .map(|identity| identity.integration)?;
-    let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
+    let cwd = tab.pane.cwd.clone();
     Some((integration.to_owned(), cwd))
 }
 
@@ -1851,7 +1845,7 @@ fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<L
             // The directory as it was given, not the kernel's note about
             // what became of it: a removed checkout is still where the
             // record says the agent is.
-            let cwd = named_checkout(&pane_in_layout(&tab.layout, tab.focus.pane)?.cwd);
+            let cwd = named_checkout(&tab.pane.cwd);
             Some(LaunchedAgent {
                 integration: integration.to_owned(),
                 id,
@@ -2509,14 +2503,9 @@ impl WorkspaceModel {
         }
         self.dirty = true;
         match event {
-            ClientEvent::Attached { session } => {
+            ClientEvent::Snapshot { session } => {
                 self.session = Some(session);
-                self.note_strip_selection(identities);
-                self.occupancy_stale = true;
-            }
-            ClientEvent::Snapshot { session, panes } => {
-                self.session = Some(session);
-                self.panes = panes.into_iter().map(|pane| (pane.pane, pane)).collect();
+                self.panes.clear();
                 self.note_strip_selection(identities);
                 self.occupancy_stale = true;
             }
@@ -2733,7 +2722,7 @@ impl WorkspaceModel {
     fn focused_pane(&self) -> PaneId {
         self.session
             .as_ref()
-            .map(|session| session.selected_tab().focus.pane)
+            .map(|session| session.selected_tab().pane.id)
             .unwrap_or(PaneId(1))
     }
     fn selected_tab(&self) -> Option<TabId> {
@@ -2749,7 +2738,7 @@ impl WorkspaceModel {
                 .iter()
                 .flat_map(|space| &space.tabs)
                 .find(|candidate| candidate.id == tab)
-                .map(|candidate| candidate.focus.pane)
+                .map(|candidate| candidate.pane.id)
         })
     }
     /// Marks the pane as busy and, when the submission was reconstructed
@@ -2765,7 +2754,7 @@ impl WorkspaceModel {
         let origin = self.session.as_ref().and_then(|session| {
             session.workspace.spaces.iter().find_map(|space| {
                 space.tabs.iter().find_map(|tab| {
-                    if tab.focus.pane != pane {
+                    if tab.pane.id != pane {
                         return None;
                     }
                     agent_identity_for_tab(identities, tab).map(|binary| {
@@ -2926,9 +2915,7 @@ impl WorkspaceModel {
                 .spaces
                 .iter()
                 .flat_map(|space| &space.tabs)
-                .any(|tab| {
-                    tab.focus.pane == pane && agent_identity_for_tab(identities, tab).is_some()
-                })
+                .any(|tab| tab.pane.id == pane && agent_identity_for_tab(identities, tab).is_some())
         })
     }
 
@@ -2984,7 +2971,7 @@ impl WorkspaceModel {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .map(|tab| tab.focus.pane)
+            .map(|tab| tab.pane.id)
             .collect();
         self.agent_activity.retain(|pane, _| live.contains(pane));
         self.completed_agent_panes
@@ -3004,12 +2991,7 @@ impl WorkspaceModel {
             .workspace
             .spaces
             .iter()
-            .find(|space| {
-                space
-                    .tabs
-                    .iter()
-                    .any(|tab| pane_in_layout(&tab.layout, pane).is_some())
-            })
+            .find(|space| space.tabs.iter().any(|tab| tab.pane.id == pane))
             .map(|space| space.root.clone())
     }
 
@@ -3033,11 +3015,7 @@ impl WorkspaceModel {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find(|tab| {
-                panes_in_layout(&tab.layout)
-                    .iter()
-                    .any(|candidate| candidate.id == pane)
-            })
+            .find(|tab| tab.pane.id == pane)
             .and_then(launched_agent_id)
     }
 
@@ -3106,7 +3084,7 @@ impl WorkspaceModel {
             .iter()
             .flat_map(|space| &space.tabs)
             .find(|candidate| candidate.id == tab)
-            .map(|tab| tab.focus.pane)
+            .map(|tab| tab.pane.id)
     }
 
     fn pane_cwd(&self, pane: PaneId) -> Option<PathBuf> {
@@ -3116,7 +3094,7 @@ impl WorkspaceModel {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| pane_in_layout(&tab.layout, pane).map(|pane| pane.cwd.clone()))
+            .find_map(|tab| (tab.pane.id == pane).then(|| tab.pane.cwd.clone()))
     }
 
     /// The pane of the tab running in `checkout` — where a message for
@@ -3130,10 +3108,7 @@ impl WorkspaceModel {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| {
-                let pane = pane_in_layout(&tab.layout, tab.focus.pane)?;
-                pane.cwd.starts_with(checkout).then_some(pane.id)
-            })
+            .find_map(|tab| tab.pane.cwd.starts_with(checkout).then_some(tab.pane.id))
     }
 
     /// Tasks holding work that no live agent tab is in front of, with the
@@ -3256,7 +3231,7 @@ impl WorkspaceModel {
     fn focused_cwd(&self) -> Option<PathBuf> {
         let session = self.session.as_ref()?;
         let tab = session.selected_tab();
-        pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+        Some(tab.pane.cwd.clone())
     }
 
     /// Asks for whatever the badge is missing, on a thread of its own.
@@ -3871,6 +3846,8 @@ fn dispatch_menu_action<W: io::Write>(
                     &ClientRequest::CloseSpace {
                         space,
                         replacement: home_seat(),
+                        columns: model.last_size.0,
+                        rows: model.last_size.1,
                     },
                 );
             }
@@ -3972,16 +3949,6 @@ fn begin_rename(model: &mut WorkspaceModel, target: MenuTarget) {
     model.renaming = Some((rename_target, label));
 }
 
-fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_terminal::Pane> {
-    match layout {
-        uze_terminal::Layout::Pane(pane) if pane.id == wanted => Some(pane),
-        uze_terminal::Layout::Pane(_) => None,
-        uze_terminal::Layout::Split { first, second, .. } => {
-            pane_in_layout(first, wanted).or_else(|| pane_in_layout(second, wanted))
-        }
-    }
-}
-
 /// Delivers the selected tab's task, the way the project's completion says.
 /// Nothing to deliver is said, never silently ignored.
 fn deliver_selected_tab(
@@ -4057,7 +4024,7 @@ fn sync_slot_occupancy(
         .spaces
         .iter()
         .flat_map(|space| &space.tabs)
-        .flat_map(|tab| panes_in_layout(&tab.layout))
+        .map(|tab| &tab.pane)
         .map(|pane| (pane.id, pane.cwd.clone()))
         .collect();
     let space_roots: Vec<PathBuf> = session
@@ -4165,24 +4132,12 @@ fn checkout_lost(bound_checkout: Option<&PathBuf>, cwd: &Path) -> bool {
         || cwd.to_string_lossy().ends_with(" (deleted)")
 }
 
-/// Every pane of a layout, in the order they are laid out.
-fn panes_in_layout(layout: &uze_terminal::Layout) -> Vec<&uze_terminal::Pane> {
-    match layout {
-        uze_terminal::Layout::Pane(pane) => vec![pane],
-        uze_terminal::Layout::Split { first, second, .. } => {
-            let mut panes = panes_in_layout(first);
-            panes.extend(panes_in_layout(second));
-            panes
-        }
-    }
-}
-
 /// The new-agent picker inherits the selected pane's live directory. The
 /// runtime's workspace root is only a fallback for callers that omit it.
 fn selected_pane_cwd(model: &WorkspaceModel) -> Option<PathBuf> {
     let session = model.session.as_ref()?;
     let tab = session.selected_tab();
-    pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+    Some(tab.pane.cwd.clone())
 }
 
 fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
@@ -4193,7 +4148,7 @@ fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
         .spaces
         .iter()
         .find_map(|space| space.tabs.iter().find(|candidate| candidate.id == tab))?;
-    pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+    Some(tab.pane.cwd.clone())
 }
 
 /// Flips one space's header between its label and its root. Purely local
@@ -4308,10 +4263,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
         return;
     };
     let tab = session.selected_tab();
-    let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
-        return;
-    };
-    let cwd = pane.cwd.clone();
+    let cwd = tab.pane.cwd.clone();
     let display_root = crate::ui::display_project_path(&cwd);
     model.code = Some(code::CodeView::opening(cwd, display_root, mode));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();

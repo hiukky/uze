@@ -898,9 +898,7 @@ impl<'a> SidebarAgent<'a> {
         is_last: bool,
         is_active_space: bool,
     ) -> Self {
-        let cwd = pane_in_layout(&tab.layout, tab.focus.pane)
-            .map(|pane| pane.cwd.clone())
-            .unwrap_or_default();
+        let cwd = tab.pane.cwd.clone();
         // The agent the space is about, not its `selected_tab`: a shell
         // opened beside an agent is part of that agent's own context, and
         // switching into it must not unselect the agent in this tree (see
@@ -911,7 +909,7 @@ impl<'a> SidebarAgent<'a> {
         // agent.
         let selected = Some(tab.id) == space_context_agent(space, identities);
         let is_current = is_active_space && selected;
-        let status = model.agent_tab_status(tab.focus.pane, is_current);
+        let status = model.agent_tab_status(tab.pane.id, is_current);
         let renaming = model
             .renaming
             .as_ref()
@@ -924,8 +922,8 @@ impl<'a> SidebarAgent<'a> {
         // the kernel's `(deleted)` path: the process cannot work there any
         // more, and the task it was running is what the preserved list now
         // holds.
-        let lost = model.lost_checkouts.contains(&tab.focus.pane);
-        let resumable = lost && model.lost_task(tab.focus.pane).is_some();
+        let lost = model.lost_checkouts.contains(&tab.pane.id);
+        let resumable = lost && model.lost_task(tab.pane.id).is_some();
         // A tab-reorder drag in this exact space, resolved to drop right
         // before (or, on the last row, at the end after) this one.
         let drop_target = model.dragging_tab.is_some_and(|dragging| {
@@ -1026,8 +1024,7 @@ fn render_empty_space_caption(
         .tabs
         .iter()
         .find(|tab| tab.id == space.selected_tab)
-        .and_then(|tab| pane_in_layout(&tab.layout, tab.focus.pane))
-        .map(|pane| crate::ui::display_project_path(&pane.cwd))
+        .map(|tab| crate::ui::display_project_path(&tab.pane.cwd))
         .unwrap_or_default();
     let mut spans = vec![Span::styled(format!("  {cwd}"), theme::fg(Token::TextDim))];
     if is_active_space {
