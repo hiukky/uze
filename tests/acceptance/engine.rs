@@ -19,8 +19,8 @@ use uze_application::{
     DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
 };
 use uze_terminal::{
-    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, open_space,
-    read_event, send_request, socket_path,
+    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, open_space, read_event,
+    send_request, socket_path,
 };
 use uze_testkit::{env::ProcessEnvGuard, fake_harness::FakeHarness, temp::TestEnvironment};
 
@@ -80,7 +80,7 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()
             .expect("the real uze binary serves a terminal");
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the server's socket appears", || socket.exists());
         let (stream, reader) = connect(&project);
         let mut engine = Self {
@@ -125,8 +125,7 @@ impl Engine {
         let started = Instant::now();
         loop {
             match read_event(&mut self.reader).expect("the server keeps talking") {
-                Some(ClientEvent::Attached { session })
-                | Some(ClientEvent::Snapshot { session, .. })
+                Some(ClientEvent::Snapshot { session })
                 | Some(ClientEvent::SessionUpdated { session }) => {
                     self.session = Some(session);
                     return;
@@ -292,7 +291,7 @@ impl Engine {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let project = self.project().to_path_buf();
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the dead server's socket is gone or stale", || {
             UnixStream::connect(&socket).is_err()
         });
@@ -327,14 +326,13 @@ impl Drop for Engine {
 fn connect(project: &Path) -> (UnixStream, UnixStream) {
     // Straight to the socket: `attach` would replace a server that is not
     // this executable, and the one started above is the real binary.
-    let mut stream = UnixStream::connect(socket_path(project).unwrap())
-        .expect("connects to the server started above");
+    let mut stream =
+        UnixStream::connect(socket_path().unwrap()).expect("connects to the server started above");
     let reader = stream.try_clone().unwrap();
     send_request(
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("engine-test".into()),
             columns: 80,
             rows: 24,
             root: Some(project.to_path_buf()),
@@ -799,7 +797,7 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     let (mut second, mut second_reader) = connect(&other);
     let second_view = loop {
         match read_event(&mut second_reader).unwrap() {
-            Some(ClientEvent::Attached { session }) => break session,
+            Some(ClientEvent::Snapshot { session }) => break session,
             Some(ClientEvent::Error { message }) => panic!("{message}"),
             Some(_) => {}
             None => panic!("hung up"),

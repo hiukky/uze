@@ -25,7 +25,7 @@ use thiserror::Error;
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
     Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId,
-    TabSeed, TerminalColor, WorkspaceId, process_probe,
+    TabSeed, TerminalColor, process_probe,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -44,12 +44,7 @@ pub enum RuntimeError {
 /// rooted at `root`, which only matters for a server that has nothing
 /// persisted yet. The caller then sends `Attach` naming the root it wants a
 /// space for.
-pub fn attach(
-    root: &Path,
-    kind: crate::SpaceKind,
-    _columns: u16,
-    _rows: u16,
-) -> Result<UnixStream, RuntimeError> {
+pub fn attach(root: &Path, kind: crate::SpaceKind) -> Result<UnixStream, RuntimeError> {
     let _span = tracing::info_span!("terminal.attach", root = %root.display()).entered();
     let endpoint = Endpoint::global()?;
     // A server left running from a previous build (e.g. a `cargo install
@@ -103,7 +98,7 @@ pub fn attach(
 /// server it started itself and never start one — a test driving the
 /// runtime through the real binary — since [`attach`] starts a server from
 /// the current executable when none answers.
-pub fn socket_path(_root: &Path) -> Result<PathBuf, RuntimeError> {
+pub fn socket_path() -> Result<PathBuf, RuntimeError> {
     Ok(Endpoint::global()?.socket)
 }
 
@@ -121,7 +116,6 @@ pub fn open_space(root: &Path, kind: crate::SpaceKind) -> Result<String, Runtime
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("nested".into()),
             columns: 0,
             rows: 0,
             root: Some(root.to_path_buf()),
@@ -130,7 +124,7 @@ pub fn open_space(root: &Path, kind: crate::SpaceKind) -> Result<String, Runtime
     )?;
     let label = loop {
         match read_event(&mut stream)? {
-            Some(ClientEvent::Attached { session }) => {
+            Some(ClientEvent::Snapshot { session }) => {
                 break session.selected_space().label.clone();
             }
             Some(ClientEvent::Error { message }) => return Err(RuntimeError::Protocol(message)),
@@ -150,8 +144,8 @@ pub fn open_space(root: &Path, kind: crate::SpaceKind) -> Result<String, Runtime
 /// running. A missing socket and a socket nobody is listening on are both
 /// that state, and reporting them as errors made every teardown script and
 /// journey run end on a failure it was right to ignore.
-pub fn stop(_root: &Path) -> Result<(), RuntimeError> {
-    let _span = tracing::info_span!("terminal.stop", root = %_root.display()).entered();
+pub fn stop() -> Result<(), RuntimeError> {
+    let _span = tracing::info_span!("terminal.stop").entered();
     let endpoint = Endpoint::global()?;
     let mut stream = match UnixStream::connect(&endpoint.socket) {
         Ok(stream) => stream,
@@ -957,11 +951,10 @@ impl Server {
             })
             .unwrap_or_default();
         let restoring = !seeds.is_empty();
-        let identity = WorkspaceId(identity_of(&uze_home_dir()));
         let session = if restoring {
-            Session::restore(identity, root.clone(), kind, 80, 24, seeds)
+            Session::restore(root.clone(), kind, 80, 24, seeds)
         } else {
-            Session::new(identity, root, kind, 80, 24)
+            Session::new(root, kind, 80, 24)
         };
         let (damage, damage_events) = mpsc::channel();
         let server = Self {
@@ -1182,9 +1175,6 @@ impl Server {
                         within_pane_bounds(rows),
                     );
                 }
-                let _ = events.send(ClientEvent::Attached {
-                    session: self.view_of(client),
-                });
                 self.broadcast_snapshot();
                 Some(client)
             }
@@ -1695,12 +1685,11 @@ impl Server {
     /// frozen on live-looking chrome. Per pane, that cap is the real bound
     /// again.
     ///
-    /// The `Snapshot` goes out first with no panes on it: it is what tells
-    /// a client to forget the panes it has, and the repaints that follow
-    /// are what give it the new ones. They are ordinary `Damage` frames
-    /// naming every cell, which is what a client already applies to a pane
-    /// it has never heard of (and what a resize already sends), so no
-    /// client has to learn anything to read this.
+    /// The `Snapshot` goes out first: it is what tells a client to forget
+    /// the panes it has, and the repaints that follow are what give it the
+    /// new ones. They are ordinary `Damage` frames naming every cell, which
+    /// is what a client already applies to a pane it has never heard of
+    /// (and what a resize already sends).
     fn broadcast_snapshot(&self) {
         let session = self.session.lock().expect("session poisoned").clone();
         // The runtimes, not their grids: a repaint is built and handed on
@@ -1721,7 +1710,6 @@ impl Server {
                     .events
                     .send(ClientEvent::Snapshot {
                         session: view_for(&session, &client.selection),
-                        panes: Vec::new(),
                     })
                     .is_ok()
             });
@@ -2557,7 +2545,7 @@ mod tests {
         ReplySink::new(sender, Arc::new(Mutex::new(Palette::default())))
     }
     use crate::{MouseMode, PaneId, TerminalColor};
-    use crate::{Session, SpaceId, TabId, WorkspaceId};
+    use crate::{Session, SpaceId, TabId};
     use alacritty_terminal::{
         Term,
         grid::Scroll,
@@ -2576,13 +2564,7 @@ mod tests {
     /// it does not — the rule that lets two terminals look at two agents.
     #[test]
     fn a_clients_view_overlays_its_own_selection_and_heals_a_stale_one() {
-        let mut session = Session::new(
-            WorkspaceId("w".into()),
-            "/tmp/a".into(),
-            crate::SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let mut session = Session::new("/tmp/a".into(), crate::SpaceKind::Worktree, 80, 24);
         let first_space = session.workspace.selected_space;
         session.add_space(
             "b".into(),
@@ -2746,7 +2728,7 @@ mod tests {
         let endpoint = Endpoint::global().expect("an endpoint can always be named");
         let _ = std::fs::remove_file(&endpoint.socket);
         assert!(
-            super::stop(&scratch).is_ok(),
+            super::stop().is_ok(),
             "no socket at all is nothing to stop, not a failure"
         );
 
@@ -2759,7 +2741,7 @@ mod tests {
             "dropping the listener leaves the socket file behind, which is the case under test"
         );
         assert!(
-            super::stop(&scratch).is_ok(),
+            super::stop().is_ok(),
             "a socket nobody answers is nothing to stop either"
         );
 
@@ -3350,7 +3332,6 @@ mod tests {
             &mut writer,
             &crate::ClientRequest::Attach {
                 version: crate::PROTOCOL_VERSION,
-                workspace: WorkspaceId("rootless".into()),
                 columns: 80,
                 rows: 24,
                 root: None,
@@ -3360,7 +3341,7 @@ mod tests {
         .unwrap();
         let attached = loop {
             match read_event(&mut reader).unwrap() {
-                Some(crate::ClientEvent::Attached { session }) => break session,
+                Some(crate::ClientEvent::Snapshot { session }) => break session,
                 Some(_) => {}
                 None => panic!("the server hung up before attaching"),
             }
@@ -3844,7 +3825,6 @@ mod tests {
             &mut writer,
             &crate::ClientRequest::Attach {
                 version: crate::PROTOCOL_VERSION,
-                workspace: WorkspaceId("resizemax".into()),
                 columns: 0,
                 rows: 0,
                 root: None,
@@ -4650,7 +4630,6 @@ mod tests {
             &mut writer,
             &crate::ClientRequest::Attach {
                 version: crate::PROTOCOL_VERSION,
-                workspace: WorkspaceId("bigsnap".into()),
                 columns: 0,
                 rows: 0,
                 root: None,
@@ -4768,7 +4747,7 @@ mod tests {
         }
         assert!(ready, "the server must be listening before it is stopped");
 
-        super::stop(&project).expect("a running server must acknowledge stop");
+        super::stop().expect("a running server must acknowledge stop");
         serving
             .recv_timeout(Duration::from_secs(30))
             .expect("the stopped server must leave its accept loop")
@@ -4962,7 +4941,6 @@ mod tests {
 
         let attach = bincode::serialize(&crate::ClientRequest::Attach {
             version: crate::PROTOCOL_VERSION,
-            workspace: WorkspaceId("a-workspace".into()),
             columns: 200,
             rows: 50,
             root: Some(PathBuf::from("/some/ordinary/project/path")),

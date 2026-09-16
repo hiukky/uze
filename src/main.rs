@@ -741,19 +741,10 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         return Ok(());
     };
     if let Command::Terminal { action } = command {
-        let root = std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
-            path: PathBuf::from("."),
-            source,
-        })?;
         return match action {
             TerminalAction::Attach => uze::ui::run(home),
-            // Resolved the same way `ui::orchestrator` resolves it before
-            // attaching — `stop` must target the server that `attach`
-            // actually started, not one keyed on the raw cwd.
-            TerminalAction::Stop => {
-                uze_terminal::stop(&uze_application::workspace_root_or_self(&root))
-                    .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
-            }
+            TerminalAction::Stop => uze_terminal::stop()
+                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string())),
             TerminalAction::Serve { root, kind } => {
                 let kind = uze_terminal::SpaceKind::from_name(&kind).ok_or_else(|| {
                     uze_application::UzeError::TerminalRuntime(format!(

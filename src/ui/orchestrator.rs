@@ -968,13 +968,12 @@ pub(crate) fn attach_workspace(
     let LaunchSpace { root, kind } = launch;
     let kind = *kind;
     let workspace_root = uze_application::space_root(root);
-    let mut stream = attach(&workspace_root, kind, columns, rows).map_err(runtime_error)?;
+    let mut stream = attach(&workspace_root, kind).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: uze_terminal::WorkspaceId("client".into()),
             columns,
             rows,
             root: match landing {
@@ -1108,7 +1107,7 @@ pub(crate) fn attach_workspace(
     // view of that session and its panes always starts empty (only what it
     // resolved on its own carries over, see `WorkspaceMemory`), so without
     // this wait the very first frame renders before the server's initial
-    // `Attached`/`Snapshot` reply lands, flashing the "starting shell…"
+    // `Snapshot` reply lands, flashing the "starting shell…"
     // placeholder and repainting the whole pane a moment later — reading
     // as a lost/reset session even though nothing server-side ever was. A
     // generous timeout is still a safety net, not the expected path: this
@@ -2509,14 +2508,9 @@ impl WorkspaceModel {
         }
         self.dirty = true;
         match event {
-            ClientEvent::Attached { session } => {
+            ClientEvent::Snapshot { session } => {
                 self.session = Some(session);
-                self.note_strip_selection(identities);
-                self.occupancy_stale = true;
-            }
-            ClientEvent::Snapshot { session, panes } => {
-                self.session = Some(session);
-                self.panes = panes.into_iter().map(|pane| (pane.pane, pane)).collect();
+                self.panes.clear();
                 self.note_strip_selection(identities);
                 self.occupancy_stale = true;
             }

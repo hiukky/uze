@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
+use crate::{PaneId, Session, SpaceId, TabId};
 
 /// Bumped for the `Space` grouping layer: the `Session`/`Workspace` shape
 /// changed (`Workspace::tabs` → `Workspace::spaces` of `Space`, each with
@@ -106,7 +106,6 @@ pub enum ClientRequest {
     SetPalette(Palette),
     Attach {
         version: u16,
-        workspace: WorkspaceId,
         /// The size of the pane this client will show first; zero in
         /// either dimension leaves every pane alone (a client that opens a
         /// space and leaves, never drawing).
@@ -231,12 +230,11 @@ impl ClientRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientEvent {
-    Attached {
-        session: Session,
-    },
+    /// The session as the receiving client sees it, and the word to forget
+    /// every pane it holds: a whole repaint of each follows as `Damage`.
+    /// The first thing an attaching client is sent.
     Snapshot {
         session: Session,
-        panes: Vec<PaneSnapshot>,
     },
     /// Tab/selection structure changed with no pane content affected —
     /// every open pane already stays current through [`ClientEvent::Damage`]
@@ -347,7 +345,6 @@ mod tests {
     fn protocol_is_versioned_and_serializable() {
         let request = ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("w".into()),
             columns: 80,
             rows: 24,
             root: Some(std::path::PathBuf::from("/tmp/w")),

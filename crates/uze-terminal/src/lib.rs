@@ -19,5 +19,5 @@ pub use runtime::{
 };
 pub use state::{
     OpenedSpace, Pane, PaneId, Session, Space, SpaceId, SpaceKind, SpaceSeat, SpaceSeed, Tab,
-    TabId, TabSeed, Workspace, WorkspaceId,
+    TabId, TabSeed, Workspace,
 };
