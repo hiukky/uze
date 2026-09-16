@@ -79,12 +79,12 @@ pub(super) fn attach_mcp_entry(
     mcp_args.push(command.as_os_str().to_owned());
     mcp_args.extend(args.iter().map(std::ffi::OsString::from));
     let output = capture(executable, command_home, &mcp_args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `claude mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("claude mcp add `{entry_name}`"),
             &output,
         )));
@@ -198,7 +198,7 @@ pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str
     }
     let output =
         capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
-            UzeError::ExposureUnavailable(format!(
+            UzeError::HarnessCommand(format!(
                 "failed to run `claude mcp remove` for entry `{entry_name}`: {error}"
             ))
         })?;
@@ -209,7 +209,7 @@ pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str
     if !mcp_entry_exists(executable, command_home, entry_name) {
         return Ok(());
     }
-    Err(UzeError::ExposureUnavailable(failed_message(
+    Err(UzeError::HarnessCommand(failed_message(
         &format!("claude mcp remove `{entry_name}`"),
         &output,
     )))

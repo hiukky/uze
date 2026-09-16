@@ -72,10 +72,7 @@ impl Plugins<'_> {
             Err(error) => return Err(error),
         };
         if !allow_protected && Self::is_protected_package(&package) {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "official marketplace plugin `{}` is protected and cannot be removed",
-                package.id.as_str()
-            )));
+            return Err(UzeError::ProtectedPackage(package.id.as_str().to_owned()));
         }
         let report = self.0.reconcile(package.id.as_str());
         let plan = plan_remove(&report);

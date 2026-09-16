@@ -952,9 +952,10 @@ impl UzeApplication {
                     .map(|integration| integration.id())
                     .collect::<Vec<_>>()
                     .join(", ");
-                UzeError::ExposureUnavailable(format!(
-                    "unknown harness `{requested}` (registered: {known})"
-                ))
+                UzeError::UnknownHarness {
+                    requested: requested.to_owned(),
+                    known,
+                }
             })
     }
 

@@ -14,6 +14,21 @@ use std::{
 
 use crate::{Result, UzeError, home::UzeHome};
 
+/// Creates `link` pointing at `target`, or reports that this platform has
+/// no symbolic links for UZE to own.
+#[cfg(unix)]
+pub fn create_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link).map_err(|source| UzeError::Write {
+        path: link.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(unix))]
+pub fn create_symlink(_target: &Path, link: &Path) -> Result<()> {
+    Err(UzeError::SymlinkUnsupported(link.to_path_buf()))
+}
+
 pub fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
     let _span =
         tracing::debug_span!("persistence.write", path = %path.display(), bytes = payload.len())

@@ -743,10 +743,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         } else if metadata.is_file() {
             copy_file(&source_path, &destination_path)?;
         } else {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "plugin store cannot preserve special filesystem entry `{}`",
-                source_path.display()
-            )));
+            return Err(UzeError::UnpreservableEntry(source_path));
         }
     }
     Ok(())
@@ -770,24 +767,12 @@ fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     let target = fs::read_link(source).map_err(|source_error| UzeError::Read {
         path: source.to_path_buf(),
         source: source_error,
     })?;
-    std::os::unix::fs::symlink(target, destination).map_err(|source_error| UzeError::Write {
-        path: destination.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
-    Err(UzeError::ExposureUnavailable(format!(
-        "plugin contains symlink `{}` which this platform cannot preserve",
-        source.display()
-    )))
+    crate::persistence::create_symlink(&target, destination)
 }
 
 #[cfg(test)]

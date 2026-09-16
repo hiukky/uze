@@ -751,7 +751,6 @@ pub(crate) fn integration_status(status: IntegrationStatus) -> String {
 /// at `link` that is not already a UZE-created symlink to something else —
 /// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
 /// helper uses.
-#[cfg(unix)]
 pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
     match fs::symlink_metadata(link) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -776,15 +775,7 @@ pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
             });
         }
     }
-    std::os::unix::fs::symlink(target, link).map_err(|source| UzeError::Write {
-        path: link.to_path_buf(),
-        source,
-    })
-}
-
-#[cfg(not(unix))]
-pub(crate) fn refresh_shim_symlink(_target: &Path, link: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(link.to_path_buf()))
+    uze_core::persistence::create_symlink(target, link)
 }
 
 pub(crate) fn package_receipt_key(package: &str, integration: &str) -> String {

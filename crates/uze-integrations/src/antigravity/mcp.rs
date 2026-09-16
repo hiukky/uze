@@ -87,12 +87,12 @@ pub(super) fn attach_mcp_entry(
     mcp_args.push(command.as_os_str().to_owned());
     mcp_args.extend(args.iter().map(std::ffi::OsString::from));
     let output = capture(Path::new(executable), command_home, &mcp_args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `agy mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("agy mcp add `{entry_name}`"),
             &output,
         )));

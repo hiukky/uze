@@ -274,23 +274,10 @@ pub fn write_superset_skill_wrapper(
         let source = entry.path();
         let target = dir.join(&entry_name);
         if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
+            uze_core::persistence::create_symlink(&source, &target)?;
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]

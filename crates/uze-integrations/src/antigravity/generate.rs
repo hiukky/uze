@@ -211,7 +211,7 @@ pub(super) fn materialize_generated_plugin(
 
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
-        symlink(&skills_source, &dir.join("skills"))?;
+        uze_core::persistence::create_symlink(&skills_source, &dir.join("skills"))?;
     }
     if canonical_mcp_servers(package).is_some() {
         let mcp = translated_mcp_config(package);
@@ -253,19 +253,6 @@ pub(super) fn remove_generated_plugin_by_id(uze_home: &UzeHome, package_id: &str
         fs::remove_dir_all(&dir).map_err(|source| UzeError::Write { path: dir, source })?;
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]

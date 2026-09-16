@@ -288,12 +288,12 @@ fn materialize_byte_preserving_skill(canonical_dir: &Path, target_dir: &Path) ->
                     path: target_dir.to_path_buf(),
                     source: source_error,
                 })?;
-                symlink(canonical_dir, target_dir)?;
+                uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
             }
         }
         Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            symlink(canonical_dir, target_dir)?;
+            uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
         }
         Err(error) => {
             return Err(UzeError::Read {
@@ -359,7 +359,7 @@ fn materialize_wrapped_skill(
         let source = entry.path();
         let target = target_dir.join(&name);
         if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
+            uze_core::persistence::create_symlink(&source, &target)?;
         }
     }
     Ok(())
@@ -495,19 +495,6 @@ pub(super) fn generated_package_receipt(
             .collect(),
         },
     }
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]

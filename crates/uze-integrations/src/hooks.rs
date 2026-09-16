@@ -594,9 +594,8 @@ pub(crate) fn merge_named_entry(
     entry_name: &str,
     entry: &serde_json::Value,
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     config
         .as_object_mut()
         .expect("read_config_object returns an object")
@@ -652,9 +651,8 @@ pub(crate) fn remove_named_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     config
         .as_object_mut()
         .expect("read_config_object returns an object")
@@ -1353,12 +1351,10 @@ pub(crate) fn merge_event_entry(
     entry: &serde_json::Value,
     previous: &[String],
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
-    let array = event_array(&mut config, event, config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
+    let array = event_array(&mut config, event, config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     for expected in previous {
         if let Ok(old) = serde_json::from_str::<serde_json::Value>(expected) {
             array.retain(|candidate| candidate != &old);
@@ -1426,12 +1422,10 @@ pub(crate) fn remove_event_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
-    let array = event_array(&mut config, event, config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
+    let array = event_array(&mut config, event, config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     let expected: serde_json::Value =
         serde_json::from_str(expected).map_err(|source| UzeError::Json {
             path: config_path.to_path_buf(),

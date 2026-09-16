@@ -90,23 +90,21 @@ pub(super) fn attach_mcp_config(
         serde_json::json!({ "$schema": "https://opencode.ai/config.json" })
     };
     let root = config.as_object_mut().ok_or_else(|| {
-        UzeError::ExposureUnavailable("OpenCode config root must be a JSON object".to_owned())
+        UzeError::HarnessConfig("OpenCode config root must be a JSON object".to_owned())
     })?;
     let mcp = root
         .entry("mcp")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| {
-            UzeError::ExposureUnavailable("OpenCode config `mcp` must be an object".to_owned())
+            UzeError::HarnessConfig("OpenCode config `mcp` must be an object".to_owned())
         })?;
     let servers = mcp
         .entry("servers")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| {
-            UzeError::ExposureUnavailable(
-                "OpenCode V2 config `mcp.servers` must be an object".to_owned(),
-            )
+            UzeError::HarnessConfig("OpenCode V2 config `mcp.servers` must be an object".to_owned())
         })?;
     let command_values: Vec<serde_json::Value> =
         std::iter::once(command.to_string_lossy().into_owned())
@@ -197,12 +195,12 @@ pub(super) fn attach_mcp_entry(
     cmd.args(&mcp_args);
     cmd.stdin(std::process::Stdio::null());
     let output = cmd.output().map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `opencode mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("opencode mcp add `{entry_name}`"),
             &output,
         )));

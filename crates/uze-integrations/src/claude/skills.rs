@@ -219,12 +219,12 @@ fn link_or_repair(link: &Path, source: &Path) -> Result<()> {
                     path: link.to_path_buf(),
                     source: source_error,
                 })?;
-                symlink(source, link)?;
+                uze_core::persistence::create_symlink(source, link)?;
             }
         }
         Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            symlink(source, link)?;
+            uze_core::persistence::create_symlink(source, link)?;
         }
         Err(error) => {
             return Err(UzeError::Read {
@@ -257,17 +257,4 @@ fn write_or_replace_file(target: &Path, content: &[u8]) -> Result<()> {
         path: target.to_path_buf(),
         source: source_error,
     })
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }

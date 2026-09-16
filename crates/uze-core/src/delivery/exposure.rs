@@ -265,7 +265,9 @@ fn attach_symlink(path: &Path, target: &Path) -> Result<()> {
             Ok(())
         }
         Ok(_) => Err(UzeError::ManagedEntryConflict(path.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_symlink(target, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::persistence::create_symlink(target, path)
+        }
         Err(source) => Err(UzeError::Read {
             path: path.to_path_buf(),
             source,
@@ -327,19 +329,6 @@ impl PackageExposurePlan {
         self.provided_resource_identities
             .contains(&resource.identity())
     }
-}
-
-#[cfg(unix)]
-fn create_symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn create_symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(all(test, unix))]
