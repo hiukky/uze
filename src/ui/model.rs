@@ -1145,21 +1145,6 @@ impl TuiModel {
         }
     }
 
-    /// Takes a keystroke as the new binding for the selected line.
-    ///
-    /// Everything that could be wrong with it is said before anything is
-    /// written: a chord that is another key on a terminal, one this
-    /// terminal cannot send, and one that already means something else in
-    /// the same keyboard. A screen that let you lock yourself out would be
-    /// worse than one that had no rebinding at all.
-    /// Where in the Keys list a point on its scroll track lands.
-    ///
-    /// The track is a picture of the whole list, so a position on it is a
-    /// position in the list — the top row is the first key, the bottom row
-    /// the last. The window itself is derived from the selection rather
-    /// than stored, so moving the selection is how the track moves the
-    /// page; there is no second notion of "where the page is" that could
-    /// disagree with the first.
     /// Whether this screen has a search field. Plugins, Extensions and
     /// Integrations filter their lists; Keys filters its own; the Overview
     /// is a report and Profiles is three panels rather than a list.
@@ -1190,6 +1175,14 @@ impl TuiModel {
         }
     }
 
+    /// Where in the Keys list a point on its scroll track lands.
+    ///
+    /// The track is a picture of the whole list, so a position on it is a
+    /// position in the list — the top row is the first key, the bottom row
+    /// the last. The window itself is derived from the selection rather
+    /// than stored, so moving the selection is how the track moves the
+    /// page; there is no second notion of "where the page is" that could
+    /// disagree with the first.
     pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
         let rows = self.key_rows().len();
         let Some(bar) =
@@ -1205,6 +1198,13 @@ impl TuiModel {
         self.keys_problem = None;
     }
 
+    /// Takes a keystroke as the new binding for the selected line.
+    ///
+    /// Everything that could be wrong with it is said before anything is
+    /// written: a chord that is another key on a terminal, one this
+    /// terminal cannot send, and one that already means something else in
+    /// the same keyboard. A screen that let you lock yourself out would be
+    /// worse than one that had no rebinding at all.
     pub(crate) fn capture_chord(&mut self, chord: uze_keys::Chord) -> super::worker::Intent {
         let Some(row) = self.selected_key_row() else {
             self.keys_capture = false;
@@ -1264,12 +1264,6 @@ impl TuiModel {
         }
     }
 
-    /// One line of the Keys screen: an action, where it is live, and the
-    /// key that reaches it there.
-    ///
-    /// Built from the keymap in force rather than from the default, so an
-    /// unbinding leaves the row rather than the row disappearing with the
-    /// key — you have to be able to see what you turned off.
     /// The Appearance screen's lines, both groups in reading order.
     pub(crate) fn appearance_rows(&self) -> Vec<AppearanceRow> {
         let mut rows = vec![AppearanceRow::Heading("Theme")];
@@ -1303,6 +1297,12 @@ impl TuiModel {
             .cloned()
     }
 
+    /// One line of the Keys screen: an action, where it is live, and the
+    /// key that reaches it there.
+    ///
+    /// Built from the keymap in force rather than from the default, so an
+    /// unbinding leaves the row rather than the row disappearing with the
+    /// key — you have to be able to see what you turned off.
     pub(crate) fn key_rows(&self) -> Vec<KeyRow> {
         let active = uze_keys::active();
         let default = uze_keys::default_keymap();
@@ -1582,10 +1582,6 @@ impl TuiModel {
         self.profile_preview_epoch = self.profile_preview_epoch.wrapping_add(1);
     }
 
-    /// Profiles has three independently-scrolled sub-panels rather than one
-    /// list, so it bypasses the generic `move_selection`/`list_len`/
-    /// `selected_mut` dispatch (designed for exactly one selection per
-    /// route) and clamps whichever panel is currently focused.
     /// Walks the Appearance list, stepping over headings rather than
     /// landing on them: a selection sitting on a label has nothing to
     /// activate, and pressing Enter there would do nothing with no reason
@@ -1647,6 +1643,10 @@ impl TuiModel {
         }
     }
 
+    /// Profiles has three independently-scrolled sub-panels rather than one
+    /// list, so it bypasses the generic `move_selection`/`list_len`/
+    /// `selected_mut` dispatch (designed for exactly one selection per
+    /// route) and clamps whichever panel is currently focused.
     pub(crate) fn move_profile_selection(&mut self, delta: isize) {
         let clamp = |current: usize, len: usize| -> usize {
             if len == 0 {

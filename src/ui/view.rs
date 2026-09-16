@@ -53,16 +53,6 @@ fn drawer_buttons(offers: &[ActionOffer]) -> Vec<uze_keys::Action> {
     buttons
 }
 
-/// Every detail drawer ends the same way: where the thing stands, then
-/// what can be done about it, as buttons.
-///
-/// The drawer is the one place a row's actions are performed with the
-/// pointer, so its buttons are the selected thing's offers — the available
-/// ones only: a button that cannot run is a caption pretending to be a
-/// control. The first thing that builds wears the accent, anything else
-/// is neutral, and what destroys comes last in the danger colour, so the
-/// weight of each is seen before it is clicked. `engaged` is an action
-/// already under way (a key being captured), drawn in the warning colour.
 /// A button's look: soft at rest, the full hue under the pointer — the
 /// step between the two is what says it can be clicked. One under way
 /// stays `strong`, so the button that started it reads as the one that
@@ -79,6 +69,16 @@ pub(crate) fn button_style(hue: Token, strong: bool, ground: Token) -> Style {
     style.add_modifier(Modifier::BOLD)
 }
 
+/// Every detail drawer ends the same way: where the thing stands, then
+/// what can be done about it, as buttons.
+///
+/// The drawer is the one place a row's actions are performed with the
+/// pointer, so its buttons are the selected thing's offers — the available
+/// ones only: a button that cannot run is a caption pretending to be a
+/// control. The first thing that builds wears the accent, anything else
+/// is neutral, and what destroys comes last in the danger colour, so the
+/// weight of each is seen before it is clicked. `engaged` is an action
+/// already under way (a key being captured), drawn in the warning colour.
 pub(crate) fn render_drawer_footer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,

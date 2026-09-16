@@ -58,9 +58,6 @@ impl TuiModel {
     }
 
     pub(crate) fn apply_key(&mut self, key: KeyEvent) -> Intent {
-        // Reference material closes on anything, which is a property of a
-        // surface that has nothing to do but be read — not a binding, and
-        // so not the keymap's to hold.
         // A glossary has nothing to answer — it is read, and then gone —
         // so any keystroke closes it. That is a property of the surface,
         // not a binding, and so not the keymap's to hold.
@@ -96,8 +93,6 @@ impl TuiModel {
         }
     }
 
-    /// Performs one action. Every arm is a meaning, so this reads as what
-    /// the product does rather than as what a keyboard is wired to.
     /// One action, performed, and noted if it was a first step that landed.
     ///
     /// Every action this client performs passes through here, whichever way
@@ -133,6 +128,8 @@ impl TuiModel {
         }
     }
 
+    /// Performs one action. Every arm is a meaning, so this reads as what
+    /// the product does rather than as what a keyboard is wired to.
     fn perform(&mut self, action: Action) -> Intent {
         if self.overlay != Overlay::None {
             return self.overlay_action(action);
@@ -495,10 +492,6 @@ impl TuiModel {
         }
     }
 
-    /// `total_width` is the terminal's current column count — needed only
-    /// for the sidebar-drag arm below (`clamp_sidebar_width`'s dynamic max
-    /// shrinks as the terminal narrows), which is otherwise the one mouse
-    /// gesture this method can't resolve from `self` alone.
     /// One mouse event over the surface drawn in `surface` — the inside
     /// of the modal, or a whole test frame.
     ///

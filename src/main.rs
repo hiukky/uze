@@ -979,18 +979,6 @@ fn print_setup_help() {
     );
 }
 
-/// `uze setup` is the single machine-level harness surface. With no
-/// arguments in a terminal it asks which harnesses to provision (see
-/// `choose_harnesses`) and provisions every registered one anywhere a
-/// question cannot be answered; with one or more ids it provisions exactly
-/// those ids. `list` and `inspect` remain read-only views under the same
-/// verb, so users do not need to learn a redundant namespace.
-///
-/// Progress contract: `setup` runs harnesses **sequentially
-/// in registration order**, one opaque container per harness. The vendor
-/// installer's output is buffered to `$UZE_HOME/state/logs/setup-<harness>.log`
-/// instead of interleaving on the terminal, so the terminal shows only
-/// ordered step headers and the per-harness final status.
 /// `uze context …` — the project-scoped half of the grammar: what this
 /// project declares, what reconciling it would write, and writing it. See
 /// ADR-019 for why none of these ever touch machine state.
@@ -1489,6 +1477,18 @@ fn harness_hint(harness: &HarnessHealth) -> String {
     }
 }
 
+/// `uze setup` is the single machine-level harness surface. With no
+/// arguments in a terminal it asks which harnesses to provision (see
+/// `choose_harnesses`) and provisions every registered one anywhere a
+/// question cannot be answered; with one or more ids it provisions exactly
+/// those ids. `list` and `inspect` remain read-only views under the same
+/// verb, so users do not need to learn a redundant namespace.
+///
+/// Progress contract: `setup` runs harnesses **sequentially
+/// in registration order**, one opaque container per harness. The vendor
+/// installer's output is buffered to `$UZE_HOME/state/logs/setup-<harness>.log`
+/// instead of interleaving on the terminal, so the terminal shows only
+/// ordered step headers and the per-harness final status.
 fn run_setup(
     app: &UzeApplication,
     home: &UzeHome,

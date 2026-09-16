@@ -10,8 +10,8 @@
 //!
 //! Module map — start at [`run`], the entry point:
 //! - `ui.rs` (this file): the entry point, plus chrome both surfaces
-//!   share — the color palette, [`TerminalSession`] (the one
-//!   alternate-screen lifecycle), and the sidebar-geometry math
+//!   share — [`TerminalSession`] (the one alternate-screen lifecycle),
+//!   row and text helpers, and the sidebar-geometry math
 //!   (`clamp_sidebar_width`/`sidebar_width_for`) both menus resize by.
 //! - [`orchestrator`]: the terminal workspace client (ADR-038) — tabs,
 //!   panes, the persistent runtime client, and the one event loop. Owns
@@ -278,9 +278,6 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
     }
 }
 
-/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
-/// label without competing with it for weight — the route counts in the
-/// management sidebar, the pull/push counts under an agent's branch.
 /// The first row of an informational popup: its name, and the key that
 /// dismisses it pinned to the right.
 pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::text::Line<'static> {
@@ -303,6 +300,9 @@ pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::tex
     ])
 }
 
+/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
+/// label without competing with it for weight — the route counts in the
+/// management sidebar, the pull/push counts under an agent's branch.
 pub(crate) fn small_digits(n: usize) -> String {
     n.to_string()
         .chars()
@@ -383,8 +383,6 @@ pub(crate) fn small_caps(s: &str) -> String {
         .collect()
 }
 
-/// `~/relative/path` when `root` is under the user's home directory, else
-/// the path as-is — mirrors what a shell prompt usually shows.
 /// The kind a space over `root` is created as when nobody chose: the
 /// placement the root's profile lands on, spelled for the wire. The one
 /// place the two vocabularies meet outside the picker.
@@ -408,6 +406,8 @@ pub(crate) fn placement_of(kind: uze_terminal::SpaceKind) -> uze_application::Pl
     }
 }
 
+/// `~/relative/path` when `root` is under the user's home directory, else
+/// the path as-is — mirrors what a shell prompt usually shows.
 pub(crate) fn display_project_path(root: &std::path::Path) -> String {
     if let Some(home) = std::env::var_os("HOME")
         && let Ok(relative) = root.strip_prefix(&home)
@@ -487,9 +487,6 @@ pub(crate) fn wrap_words(text: &str, measure: usize) -> Vec<String> {
     lines
 }
 
-/// Every content screen's outer inset — the design's `padding: 36px 44px`
-/// on each route's root div, translated to terminal cells. No border, no
-/// background: content just sits indented on the shared backdrop.
 /// A hint line for `actions`, each printed with the key that reaches it
 /// in `scopes`.
 ///
@@ -522,6 +519,9 @@ pub(crate) fn hint_for(scopes: &[uze_keys::Scope], actions: &[uze_keys::Action])
     Line::from(spans)
 }
 
+/// Every content screen's outer inset — the design's `padding: 36px 44px`
+/// on each route's root div, translated to terminal cells. No border, no
+/// background: content just sits indented on the shared backdrop.
 pub(crate) fn content_area(area: Rect) -> Rect {
     Rect::new(
         area.x + CONTENT_INSET_LEFT,
