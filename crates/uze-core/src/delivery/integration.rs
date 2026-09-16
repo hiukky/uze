@@ -1,11 +1,6 @@
 //! Harness-agnostic integration and managed-attachment contracts.
 
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{ffi::OsString, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +8,7 @@ use crate::{
     capability::CapabilityKind,
     conversation::SessionId,
     error::Result,
-    exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
     home::UzeHome,
     provisioning::ProvisionStatus,
@@ -21,6 +16,8 @@ use crate::{
     state,
     store::StoredPackage,
 };
+
+pub use crate::exposure::ManagedArtifact;
 
 /// Stable receipt for one harness-owned side effect. The ledger persists this
 /// intent; every destructive operation still asks the integration to inspect
@@ -31,64 +28,6 @@ pub struct AttachmentReceipt {
     pub resource_identity: Option<String>,
     pub integration: String,
     pub artifact: ManagedArtifact,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ManagedArtifact {
-    SymlinkReference {
-        path: PathBuf,
-        target: PathBuf,
-    },
-    VendorConfigEntry {
-        entry_name: String,
-        transport: String,
-        command: PathBuf,
-        args: Vec<String>,
-        cwd: Option<PathBuf>,
-        environment: Vec<McpEnvironmentReference>,
-        enabled: Option<bool>,
-    },
-    /// UZE owns a delimited region inside a shared text file, never the
-    /// whole file. See `ExposureMechanism::ManagedTextRegion` and
-    /// `crate::text_region`, which every safety rule for this variant lives
-    /// in — this receipt shape carries no knowledge of what kind of file
-    /// `target_file` is or why.
-    ManagedTextRegion {
-        target_file: PathBuf,
-        region_identity: String,
-        expected_content: String,
-    },
-    /// A delivery whose ownership proof only the owning integration can
-    /// interpret. The Core routes it by `receipt.integration`, never reads
-    /// `detail`, and refuses to inspect or detach it generically.
-    IntegrationOwned {
-        kind: String,
-        selector: String,
-        #[serde(flatten, default)]
-        detail: BTreeMap<String, serde_json::Value>,
-    },
-    /// A UZE-namespaced entry inside the harness's shared hook
-    /// configuration (ADR-033). `entry_name` is the stable UZE identity,
-    /// `event` the manifest group's semantic event where the target shape
-    /// is event-keyed, and `expected` the exact serialized entry content
-    /// the owning integration wrote. Inspection and detach are
-    /// integration-owned: the Core knows the identity, never the file's
-    /// shape.
-    HookConfigEntry {
-        config_file: PathBuf,
-        entry_name: String,
-        event: crate::hook::HookEvent,
-        expected: String,
-        /// The generated wrapper this entry runs.
-        wrapper: PathBuf,
-    },
-    /// A whole, UZE-owned derived file the harness loads from its own
-    /// discovery directory (the OpenCode bridge): no configuration entry
-    /// exists to merge, so `path` is the entire artifact. The owning
-    /// integration interprets inspection and detach.
-    ManagedHookFile {
-        path: PathBuf,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -520,21 +459,20 @@ pub trait IntegrationPort {
     }
 
     /// Idempotently creates or refreshes this harness's managed attachment
-    /// for one resource. `None` when the currently selected exposure
-    /// mechanism does not support persistent attachment (e.g. setup has not
-    /// completed yet and the integration is still on a conformance-probe
-    /// fallback).
-    fn attach(&self, resource: &crate::project::Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
-                Ok(Some(plan.mechanism.attach()?))
-            }
-            ExposureMechanism::ManagedTextRegion { .. } => {
-                Ok(Some(plan.mechanism.attach_text_region()?))
-            }
-            _ => Ok(None),
+    /// for one resource and returns the artifact it now owns. `None` when
+    /// the plan has nothing to attach (e.g. setup has not completed).
+    fn attach(&self, resource: &crate::project::Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        if !matches!(
+            artifact,
+            ManagedArtifact::SymlinkReference { .. } | ManagedArtifact::ManagedTextRegion { .. }
+        ) {
+            return Ok(None);
         }
+        artifact.attach_standard()?;
+        Ok(Some(artifact))
     }
 
     /// Performs a package-level native delivery and returns its own ownership
@@ -592,67 +530,14 @@ pub trait IntegrationPort {
         &self,
         resource: &crate::project::Resource,
     ) -> Result<Option<AttachmentReceipt>> {
-        let Some(location) = self.attach(resource)? else {
+        let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
             return Ok(None);
         };
-        let package_id = match &resource.origin {
-            crate::project::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-            crate::project::ResourceOrigin::Project { .. } => return Ok(None),
-        };
-        let plan = self.exposure_plan(resource);
-        let artifact = match plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { source, .. } => {
-                ManagedArtifact::SymlinkReference {
-                    path: location,
-                    target: source,
-                }
-            }
-            ExposureMechanism::ManagedVendorConfig {
-                entry_name,
-                transport,
-                command,
-                args,
-                cwd,
-                environment,
-                enabled,
-            } => ManagedArtifact::VendorConfigEntry {
-                entry_name,
-                transport,
-                command,
-                args,
-                cwd,
-                environment,
-                enabled,
-            },
-            ExposureMechanism::ManagedTextRegion {
-                target_file,
-                region_identity,
-                expected_content,
-            } => ManagedArtifact::ManagedTextRegion {
-                target_file,
-                region_identity,
-                expected_content,
-            },
-            ExposureMechanism::ManagedHookConfig {
-                config_file,
-                entry_name,
-                event,
-                expected,
-                wrapper,
-            } => ManagedArtifact::HookConfigEntry {
-                config_file,
-                entry_name,
-                event,
-                expected,
-                wrapper,
-            },
-            ExposureMechanism::ManagedHookFile { path } => {
-                ManagedArtifact::ManagedHookFile { path }
-            }
-            _ => return Ok(None),
+        let Some(artifact) = self.attach(resource)? else {
+            return Ok(None);
         };
         Ok(Some(AttachmentReceipt {
-            package_id,
+            package_id: id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact,
@@ -660,11 +545,11 @@ pub trait IntegrationPort {
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
-        inspect_standard_receipt(receipt)
+        receipt.artifact.inspect_standard()
     }
 
     fn detach_receipt(&self, receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
-        detach_standard_receipt(receipt)
+        receipt.artifact.detach_standard()
     }
 
     /// Restores a receipt that has been inspected as `Missing`, but only for
@@ -678,32 +563,9 @@ pub trait IntegrationPort {
     /// primitives rather than overwritten.
     fn repair_missing_receipt(&self, receipt: &AttachmentReceipt) -> Result<bool> {
         match &receipt.artifact {
-            ManagedArtifact::SymlinkReference { path, target } => {
-                let Some(parent) = path.parent() else {
-                    return Ok(false);
-                };
-                let Some(entry_name) = path.file_name().and_then(|name| name.to_str()) else {
-                    return Ok(false);
-                };
-                ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: parent.to_path_buf(),
-                    entry_name: entry_name.to_owned(),
-                    source: target.clone(),
-                }
-                .attach()?;
-                Ok(true)
-            }
-            ManagedArtifact::ManagedTextRegion {
-                target_file,
-                region_identity,
-                expected_content,
-            } => {
-                ExposureMechanism::ManagedTextRegion {
-                    target_file: target_file.clone(),
-                    region_identity: region_identity.clone(),
-                    expected_content: expected_content.clone(),
-                }
-                .attach_text_region()?;
+            ManagedArtifact::SymlinkReference { .. }
+            | ManagedArtifact::ManagedTextRegion { .. } => {
+                receipt.artifact.attach_standard()?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -783,140 +645,10 @@ pub fn qualified_exposure_name_candidates(
     vec![qualified_capability_name(active_plugin_name, &logical)]
 }
 
-/// Extracts the physical exposure name a receipt's artifact already claims,
-/// generically — no artifact variant here knows or cares what kind of
-/// capability it represents. `None` for an artifact shape with no single
-/// physical name of its own (a text region spans a *portion* of a shared
-/// file, not a dedicated entry; an integration-owned artifact's naming is
-/// opaque to the Core by design).
-pub fn managed_artifact_exposure_name(artifact: &ManagedArtifact) -> Option<String> {
-    match artifact {
-        ManagedArtifact::SymlinkReference { path, .. } => {
-            path.file_name()?.to_str().map(str::to_owned)
-        }
-        ManagedArtifact::VendorConfigEntry { entry_name, .. } => Some(entry_name.clone()),
-        ManagedArtifact::HookConfigEntry { entry_name, .. } => Some(entry_name.clone()),
-        ManagedArtifact::ManagedHookFile { path } => path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned),
-        // A text region spans a *portion* of a shared file, not a dedicated
-        // entry; an integration-owned artifact's naming is opaque to the
-        // Core by design.
-        ManagedArtifact::ManagedTextRegion { .. } | ManagedArtifact::IntegrationOwned { .. } => {
-            None
-        }
-    }
-}
-
-/// Shared inspection for artifacts whose ownership proof does not depend on a
-/// harness schema. Vendor integrations call this explicitly rather than
-/// redispatching through `IntegrationPort` from an override.
-pub fn inspect_standard_receipt(receipt: &AttachmentReceipt) -> AttachmentInspection {
-    match &receipt.artifact {
-        ManagedArtifact::SymlinkReference { path, target } => match fs::read_link(path) {
-            Ok(actual) if &actual == target => AttachmentInspection {
-                state: AttachmentState::Matched,
-                reason: "managed symlink target matches receipt".to_owned(),
-            },
-            Ok(_) => AttachmentInspection {
-                state: AttachmentState::Drifted,
-                reason: "symlink target differs from receipt".to_owned(),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => AttachmentInspection {
-                state: AttachmentState::Missing,
-                reason: "managed symlink is missing".to_owned(),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
-                AttachmentInspection {
-                    state: AttachmentState::Conflict,
-                    reason: "managed path is occupied by a non-symlink".to_owned(),
-                }
-            }
-            Err(error) => AttachmentInspection {
-                state: AttachmentState::Blocked,
-                reason: error.to_string(),
-            },
-        },
-        ManagedArtifact::ManagedTextRegion {
-            target_file,
-            region_identity,
-            expected_content,
-        } => crate::text_region::inspect(target_file, region_identity, expected_content),
-        _ => AttachmentInspection {
-            state: AttachmentState::Blocked,
-            reason: "integration must inspect this vendor artifact".to_owned(),
-        },
-    }
-}
-
-/// Removes only a currently matched standard artifact. Callers receive any
-/// non-matched inspection unchanged, so drift never turns into a destructive
-/// operation.
-pub fn detach_standard_receipt(receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
-    if let ManagedArtifact::ManagedTextRegion {
-        target_file,
-        region_identity,
-        expected_content,
-    } = &receipt.artifact
-    {
-        // `text_region::detach` already re-inspects immediately before its
-        // own destructive write, per the same ADR-009 discipline the rest of
-        // this function applies below for a symlink.
-        return crate::text_region::detach(target_file, region_identity, expected_content);
-    }
-    let inspection = inspect_standard_receipt(receipt);
-    if inspection.state != AttachmentState::Matched {
-        return Ok(inspection);
-    }
-    // Re-read immediately before unlinking. This protects the normal
-    // non-concurrent case where a user changes the reference after a prior
-    // doctor/reconcile pass but before detach begins.
-    let fresh = inspect_standard_receipt(receipt);
-    if fresh.state != AttachmentState::Matched {
-        return Ok(fresh);
-    }
-    if let ManagedArtifact::SymlinkReference { path, .. } = &receipt.artifact {
-        fs::remove_file(path).map_err(|source| crate::UzeError::Write {
-            path: path.clone(),
-            source,
-        })?;
-    }
-    Ok(AttachmentInspection {
-        state: AttachmentState::Missing,
-        reason: "managed artifact detached".to_owned(),
-    })
-}
-
-/// A human-readable artifact locator for the existing CLI. The typed receipt
-/// remains the source of truth; this intentionally loses no ownership data
-/// because it is display-only.
-pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
-    match &receipt.artifact {
-        ManagedArtifact::SymlinkReference { path, .. } => path.clone(),
-        ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
-            PathBuf::from(format!("mcp:{entry_name}"))
-        }
-        ManagedArtifact::HookConfigEntry {
-            config_file,
-            entry_name,
-            ..
-        } => PathBuf::from(format!("{}#{entry_name}", config_file.display())),
-        ManagedArtifact::ManagedHookFile { path } => path.clone(),
-        ManagedArtifact::ManagedTextRegion {
-            target_file,
-            region_identity,
-            ..
-        } => PathBuf::from(format!("{}#{region_identity}", target_file.display())),
-        ManagedArtifact::IntegrationOwned { kind, selector, .. } => {
-            PathBuf::from(format!("{kind}:{selector}"))
-        }
-    }
-}
-
 #[cfg(test)]
 mod artifact_representation_tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// The ledger carries one representation for an integration-owned
     /// artifact, and a write emits exactly it.
@@ -951,12 +683,12 @@ mod artifact_representation_tests {
             },
         };
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Blocked
         );
         // And a blocked inspection can never become a destructive operation.
         assert_eq!(
-            detach_standard_receipt(&receipt).unwrap().state,
+            receipt.artifact.detach_standard().unwrap().state,
             AttachmentState::Blocked
         );
     }
@@ -965,6 +697,7 @@ mod artifact_representation_tests {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use std::{fs, path::PathBuf};
 
     fn receipt(path: PathBuf, target: PathBuf) -> AttachmentReceipt {
         AttachmentReceipt {
@@ -990,27 +723,27 @@ mod lifecycle_tests {
         let receipt = receipt(path.clone(), expected.clone());
 
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Missing
         );
         symlink(&expected, &path).unwrap();
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Matched
         );
         assert_eq!(
-            detach_standard_receipt(&receipt).unwrap().state,
+            receipt.artifact.detach_standard().unwrap().state,
             AttachmentState::Missing
         );
         assert!(!path.exists());
 
         symlink(&other, &path).unwrap();
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Drifted
         );
         assert_eq!(
-            detach_standard_receipt(&receipt).unwrap().state,
+            receipt.artifact.detach_standard().unwrap().state,
             AttachmentState::Drifted
         );
         assert_eq!(fs::read_link(&path).unwrap(), other);
@@ -1018,11 +751,11 @@ mod lifecycle_tests {
         fs::remove_file(&path).unwrap();
         fs::write(&path, "foreign").unwrap();
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Conflict
         );
         assert_eq!(
-            detach_standard_receipt(&receipt).unwrap().state,
+            receipt.artifact.detach_standard().unwrap().state,
             AttachmentState::Conflict
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "foreign");
@@ -1042,7 +775,7 @@ mod lifecycle_tests {
         permissions.set_mode(0o000);
         fs::set_permissions(&locked, permissions).unwrap();
         assert_eq!(
-            inspect_standard_receipt(&receipt).state,
+            receipt.artifact.inspect_standard().state,
             AttachmentState::Blocked
         );
         let mut permissions = fs::metadata(&locked).unwrap().permissions();
@@ -1050,49 +783,6 @@ mod lifecycle_tests {
         fs::set_permissions(&locked, permissions).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-/// A cheap, vendor-neutral fingerprint of the filesystem surface an
-/// attachment lives on — the freshness half of the inspection cache
-/// (ADR 018), mirroring the detection cache's own fingerprint rule
-/// (ADR 018).
-///
-/// Only artifacts with a directly stat-able presence produce one:
-///
-/// - `SymlinkReference` → the managed link's own state (its mtime and the
-///   path it currently points at), always `Some` — a missing link is a
-///   real, checkable state (`"absent"`), not the absence of a fingerprint;
-/// - everything else (vendor config entries, integration-owned native
-///   catalogues, text regions) → `None`, because the state lives inside
-///   vendor files whose locations this layer deliberately does not know;
-///   those verdicts are bounded by TTL + mutation invalidation alone.
-pub fn managed_artifact_fingerprint(artifact: &ManagedArtifact) -> Option<String> {
-    if let ManagedArtifact::SymlinkReference { path, target } = artifact {
-        let state = fs::symlink_metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(u128::MAX); // absent/untimed: a state, never "no info"
-        let link = fs::read_link(path)
-            .map(|resolved| resolved.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        return Some(format!("{state}:{link}:{}", target.display()));
-    }
-    None
-}
-
-/// Whether a managed artifact is still physically in place. The cheap,
-/// vendor-neutral half of "is this attachment still effective": only a
-/// directly stat-able artifact can answer without touching vendor state
-/// (`SymlinkReference` — the link must exist and still point where the
-/// receipt says). Everything else is the owning integration's verdict, so
-/// the answer is `false` here and callers fall back to receipt existence.
-pub fn managed_artifact_present(artifact: &ManagedArtifact) -> bool {
-    if let ManagedArtifact::SymlinkReference { path, target } = artifact {
-        return fs::read_link(path).is_ok_and(|resolved| resolved == *target);
-    }
-    false
 }
 
 #[cfg(test)]

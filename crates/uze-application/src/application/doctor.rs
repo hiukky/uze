@@ -50,7 +50,7 @@ impl Health<'_> {
     /// actually attached (ADR-033 / doctor spec: a degraded hook must be
     /// actionable, never hidden behind a healthy-native row).
     fn hook_health(&self, reconciliation: &ReconciliationReport) -> Vec<HookHealth> {
-        use uze_core::{hook::PortableHook, integration::receipt_location, store::PackageId};
+        use uze_core::{hook::PortableHook, store::PackageId};
         let Ok(id) = PackageId::from_qualified(
             &reconciliation.package_id,
             std::path::Path::new("plugin.json"),
@@ -100,7 +100,7 @@ impl Health<'_> {
                         _ => None,
                     },
                     delivery: hook_delivery_note(&plan.mechanism),
-                    artifact: attached.map(|entry| receipt_location(&entry.receipt)),
+                    artifact: attached.map(|entry| entry.receipt.artifact.location()),
                     state: attached.map(|entry| entry.inspection.state),
                 });
             }
@@ -720,7 +720,11 @@ fn quarantined_sentences(entries: &[uze_core::store::QuarantinedRegistration]) -
 /// harness: the generated wrapper keeps working without UZE, but it needs
 /// its own system dependency present.
 fn hook_delivery_note(mechanism: &ExposureMechanism) -> Option<String> {
-    let ExposureMechanism::ManagedHookConfig { wrapper, .. } = mechanism else {
+    let ExposureMechanism::Managed(uze_core::integration::ManagedArtifact::HookConfigEntry {
+        wrapper,
+        ..
+    }) = mechanism
+    else {
         return None;
     };
     let dependency = uze_core::hook::WRAPPER_DEPENDENCY;
@@ -737,13 +741,13 @@ mod delivery_note_tests {
     use super::*;
 
     fn managed(wrapper: &str) -> ExposureMechanism {
-        ExposureMechanism::ManagedHookConfig {
+        ExposureMechanism::Managed(uze_core::integration::ManagedArtifact::HookConfigEntry {
             config_file: std::path::PathBuf::from("/config/settings.json"),
             entry_name: "demo:protect".to_owned(),
             event: uze_core::hook::HookEvent::PreToolUse,
             expected: "{}".to_owned(),
             wrapper: std::path::PathBuf::from(wrapper),
-        }
+        })
     }
 
     #[test]

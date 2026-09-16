@@ -851,6 +851,12 @@ mod claude_native_coverage_tests {
         assert!(plan.provided_resource_identities.contains(&r_a.identity()));
         assert!(!plan.provided_resource_identities.contains(&r_b.identity()));
         // r_b should still be attachable via capability fallback
+        uze_core::state::record(
+            &UzeHome::at(_root.join("uze")),
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let plan_b = integration.exposure_plan(&r_b);
         assert!(!matches!(
             plan_b.mechanism,

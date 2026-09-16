@@ -144,7 +144,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(
@@ -186,7 +189,7 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
 /// directory or `mcp.json` — which every fixture in this file has — now
 /// qualifies for whole-package native delivery rather than per-Skill
 /// decomposition, so it can no longer exercise
-/// `ManagedUserScopeReference` naming resolution through the full
+/// Managed `SymlinkReference` naming resolution through the full
 /// `add_plugin` path. OpenCode has no package-level native delivery
 /// concept at all (`package_exposure_plan` stays at Core's `None`
 /// default for every package, unconditionally) and uses the same shared

@@ -4,8 +4,11 @@
 use std::{fs, path::PathBuf};
 
 use uze_core::{
-    UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
-    integration::IntegrationPort, router::CompatibilityRoute,
+    UzeHome, UzeStore,
+    capability::CapabilityKind,
+    exposure::{ExposureMechanism, ManagedArtifact},
+    integration::IntegrationPort,
+    router::CompatibilityRoute,
 };
 
 use uze_integrations::{
@@ -162,17 +165,16 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .iter()
             .find(|p| matches!(
                 p.mechanism,
-                ExposureMechanism::ManagedUserScopeReference { .. }
+                ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
             ))
             .unwrap()
             .mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
-    assert!(
-        claude_routes
-            .iter()
-            .any(|p| matches!(p.mechanism, ExposureMechanism::ManagedVendorConfig { .. }))
-    );
+    assert!(claude_routes.iter().any(|p| matches!(
+        p.mechanism,
+        ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry { .. })
+    )));
 
     assert!(
         opencode
@@ -194,7 +196,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     );
     assert!(matches!(
         opencode.exposure_plan(skill).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
     assert_eq!(
         opencode.exposure_plan(mcp).route,
@@ -202,7 +204,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     );
     assert!(matches!(
         opencode.exposure_plan(mcp).mechanism,
-        ExposureMechanism::ManagedVendorConfig { .. }
+        ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry { .. })
     ));
 
     // Prove the adversarial delivery writes one native OpenCode config entry

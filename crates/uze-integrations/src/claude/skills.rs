@@ -8,7 +8,7 @@ use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
     project::Resource,
     router::CompatibilityRoute,
@@ -68,11 +68,10 @@ impl ClaudeIntegration {
             }
             return ExposurePlan {
                 route: route_for_policy(policy),
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source: shim_root,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: shim_root,
+                }),
                 evidence,
             };
         }

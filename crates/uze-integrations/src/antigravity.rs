@@ -67,7 +67,6 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -475,10 +474,12 @@ impl IntegrationPort for AntigravityIntegration {
         }
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { .. } => {
                 // Materialize the generated wrapper first — and only when
                 // this resource owns the physical entry (a resolved shared
                 // artifact is authoritative; nothing new may replace it).
@@ -487,9 +488,10 @@ impl IntegrationPort for AntigravityIntegration {
                 {
                     skills::materialize_generated_skill(&self.uze_home, resource)?;
                 }
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -500,8 +502,9 @@ impl IntegrationPort for AntigravityIntegration {
                 entry_name,
                 command,
                 args,
-            ),
-            ExposureMechanism::ManagedHookConfig {
+            )?
+            .is_some(),
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 expected,
@@ -520,14 +523,12 @@ impl IntegrationPort for AntigravityIntegration {
                         path: config_file.clone(),
                         source,
                     })?;
-                Ok(Some(hook_projection::merge_named_entry(
-                    config_file,
-                    entry_name,
-                    &entry,
-                )?))
+                hook_projection::merge_named_entry(config_file, entry_name, &entry)?;
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -581,7 +582,7 @@ impl IntegrationPort for AntigravityIntegration {
                 expected,
                 Some((hook_projection::ANTIGRAVITY_TARGET, wrapper.as_path())),
             ),
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -638,7 +639,7 @@ impl IntegrationPort for AntigravityIntegration {
                 return Ok(detached);
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -685,11 +686,7 @@ impl AntigravityIntegration {
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
             evidence: "Antigravity CLI natively discovers Markdown custom agents from its global agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }

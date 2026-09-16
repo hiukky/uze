@@ -10,7 +10,7 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     project::Resource,
     router::CompatibilityRoute,
@@ -47,7 +47,7 @@ impl AntigravityIntegration {
         };
         ExposurePlan {
             route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -55,7 +55,7 @@ impl AntigravityIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: None,
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server once via `agy mcp add <name> <command> [args...]`, writing to ~/.gemini/config/mcp_config.json's mcpServers. The Antigravity MCP runtime remains native."
                 .to_owned(),
         }

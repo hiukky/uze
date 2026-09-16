@@ -9,7 +9,7 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     harness_runtime::resolve_real_executable,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
@@ -56,7 +56,7 @@ impl OpenCodeIntegration {
         };
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -64,7 +64,7 @@ impl OpenCodeIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: Some(true),
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server via `opencode mcp add <name> -- <command>` into opencode.json's mcp.servers.<name>.command array; OpenCode MCP runtime remains native. Verified `opencode mcp --help` exposes `add` (requires ` -- ` separator); no `remove` verb exists so detach stays direct JSON rewrite."
                 .to_owned(),
         }

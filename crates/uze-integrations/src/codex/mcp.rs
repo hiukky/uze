@@ -6,7 +6,7 @@ use std::{path::Path, path::PathBuf, process::Command};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     project::Resource,
     router::CompatibilityRoute,
@@ -41,7 +41,7 @@ impl CodexIntegration {
         };
         ExposurePlan {
             route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -49,7 +49,7 @@ impl CodexIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: None,
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server once via `codex mcp add`, writing to ~/.codex/config.toml's [mcp_servers.*] (no --scope flag exists; global is the only destination). Available to every future session in any project."
                 .to_owned(),
         }

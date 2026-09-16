@@ -18,7 +18,7 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     hook::{
         CommandHook, HOOKS_FILE_NAME, HarnessToolVocabulary, HookCapabilities, HookEffect,
@@ -1798,14 +1798,14 @@ pub(crate) fn hook_exposure_plan(
                 Some(shared_wrapper_path(uze_home, target)),
                 exec_form,
             ) {
-                Some(delivery) => ExposureMechanism::ManagedHookConfig {
+                Some(delivery) => ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
                     config_file,
                     entry_name: hook_entry_name(resource, &hook),
                     event: hook.event,
                     expected: serde_json::to_string(&delivery.entry)
                         .expect("hook entry serializes"),
                     wrapper: delivery.wrapper,
-                },
+                }),
                 None => {
                     undeliverable = Some(NO_WRAPPER_TEMPLATE);
                     ExposureMechanism::Unsupported {
@@ -1876,13 +1876,13 @@ pub(crate) fn antigravity_hook_exposure_plan(
                 .expect("hook exposure_plan is only reached for packages");
             let wrapper = shared_wrapper_path(uze_home, ANTIGRAVITY_TARGET);
             let entry = agy_named_entry(&hook, &wrapper, package_root);
-            ExposureMechanism::ManagedHookConfig {
+            ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name: hook_entry_name(resource, &hook),
                 event: hook.event,
                 expected: serde_json::to_string(&entry).expect("hook entry serializes"),
                 wrapper,
-            }
+            })
         }
     };
     let evidence = match (&compatibility.reason, undeliverable) {

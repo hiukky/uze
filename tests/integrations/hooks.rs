@@ -206,13 +206,13 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
 
     let plan = claude.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         event,
         expected: _expected,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("Claude hook plan is a managed config entry");
     };
@@ -587,13 +587,13 @@ fn codex_writes_its_own_hooks_json_command_form() {
 
     let plan = codex.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         event,
         expected,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("Codex hook plan is a managed config entry");
     };
@@ -753,7 +753,9 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
 
     let plan = integration.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Adaptable);
-    let uze_core::exposure::ExposureMechanism::ManagedHookFile { path } = &plan.mechanism else {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile { path }) =
+        &plan.mechanism
+    else {
         panic!("OpenCode hook plan is an owned bridge file");
     };
     assert_eq!(*path, bridge);
@@ -954,13 +956,13 @@ fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
 
     let plan = antigravity.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         expected,
         wrapper,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("an Antigravity hook is delivered as a managed hook config entry");
     };
@@ -1008,7 +1010,11 @@ fn antigravity_hook_delivery_never_touches_a_foreign_named_hook() {
     .unwrap();
 
     let attached = antigravity.attach(protect).unwrap().expect("hook attaches");
-    assert_eq!(attached, config);
+    assert!(matches!(
+        attached,
+        uze_core::integration::ManagedArtifact::HookConfigEntry { ref config_file, .. }
+            if *config_file == config
+    ));
     let receipt = antigravity.attach_receipt(protect).unwrap().unwrap();
     assert_eq!(
         antigravity.inspect_receipt(&receipt).state,

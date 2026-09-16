@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
@@ -244,11 +244,10 @@ impl OpenCodeIntegration {
             }
             return ExposurePlan {
                 route,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: source,
+                }),
                 evidence,
             };
         }

@@ -671,6 +671,12 @@ mod codex_native_coverage_tests {
         assert!(plan.provided_resource_identities.is_empty());
         // The uncovered skill must still be attachable through the normal
         // capability-level fallback — never silently dropped.
+        uze_core::state::record(
+            &UzeHome::at(_root.join("uze")),
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_a);
         assert!(!matches!(
             fallback.mechanism,

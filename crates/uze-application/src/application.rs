@@ -316,9 +316,7 @@ impl UzeApplication {
             return Ok(false);
         }
         for (_, receipt) in &for_integration {
-            if uze_core::integration::managed_artifact_fingerprint(&receipt.artifact).is_some()
-                && !uze_core::integration::managed_artifact_present(&receipt.artifact)
-            {
+            if receipt.artifact.fingerprint().is_some() && !receipt.artifact.is_in_place() {
                 // A stat-able artifact that is not in place (or
                 // re-pointed): not effective, re-attach to heal.
                 return Ok(false);
@@ -1042,8 +1040,7 @@ impl UzeApplication {
             package_id,
             &self.integration_ports(),
             |ledger_key, receipt, integration| {
-                let fingerprint =
-                    uze_core::integration::managed_artifact_fingerprint(&receipt.artifact);
+                let fingerprint = receipt.artifact.fingerprint();
                 if let Some(cached) = self
                     .inspection_cache
                     .get(ledger_key, fingerprint.as_deref())

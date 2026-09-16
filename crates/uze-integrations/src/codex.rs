@@ -22,7 +22,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
+        default_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -494,10 +494,12 @@ impl IntegrationPort for CodexIntegration {
         })
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { .. } => {
                 // Only materialize when this resource is the one that owns
                 // the physical entry. When the shared-root resolution reused
                 // another integration's receipt (resolved_artifact_target
@@ -510,9 +512,10 @@ impl IntegrationPort for CodexIntegration {
                 } else if resource.capability.kind == CapabilityKind::Agent {
                     self.materialize_agent(resource)?;
                 }
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -525,16 +528,17 @@ impl IntegrationPort for CodexIntegration {
                     entry_name,
                     command,
                     args,
-                )
+                )?
+                .is_some()
             }
-            ExposureMechanism::ManagedHookConfig {
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
                 wrapper,
             } => {
-                let path = hook_projection::attach_event_entry(
+                hook_projection::attach_event_entry(
                     &self.uze_home,
                     self.id(),
                     config_file,
@@ -543,10 +547,11 @@ impl IntegrationPort for CodexIntegration {
                     expected,
                     Some(("codex", wrapper.as_path())),
                 )?;
-                Ok(Some(path))
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn attach_package(
@@ -664,7 +669,7 @@ impl IntegrationPort for CodexIntegration {
                     &package_root,
                 )
             }
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -708,7 +713,7 @@ impl IntegrationPort for CodexIntegration {
                 }
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -731,11 +736,7 @@ impl CodexIntegration {
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.toml"),
-                source: self.generated_agents_dir.join(format!("{entry_name}.toml")),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.toml")), target: self.generated_agents_dir.join(format!("{entry_name}.toml")) }),
             evidence: "Codex natively loads standalone custom-agent TOML files from ~/.codex/agents/. UZE deterministically generates that native TOML from the portable Markdown definition and exposes it through a receipt-owned reference.".to_owned(),
         }
     }

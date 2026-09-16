@@ -140,7 +140,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze_core::Result<()> {
         self.0.install(home, detection)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(

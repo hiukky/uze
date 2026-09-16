@@ -61,7 +61,7 @@ with it today (ADR-014 explicitly anticipates this).
 
 | Receipt | Inspect | Detach | Drift-safe |
 |---|---|---|---|
-| `VendorConfigEntry` (MCP only — Skills use the shared `SymlinkReference` path via `ManagedUserScopeReference::attach()`/standard detach) | Reads `opencode.json`, checks `mcp.<name>` against the receipt's recorded command/args/transport/cwd/env/enabled | Re-inspects immediately before mutating (ADR-009); removes only the matched key, preserves every other `mcp` entry and top-level config key | Yes — `mcp_inspection_tolerates_unrelated_fields_and_detaches_only_owned_entry` asserts a `foreign` entry and an `unrelated` top-level key both survive detach |
+| `VendorConfigEntry` (MCP only — Skills use the shared `SymlinkReference` path via `ManagedArtifact::attach_standard`/`detach_standard`) | Reads `opencode.json`, checks `mcp.<name>` against the receipt's recorded command/args/transport/cwd/env/enabled | Re-inspects immediately before mutating (ADR-009); removes only the matched key, preserves every other `mcp` entry and top-level config key | Yes — `mcp_inspection_tolerates_unrelated_fields_and_detaches_only_owned_entry` asserts a `foreign` entry and an `unrelated` top-level key both survive detach |
 
 OpenCode is the only integration that writes its vendor config file
 **directly** (`attach_mcp_config`/`detach_receipt` parse-and-rewrite JSON)

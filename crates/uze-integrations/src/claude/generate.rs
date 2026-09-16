@@ -804,7 +804,13 @@ mod generated_native_tests {
         assert!(!covered.contains(&r_out.identity()));
 
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = ClaudeIntegration::new(_root.join("claude"), uze_home);
+        let integration = ClaudeIntegration::new(_root.join("claude"), uze_home.clone());
+        uze_core::state::record(
+            &uze_home,
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_out);
         assert!(!matches!(
             fallback.mechanism,

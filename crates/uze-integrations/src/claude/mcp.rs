@@ -6,7 +6,7 @@ use std::{fs, path::Path, path::PathBuf, process::Command};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     project::Resource,
     router::CompatibilityRoute,
@@ -41,7 +41,7 @@ impl ClaudeIntegration {
         };
         ExposurePlan {
             route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -49,7 +49,7 @@ impl ClaudeIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: None,
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server once via `claude mcp add --scope user --transport stdio`, writing to ~/.claude.json's mcpServers. Available to every future session in any project with no --plugin-dir-style flag."
                 .to_owned(),
         }

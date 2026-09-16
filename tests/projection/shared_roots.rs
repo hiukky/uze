@@ -105,7 +105,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn status(&self, home: &UzeHome) -> uze_core::integration::IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(

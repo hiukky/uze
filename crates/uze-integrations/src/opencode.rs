@@ -29,8 +29,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, active_plugin_name,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
-        qualified_exposure_name_candidates,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     persistence::write_atomic,
     preference::{
@@ -280,20 +279,23 @@ impl IntegrationPort for OpenCodeIntegration {
             ),
         }
     }
-    fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { .. } => {
                 if resource.capability.kind == CapabilityKind::AgentSkill {
                     self.materialize_or_verify_skill(resource)?;
                 }
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedHookFile { path } => {
+            ManagedArtifact::ManagedHookFile { path } => {
                 self.attach_hook_bridge(resource, path)?;
-                Ok(Some(path.clone()))
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -321,13 +323,14 @@ impl IntegrationPort for OpenCodeIntegration {
                             &self.config_path,
                         )
                     {
-                        return Ok(path);
+                        return Ok(path.and(Some(artifact.clone())));
                     }
                 }
-                attach_mcp_config(&self.config_path, entry_name, command, args)
+                attach_mcp_config(&self.config_path, entry_name, command, args)?.is_some()
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -344,7 +347,7 @@ impl IntegrationPort for OpenCodeIntegration {
             enabled,
         } = &receipt.artifact
         else {
-            return inspect_standard_receipt(receipt);
+            return receipt.artifact.inspect_standard();
         };
         let bytes = match fs::read(&self.config_path) {
             Ok(bytes) => bytes,
@@ -402,7 +405,7 @@ impl IntegrationPort for OpenCodeIntegration {
             if let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact {
                 return self.detach_hook_bridge(receipt, path);
             }
-            let detached = detach_standard_receipt(receipt)?;
+            let detached = receipt.artifact.detach_standard()?;
             if detached.state == AttachmentState::Missing
                 && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
             {
@@ -481,11 +484,7 @@ impl OpenCodeIntegration {
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
             evidence: "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }
@@ -519,9 +518,9 @@ impl OpenCodeIntegration {
                         );
                     }
                 };
-                ExposureMechanism::ManagedHookFile {
+                ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile {
                     path: hook_projection::opencode_bridge_path(self.config_root(), package_id),
-                }
+                })
             }
         };
         let base = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file, so the delivered artifact is a generated Plugin.define plugin that IS the wrapper: it registers ctx.tool.hook callbacks and runs the authored handlers sequentially on the harness's embedded Bun runtime against the portable HOOK_* contract (per-handler timeouts, PLUGIN_ROOT injected, first-deny-wins, fail-closed by effect) with the package's groups as data. The V2 tool hooks carry the tool input but no block signal, and the only decision point (permission.evaluate) carries the action's resources rather than the input, so deny/ask are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the plugin can never be loaded twice.";

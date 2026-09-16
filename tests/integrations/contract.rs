@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use uze_core::{
     UzeHome, UzeStore,
     capability::CapabilityKind,
-    exposure::{ExposureMechanism, ExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
     router::{CompatibilityRoute, HarnessCapabilities},
 };
@@ -102,11 +102,10 @@ impl IntegrationPort for FakeIntegration {
     fn exposure_plan(&self, resource: &uze_core::Resource) -> ExposurePlan {
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: PathBuf::from("/fake-harness/skills"),
-                entry_name: "uze-e2e".to_owned(),
-                source: resource.capability.path.parent().unwrap().to_path_buf(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                path: PathBuf::from("/fake-harness/skills").join("uze-e2e"),
+                target: resource.capability.path.parent().unwrap().to_path_buf(),
+            }),
             evidence: "fake managed exposure".to_owned(),
         }
     }
@@ -143,7 +142,7 @@ fn a_new_peer_integration_needs_no_core_change() {
     assert_eq!(skill.route, CompatibilityRoute::Native);
     assert!(matches!(
         skill.mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     fs::remove_dir_all(home_root).unwrap();
@@ -193,13 +192,14 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
 
     assert!(matches!(
         claude.exposure_plan(resource).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let attached = claude
         .attach(resource)
         .unwrap()
-        .expect("managed attachment path");
+        .expect("managed attachment path")
+        .location();
     assert!(attached.is_symlink());
     assert_eq!(attached.parent().unwrap(), claude_home.join("skills"));
 
@@ -213,7 +213,7 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
     );
 
     // Idempotent: attaching again resolves to the same entry, no error.
-    let attached_again = claude.attach(resource).unwrap().unwrap();
+    let attached_again = claude.attach(resource).unwrap().unwrap().location();
     assert_eq!(attached, attached_again);
 
     fs::remove_dir_all(home_root).unwrap();
@@ -241,13 +241,14 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
 
     assert!(matches!(
         codex.exposure_plan(resource).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let attached = codex
         .attach(resource)
         .unwrap()
-        .expect("managed attachment path");
+        .expect("managed attachment path")
+        .location();
     assert!(attached.is_symlink());
     // The managed reference points at UZE's generated wrapper skill
     // (name = stable namespaced label `uze-agent-skill-conformance:uze-e2e`,
@@ -267,7 +268,7 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
     );
 
     // Idempotent, and independent of Claude's own attachment state.
-    let attached_again = codex.attach(resource).unwrap().unwrap();
+    let attached_again = codex.attach(resource).unwrap().unwrap().location();
     assert_eq!(attached, attached_again);
     assert!(!uze_core::state::is_installed(&uze_home, "claude-code"));
 
@@ -321,15 +322,15 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
     }
 
     let claude_plan = claude.exposure_plan(resource);
-    let ExposureMechanism::ManagedVendorConfig {
+    let ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
         entry_name,
         command,
         args,
         ..
-    } = &claude_plan.mechanism
+    }) = &claude_plan.mechanism
     else {
         panic!(
-            "expected ManagedVendorConfig, got {:?}",
+            "expected a managed VendorConfigEntry, got {:?}",
             claude_plan.mechanism
         );
     };
@@ -338,13 +339,13 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
     assert!(args.is_empty());
 
     let codex_plan = codex.exposure_plan(resource);
-    let ExposureMechanism::ManagedVendorConfig {
+    let ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
         entry_name: codex_entry_name,
         ..
-    } = &codex_plan.mechanism
+    }) = &codex_plan.mechanism
     else {
         panic!(
-            "expected ManagedVendorConfig, got {:?}",
+            "expected a managed VendorConfigEntry, got {:?}",
             codex_plan.mechanism
         );
     };

@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use uze_core::{UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism, integration::IntegrationPort, router::CompatibilityRoute};
+use uze_core::{UzeHome, UzeStore, capability::CapabilityKind, exposure::{ExposureMechanism, ManagedArtifact}, integration::IntegrationPort, router::CompatibilityRoute};
 
 use uze_integrations::{
     antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
@@ -146,7 +146,7 @@ fn one_canonical_package_reaches_every_harness_through_its_most_native_safe_repr
     assert_eq!(opencode_plan.route, CompatibilityRoute::Native);
     assert!(matches!(
         opencode_plan.mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let _ = std::fs::remove_dir_all(root);

@@ -24,8 +24,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
-        qualified_exposure_name_candidates,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -527,37 +526,41 @@ impl IntegrationPort for ClaudeIntegration {
         PublicationStatus::Published
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<std::path::PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference {
-                source, entry_name, ..
-            } => {
-                if resource.capability.kind != CapabilityKind::AgentSkill {
-                    return Ok(Some(plan.mechanism.attach()?));
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { path, target } => {
+                if resource.capability.kind == CapabilityKind::AgentSkill {
+                    let skill_source_dir = resource
+                        .capability
+                        .path
+                        .parent()
+                        .expect("SKILL.md has a parent");
+                    let entry_name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .expect("a managed Skill entry has a UTF-8 name");
+                    // The shim's own plugin directory gets the stable
+                    // namespaced label (`flow:review`), while the *manifest
+                    // plugin name* stays the namespace (`flow`): Claude then
+                    // exposes the skill as `/flow:review` (ADR-026) instead
+                    // of double namespacing it (`/flow:flow:review`).
+                    let namespace = active_plugin_name(&self.uze_home, resource);
+                    let policy = resource.skill_invocation();
+                    materialize_shim(
+                        target,
+                        skill_source_dir,
+                        entry_name,
+                        namespace.as_deref(),
+                        &policy,
+                    )?;
                 }
-                let skill_source_dir = resource
-                    .capability
-                    .path
-                    .parent()
-                    .expect("SKILL.md has a parent");
-                // The shim's own plugin directory gets the stable namespaced
-                // label (`flow:review`), while the *manifest plugin name*
-                // stays the namespace (`flow`): Claude then exposes the
-                // skill as `/flow:review` (ADR-026) instead of double
-                // namespacing it (`/flow:flow:review`).
-                let namespace = active_plugin_name(&self.uze_home, resource);
-                let policy = resource.skill_invocation();
-                materialize_shim(
-                    source,
-                    skill_source_dir,
-                    entry_name,
-                    namespace.as_deref(),
-                    &policy,
-                )?;
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -570,16 +573,17 @@ impl IntegrationPort for ClaudeIntegration {
                     entry_name,
                     command,
                     args,
-                )
+                )?
+                .is_some()
             }
-            ExposureMechanism::ManagedHookConfig {
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
                 wrapper,
             } => {
-                let path = hook_projection::attach_event_entry(
+                hook_projection::attach_event_entry(
                     &self.uze_home,
                     self.id(),
                     config_file,
@@ -588,10 +592,11 @@ impl IntegrationPort for ClaudeIntegration {
                     expected,
                     Some(("claude", wrapper.as_path())),
                 )?;
-                Ok(Some(path))
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -646,7 +651,7 @@ impl IntegrationPort for ClaudeIntegration {
                     &marketplace_root,
                 )
             }
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -698,7 +703,7 @@ impl IntegrationPort for ClaudeIntegration {
                 })
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -719,11 +724,7 @@ impl ClaudeIntegration {
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
             evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }
