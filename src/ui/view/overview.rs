@@ -439,7 +439,7 @@ impl PromptColumns {
         style: Style,
     ) -> Line<'static> {
         let gap = " ".repeat(COLUMN_GAP);
-        let workspace = clip_chars(workspace, self.workspace);
+        let workspace = crate::ui::elide_tail(workspace, self.workspace);
         Line::from(vec![
             marker,
             Span::styled(
@@ -454,15 +454,6 @@ impl PromptColumns {
             Span::styled(prompt.to_owned(), style),
         ])
     }
-}
-
-fn clip_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        return value.to_owned();
-    }
-    let mut clipped: String = value.chars().take(max.saturating_sub(1)).collect();
-    clipped.push('…');
-    clipped
 }
 
 /// Lays the listing out newest-first within `budget` lines. When the

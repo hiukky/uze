@@ -1062,22 +1062,9 @@ fn caveats(axes: &[AxisPlan], width: u16) -> Vec<Line<'static>> {
 /// mark reads as one block.
 fn wrapped(text: &str, indent: usize, hang: usize, width: u16, color: Color) -> Vec<Line<'static>> {
     let room = (width as usize).saturating_sub(indent + hang).max(20);
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > room {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
+    crate::ui::fold(text, room)
         .into_iter()
+        .filter(|line| !line.is_empty())
         .enumerate()
         .map(|(index, line)| {
             let lead = if index == 0 { indent } else { indent + hang };

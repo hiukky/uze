@@ -883,13 +883,8 @@ pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
     let Some(i) = cut else {
         return;
     };
-    // Room for however wide this theme's elision marker actually is.
-    let keep = max
-        .saturating_sub(used)
-        .saturating_sub(theme::width(Symbol::Ellipsis) as usize);
-    let mut truncated: String = line.spans[i].content.chars().take(keep).collect();
-    truncated.push_str(&theme::glyph(Symbol::Ellipsis));
-    line.spans[i].content = std::borrow::Cow::Owned(truncated);
+    line.spans[i].content =
+        std::borrow::Cow::Owned(crate::ui::elide_tail(&line.spans[i].content, max - used));
     line.spans.truncate(i + 1);
 }
 

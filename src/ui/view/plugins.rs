@@ -31,8 +31,8 @@ use uze_application::application::{DoctorReport, MarketplacePluginSummary, Plugi
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{DrawerStatus, drawer_footer_height, fold, render_drawer_footer};
+use super::super::{content_area, fold, render_screen_header, side_panel_area};
+use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's

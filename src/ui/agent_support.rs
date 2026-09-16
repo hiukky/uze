@@ -217,7 +217,7 @@ fn styled_row(
     width: usize,
 ) -> Line<'static> {
     let (icon, icon_color) = icon_for(state);
-    let value = clip(value, width.saturating_sub(3));
+    let value = crate::ui::elide_tail(value, width.saturating_sub(3));
     let gap = width
         .saturating_sub(2 + label.chars().count() + value.chars().count())
         .max(1);
@@ -264,7 +264,10 @@ fn reason_line(support: &AgentSupport, capability: CapabilityKind, width: usize)
         capability_label(capability).to_lowercase()
     );
     Line::from(Span::styled(
-        format!("  {}", clip(&text, width.saturating_sub(2))),
+        format!(
+            "  {}",
+            crate::ui::elide_tail(&text, width.saturating_sub(2))
+        ),
         theme::fg(Token::TextMuted),
     ))
 }
@@ -317,15 +320,6 @@ fn capability_state(support: &AgentSupport, kind: CapabilityKind) -> CapabilityS
     } else {
         CapabilityState::Unavailable
     }
-}
-
-fn clip(value: &str, max: usize) -> String {
-    let mut clipped = value.chars().take(max).collect::<String>();
-    if value.chars().count() > max {
-        clipped.pop();
-        clipped.push('…');
-    }
-    clipped
 }
 
 pub(crate) fn capability_label(kind: CapabilityKind) -> &'static str {

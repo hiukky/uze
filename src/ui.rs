@@ -465,26 +465,51 @@ const CONTENT_INSET_LEFT: u16 = 2;
 const CONTENT_INSET_RIGHT: u16 = 2;
 const CONTENT_INSET_TOP: u16 = 1;
 
-/// `text` broken between words into lines of at most `measure` columns; a
-/// single word longer than that stands on a line of its own.
-pub(crate) fn wrap_words(text: &str, measure: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
+/// `text` broken between words into rows of at most `width` columns, with
+/// a word wider than a row broken across rows — the one wrapper every
+/// surface folds prose with. Empty text is one empty row.
+///
+/// Folding *before* a paragraph is authored is what keeps a row index a
+/// screen row: the plugin drawer anchors its two clickable rows (the
+/// marketplace name, the address under it) by counting authored lines, and
+/// a description that ratatui's own `Wrap` folded afterwards pushed the
+/// drawn rows down and left the targets sitting above them.
+pub(crate) fn fold(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
+    }
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
     for word in text.split_whitespace() {
-        let cells = |text: &str| Span::raw(text).width();
-        let wanted = cells(&line) + usize::from(!line.is_empty()) + cells(word);
-        if !line.is_empty() && wanted > measure {
-            lines.push(std::mem::take(&mut line));
+        // A word wider than the row is broken across rows rather than
+        // left to overflow — the paragraph's own wrapper does the same,
+        // and a bare URL in a description is exactly that word.
+        let mut word = word;
+        while word.chars().count() > width {
+            if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            let split = word
+                .char_indices()
+                .nth(width)
+                .map_or(word.len(), |(index, _)| index);
+            let (head, tail) = word.split_at(split);
+            rows.push(head.to_owned());
+            word = tail;
         }
-        if !line.is_empty() {
-            line.push(' ');
+        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
+        if projected > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
         }
-        line.push_str(word);
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
     }
-    if !line.is_empty() {
-        lines.push(line);
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
     }
-    lines
+    rows
 }
 
 /// A hint line for `actions`, each printed with the key that reaches it

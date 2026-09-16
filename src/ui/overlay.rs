@@ -927,7 +927,7 @@ fn render_dialog(
             theme::fg(Token::TextMuted)
         };
         lines.extend(
-            crate::ui::wrap_words(paragraph, measure)
+            crate::ui::fold(paragraph, measure)
                 .into_iter()
                 .map(|line| Line::from(Span::styled(line, style))),
         );
