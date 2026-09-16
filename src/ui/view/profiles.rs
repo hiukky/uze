@@ -219,7 +219,7 @@ fn render_profile_tree(
         Paragraph::new(Span::styled("+ new", theme::fg(Token::Accent))).alignment(Alignment::Right),
         header[3],
     );
-    hits.push((header[3], Hit::NewProfile));
+    hits.push((header[3], Hit::OfferedAction(uze_keys::Action::NewProfile)));
     let subtitle = match (model.profile_preview_open, model.selected_profile()) {
         (true, Some(profile)) => preview_summary(model, &profile.id),
         _ => "Configure preferences and apply them across harnesses".to_owned(),

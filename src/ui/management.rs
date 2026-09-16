@@ -213,26 +213,6 @@ fn context_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Where an intent takes the operator out of the modal rather than
-/// being performed inside it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Leaving {
-    Close,
-    /// Closed, with this workspace tab selected.
-    CloseToTab(u64),
-    Quit,
-}
-
-/// The intents that end the modal rather than being dispatched in it.
-pub(crate) fn leaving(intent: &Intent) -> Option<Leaving> {
-    match intent {
-        Intent::Quit => Some(Leaving::Quit),
-        Intent::SwitchToWorkspace => Some(Leaving::Close),
-        Intent::SwitchToWorkspaceTab(tab) => Some(Leaving::CloseToTab(*tab)),
-        _ => None,
-    }
-}
-
 // --- Geometry -----------------------------------------------------------
 
 /// Where the modal sits in `frame`: wide, because it holds whole screens

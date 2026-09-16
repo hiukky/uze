@@ -35,11 +35,11 @@ pub(crate) enum Intent {
     Quit,
     /// Closes the modal — the same action that opened it, or the close
     /// mark on its title.
-    SwitchToWorkspace,
+    CloseModal,
     /// Leave management and re-select this tab in the workspace. Carries
     /// no space id: `Session::select_tab` moves the selected space along
     /// with the tab when they differ.
-    SwitchToWorkspaceTab(u64),
+    CloseToTab(u64),
     /// Delete the current workspace's recorded prompts.
     ClearPromptHistory,
     /// Write the operator's keyboard to `keys.json`. The keymap is already
@@ -114,8 +114,8 @@ impl Intent {
         match self {
             Self::None => "none",
             Self::Quit => "quit",
-            Self::SwitchToWorkspace => "switch_to_workspace",
-            Self::SwitchToWorkspaceTab(_) => "switch_to_workspace_tab",
+            Self::CloseModal => "close_modal",
+            Self::CloseToTab(_) => "close_to_tab",
             Self::ClearPromptHistory => "clear_prompt_history",
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
@@ -178,10 +178,7 @@ pub(crate) fn dispatch(
     // parent, so a refresh's spans belong to the press that asked for it.
     let _span = tracing::info_span!("tui.intent", intent = intent.name()).entered();
     match intent {
-        Intent::None
-        | Intent::Quit
-        | Intent::SwitchToWorkspace
-        | Intent::SwitchToWorkspaceTab(_) => {}
+        Intent::None | Intent::Quit | Intent::CloseModal | Intent::CloseToTab(_) => {}
         Intent::OpenThemePicker => {
             // Cheap enough to read here rather than on a thread: a JSON
             // read and a directory listing, the same work `uze theme list`

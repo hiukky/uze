@@ -1802,7 +1802,7 @@ impl TuiModel {
     pub(crate) fn activate_selected_prompt(&mut self) -> super::worker::Intent {
         self.prompt_history
             .get(self.overview_prompt_selected)
-            .map(|entry| super::worker::Intent::SwitchToWorkspaceTab(entry.tab_id))
+            .map(|entry| super::worker::Intent::CloseToTab(entry.tab_id))
             .unwrap_or(super::worker::Intent::None)
     }
 

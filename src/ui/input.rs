@@ -118,7 +118,7 @@ impl TuiModel {
     /// modal changes nothing here to look at.
     fn step_landed(&self, action: Action, intent: &Intent) -> bool {
         match action {
-            Action::SwitchMode => *intent == Intent::SwitchToWorkspace,
+            Action::SwitchMode => *intent == Intent::CloseModal,
             // Wraps, so it always moves.
             Action::NextScreen | Action::PreviousScreen => true,
             Action::OpenThemePicker => *intent == Intent::OpenThemePicker,
@@ -147,7 +147,7 @@ impl TuiModel {
                 self.overlay = Overlay::HarnessHelp;
                 Intent::None
             }
-            Action::SwitchMode => Intent::SwitchToWorkspace,
+            Action::SwitchMode => Intent::CloseModal,
             Action::Quit => Intent::Quit,
             Action::Refresh => Intent::Refresh,
             // Appearance is machine-wide, so it is not a route's own
@@ -439,7 +439,7 @@ impl TuiModel {
                 self.profile_panel = ProfilePanel::List;
                 return Intent::None;
             }
-            return Intent::SwitchToWorkspace;
+            return Intent::CloseModal;
         }
         // Slides the open drawer away — the fetched detail stays cached, so
         // reopening the same selection is instant.
@@ -448,7 +448,7 @@ impl TuiModel {
                 screen.drawer_open = false;
                 Intent::None
             }
-            _ => Intent::SwitchToWorkspace,
+            _ => Intent::CloseModal,
         }
     }
 

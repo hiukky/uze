@@ -25,7 +25,6 @@ pub(crate) enum Hit {
     OpenLink(String),
     ExtensionRow(usize),
     HarnessRow(usize),
-    NewProfile,
     /// A harness's row in the profile preview: opens or closes it.
     PreviewHarness(usize),
     ProfileRow(usize),
@@ -178,10 +177,6 @@ impl TuiModel {
                 self.harness_screen.selected = index;
                 self.harness_screen.drawer_open = true;
                 self.focus = Focus::Content;
-                Intent::None
-            }
-            Hit::NewProfile => {
-                self.overlay = Overlay::NewProfile(String::new());
                 Intent::None
             }
             Hit::PreviewHarness(index) => {

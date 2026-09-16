@@ -989,7 +989,10 @@ fn n_opens_new_profile_overlay_and_submitting_creates_it() {
 #[test]
 fn clicking_new_profile_opens_the_profile_overlay() {
     let mut model = model_with_data();
-    model.hits = vec![(Rect::new(10, 4, 5, 1), Hit::NewProfile)];
+    model.hits = vec![(
+        Rect::new(10, 4, 5, 1),
+        Hit::OfferedAction(uze_keys::Action::NewProfile),
+    )];
 
     assert_eq!(model.click(12, 4), Intent::None);
     assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
@@ -3123,7 +3126,7 @@ fn activating_a_prompt_returns_to_its_tab() {
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(intent, Intent::SwitchToWorkspaceTab(3));
+    assert_eq!(intent, Intent::CloseToTab(3));
 }
 
 #[test]
@@ -3136,7 +3139,7 @@ fn an_empty_history_leaves_enter_to_the_routes_own_action() {
 
     assert_ne!(
         model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Intent::SwitchToWorkspaceTab(0)
+        Intent::CloseToTab(0)
     );
 }
 
@@ -3199,7 +3202,7 @@ fn a_prompt_row_is_clickable_and_hoverable_at_the_same_rect() {
     );
     assert_eq!(model.overview_prompt_hovered, Some(1));
 
-    assert_eq!(model.click(column, row), Intent::SwitchToWorkspaceTab(2));
+    assert_eq!(model.click(column, row), Intent::CloseToTab(2));
     assert_eq!(model.overview_prompt_selected, 1);
 }
 
