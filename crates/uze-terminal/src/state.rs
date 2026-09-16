@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::launch::Launch;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct SpaceId(pub u64);
@@ -43,11 +45,9 @@ pub struct Workspace {
 /// label is: persisted, restored, reported, and never read by the server,
 /// which spawns panes the same way whichever it is. What a kind *means* is
 /// the client's business at placement and at drawing.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SpaceKind {
-    /// Every agent in a slot of its own — what every space was before
-    /// kinds existed, and what an absent kind reads back as.
-    #[default]
+    /// Every agent in a slot of its own.
     Worktree,
     /// Every agent in the space's own directory.
     Workspace,
@@ -157,143 +157,82 @@ pub enum OpenedSpace {
     Created { space: SpaceId, pane: PaneId },
 }
 
-/// A space to recreate on startup, restoring the shape (not the running
-/// state — see [`Session::restore`]) a previous server instance had before
-/// it stopped, whether cleanly or not (a crash, a reboot — anything that
-/// left no chance to save more than this). Deliberately minimal: just
-/// enough to reopen the same tabs in the same places, with no notion here
-/// of what command a tab's pane should relaunch with — [`Session::restore`]
-/// only rebuilds structure; the caller spawns each pane afterward however
-/// it sees fit.
-pub struct SpaceSeed {
-    pub label: String,
-    pub root: PathBuf,
-    pub kind: SpaceKind,
-    pub tabs: Vec<TabSeed>,
+/// The size a pane is spawned at before any client has said how large it
+/// is drawn — a restored pane, or a space opened on a client's behalf with
+/// no size to go by. The next resize from a client that shows it corrects
+/// it.
+pub(crate) const PLACEHOLDER_PANE_SIZE: (u16, u16) = (80, 24);
+
+/// A space as it outlives the server: the shape a previous instance had,
+/// and what each of its tabs was launched as — written on every structural
+/// change, so a crash or a reboot leaves no more than one change unsaved.
+#[derive(Deserialize, Serialize)]
+pub(crate) struct SpaceSeed {
+    pub(crate) label: String,
+    pub(crate) root: PathBuf,
+    pub(crate) kind: SpaceKind,
+    pub(crate) tabs: Vec<TabSeed>,
 }
 
-pub struct TabSeed {
-    pub label: String,
-    pub cwd: PathBuf,
+#[derive(Deserialize, Serialize)]
+pub(crate) struct TabSeed {
+    pub(crate) label: String,
+    pub(crate) cwd: PathBuf,
     /// Which tab of this same space this one belongs with, by index into
     /// `SpaceSeed::tabs` — a seed cannot name a [`TabId`], since restoring
     /// mints fresh ones. Out of range, or pointing at itself, restores as
     /// `None`.
-    pub agent: Option<usize>,
-    /// The launch environment the tab is respawned with, beside its
-    /// command.
-    pub env: crate::launch::Environment,
+    pub(crate) agent: Option<usize>,
+    pub(crate) launch: Launch,
 }
 
 impl Session {
     pub fn new(root: PathBuf, kind: SpaceKind, columns: u16, rows: u16) -> Self {
-        let pane = Pane {
-            id: PaneId(1),
-            cwd: root.clone(),
-            columns,
-            rows,
-            process: "shell".to_owned(),
-        };
-        let tab = Tab {
-            id: TabId(1),
-            label: "shell".to_owned(),
-            agent: None,
-            env: Vec::new(),
-            pane,
-        };
-        let space = Space {
-            id: SpaceId(1),
-            label: space_label(&root),
-            root,
-            kind,
-            tabs: vec![tab],
-            selected_tab: TabId(1),
-        };
+        let mut session = Self::empty();
+        session.add_space(space_label(&root), root, kind, columns, rows);
+        session
+    }
+
+    fn empty() -> Self {
         Self {
             workspace: Workspace {
-                spaces: vec![space],
+                spaces: Vec::new(),
                 selected_space: SpaceId(1),
             },
-            next_space_id: 2,
-            next_tab_id: 2,
-            next_pane_id: 2,
+            next_space_id: 1,
+            next_tab_id: 1,
+            next_pane_id: 1,
         }
     }
 
-    /// Rebuilds the space/tab shape `seeds` describes, allocating ids the
-    /// same sequential way [`Session::new`]/[`Session::add_space`] do so
-    /// the result is indistinguishable from one built up through ordinary
-    /// use. A seed space with no tabs is dropped (a space always has
-    /// somewhere to focus); if nothing is left standing, falls back to
-    /// [`Session::new`]'s ordinary single-space bootstrap rather than
-    /// producing a workspace with zero spaces.
-    pub fn restore(
-        root: PathBuf,
-        kind: SpaceKind,
-        columns: u16,
-        rows: u16,
-        seeds: Vec<SpaceSeed>,
-    ) -> Self {
-        let mut next_space_id = 1;
-        let mut next_tab_id = 1;
-        let mut next_pane_id = 1;
-        let mut spaces = Vec::new();
-        for seed in seeds {
-            if seed.tabs.is_empty() {
-                continue;
-            }
-            let space_id = SpaceId(next_space_id);
-            next_space_id += 1;
-            // Every tab of this space gets its id before any `agent` is
-            // resolved: a seed names its agent by position, and the tab at
-            // that position may not have been minted yet.
-            let first_tab_id = next_tab_id;
+    /// Rebuilds the shape `seeds` describe, minting ids the way ordinary
+    /// use does, and pairs every pane with the launch it is to be spawned
+    /// with. A seed space with no tabs is dropped — a space always has
+    /// somewhere to focus — and `None` is a workspace with nothing left
+    /// standing.
+    pub(crate) fn restore(seeds: Vec<SpaceSeed>) -> Option<(Self, Vec<(PaneId, Launch)>)> {
+        let (columns, rows) = PLACEHOLDER_PANE_SIZE;
+        let mut session = Self::empty();
+        let mut launches = Vec::new();
+        for seed in seeds.into_iter().filter(|seed| !seed.tabs.is_empty()) {
+            // Tab ids are minted in order, so the tab a seed names by
+            // position is known before it exists.
+            let first_tab = session.next_tab_id;
             let seeded = seed.tabs.len();
-            let mut tabs = Vec::new();
-            for (index, tab_seed) in seed.tabs.into_iter().enumerate() {
-                let tab_id = TabId(next_tab_id);
-                let pane_id = PaneId(next_pane_id);
-                next_tab_id += 1;
-                next_pane_id += 1;
-                tabs.push(Tab {
-                    id: tab_id,
-                    label: tab_seed.label,
-                    agent: tab_seed
-                        .agent
-                        .filter(|agent| *agent != index && *agent < seeded)
-                        .map(|agent| TabId(first_tab_id + agent as u64)),
-                    env: tab_seed.env,
-                    pane: Pane {
-                        id: pane_id,
-                        cwd: tab_seed.cwd,
-                        columns,
-                        rows,
-                        process: "shell".to_owned(),
-                    },
-                });
+            let mut tabs = Vec::with_capacity(seeded);
+            for (index, tab) in seed.tabs.into_iter().enumerate() {
+                let agent = tab
+                    .agent
+                    .filter(|agent| *agent != index && *agent < seeded)
+                    .map(|agent| TabId(first_tab + agent as u64));
+                let minted = session.mint_tab(tab.label, agent, tab.cwd, columns, rows);
+                launches.push((minted.pane.id, tab.launch));
+                tabs.push(minted);
             }
-            let selected_tab = tabs[0].id;
-            spaces.push(Space {
-                id: space_id,
-                label: seed.label,
-                root: seed.root,
-                kind: seed.kind,
-                tabs,
-                selected_tab,
-            });
+            session.push_space(seed.label, seed.root, seed.kind, tabs);
         }
-        let Some(selected_space) = spaces.first().map(|space| space.id) else {
-            return Self::new(root, kind, columns, rows);
-        };
-        Self {
-            workspace: Workspace {
-                spaces,
-                selected_space,
-            },
-            next_space_id,
-            next_tab_id,
-            next_pane_id,
-        }
+        session.workspace.selected_space = session.workspace.spaces.first()?.id;
+        Some((session, launches))
     }
 
     pub fn selected_space(&self) -> &Space {
@@ -418,34 +357,55 @@ impl Session {
         columns: u16,
         rows: u16,
     ) -> PaneId {
-        let space_id = SpaceId(self.next_space_id);
-        let tab_id = TabId(self.next_tab_id);
-        let pane_id = PaneId(self.next_pane_id);
+        let tab = self.mint_tab("shell".to_owned(), None, root.clone(), columns, rows);
+        let pane = tab.pane.id;
+        self.push_space(label, root, kind, vec![tab]);
+        pane
+    }
+
+    /// Adds a space holding `tabs`, the first of them selected, and selects
+    /// it.
+    fn push_space(&mut self, label: String, root: PathBuf, kind: SpaceKind, tabs: Vec<Tab>) {
+        let id = SpaceId(self.next_space_id);
         self.next_space_id += 1;
-        self.next_tab_id += 1;
-        self.next_pane_id += 1;
         self.workspace.spaces.push(Space {
-            id: space_id,
+            id,
             label,
-            tabs: vec![Tab {
-                id: tab_id,
-                label: "shell".to_owned(),
-                agent: None,
-                env: Vec::new(),
-                pane: Pane {
-                    id: pane_id,
-                    cwd: root.clone(),
-                    columns,
-                    rows,
-                    process: "shell".to_owned(),
-                },
-            }],
             root,
             kind,
-            selected_tab: tab_id,
+            selected_tab: tabs[0].id,
+            tabs,
         });
-        self.workspace.selected_space = space_id;
-        pane_id
+        self.workspace.selected_space = id;
+    }
+
+    /// A tab with a fresh id, holding a pane with a fresh id that has not
+    /// been spawned yet.
+    fn mint_tab(
+        &mut self,
+        label: String,
+        agent: Option<TabId>,
+        cwd: PathBuf,
+        columns: u16,
+        rows: u16,
+    ) -> Tab {
+        let tab = TabId(self.next_tab_id);
+        let pane = PaneId(self.next_pane_id);
+        self.next_tab_id += 1;
+        self.next_pane_id += 1;
+        Tab {
+            id: tab,
+            label,
+            agent,
+            env: Vec::new(),
+            pane: Pane {
+                id: pane,
+                cwd,
+                columns,
+                rows,
+                process: "shell".to_owned(),
+            },
+        }
     }
 
     /// Removes `space` and returns every pane across every tab it owned, so
@@ -524,10 +484,6 @@ impl Session {
         rows: u16,
         cwd: PathBuf,
     ) -> PaneId {
-        let tab_id = TabId(self.next_tab_id);
-        let pane_id = PaneId(self.next_pane_id);
-        self.next_tab_id += 1;
-        self.next_pane_id += 1;
         let default = self.workspace.selected_space;
         let index = self
             .workspace
@@ -536,26 +492,21 @@ impl Session {
             .position(|s| s.id == space)
             .or_else(|| self.workspace.spaces.iter().position(|s| s.id == default))
             .expect("session selected space is always present");
-        let space = &mut self.workspace.spaces[index];
         // A tab can only belong with an agent of its own space — a client
         // naming one from elsewhere (or one that has since been closed)
         // gets a tab of the space itself rather than a dangling reference.
-        let agent = agent.filter(|agent| space.tabs.iter().any(|tab| tab.id == *agent));
-        space.tabs.push(Tab {
-            id: tab_id,
-            label,
-            agent,
-            env: Vec::new(),
-            pane: Pane {
-                id: pane_id,
-                cwd,
-                columns,
-                rows,
-                process: "shell".to_owned(),
-            },
+        let agent = agent.filter(|agent| {
+            self.workspace.spaces[index]
+                .tabs
+                .iter()
+                .any(|tab| tab.id == *agent)
         });
-        space.selected_tab = tab_id;
-        pane_id
+        let tab = self.mint_tab(label, agent, cwd, columns, rows);
+        let pane = tab.pane.id;
+        let space = &mut self.workspace.spaces[index];
+        space.selected_tab = tab.id;
+        space.tabs.push(tab);
+        pane
     }
 
     /// Selects `tab` (found by searching every space, not just the
@@ -837,23 +788,18 @@ mod tests {
 
     #[test]
     fn the_kind_is_restored_with_the_space() {
-        let session = Session::restore(
-            PathBuf::from("/tmp/a"),
-            SpaceKind::Worktree,
-            80,
-            24,
-            vec![SpaceSeed {
-                label: "shared".into(),
-                root: PathBuf::from("/tmp/shared"),
-                kind: SpaceKind::Workspace,
-                tabs: vec![TabSeed {
-                    label: "shell".into(),
-                    cwd: PathBuf::from("/tmp/shared"),
-                    agent: None,
-                    env: Vec::new(),
-                }],
+        let (session, _) = Session::restore(vec![SpaceSeed {
+            label: "shared".into(),
+            root: PathBuf::from("/tmp/shared"),
+            kind: SpaceKind::Workspace,
+            tabs: vec![TabSeed {
+                label: "shell".into(),
+                cwd: PathBuf::from("/tmp/shared"),
+                agent: None,
+                launch: Launch::Shell,
             }],
-        );
+        }])
+        .expect("a space stands");
         assert_eq!(session.workspace.spaces[0].kind, SpaceKind::Workspace);
     }
 
@@ -1215,37 +1161,32 @@ mod tests {
     /// which, not the numbers they happened to carry.
     #[test]
     fn restoring_rebuilds_which_tab_belongs_with_which() {
-        let session = Session::restore(
-            PathBuf::from("/tmp/a"),
-            SpaceKind::Worktree,
-            80,
-            24,
-            vec![SpaceSeed {
-                label: "frontend".into(),
-                root: PathBuf::from("/tmp/seed"),
-                kind: SpaceKind::Worktree,
-                tabs: vec![
-                    TabSeed {
-                        label: "claude".into(),
-                        cwd: PathBuf::from("/tmp/a/web"),
-                        agent: None,
-                        env: Vec::new(),
-                    },
-                    TabSeed {
-                        label: "shell".into(),
-                        cwd: PathBuf::from("/tmp/a/web"),
-                        agent: Some(0),
-                        env: Vec::new(),
-                    },
-                    TabSeed {
-                        label: "loose".into(),
-                        cwd: PathBuf::from("/tmp/a"),
-                        agent: Some(7),
-                        env: Vec::new(),
-                    },
-                ],
-            }],
-        );
+        let (session, _) = Session::restore(vec![SpaceSeed {
+            label: "frontend".into(),
+            root: PathBuf::from("/tmp/seed"),
+            kind: SpaceKind::Worktree,
+            tabs: vec![
+                TabSeed {
+                    label: "claude".into(),
+                    cwd: PathBuf::from("/tmp/a/web"),
+                    agent: None,
+                    launch: Launch::Shell,
+                },
+                TabSeed {
+                    label: "shell".into(),
+                    cwd: PathBuf::from("/tmp/a/web"),
+                    agent: Some(0),
+                    launch: Launch::Shell,
+                },
+                TabSeed {
+                    label: "loose".into(),
+                    cwd: PathBuf::from("/tmp/a"),
+                    agent: Some(7),
+                    launch: Launch::Shell,
+                },
+            ],
+        }])
+        .expect("a space stands");
 
         let tabs = &session.workspace.spaces[0].tabs;
         assert_eq!(tabs[1].agent, Some(tabs[0].id));
@@ -1255,44 +1196,39 @@ mod tests {
 
     #[test]
     fn restore_rebuilds_the_seeded_shape_with_sequential_ids() {
-        let session = Session::restore(
-            PathBuf::from("/tmp/a"),
-            SpaceKind::Worktree,
-            80,
-            24,
-            vec![
-                SpaceSeed {
-                    label: "frontend".into(),
-                    root: PathBuf::from("/tmp/seed"),
-                    kind: SpaceKind::Worktree,
-                    tabs: vec![
-                        TabSeed {
-                            label: "claude".into(),
-                            cwd: PathBuf::from("/tmp/a/web"),
-                            agent: None,
-                            env: Vec::new(),
-                        },
-                        TabSeed {
-                            label: "shell".into(),
-                            cwd: PathBuf::from("/tmp/a"),
-                            agent: None,
-                            env: Vec::new(),
-                        },
-                    ],
-                },
-                SpaceSeed {
-                    label: "backend".into(),
-                    root: PathBuf::from("/tmp/seed"),
-                    kind: SpaceKind::Worktree,
-                    tabs: vec![TabSeed {
-                        label: "codex".into(),
-                        cwd: PathBuf::from("/tmp/a/api"),
+        let (session, _) = Session::restore(vec![
+            SpaceSeed {
+                label: "frontend".into(),
+                root: PathBuf::from("/tmp/seed"),
+                kind: SpaceKind::Worktree,
+                tabs: vec![
+                    TabSeed {
+                        label: "claude".into(),
+                        cwd: PathBuf::from("/tmp/a/web"),
                         agent: None,
-                        env: Vec::new(),
-                    }],
-                },
-            ],
-        );
+                        launch: Launch::Shell,
+                    },
+                    TabSeed {
+                        label: "shell".into(),
+                        cwd: PathBuf::from("/tmp/a"),
+                        agent: None,
+                        launch: Launch::Shell,
+                    },
+                ],
+            },
+            SpaceSeed {
+                label: "backend".into(),
+                root: PathBuf::from("/tmp/seed"),
+                kind: SpaceKind::Worktree,
+                tabs: vec![TabSeed {
+                    label: "codex".into(),
+                    cwd: PathBuf::from("/tmp/a/api"),
+                    agent: None,
+                    launch: Launch::Shell,
+                }],
+            },
+        ])
+        .expect("a space stands");
 
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.workspace.selected_space, SpaceId(1));
@@ -1449,20 +1385,62 @@ mod tests {
     }
 
     #[test]
-    fn restore_with_no_usable_seeds_falls_back_to_the_ordinary_bootstrap() {
-        let restored = Session::restore(
-            PathBuf::from("/tmp/a"),
-            SpaceKind::Worktree,
-            80,
-            24,
-            vec![SpaceSeed {
-                label: "empty".into(),
-                root: PathBuf::from("/tmp/seed"),
-                kind: SpaceKind::Worktree,
-                tabs: vec![],
+    fn restore_with_no_usable_seeds_restores_nothing() {
+        let restored = Session::restore(vec![SpaceSeed {
+            label: "empty".into(),
+            root: PathBuf::from("/tmp/seed"),
+            kind: SpaceKind::Worktree,
+            tabs: vec![],
+        }]);
+        assert!(restored.is_none());
+    }
+
+    /// A space with nothing in it is dropped on the way back, and every
+    /// pane after it still comes back with its own launch rather than the
+    /// one of whichever tab happened to sit at its position.
+    #[test]
+    fn an_empty_space_shifts_no_launch_onto_another_tab() {
+        let agent = Launch::Program {
+            argv: vec!["claude".to_owned()],
+            env: vec![("UZE_AGENT".to_owned(), "abc".to_owned())],
+        };
+        let seed = |label: &str, launch: Launch| SpaceSeed {
+            label: label.into(),
+            root: PathBuf::from("/tmp/seed"),
+            kind: SpaceKind::Worktree,
+            tabs: vec![TabSeed {
+                label: label.into(),
+                cwd: PathBuf::from("/tmp/seed"),
+                agent: None,
+                launch,
             }],
+        };
+        let empty = SpaceSeed {
+            tabs: Vec::new(),
+            ..seed("empty", Launch::Shell)
+        };
+
+        let (session, launches) = Session::restore(vec![
+            empty,
+            seed("agent", agent.clone()),
+            seed("shell", Launch::Shell),
+        ])
+        .expect("two spaces stand");
+
+        let pane_of = |label: &str| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .find(|space| space.label == label)
+                .expect("restored")
+                .tabs[0]
+                .pane
+                .id
+        };
+        assert_eq!(
+            launches,
+            vec![(pane_of("agent"), agent), (pane_of("shell"), Launch::Shell)]
         );
-        let fresh = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
-        assert_eq!(restored, fresh);
     }
 }

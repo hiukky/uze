@@ -24,8 +24,10 @@ use thiserror::Error;
 
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
-    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId,
-    TabSeed, TerminalColor, process_probe,
+    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, TabId, TerminalColor,
+    launch::Launch,
+    process_probe,
+    state::{PLACEHOLDER_PANE_SIZE, SpaceSeed, TabSeed},
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -450,42 +452,9 @@ fn classify_lock_refusal(errno: Option<i32>) -> LockRefusal {
     }
 }
 
-#[derive(Default, Serialize, serde::Deserialize)]
+#[derive(Serialize, serde::Deserialize)]
 struct PersistedWorkspace {
-    spaces: Vec<PersistedSpace>,
-}
-
-#[derive(Serialize, serde::Deserialize)]
-struct PersistedSpace {
-    label: String,
-    root: PathBuf,
-    /// Absent in a file written before spaces had kinds, which reads back
-    /// as the kind every space was then — the file's own convention.
-    #[serde(default)]
-    kind: crate::SpaceKind,
-    tabs: Vec<PersistedTab>,
-}
-
-#[derive(Serialize, serde::Deserialize)]
-struct PersistedTab {
-    label: String,
-    cwd: PathBuf,
-    /// The tab this one belongs with, by index into its own space's tabs
-    /// (see [`crate::TabSeed::agent`]). Absent in a file written
-    /// before tabs belonged with anything, which reads back as `None`.
-    #[serde(default)]
-    agent: Option<usize>,
-    /// The `argv` this tab's pane was last spawned with (see
-    /// [`PaneRuntime::spawn_command`]) — `None` for a plain shell, `Some`
-    /// for whatever agent it was running, so restoring relaunches the same
-    /// program rather than dropping back to a bare shell.
-    command: Option<Vec<String>>,
-    /// The environment `command` was launched with (see
-    /// [`crate::launch`]), respawned beside it. Absent in a file written
-    /// before a launch carried one, which reads back as empty — the file's
-    /// own convention, as `agent` above.
-    #[serde(default)]
-    env: crate::launch::Environment,
+    spaces: Vec<SpaceSeed>,
 }
 
 /// Best-effort: a workspace with nothing persisted yet (first run, or the
@@ -554,8 +523,8 @@ fn spawnable_pane_bounds(dimension: u16) -> u16 {
 const PLAIN_SHELL_PROCESS_NAMES: [&str; 8] =
     ["shell", "zsh", "bash", "sh", "dash", "fish", "ksh", "tcsh"];
 
-/// A best-effort relaunch command for a pane that was spawned plain (no
-/// explicit `argv` — see [`PaneRuntime::spawn_command`]) but whose last-
+/// A best-effort relaunch command for a pane that was spawned as a shell
+/// (see [`PaneRuntime::launch`]) but whose last-
 /// known foreground process isn't an ordinary shell — `Some([process])` to
 /// try relaunching that same program by name on restore, `None` when it
 /// looks like nothing worth relaunching was there (a plain shell, or the
@@ -925,37 +894,14 @@ impl Server {
         // `persisted_state_path` for why a crash, a `kill -9`, or a reboot
         // still leaves this behind even though nothing else about a pane's
         // running state survives any of those.
-        let persisted = load_persisted_workspace();
-        let seeds: Vec<SpaceSeed> = persisted
-            .as_ref()
-            .map(|workspace| {
-                workspace
-                    .spaces
-                    .iter()
-                    .map(|space| SpaceSeed {
-                        label: space.label.clone(),
-                        root: space.root.clone(),
-                        kind: space.kind,
-                        tabs: space
-                            .tabs
-                            .iter()
-                            .map(|tab| TabSeed {
-                                label: tab.label.clone(),
-                                cwd: tab.cwd.clone(),
-                                agent: tab.agent,
-                                env: tab.env.clone(),
-                            })
-                            .collect(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let restoring = !seeds.is_empty();
-        let session = if restoring {
-            Session::restore(root.clone(), kind, 80, 24, seeds)
-        } else {
-            Session::new(root, kind, 80, 24)
-        };
+        let (session, launches) = load_persisted_workspace()
+            .and_then(|persisted| Session::restore(persisted.spaces))
+            .unwrap_or_else(|| {
+                let (columns, rows) = PLACEHOLDER_PANE_SIZE;
+                let session = Session::new(root, kind, columns, rows);
+                let bootstrap = session.selected_tab().pane.id;
+                (session, vec![(bootstrap, Launch::Shell)])
+            });
         let (damage, damage_events) = mpsc::channel();
         let server = Self {
             session: Mutex::new(session),
@@ -969,59 +915,21 @@ impl Server {
             damage,
             palette: Arc::new(Mutex::new(Palette::default())),
         };
-        if restoring && let Some(persisted) = &persisted {
-            // Zip the restored session's freshly-allocated tabs back up
-            // against the persisted commands they came from — safe because
-            // `Session::restore` walks `seeds` (built from `persisted` one
-            // line above) in the same order and never drops a space that
-            // came in with tabs, so the two always line up one for one.
-            let spawns: Vec<(PaneId, Option<Vec<String>>, crate::launch::Environment)> = server
-                .session
-                .lock()
-                .expect("session poisoned")
-                .workspace
-                .spaces
-                .iter()
-                .zip(&persisted.spaces)
-                .flat_map(|(space, persisted_space)| {
-                    space
-                        .tabs
-                        .iter()
-                        .zip(&persisted_space.tabs)
-                        .map(|(tab, persisted_tab)| {
-                            (
-                                tab.pane.id,
-                                persisted_tab.command.clone(),
-                                persisted_tab.env.clone(),
-                            )
-                        })
-                })
-                .collect();
-            for (pane, command, env) in spawns {
-                // A persisted command is a guess (an agent binary that may
-                // since be uninstalled or renamed, or a best-effort
-                // relaunch built from a live process name — see
-                // `relaunch_command_for_process`) — one bad guess must
-                // never keep the rest of a restored workspace from coming
-                // back, so a failed spawn retries as a plain shell instead
-                // of propagating; a plain-shell spawn failing is the same
-                // fatal condition it always was.
-                let spawned = server.spawn_pane(pane, command.as_deref(), &env);
-                if spawned.is_err() && command.is_some() {
-                    let _ = server.spawn_pane(pane, None, &[]);
-                } else {
-                    spawned?;
-                }
+        for (pane, launch) in launches {
+            // A persisted program is a guess (an agent binary that may
+            // since be uninstalled or renamed, or a best-effort relaunch
+            // built from a live process name — see
+            // `relaunch_command_for_process`) — one bad guess must never
+            // keep the rest of a restored workspace from coming back, so a
+            // failed program retries as a shell; a shell failing to spawn is
+            // fatal.
+            let guessed = matches!(launch, Launch::Program { .. });
+            let spawned = server.spawn_pane(pane, launch);
+            if spawned.is_err() && guessed {
+                let _ = server.spawn_pane(pane, Launch::Shell);
+            } else {
+                spawned?;
             }
-        } else {
-            let first = server
-                .session
-                .lock()
-                .expect("session poisoned")
-                .selected_tab()
-                .pane
-                .id;
-            server.spawn_pane(first, None, &[])?;
         }
         Ok((server, damage_events))
     }
@@ -1036,55 +944,53 @@ impl Server {
         let path = persisted_state_path();
         let panes = self.panes.lock().expect("panes poisoned");
         let session = self.session.lock().expect("session poisoned");
-        let workspace = PersistedWorkspace {
-            spaces: session
-                .workspace
-                .spaces
-                .iter()
-                .map(|space| PersistedSpace {
-                    label: space.label.clone(),
-                    root: space.root.clone(),
-                    kind: space.kind,
-                    tabs: space
-                        .tabs
-                        .iter()
-                        .map(|tab| {
-                            // By position, since a restored tab is minted a
-                            // fresh id — and against this same list, which
-                            // is the one `Session::restore` will rebuild.
-                            let agent = tab.agent.and_then(|agent| {
-                                space.tabs.iter().position(|other| other.id == agent)
-                            });
-                            // A tab spawned plain but with something other
-                            // than a shell now running in it (someone typed
-                            // `claude` straight into a "$ shell" tab, never
-                            // going through "+ agent" at all) is exactly as
-                            // much "had an agent" as one `CreateTab` was
-                            // told to launch directly — restoring it back
-                            // to a bare shell would silently drop that.
-                            let runtime = panes.get(&tab.pane.id);
-                            let command = runtime
-                                .and_then(|runtime| runtime.spawn_command.clone())
-                                .or_else(|| relaunch_command_for_process(&tab.pane.process));
-                            // The environment follows the command it was
-                            // launched with, and only that one: a process
-                            // typed into a shell was launched by nobody.
-                            let env = runtime
-                                .filter(|runtime| runtime.spawn_command.is_some())
-                                .map(|runtime| runtime.spawn_env.clone())
-                                .unwrap_or_default();
-                            PersistedTab {
-                                label: tab.label.clone(),
-                                cwd: tab.pane.cwd.clone(),
-                                agent,
-                                command,
-                                env,
-                            }
-                        })
-                        .collect(),
-                })
-                .collect(),
-        };
+        let workspace =
+            PersistedWorkspace {
+                spaces: session
+                    .workspace
+                    .spaces
+                    .iter()
+                    .map(|space| SpaceSeed {
+                        label: space.label.clone(),
+                        root: space.root.clone(),
+                        kind: space.kind,
+                        tabs: space
+                            .tabs
+                            .iter()
+                            .map(|tab| {
+                                // By position, since a restored tab is minted a
+                                // fresh id — and against this same list, which
+                                // is the one `Session::restore` will rebuild.
+                                let agent = tab.agent.and_then(|agent| {
+                                    space.tabs.iter().position(|other| other.id == agent)
+                                });
+                                // A shell with something other than a shell now
+                                // running in it (someone typed `claude` straight
+                                // into it) had an agent as much as a launched
+                                // one did — restoring it to a bare shell would
+                                // silently drop that. What was typed was
+                                // launched by nobody, so it carries no
+                                // environment.
+                                let launch =
+                                    match panes.get(&tab.pane.id).map(|runtime| &runtime.launch) {
+                                        Some(launch @ Launch::Program { .. }) => launch.clone(),
+                                        _ => relaunch_command_for_process(&tab.pane.process)
+                                            .map_or(Launch::Shell, |argv| Launch::Program {
+                                                argv,
+                                                env: Vec::new(),
+                                            }),
+                                    };
+                                TabSeed {
+                                    label: tab.label.clone(),
+                                    cwd: tab.pane.cwd.clone(),
+                                    agent,
+                                    launch,
+                                }
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            };
         drop(session);
         drop(panes);
         if let Some(parent) = path.parent() {
@@ -1225,12 +1131,15 @@ impl Server {
                     // without the launch it was asked for is worse than no
                     // tab, and a shell carrying a launch environment would
                     // report as an agent it is not.
-                    if let Err(refusal) = crate::launch::validate(command.as_deref(), &env) {
-                        let _ = events.send(ClientEvent::Error {
-                            message: refusal.to_string(),
-                        });
-                        continue;
-                    }
+                    let launch = match crate::launch::validate(command, env) {
+                        Ok(launch) => launch,
+                        Err(refusal) => {
+                            let _ = events.send(ClientEvent::Error {
+                                message: refusal.to_string(),
+                            });
+                            continue;
+                        }
+                    };
                     let (pane, tab, space) = {
                         let mut session = self.session.lock().expect("session poisoned");
                         let space = self
@@ -1262,7 +1171,7 @@ impl Server {
                         selection.space = Some(space);
                         selection.tabs.insert(space, tab);
                     });
-                    if self.spawn_pane(pane, command.as_deref(), &env).is_err() {
+                    if self.spawn_pane(pane, launch).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
                         });
@@ -1355,7 +1264,7 @@ impl Server {
                         );
                         (session.workspace.selected_space, pane)
                     };
-                    if self.spawn_pane(pane, None, &[]).is_err() {
+                    if self.spawn_pane(pane, Launch::Shell).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
                         });
@@ -1392,7 +1301,7 @@ impl Server {
                     }
                     drop(runtimes);
                     if let Some(pane) = removed.replacement {
-                        if self.spawn_pane(pane, None, &[]).is_err() {
+                        if self.spawn_pane(pane, Launch::Shell).is_err() {
                             let _ = events.send(ClientEvent::Error {
                                 message: "could not create terminal pane".into(),
                             });
@@ -1443,7 +1352,7 @@ impl Server {
         match opened {
             OpenedSpace::Existing(space) => Ok(space),
             OpenedSpace::Created { space, pane } => {
-                self.spawn_pane(pane, None, &[])?;
+                self.spawn_pane(pane, Launch::Shell)?;
                 Ok(space)
             }
         }
@@ -1493,12 +1402,7 @@ impl Server {
         }
     }
 
-    fn spawn_pane(
-        &self,
-        pane_id: PaneId,
-        command: Option<&[String]>,
-        env: &[(String, String)],
-    ) -> Result<(), RuntimeError> {
+    fn spawn_pane(&self, pane_id: PaneId, launch: Launch) -> Result<(), RuntimeError> {
         let pane = self
             .session
             .lock()
@@ -1516,14 +1420,14 @@ impl Server {
             spawnable_pane_bounds(pane.columns),
             spawnable_pane_bounds(pane.rows),
             self.damage.clone(),
-            PaneLaunch { command, env },
+            launch,
             Arc::clone(&self.palette),
         )?;
         {
             let mut session = self.session.lock().expect("session poisoned");
             // The tab reports the launch the server made, from the one
             // place that makes it: a respawn as a plain shell clears it.
-            session.record_launch(pane_id, runtime.spawn_env.clone());
+            session.record_launch(pane_id, runtime.launch.env().to_vec());
             // Best-effort: label the sidebar tree with the real shell name
             // immediately instead of leaving the "shell" placeholder until
             // the next status tick.
@@ -1585,7 +1489,7 @@ impl Server {
             .collect();
         let mut restored = false;
         for pane in finished {
-            if self.spawn_pane(pane, None, &[]).is_ok() {
+            if self.spawn_pane(pane, Launch::Shell).is_ok() {
                 restored = true;
                 self.broadcast_pane_damage(pane);
             }
@@ -1871,30 +1775,16 @@ fn spawn_endpoint_watch(server: Arc<Server>) {
     });
 }
 
-/// What a pane's first process is launched as: the program, or the default
-/// shell when there is none, and the environment the launch carries
-/// beyond the pane's own — which only a program ever does.
-#[derive(Clone, Copy)]
-struct PaneLaunch<'a> {
-    command: Option<&'a [String]>,
-    env: &'a [(String, String)],
-}
-
 struct PaneRuntime {
     id: PaneId,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     terminal: Arc<Mutex<Term<ReplySink>>>,
-    /// The `argv` this pane was spawned with, if it wasn't the default
-    /// shell — kept only so a workspace restart can respawn the same
-    /// command in the same tab (see [`Server::persisted_workspace`]); never
-    /// read back to change how this live pane behaves.
-    spawn_command: Option<Vec<String>>,
-    /// What `spawn_command` was launched with beyond the pane's own
-    /// environment — kept, persisted and reported for the same reason as
-    /// the command, and empty whenever there is none.
-    spawn_env: Vec<(String, String)>,
+    /// What this pane was spawned as — kept so a workspace restart can
+    /// respawn the same launch in the same tab (see [`Server::persist`]),
+    /// and so a finished program can be told from a shell.
+    launch: Launch,
     /// The last snapshot actually sent to clients, so
     /// [`PaneRuntime::damage_since_last`] can diff against what they
     /// already have instead of resending every cell on every PTY read.
@@ -1961,18 +1851,9 @@ impl PaneRuntime {
         columns: u16,
         rows: u16,
         damage: mpsc::Sender<PaneId>,
-        launch: PaneLaunch<'_>,
+        launch: Launch,
         palette: Arc<Mutex<Palette>>,
     ) -> Result<Self, RuntimeError> {
-        let PaneLaunch { command, env } = launch;
-        let spawn_command = command
-            .filter(|command| !command.is_empty())
-            .map(<[String]>::to_vec);
-        let spawn_env = if spawn_command.is_some() {
-            env.to_vec()
-        } else {
-            Vec::new()
-        };
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -1982,16 +1863,13 @@ impl PaneRuntime {
                 pixel_height: 0,
             })
             .map_err(|error| RuntimeError::Pty(error.to_string()))?;
-        let mut command = match command {
-            Some([program, args @ ..]) => {
+        let mut command = match launch.argv().split_first() {
+            Some((program, args)) => {
                 let mut builder = CommandBuilder::new(program);
                 builder.args(args);
                 builder
             }
-            Some([]) | None => {
-                let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-                CommandBuilder::new(shell)
-            }
+            None => CommandBuilder::new(env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())),
         };
         command.cwd(cwd);
         // `CommandBuilder` seeds a pane from *this* process's environment,
@@ -2005,7 +1883,7 @@ impl PaneRuntime {
         for inherited in crate::launch::STAMPED_VARIABLES {
             command.env_remove(inherited);
         }
-        for (name, value) in &spawn_env {
+        for (name, value) in launch.env() {
             command.env(name, value);
         }
         // What tells a `uze` started inside this pane that it is inside one,
@@ -2066,8 +1944,7 @@ impl PaneRuntime {
             writer,
             child: Mutex::new(child),
             terminal,
-            spawn_command,
-            spawn_env,
+            launch,
             last_sent: Mutex::new(None),
         })
     }
@@ -2106,7 +1983,7 @@ impl PaneRuntime {
     }
 
     fn finished_agent(&self) -> bool {
-        self.spawn_command.is_some()
+        matches!(self.launch, Launch::Program { .. })
             && self
                 .child
                 .lock()
@@ -2515,14 +2392,13 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compatibility, Endpoint, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneLaunch,
-        PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, Probe, ReplySink,
-        RuntimeError, Selection, Server, WorkspaceLock, corroborated_as_server, heal_pid_file,
-        identity_of, persisted_state_path, platform_reads_processes, probe_server, read_event,
-        read_message, recorded_compatibility, relaunch_command_for_process,
-        replace_incompatible_server, runtime_process_is_alive, send_request,
-        server_protocol_version, snapshot, view_for, workspace_is_unclaimed, workspace_lock_path,
-        write_atomically, write_message, write_pid_file,
+        Compatibility, Endpoint, Launch, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
+        PaneRuntime, PersistedWorkspace, Probe, ReplySink, RuntimeError, Selection, Server,
+        WorkspaceLock, corroborated_as_server, heal_pid_file, identity_of, persisted_state_path,
+        platform_reads_processes, probe_server, read_event, read_message, recorded_compatibility,
+        relaunch_command_for_process, replace_incompatible_server, runtime_process_is_alive,
+        send_request, server_protocol_version, snapshot, view_for, workspace_is_unclaimed,
+        workspace_lock_path, write_atomically, write_message, write_pid_file,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -2544,6 +2420,7 @@ mod tests {
     fn reply_sink(sender: std::sync::mpsc::Sender<Vec<u8>>) -> ReplySink {
         ReplySink::new(sender, Arc::new(Mutex::new(Palette::default())))
     }
+    use crate::state::{SpaceSeed, TabSeed};
     use crate::{MouseMode, PaneId, TerminalColor};
     use crate::{Session, SpaceId, TabId};
     use alacritty_terminal::{
@@ -3033,10 +2910,7 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: None,
-                env: &[],
-            },
+            Launch::Shell,
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3078,10 +2952,7 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: None,
-                env: &[],
-            },
+            Launch::Shell,
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3131,10 +3002,7 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: None,
-                env: &[],
-            },
+            Launch::Shell,
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3222,8 +3090,8 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: Some(&[
+            Launch::Program {
+                argv: vec![
                     "/bin/sh".to_owned(),
                     "-c".to_owned(),
                     // `$$` is the shell's own pid, and `exec` keeps it — the
@@ -3234,8 +3102,8 @@ mod tests {
                         "export UZE_SHIM_NAME=claude UZE_SHIM_PID=$$; exec {} 5",
                         versioned_binary.display()
                     ),
-                ]),
-                env: &[],
+                ],
+                env: Vec::new(),
             },
             Arc::new(Mutex::new(Palette::default())),
         )
@@ -3304,7 +3172,7 @@ mod tests {
             80,
             24,
         );
-        server.spawn_pane(pane, None, &[]).unwrap();
+        server.spawn_pane(pane, Launch::Shell).unwrap();
         let launch = {
             let mut session = server.session.lock().expect("session poisoned");
             let launch = session
@@ -3401,9 +3269,7 @@ mod tests {
             80,
             24,
         );
-        first
-            .spawn_pane(agent_pane, Some(&["sleep".to_owned(), "5".to_owned()]), &[])
-            .unwrap();
+        first.spawn_pane(agent_pane, sleep_five()).unwrap();
         // `CreateSpace`'s real dispatch (`runtime.rs`'s `handle_client`)
         // calls `broadcast_session`, which persists — replicated here
         // directly since this test drives `Server` without a socket.
@@ -3432,8 +3298,8 @@ mod tests {
                 .get(&tab.pane.id)
                 .expect("restored tab's pane was actually spawned");
             assert_eq!(
-                runtime.spawn_command.as_deref(),
-                Some(["sleep".to_owned(), "5".to_owned()].as_slice()),
+                runtime.launch,
+                sleep_five(),
                 "restored tab relaunched with its original agent command"
             );
         }
@@ -3466,17 +3332,7 @@ mod tests {
             80,
             24,
         );
-        server
-            // `/bin/sh -c 'exit 0'`, not `/bin/true`: macOS keeps `true` in
-            // `/usr/bin` and has no `/bin/true` at all. `/bin/sh` is the one
-            // path POSIX actually promises, and what this needs is any
-            // process that exits at once.
-            .spawn_pane(
-                pane,
-                Some(&["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()]),
-                &[],
-            )
-            .unwrap();
+        server.spawn_pane(pane, exits_at_once(Vec::new())).unwrap();
 
         for _ in 0..40 {
             server.restore_finished_agent_panes();
@@ -3485,7 +3341,7 @@ mod tests {
                 .lock()
                 .expect("panes poisoned")
                 .get(&pane)
-                .is_some_and(|runtime| runtime.spawn_command.is_none());
+                .is_some_and(|runtime| runtime.launch == Launch::Shell);
             if restored {
                 break;
             }
@@ -3497,7 +3353,7 @@ mod tests {
                 .lock()
                 .expect("panes poisoned")
                 .get(&pane)
-                .is_some_and(|runtime| runtime.spawn_command.is_none()),
+                .is_some_and(|runtime| runtime.launch == Launch::Shell),
             "a completed direct agent must leave an interactive shell in its existing pane"
         );
         server.stop_panes();
@@ -3525,7 +3381,7 @@ mod tests {
 
     /// The exact case that motivated `relaunch_command_for_process`: a tab
     /// opened as a plain "$ shell" (never through "+ agent", so it has no
-    /// `spawn_command` of its own), where someone then typed an agent
+    /// launch of its own), where someone then typed an agent
     /// straight into it — `update_pane_status` here stands in for the
     /// status ticker's own probe reporting that live.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -3572,8 +3428,11 @@ mod tests {
                 .get(&tab.pane.id)
                 .expect("restored tab's pane was actually spawned");
             assert_eq!(
-                runtime.spawn_command.as_deref(),
-                Some(["sleep".to_owned()].as_slice()),
+                runtime.launch,
+                Launch::Program {
+                    argv: vec!["sleep".to_owned()],
+                    env: Vec::new(),
+                },
                 "a process typed straight into a plain shell tab still relaunches on restore"
             );
         }
@@ -3637,16 +3496,18 @@ mod tests {
         let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let stale = PersistedWorkspace {
-            spaces: vec![PersistedSpace {
+            spaces: vec![SpaceSeed {
                 label: "space 1".into(),
                 root: project.clone(),
                 kind: crate::SpaceKind::Worktree,
-                tabs: vec![PersistedTab {
+                tabs: vec![TabSeed {
                     label: "shell".into(),
                     cwd: project.clone(),
                     agent: None,
-                    command: Some(vec!["definitely-not-a-real-binary-xyz".to_owned()]),
-                    env: Vec::new(),
+                    launch: Launch::Program {
+                        argv: vec!["definitely-not-a-real-binary-xyz".to_owned()],
+                        env: Vec::new(),
+                    },
                 }],
             }],
         };
@@ -3890,10 +3751,7 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: None,
-                env: &[],
-            },
+            Launch::Shell,
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3958,6 +3816,24 @@ mod tests {
         ]
     }
 
+    fn sleep_five() -> Launch {
+        Launch::Program {
+            argv: vec!["sleep".to_owned(), "5".to_owned()],
+            env: Vec::new(),
+        }
+    }
+
+    /// `/bin/sh -c 'exit 0'`, not `/bin/true`: macOS keeps `true` in
+    /// `/usr/bin` and has no `/bin/true` at all. `/bin/sh` is the one path
+    /// POSIX actually promises, and what this needs is any process that
+    /// exits at once.
+    fn exits_at_once(env: Vec<(String, String)>) -> Launch {
+        Launch::Program {
+            argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()],
+            env,
+        }
+    }
+
     fn stamp(id: &str) -> Vec<(String, String)> {
         vec![(
             crate::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
@@ -3976,18 +3852,15 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: Some(&report_variable(
-                    crate::launch::AGENT_IDENTITY_VARIABLE,
-                    &report,
-                )),
-                env: &stamp("agent-31"),
+            Launch::Program {
+                argv: report_variable(crate::launch::AGENT_IDENTITY_VARIABLE, &report),
+                env: stamp("agent-31"),
             },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
         assert_eq!(read_when_written(&report), "agent-31");
-        assert_eq!(pane.spawn_env, stamp("agent-31"));
+        assert_eq!(pane.launch.env(), stamp("agent-31"));
         pane.stop();
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -4008,12 +3881,9 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: Some(&report_variable(
-                    crate::launch::AGENT_IDENTITY_VARIABLE,
-                    &report,
-                )),
-                env: &[],
+            Launch::Program {
+                argv: report_variable(crate::launch::AGENT_IDENTITY_VARIABLE, &report),
+                env: Vec::new(),
             },
             Arc::new(Mutex::new(Palette::default())),
         )
@@ -4037,19 +3907,18 @@ mod tests {
         let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let persisted = PersistedWorkspace {
-            spaces: vec![PersistedSpace {
+            spaces: vec![SpaceSeed {
                 label: "space 1".into(),
                 root: project.clone(),
                 kind: crate::SpaceKind::Worktree,
-                tabs: vec![PersistedTab {
+                tabs: vec![TabSeed {
                     label: "agent 1".into(),
                     cwd: project.clone(),
                     agent: None,
-                    command: Some(report_variable(
-                        crate::launch::AGENT_IDENTITY_VARIABLE,
-                        &report,
-                    )),
-                    env: stamp("agent-restarted"),
+                    launch: Launch::Program {
+                        argv: report_variable(crate::launch::AGENT_IDENTITY_VARIABLE, &report),
+                        env: stamp("agent-restarted"),
+                    },
                 }],
             }],
         };
@@ -4095,11 +3964,7 @@ mod tests {
             24,
         );
         server
-            .spawn_pane(
-                pane,
-                Some(&["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()]),
-                &stamp("agent-done"),
-            )
+            .spawn_pane(pane, exits_at_once(stamp("agent-done")))
             .unwrap();
         let launched = server
             .session
@@ -4117,7 +3982,7 @@ mod tests {
                 .lock()
                 .expect("panes poisoned")
                 .get(&pane)
-                .is_some_and(|runtime| runtime.spawn_command.is_none());
+                .is_some_and(|runtime| runtime.launch == Launch::Shell);
             if restored {
                 break;
             }
@@ -4125,7 +3990,7 @@ mod tests {
         }
         let panes = server.panes.lock().expect("panes poisoned");
         let runtime = panes.get(&pane).expect("the pane was respawned");
-        assert!(runtime.spawn_command.is_none() && runtime.spawn_env.is_empty());
+        assert_eq!(runtime.launch, Launch::Shell);
         drop(panes);
         let session = server.session.lock().expect("session poisoned");
         assert!(
@@ -4158,18 +4023,16 @@ mod tests {
             80,
             24,
             damage,
-            PaneLaunch {
-                command: // `UZE_SHIM_PID=1` is the shape of an inherited pair: a name
-            // stamped for a process that is not this one.
-            Some(&[
-                "/bin/sh".to_owned(),
-                "-c".to_owned(),
-                format!(
-                    "export UZE_SHIM_NAME=claude UZE_SHIM_PID=1; exec {} 5",
-                    versioned_binary.display()
-                ),
-            ]),
-                env: &[],
+            Launch::Program {
+                argv: vec![
+                    "/bin/sh".to_owned(),
+                    "-c".to_owned(),
+                    format!(
+                        "export UZE_SHIM_NAME=claude UZE_SHIM_PID=1; exec {} 5",
+                        versioned_binary.display()
+                    ),
+                ],
+                env: Vec::new(),
             },
             Arc::new(Mutex::new(Palette::default())),
         )
