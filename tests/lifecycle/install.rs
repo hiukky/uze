@@ -42,11 +42,10 @@ fn installed(home: &UzeHome) -> (uze_core::StoredPackage, uze_core::EffectiveEnv
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     uze_core::state::record(
         home,
+        integration.id(),
         uze_core::state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();

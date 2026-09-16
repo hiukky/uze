@@ -184,7 +184,6 @@ impl CodexIntegration {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: self.id().to_owned(),
-            strategy: "native-plugin-marketplace".to_owned(),
             artifact: ManagedArtifact::IntegrationOwned {
                 kind: "marketplace-plugin".to_owned(),
                 selector,
@@ -430,11 +429,10 @@ impl IntegrationPort for CodexIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }

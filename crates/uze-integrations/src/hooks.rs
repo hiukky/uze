@@ -2644,7 +2644,6 @@ mod tests {
             package_id: "pkg@market".to_owned(),
             resource_identity: None,
             integration: ANTIGRAVITY_TARGET.to_owned(),
-            strategy: "hook-config-entry".to_owned(),
             artifact: uze_core::integration::ManagedArtifact::HookConfigEntry {
                 config_file: config.to_path_buf(),
                 entry_name: entry_name.to_owned(),

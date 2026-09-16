@@ -131,7 +131,6 @@ impl IntegrationPort for AllResourceSymlinkIntegration {
             },
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -188,7 +187,6 @@ impl IntegrationPort for PartialIntegration {
             },
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -292,7 +290,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: expected,
@@ -323,7 +320,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: package.root.clone(),
@@ -443,7 +439,6 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
             package_id: alpha_id.clone(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: app
@@ -1484,7 +1479,6 @@ impl IntegrationPort for HealthySymlinkIntegration {
             },
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test-healthy".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -1552,7 +1546,6 @@ impl IntegrationPort for ForeignFailingIntegration {
             },
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test-foreign".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),

@@ -516,7 +516,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
@@ -571,7 +570,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
@@ -622,7 +620,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),

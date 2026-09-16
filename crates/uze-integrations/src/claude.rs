@@ -391,11 +391,10 @@ impl IntegrationPort for ClaudeIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }
@@ -918,7 +917,6 @@ mod lifecycle_tests {
             package_id: "example".to_owned(),
             resource_identity: Some("skill:example".to_owned()),
             integration: integration.id().to_owned(),
-            strategy: "managed-user-scope-reference".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: reference,
                 target: shim.clone(),

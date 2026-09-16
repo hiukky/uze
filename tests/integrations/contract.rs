@@ -181,11 +181,10 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
     // process.
     uze_core::state::record(
         &uze_home,
+        claude.id(),
         uze_core::state::IntegrationRecord {
-            harness: claude.id().to_owned(),
             version: Some("2.1.237".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -230,11 +229,10 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
 
     uze_core::state::record(
         &uze_home,
+        codex.id(),
         uze_core::state::IntegrationRecord {
-            harness: codex.id().to_owned(),
             version: Some("0.148.0".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -311,11 +309,10 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
     for harness in [claude.id(), codex.id()] {
         uze_core::state::record(
             &uze_home,
+            harness,
             uze_core::state::IntegrationRecord {
-                harness: harness.to_owned(),
                 version: Some("0.0.0".to_owned()),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
         .unwrap();

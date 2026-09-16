@@ -45,11 +45,10 @@ pub(crate) fn install(
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     state::record(
         home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: Some("test".to_owned()),
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();

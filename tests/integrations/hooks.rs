@@ -544,7 +544,6 @@ fn reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones() {
             package_id: "hook-demo@local".to_owned(),
             resource_identity: Some(protect.identity()),
             integration: "claude-code".to_owned(),
-            strategy: "ManagedHookConfig".to_owned(),
             artifact: ManagedArtifact::HookConfigEntry {
                 config_file: settings.clone(),
                 entry_name: "hook-demo@local:protect-env".to_owned(),

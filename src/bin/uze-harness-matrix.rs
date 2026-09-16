@@ -197,11 +197,10 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     std::fs::create_dir_all(home.state_dir()).unwrap();
     uze_core::state::record(
         home,
+        integration.id(),
         uze_core::state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "harness-matrix".to_owned(),
-            installed: true,
         },
     )
     .unwrap();

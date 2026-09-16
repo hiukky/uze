@@ -277,7 +277,6 @@ pub(super) fn attach_explicit_plugin(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration.id().to_owned(),
-        strategy: "native-plugin-install".to_owned(),
         artifact: uze_core::integration::ManagedArtifact::IntegrationOwned {
             kind: PLUGIN_KIND.to_owned(),
             selector: name,
@@ -327,7 +326,6 @@ pub(super) fn attach_generated_plugin(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration.id().to_owned(),
-        strategy: "native-plugin-generated".to_owned(),
         artifact: uze_core::integration::ManagedArtifact::IntegrationOwned {
             kind: GENERATED_PLUGIN_KIND.to_owned(),
             selector: name,

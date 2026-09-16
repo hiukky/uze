@@ -103,7 +103,6 @@ pub(super) fn claude_package_receipt(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: "claude-plugin".to_owned(),
             selector: selector.to_owned(),

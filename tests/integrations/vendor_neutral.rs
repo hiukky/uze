@@ -472,7 +472,6 @@ fn an_integration_owned_receipt_round_trips_through_the_ledger() {
         package_id: "plugin-a".to_owned(),
         resource_identity: None,
         integration: "fake-native".to_owned(),
-        strategy: "whatever-the-integration-calls-it".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: "fake-catalogue-entry".to_owned(),
             selector: "plugin-a@fake".to_owned(),

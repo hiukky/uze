@@ -103,11 +103,10 @@ pub(crate) fn mcp_resource(package: &StoredPackage, name: &str, payload: &str) -
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     state::record(
         home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "conformance-fixture".to_owned(),
-            installed: true,
         },
     )
     .unwrap();

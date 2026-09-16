@@ -71,10 +71,8 @@ pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
 /// Deliberately excludes anything resembling a harness credential.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IntegrationRecord {
-    pub harness: String,
     pub version: Option<String>,
     pub strategy: String,
-    pub installed: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -91,28 +89,25 @@ pub fn get(home: &UzeHome, harness: &str) -> Result<Option<IntegrationRecord>> {
     Ok(load_registry(home)?.integrations.get(harness).cloned())
 }
 
-/// True only when the harness has a recorded, completed installation. Any
-/// read/parse failure is treated as "not installed" so exposure planning can
-/// safely fall back to a conformance-probe mechanism rather than error.
+/// True only when the harness has a recorded installation. Any read/parse
+/// failure is treated as "not installed" so exposure planning reports the
+/// setup it needs rather than an error.
 pub fn is_installed(home: &UzeHome, harness: &str) -> bool {
-    get(home, harness)
-        .ok()
-        .flatten()
-        .is_some_and(|record| record.installed)
+    get(home, harness).ok().flatten().is_some()
 }
 
 /// Idempotently records or refreshes one harness's integration state. A
 /// second call with the same harness id replaces, rather than duplicates,
 /// its entry.
-pub fn record(home: &UzeHome, entry: IntegrationRecord) -> Result<()> {
+pub fn record(home: &UzeHome, harness: &str, entry: IntegrationRecord) -> Result<()> {
     home.ensure_layout()?;
     let mut registry = load_registry(home)?;
     // Every command records each detected harness on its way in; an
     // unchanged record must cost a read, not a synced rewrite of the file.
-    if registry.integrations.get(&entry.harness) == Some(&entry) {
+    if registry.integrations.get(harness) == Some(&entry) {
         return Ok(());
     }
-    registry.integrations.insert(entry.harness.clone(), entry);
+    registry.integrations.insert(harness.to_owned(), entry);
     save_registry(home, &registry)
 }
 
@@ -139,7 +134,6 @@ fn save_registry(home: &UzeHome, registry: &IntegrationRegistry) -> Result<()> {
 /// to remove a harness executable; it is product history, not ownership.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProvisioningRecord {
-    pub harness: String,
     pub action: ProvisionAction,
     pub status: ProvisionStatus,
     pub method: String,
@@ -172,9 +166,8 @@ pub fn record_provisioning(
         .unwrap_or_default()
         .as_secs();
     registry.harnesses.insert(
-        harness.clone(),
+        harness,
         ProvisioningRecord {
-            harness,
             action: result.action,
             status: result.status,
             method: result.method.clone(),
@@ -202,7 +195,6 @@ fn load_provisioning_registry(home: &UzeHome) -> Result<ProvisioningRegistry> {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MarketplaceRecord {
-    pub name: String,
     pub source: crate::acquisition::PackageSource,
 }
 
@@ -235,13 +227,9 @@ pub fn marketplace_add(
             requested: format!("{source:?}"),
         });
     }
-    registry.marketplaces.insert(
-        name.to_owned(),
-        MarketplaceRecord {
-            name: name.to_owned(),
-            source,
-        },
-    );
+    registry
+        .marketplaces
+        .insert(name.to_owned(), MarketplaceRecord { source });
     save_marketplace_registry(home, &registry)?;
     Ok(true)
 }
@@ -307,20 +295,18 @@ mod tests {
         UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
-    fn record_of(harness: &str, version: &str) -> IntegrationRecord {
+    fn record_of(version: &str) -> IntegrationRecord {
         IntegrationRecord {
-            harness: harness.to_owned(),
             version: Some(version.to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         }
     }
 
     #[test]
     fn recording_twice_refreshes_instead_of_duplicating() {
         let home = temp_home("idempotent");
-        record(&home, record_of("claude-code", "2.1.237")).unwrap();
-        record(&home, record_of("claude-code", "2.1.238")).unwrap();
+        record(&home, "claude-code", record_of("2.1.237")).unwrap();
+        record(&home, "claude-code", record_of("2.1.238")).unwrap();
 
         let all = load(&home).unwrap();
         assert_eq!(all.len(), 1);
@@ -337,7 +323,7 @@ mod tests {
     #[test]
     fn one_harness_state_does_not_affect_another() {
         let home = temp_home("independent");
-        record(&home, record_of("claude-code", "2.1.237")).unwrap();
+        record(&home, "claude-code", record_of("2.1.237")).unwrap();
         assert!(is_installed(&home, "claude-code"));
         assert!(!is_installed(&home, "codex"));
         fs::remove_dir_all(home.root()).unwrap();
@@ -348,7 +334,6 @@ mod tests {
             package_id: package.to_owned(),
             resource_identity: Some(format!("mcp:{entry}")),
             integration: integration.to_owned(),
-            strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: entry.to_owned(),
                 transport: "stdio".to_owned(),
@@ -419,7 +404,6 @@ mod tests {
                 package_id: "plugin-a".to_owned(),
                 resource_identity: None,
                 integration: "codex".to_owned(),
-                strategy: "native-plugin-marketplace".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "marketplace-plugin".to_owned(),
                     selector: "plugin-a@uze-local".to_owned(),

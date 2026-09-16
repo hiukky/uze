@@ -259,11 +259,10 @@ impl IntegrationPort for OpenCodeIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "native-user-scope-skills-plus-managed-mcp-config".to_owned(),
-                installed: true,
             },
         )
     }
@@ -742,7 +741,6 @@ mod lifecycle_tests {
             package_id: "plugin".to_owned(),
             resource_identity: Some("mcp:example".to_owned()),
             integration: "opencode".to_owned(),
-            strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: "uze-example".to_owned(),
                 transport: "stdio".to_owned(),

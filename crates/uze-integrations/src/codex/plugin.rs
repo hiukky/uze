@@ -698,11 +698,10 @@ mod codex_native_coverage_tests {
         let integration = CodexIntegration::new(_root.join("agents"), uze_home.clone());
         uze_core::state::record(
             &uze_home,
+            integration.id(),
             uze_core::state::IntegrationRecord {
-                harness: integration.id().to_owned(),
                 version: None,
                 strategy: "test".to_owned(),
-                installed: true,
             },
         )
         .unwrap();

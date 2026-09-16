@@ -170,7 +170,6 @@ mod tests {
             package_id: "plugin".to_owned(),
             resource_identity: Some("skill:x".to_owned()),
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: expected,

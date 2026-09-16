@@ -30,7 +30,6 @@ pub struct AttachmentReceipt {
     pub package_id: String,
     pub resource_identity: Option<String>,
     pub integration: String,
-    pub strategy: String,
     pub artifact: ManagedArtifact,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -503,13 +502,10 @@ pub trait IntegrationPort {
     /// the binary works (`ProvisionStatus::Verified`, recorded separately by
     /// `provision_and_prepare` via `state::record_provisioning`) — without
     /// this, a harness whose setup was genuinely verified would read back as
-    /// merely "unverified" forever, since `install`'s own record tracks
-    /// nothing beyond a bare installed flag.
+    /// merely "unverified" forever, since `install`'s own record says only
+    /// that it ran.
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
-        let Some(record) = state::get(home, self.id()).ok().flatten() else {
-            return IntegrationStatus::NotConfigured;
-        };
-        if !record.installed {
+        if !state::is_installed(home, self.id()) {
             return IntegrationStatus::NotConfigured;
         }
         let verified = state::provisioning(home, self.id())
@@ -604,7 +600,6 @@ pub trait IntegrationPort {
             crate::project::ResourceOrigin::Project { .. } => return Ok(None),
         };
         let plan = self.exposure_plan(resource);
-        let strategy = format!("{:?}", plan.mechanism);
         let artifact = match plan.mechanism {
             ExposureMechanism::ManagedUserScopeReference { source, .. } => {
                 ManagedArtifact::SymlinkReference {
@@ -660,7 +655,6 @@ pub trait IntegrationPort {
             package_id,
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy,
             artifact,
         }))
     }
@@ -932,7 +926,6 @@ mod artifact_representation_tests {
             package_id: "plugin-a".to_owned(),
             resource_identity: None,
             integration: "codex".to_owned(),
-            strategy: "native-plugin-marketplace".to_owned(),
             artifact: ManagedArtifact::IntegrationOwned {
                 kind: "marketplace-plugin".to_owned(),
                 selector: "plugin-a@uze-local".to_owned(),
@@ -951,7 +944,6 @@ mod artifact_representation_tests {
             package_id: "plugin-a".to_owned(),
             resource_identity: None,
             integration: "codex".to_owned(),
-            strategy: "native-plugin-marketplace".to_owned(),
             artifact: ManagedArtifact::IntegrationOwned {
                 kind: "marketplace-plugin".to_owned(),
                 selector: "plugin-a@uze-local".to_owned(),
@@ -979,7 +971,6 @@ mod lifecycle_tests {
             package_id: "plugin".to_owned(),
             resource_identity: Some("skill:example".to_owned()),
             integration: "test".to_owned(),
-            strategy: "managed-user-scope-reference".to_owned(),
             artifact: ManagedArtifact::SymlinkReference { path, target },
         }
     }

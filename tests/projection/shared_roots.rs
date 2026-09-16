@@ -469,7 +469,6 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
                 package_id: "flow".to_owned(),
                 resource_identity: Some(resource_identity),
                 integration: "codex".to_owned(),
-                strategy: "managed-user-scope-reference".to_owned(),
                 artifact: uze_core::integration::ManagedArtifact::SymlinkReference {
                     path: agents_home.join("skills/flow:legacy"),
                     target: legacy_wrapper.clone(),

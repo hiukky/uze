@@ -480,7 +480,6 @@ pub(super) fn generated_package_receipt(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace-generated".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: GENERATED_PLUGIN_KIND.to_owned(),
             selector: selector.to_owned(),

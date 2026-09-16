@@ -369,11 +369,10 @@ impl IntegrationPort for AntigravityIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }

@@ -394,11 +394,10 @@ fn a_failing_vendor_cli_propagates_the_error_and_leaves_no_partial_state() {
     env_scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
     state::record(
         &uze_home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "conformance-fixture".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
