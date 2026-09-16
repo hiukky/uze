@@ -93,7 +93,7 @@ impl Marketplace<'_> {
         self.list()?
             .into_iter()
             .find(|entry| entry.name == name)
-            .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
+            .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))
     }
 
     #[tracing::instrument(name = "marketplace.install_plugin", skip_all, fields(spec = %spec), err)]
@@ -121,9 +121,7 @@ impl Marketplace<'_> {
             return self.install_from_resolving(&plugin_name, authority, name_authority);
         }
         let record = uze_core::state::marketplace_get(&self.0.home, &marketplace_name)?
-            .ok_or_else(|| {
-                UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
-            })?;
+            .ok_or_else(|| UzeError::UnknownMarketplace(marketplace_name.to_owned()))?;
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let materialized =
             UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
@@ -211,10 +209,8 @@ impl Marketplace<'_> {
             // question about the catalogue, and it is answered without a
             // clone, the way the listing above was. Installing is what
             // clones at a commit.
-            let record =
-                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
-                    UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
-                })?;
+            let record = uze_core::state::marketplace_get(&self.0.home, marketplace)?
+                .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
             let catalogue = self.0.catalogue(marketplace, &record.source)?;
             let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
                 &catalogue.manifest,

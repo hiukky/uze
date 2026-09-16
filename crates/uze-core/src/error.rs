@@ -183,6 +183,10 @@ pub enum UzeError {
         existing: String,
         requested: String,
     },
+    #[error("marketplace `{0}` not found")]
+    UnknownMarketplace(String),
+    #[error("marketplace `{0}` still has installed plugins; remove them first")]
+    MarketplaceInUse(String),
     #[error("marketplace `{0}` is reserved and cannot be added or removed")]
     ReservedMarketplace(String),
     #[error("invalid plugin spec: {0}")]

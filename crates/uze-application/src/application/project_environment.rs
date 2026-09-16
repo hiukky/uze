@@ -285,10 +285,8 @@ impl Project<'_> {
         }
 
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
-        let global =
-            uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
-                UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
-            })?;
+        let global = uze_core::state::marketplace_get(&self.0.home, marketplace)?
+            .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
         let request = MarketplaceRequest::of(&global.source)?;
 
         // A marketplace name means one repository. The lock naming one and
