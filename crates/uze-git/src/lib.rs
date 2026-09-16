@@ -212,9 +212,12 @@ mod tests {
     use super::*;
     use std::{path::PathBuf, time::Instant};
 
+    /// A span's name and the `exit` it recorded.
+    type SpanExit = (String, Option<i64>);
+
     /// The spans this crate opens, with the `exit` each recorded.
     #[derive(Clone, Default)]
-    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<(String, Option<i64>)>>>);
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<SpanExit>>>);
 
     impl<S> tracing_subscriber::Layer<S> for Recorded
     where
