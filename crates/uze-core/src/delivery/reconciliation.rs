@@ -44,6 +44,21 @@ pub fn reconcile_package(
     package_id: &str,
     integrations: &[&dyn IntegrationPort],
 ) -> ReconciliationReport {
+    reconcile_package_with(home, package_id, integrations, |_, receipt, integration| {
+        integration.inspect_receipt(receipt)
+    })
+}
+
+/// [`reconcile_package`] with the inspection of one receipt by its owning
+/// integration supplied by the caller — given the receipt's ledger key, so a
+/// caller may answer from a cache. The rule that a receipt whose integration
+/// is unknown is BLOCKED stays here, whoever inspects.
+pub fn reconcile_package_with(
+    home: &UzeHome,
+    package_id: &str,
+    integrations: &[&dyn IntegrationPort],
+    inspect: impl Fn(&str, &AttachmentReceipt, &dyn IntegrationPort) -> AttachmentInspection,
+) -> ReconciliationReport {
     let entries = match state::receipts(home, Some(package_id)) {
         Ok(entries) => entries,
         Err(error) => {
@@ -60,7 +75,7 @@ pub fn reconcile_package(
             let inspection = integrations
                 .iter()
                 .find(|integration| integration.id() == receipt.integration)
-                .map(|integration| integration.inspect_receipt(&receipt))
+                .map(|integration| inspect(&ledger_key, &receipt, *integration))
                 .unwrap_or_else(|| AttachmentInspection {
                     state: AttachmentState::Blocked,
                     reason: format!("integration `{}` is unavailable", receipt.integration),
