@@ -13,7 +13,7 @@ use std::{fs, io, path::Path, sync::OnceLock};
 
 use crate::{
     action::Action,
-    chord::{Chord, ChordProblem},
+    chord::Chord,
     file::KeymapFile,
     keymap::{Binding, Keymap},
     scope::Scope,
@@ -121,8 +121,7 @@ pub fn resolve(file: &KeymapFile) -> Result<Loaded, Vec<Problem>> {
                     Err(problem) => {
                         readable = false;
                         errors.push(Problem::error(format!(
-                            "{scope_name}.{action_name}: {}",
-                            describe(&problem)
+                            "{scope_name}.{action_name}: {problem}"
                         )));
                     }
                 }
@@ -187,10 +186,6 @@ pub fn difference_from_default(keymap: &Keymap) -> KeymapFile {
         }
     }
     file
-}
-
-fn describe(problem: &ChordProblem) -> String {
-    problem.to_string()
 }
 
 fn bind(scope: Scope, chord: &str, action: Action) -> Binding {
@@ -421,7 +416,12 @@ mod tests {
         // asks whether that was intended.
         let unbound: Vec<String> = ALL_ACTIONS
             .iter()
-            .filter(|action| default_keymap().any_chord_for(**action).is_none())
+            .filter(|action| {
+                !default_keymap()
+                    .bindings()
+                    .iter()
+                    .any(|binding| binding.action == **action)
+            })
             .map(|action| action.name())
             .collect();
         assert_eq!(
