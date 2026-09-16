@@ -31,7 +31,7 @@ use ratatui::{
 };
 
 use super::super::hit::Hit;
-use super::super::model::{AppearanceRow, ResizablePanel, TuiModel};
+use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
 use crate::ui::theme::{self, Symbol, Token};
 
@@ -57,7 +57,7 @@ pub(crate) fn render_appearance(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, "Appearance", "theme & glyphs", None);
+    let content = render_screen_header(frame, area, Route::Appearance, None);
 
     let drawer_width = model
         .appearance_drawer_width

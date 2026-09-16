@@ -19,7 +19,7 @@ use ratatui::{
 use uze_keys::CaveatKind;
 
 use super::super::hit::Hit;
-use super::super::model::{KeyRow, ResizablePanel, TuiModel};
+use super::super::model::{KeyRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
 use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
@@ -31,7 +31,7 @@ pub(crate) fn render_keys(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, "Shortcuts", "what each key does", None);
+    let content = render_screen_header(frame, area, Route::Keys, None);
 
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     hits.push((filter_area, Hit::FocusFilter));

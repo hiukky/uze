@@ -85,6 +85,19 @@ impl Route {
         }
     }
 
+    /// What the route is about, in the few words under its name.
+    pub(crate) fn subtitle(self) -> &'static str {
+        match self {
+            Route::Overview => "status & health",
+            Route::Plugins => "skills · agents · MCP",
+            Route::Extensions => "official tool extensions",
+            Route::Harnesses => "detected agents",
+            Route::Profiles => "autonomy · sandbox · model",
+            Route::Keys => "what each key does",
+            Route::Appearance => "theme & glyphs",
+        }
+    }
+
     /// The badge a route carries beside its name in the sidebar, or
     /// `None` for one that is finished. The sidebar is where someone
     /// decides which screen to open, so it is where "not settled yet" has

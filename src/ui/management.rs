@@ -471,18 +471,6 @@ pub(crate) fn render(
     }
 }
 
-fn route_subtitle(route: Route) -> &'static str {
-    match route {
-        Route::Overview => "status & health",
-        Route::Plugins => "skills · agents · MCP",
-        Route::Extensions => "official tool extensions",
-        Route::Harnesses => "detected agents",
-        Route::Profiles => "autonomy · sandbox · model",
-        Route::Keys => "what each key does",
-        Route::Appearance => "theme & glyphs",
-    }
-}
-
 /// What is worth trying once on this side of the product.
 ///
 /// Every one of them works on every screen. That is the rule, not a
@@ -788,7 +776,7 @@ fn render_sidebar(
                     .fg(theme::color(Token::TextDim))
                     .bg(theme::color(Token::SurfaceRaised));
                 frame.render_widget(
-                    Paragraph::new(Span::styled(route_subtitle(route), sub_style))
+                    Paragraph::new(Span::styled(route.subtitle(), sub_style))
                         .style(theme::bg(Token::SurfaceRaised)),
                     inner_sub,
                 );
@@ -824,7 +812,7 @@ fn render_sidebar(
             if let Some(sub_rect) = subtitle_rect {
                 let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
                 let line = Line::from(vec![Span::styled(
-                    route_subtitle(route),
+                    route.subtitle(),
                     theme::fg(Token::TextDim),
                 )]);
                 frame.render_widget(Paragraph::new(line), inner_sub);

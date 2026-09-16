@@ -25,7 +25,7 @@ pub(crate) fn render_overview(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, "Overview", "status & health", None);
+    let content = render_screen_header(frame, area, Route::Overview, None);
 
     let harness_total = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
     let harness_detected = model.doctor.as_ref().map_or(0, |d| {

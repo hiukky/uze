@@ -575,8 +575,8 @@ pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
     )
 }
 
-/// Every screen's header: a bold bright title, a muted subtitle on the
-/// next line, and an optional right-aligned trailer on the title's own
+/// Every screen's header: the route's name in bold, its subtitle muted on
+/// the next line, and an optional right-aligned trailer on the title's own
 /// row (item count, doctor summary, source count — whatever that route
 /// reports). Exactly the two-line header shape every route in the design
 /// uses. Returns the area still available below the header plus its own
@@ -584,10 +584,10 @@ pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
 pub(crate) fn render_screen_header(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    title: &str,
-    subtitle: &str,
+    route: model::Route,
     trailer: Option<Span<'static>>,
 ) -> Rect {
+    let title = route.label();
     let title_style = Style::default()
         .fg(theme::color(Token::TextBright))
         .add_modifier(Modifier::BOLD);
@@ -609,7 +609,7 @@ pub(crate) fn render_screen_header(
     if area.height > 1 {
         let subtitle_row = Rect::new(area.x, area.y + 1, area.width, 1);
         frame.render_widget(
-            Paragraph::new(Span::styled(subtitle, theme::fg(Token::TextMuted))),
+            Paragraph::new(Span::styled(route.subtitle(), theme::fg(Token::TextMuted))),
             subtitle_row,
         );
     }

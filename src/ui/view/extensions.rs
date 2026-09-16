@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 use super::super::hit::Hit;
-use super::super::model::{ResizablePanel, TuiModel};
+use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header, side_panel_area};
 use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
@@ -45,8 +45,7 @@ pub(crate) fn render_extensions(
     let content = render_screen_header(
         frame,
         header_area,
-        "Extensions",
-        "official tool extensions",
+        Route::Extensions,
         Some(Span::styled(
             format!("{} bundled", model.extensions.len()),
             theme::fg(Token::TextMuted),

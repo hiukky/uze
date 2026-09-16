@@ -30,7 +30,7 @@ use uze_application::application::{DoctorReport, MarketplacePluginSummary, Plugi
 
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
-use super::super::model::{ResizablePanel, TuiModel};
+use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, fold, render_screen_header, side_panel_area};
 use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
@@ -155,13 +155,7 @@ pub(crate) fn render_plugins(
             theme::fg(Token::TextMuted),
         )
     });
-    let content = render_screen_header(
-        frame,
-        header_area,
-        "Plugins",
-        "skills · agents · MCP",
-        trailer,
-    );
+    let content = render_screen_header(frame, header_area, Route::Plugins, trailer);
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
     render_filter_box(frame, filter_area, model);
     hits.push((filter_area, Hit::FocusFilter));

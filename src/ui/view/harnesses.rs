@@ -137,8 +137,7 @@ pub(crate) fn render_harnesses(
     let content = render_screen_header(
         frame,
         list_area,
-        "Integrations",
-        "detected agents",
+        Route::Harnesses,
         Some(Span::styled(
             format!("{count} installed"),
             theme::fg(Token::TextMuted),
