@@ -709,23 +709,7 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
 fn pr_publishes_then_hands_the_request_to_its_agent_and_syncs_it_after() {
     let mut engine = Engine::start("  completion: pr\n");
     let project = engine.project().to_path_buf();
-    let origin = engine.env.root().join("origin.git");
-    engine.git(
-        &project,
-        &[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            "main",
-            origin.to_str().unwrap(),
-        ],
-    );
-    engine.git(
-        &project,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    engine.git(&project, &["push", "--quiet", "-u", "origin", "main"]);
+    uze_testkit::git::publish_to_origin(&project, "main");
 
     let (id, slot) = engine.launch(&commit_script("feature.rs", "feature\\n"));
     wait_for_states(&engine, &[&id], &TaskStateView::Ready);

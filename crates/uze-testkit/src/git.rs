@@ -101,6 +101,29 @@ impl Repository {
         self.git_in(checkout, &["rev-parse", "--abbrev-ref", "HEAD"])
     }
 
+    /// Gives the repository a bare `origin` beside it and pushes `branch`
+    /// there, tracking it. Answers with the bare repository's path — see
+    /// [`publish_to_origin`].
+    pub fn with_origin(&self, branch: &str) -> PathBuf {
+        publish_to_origin(&self.root, branch)
+    }
+
+    /// A second clone of `origin`, beside the repository, committing as
+    /// someone else — whoever else pushes to the remote the test is about.
+    pub fn clone_origin(&self) -> PathBuf {
+        let origin = self.git(&["remote", "get-url", "origin"]);
+        let other = sibling(&self.root, "other");
+        self.git(&[
+            "clone",
+            "--quiet",
+            &origin,
+            other.to_str().expect("a UTF-8 scratch path"),
+        ]);
+        self.git_in(&other, &["config", "user.name", "Other"]);
+        self.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        other
+    }
+
     /// Runs `git` in the repository, returning its trimmed stdout and
     /// panicking on failure.
     pub fn git(&self, args: &[&str]) -> String {
@@ -159,6 +182,32 @@ pub fn isolated_git_in(checkout: &Path, args: &[&str]) -> String {
     .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"))
     .trim()
     .to_owned()
+}
+
+/// Creates a bare `origin.git` beside `checkout`, whose `HEAD` names
+/// `branch` the way a real remote advertises its default, adds it as the
+/// `origin` remote and pushes `branch` to it with tracking. Answers with the
+/// bare repository's path.
+///
+/// Per invocation like [`isolated_git_in`], so it serves a checkout that is
+/// not a [`Repository`] as well as one that is.
+pub fn publish_to_origin(checkout: &Path, branch: &str) -> PathBuf {
+    let origin = sibling(checkout, "origin.git");
+    let origin_path = origin.to_str().expect("a UTF-8 scratch path");
+    isolated_git_in(
+        checkout,
+        &["init", "--quiet", "--bare", "-b", branch, origin_path],
+    );
+    isolated_git_in(checkout, &["remote", "add", "origin", origin_path]);
+    isolated_git_in(checkout, &["push", "--quiet", "-u", "origin", branch]);
+    origin
+}
+
+fn sibling(checkout: &Path, name: &str) -> PathBuf {
+    checkout
+        .parent()
+        .expect("a checkout inside a scratch directory")
+        .join(name)
 }
 
 /// Turns an existing directory into a repository with one commit holding
@@ -228,6 +277,27 @@ mod tests {
             repository
                 .try_git_in(repository.root(), &["rev-parse", "HEAD"])
                 .is_err()
+        );
+    }
+
+    /// A remote someone else pushes to: the push lands in the bare
+    /// repository, and the repository sees it once it fetches.
+    #[test]
+    fn a_published_repository_shares_its_origin_with_a_second_clone() {
+        let repository = Repository::new("testkit-git-origin");
+        let origin = repository.with_origin(INITIAL_BRANCH);
+        assert!(origin.join("HEAD").is_file(), "a bare repository");
+
+        let other = repository.clone_origin();
+        std::fs::write(other.join("theirs.txt"), "").unwrap();
+        repository.git_in(&other, &["add", "."]);
+        repository.git_in(&other, &["commit", "--quiet", "-m", "theirs"]);
+        repository.git_in(&other, &["push", "--quiet"]);
+
+        repository.git(&["fetch", "--quiet"]);
+        assert_eq!(
+            repository.git(&["rev-parse", "@{upstream}"]),
+            repository.git_in(&other, &["rev-parse", "HEAD"])
         );
     }
 

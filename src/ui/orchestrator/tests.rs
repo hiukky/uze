@@ -545,8 +545,11 @@ mod workspace_tests {
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
 
-        let mut view =
-            code::CodeView::opening(root.clone(), "/repo".to_owned(), code::NavigatorMode::Files);
+        let mut view = code::CodeView::opening(
+            root.clone(),
+            "/repo".to_owned(),
+            code::ContentMode::Contents,
+        );
         // Answered by hand rather than off a disk: what is under test is
         // where the click lands, and a temp directory would only add a
         // way for the test to fail for reasons of its own.

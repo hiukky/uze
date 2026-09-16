@@ -182,8 +182,8 @@ impl OpenFile {
         let Some(text) = self.lines.get(self.caret.line) else {
             return;
         };
-        let mut highlighter = crate::shared::highlight::highlighter(&self.path, &self.theme);
-        let spans = crate::shared::highlight::line(&mut highlighter, text);
+        let mut highlighter = crate::code::highlight::highlighter(&self.path, &self.theme);
+        let spans = crate::code::highlight::line(&mut highlighter, text);
         if let Some(slot) = self.highlighted.get_mut(self.caret.line) {
             *slot = spans;
         }

@@ -69,7 +69,6 @@ impl Fixture {
     fn with_layout(label: &str, layout: impl FnOnce(&Path)) -> Self {
         let root = temporary(label);
         let work = root.join("work");
-        let bare = root.join("origin.git");
         fs::create_dir_all(&work).unwrap();
         git(
             &["init", "--quiet", "--initial-branch", "trunk", "."],
@@ -78,13 +77,7 @@ impl Fixture {
         layout(&work);
         git(&["add", "-A"], &work);
         git(&["commit", "--quiet", "-m", "initial"], &work);
-        fs::create_dir_all(&bare).unwrap();
-        git(&["init", "--quiet", "--bare", "."], &bare);
-        git(&["remote", "add", "origin", &bare.to_string_lossy()], &work);
-        git(&["push", "--quiet", "origin", "trunk"], &work);
-        // A real remote advertises its default branch. Setting it here keeps
-        // the fixture honest rather than exercising a misconfigured remote.
-        git(&["symbolic-ref", "HEAD", "refs/heads/trunk"], &bare);
+        let bare = uze_testkit::git::publish_to_origin(&work, "trunk");
         let url = format!("file://{}", bare.display());
         Self { root, work, url }
     }

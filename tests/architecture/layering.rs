@@ -405,7 +405,9 @@ fn the_workspace_client_reaches_for_git_only_from_a_thread() {
 /// into a render function is a mark nobody can change, and it is what made a
 /// terminal without a Nerd Font — or an operator who simply wants ASCII —
 /// something UZE had no answer for. Every one of these is a
-/// `uze_theme::Symbol` now, resolved through `src/ui/theme.rs`.
+/// `uze_theme::Symbol` now, resolved through `src/ui/theme.rs`. An
+/// extension is held to the same rule: it names a kind (`RowIcon`,
+/// `RowMark`) and the host draws the glyph.
 ///
 /// Deliberately not the whole set of non-ASCII characters. Arrows, the
 /// middot and the ellipsis appear in hint lines as *notation* — "↑↓ select"
@@ -442,22 +444,41 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
         '\u{2192}', // → toward
     ];
 
+    /// Where a glyph legitimately becomes a string, and why.
+    const SANCTIONED: &[(&str, &str)] = &[
+        (
+            "src/ui/theme.rs",
+            "the adapter: the one place a symbol resolves to its glyph",
+        ),
+        (
+            "crates/uze-extensions/src/code/markdown.rs",
+            "a rendered document's own typography — a rule and a quote bar \
+             are the document's structure drawn as text, content rather \
+             than chrome, the way syntax colour is",
+        ),
+    ];
+
     let root = repository_root();
+    let sources = production_sources(&root.join("src/ui"))
+        .into_iter()
+        .chain(production_sources(&root.join("crates/uze-extensions/src")));
     let mut written = Vec::new();
-    for (path, contents) in production_sources(&root.join("src/ui")) {
+    for (path, contents) in sources {
         let relative = path
             .strip_prefix(&root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        // The adapter is where a glyph legitimately becomes a string.
-        if relative == "src/ui/theme.rs" {
+        if SANCTIONED.iter().any(|(file, _)| relative == *file) {
             continue;
         }
         for (number, line) in contents.lines().enumerate() {
             let code = line.split("//").next().unwrap_or_default();
             for mark in MARKS {
-                if code.contains(*mark) {
+                // Spelled as an escape it is the same glyph, and the form
+                // a scan for the character itself would never see.
+                let escaped = format!("\\u{{{:x}}}", *mark as u32);
+                if code.contains(*mark) || code.to_lowercase().contains(&escaped) {
                     written.push(format!("  {relative}:{}: {mark}", number + 1));
                 }
             }

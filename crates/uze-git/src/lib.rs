@@ -6,19 +6,22 @@
 //! # Why a crate rather than a module in `uze-core`
 //!
 //! Not because Git is peripheral — it is essential — but because of which
-//! way the dependencies run. Three crates need it, and two of them cannot
-//! depend on the domain: `uze-extensions` is forbidden to by an enforced
-//! rule (an extension never names the domain crate), and `uze-testkit`
-//! would form a cycle, since `uze-core` dev-depends on it. A leaf with no
-//! dependencies of its own is the only position all three can share. What it owns is the part every caller was reinventing — how the
-//! process is spawned, what environment it inherits, and what a non-zero
-//! exit means.
+//! way the dependencies run. The domain needs it, and so do two callers
+//! that may not name the domain: the workspace client's extension host,
+//! which is how an extension reaches Git (presentation never names
+//! `uze-core`, an enforced rule), and `uze-testkit`, which would form a
+//! cycle, since `uze-core` dev-depends on it. A leaf that depends on no
+//! other crate of the workspace is the only position all of them can share.
+//!
+//! What it owns is the part every caller was reinventing — how the process
+//! is spawned, what environment it inherits, and what a non-zero exit
+//! means.
 //!
 //! # Why a non-zero exit is not an error
 //!
 //! Two callers grew two incompatible conventions. `worktree` treated any
 //! non-zero exit as failure; the diff view treated `1` as success, because
-//! `git diff` uses it for "there are differences". Both were right for
+//! `git diff --no-index` uses it for "there are differences". Both were right for
 //! their own command and wrong for the other's, and a third caller would
 //! have had to guess again — `git rebase` exits 1 on a conflict, which is a
 //! state, and `git rev-parse --verify --quiet` exits 1 for "no such ref",
@@ -105,11 +108,12 @@ impl Output {
         }
     }
 
-    /// Stdout when Git exited with `code` or zero. For a subcommand whose
-    /// non-zero exit is an answer rather than a failure — `diff` reporting
-    /// differences, `rev-parse --verify --quiet` reporting a missing ref.
-    pub fn or_exit(self, code: i32) -> Result<String, String> {
-        if self.is_success() || self.code == Some(code) {
+    /// Stdout when Git exited zero or with one of `answers`. For a
+    /// subcommand whose non-zero exit is an answer rather than a failure —
+    /// `diff --no-index` reporting differences, `rev-parse --verify
+    /// --quiet` reporting a missing ref.
+    pub fn or_exit(self, answers: &[i32]) -> Result<String, String> {
+        if self.is_success() || self.code.is_some_and(|code| answers.contains(&code)) {
             Ok(self.stdout)
         } else {
             Err(self.stderr.trim().to_owned())
@@ -212,9 +216,12 @@ mod tests {
     use super::*;
     use std::{path::PathBuf, time::Instant};
 
+    /// A span's name and the `exit` it recorded.
+    type SpanExit = (String, Option<i64>);
+
     /// The spans this crate opens, with the `exit` each recorded.
     #[derive(Clone, Default)]
-    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<(String, Option<i64>)>>>);
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<SpanExit>>>);
 
     impl<S> tracing_subscriber::Layer<S> for Recorded
     where
@@ -316,7 +323,8 @@ mod tests {
         let diff = read(&root, &["diff", "--quiet"]).unwrap();
         assert_eq!(diff.code, Some(1), "differences, not a failure");
         assert!(diff.clone().successful().is_err());
-        assert!(diff.or_exit(1).is_ok());
+        assert!(diff.clone().or_exit(&[1]).is_ok());
+        assert!(diff.or_exit(&[]).is_err());
 
         let missing = read(
             &root,

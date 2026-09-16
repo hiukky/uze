@@ -13,14 +13,14 @@ use std::{
 
 use super::{
     changes::{ChangedFile, Changes, FileStatus},
-    diff::{highlight_diff_rows, pair_side_by_side, parse_unified_diff},
+    diff,
     render::changes_navigator as navigator,
     *,
 };
 use crate::{
     DirEntry,
-    shared::highlight::FALLBACK_SYNTAX_THEME,
-    view::{Command, Content, LineTone, NavigatorRow, Role, Size},
+    code::highlight::FALLBACK_SYNTAX_THEME,
+    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size},
 };
 
 fn space() -> Size {
@@ -57,7 +57,7 @@ fn surface(root: &Path, files: Vec<ChangedFile>, selected: usize) -> CodeView {
         ..CodeView::opening(
             root.to_path_buf(),
             root.display().to_string(),
-            NavigatorMode::Changes,
+            ContentMode::Diff,
         )
     }
 }
@@ -79,10 +79,8 @@ fn fixture() -> CodeView {
         ],
         1,
     );
-    view.changes.diff = highlight_diff_rows(
-        pair_side_by_side(parse_unified_diff(
-            "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
-        )),
+    view.changes.diff = diff::read(
+        "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
         Path::new("/repo/src/ui.rs"),
         FALLBACK_SYNTAX_THEME,
     );
@@ -191,7 +189,7 @@ fn a_checkout_that_is_no_repository_still_has_a_tree() {
     let mut view = CodeView::opening(
         PathBuf::from("/nope"),
         "/nope".to_owned(),
-        NavigatorMode::Changes,
+        ContentMode::Diff,
     );
     view.changes.error = Some("not a git repository".to_owned());
     view.changes.diff_pending = false;
@@ -405,10 +403,10 @@ fn the_timeline_section_names_meaning_rather_than_colour() {
     assert_eq!(section.caption.text, "agent/x");
     assert!(section.resizable);
     // HEAD is ringed; standing is the hue, and the hue is a role.
-    assert_eq!(section.rows[0].marker.text, "\u{25c9}");
-    assert_eq!(section.rows[0].marker.role, Role::Info);
-    assert_eq!(section.rows[1].marker.text, "\u{25cf}");
-    assert_eq!(section.rows[1].marker.role, Role::Warning);
+    assert_eq!(section.rows[0].mark, RowMark::Head);
+    assert_eq!(section.rows[0].mark_role, Role::Info);
+    assert_eq!(section.rows[1].mark, RowMark::Commit);
+    assert_eq!(section.rows[1].mark_role, Role::Warning);
     assert_eq!(section.rows[0].trailing.text, "3h");
 
     let folded = timeline_section(&timeline, true, 0);
@@ -421,6 +419,43 @@ fn the_timeline_section_names_meaning_rather_than_colour() {
 }
 
 // --- the files half, and the switch between them -------------------------
+
+/// The same grant the workspace client makes, for the tests that drive real
+/// `git` in a scratch repository. A fake is the right tool for testing *the
+/// view*; these test what the view reads.
+pub(super) struct RepositoryHost;
+
+impl Host for RepositoryHost {
+    fn git(&self, root: &Path, args: &[&str], answers: &[i32]) -> Result<String, String> {
+        uze_git::read(root, args)
+            .map_err(|error| error.to_string())?
+            .or_exit(answers)
+    }
+
+    fn repository_root(&self, path: &Path) -> Result<PathBuf, String> {
+        uze_git::repository::root(path)
+    }
+
+    fn read_file(&self, path: &Path) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|error| error.to_string())
+    }
+
+    fn syntax_theme(&self) -> String {
+        FALLBACK_SYNTAX_THEME.to_owned()
+    }
+
+    fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, String> {
+        unreachable!("what the repository tests read, they read through `git`")
+    }
+
+    fn write_file(&self, _path: &Path, _contents: &str) -> Result<(), String> {
+        unreachable!("reading a repository writes nothing")
+    }
+
+    fn delete_file(&self, _path: &Path) -> Result<(), String> {
+        unreachable!("reading a repository deletes nothing")
+    }
+}
 
 /// A filesystem that only ever existed in memory, so these prove the
 /// surface's own behaviour rather than a temp directory's.
@@ -457,7 +492,11 @@ impl FakeMachine {
 }
 
 impl Host for FakeMachine {
-    fn git(&self, _root: &Path, _args: &[&str]) -> Result<String, String> {
+    fn git(&self, _root: &Path, _args: &[&str], _answers: &[i32]) -> Result<String, String> {
+        Err("no git here".to_owned())
+    }
+
+    fn repository_root(&self, _path: &Path) -> Result<PathBuf, String> {
         Err("no git here".to_owned())
     }
 
@@ -488,10 +527,6 @@ impl Host for FakeMachine {
         Ok(())
     }
 
-    fn display_path(&self, path: &Path) -> String {
-        path.display().to_string()
-    }
-
     fn syntax_theme(&self) -> String {
         FALLBACK_SYNTAX_THEME.to_owned()
     }
@@ -509,7 +544,7 @@ fn settle(view: &mut CodeView, machine: &FakeMachine) {
 }
 
 fn files_at(root: &str) -> CodeView {
-    CodeView::opening(PathBuf::from(root), root.to_owned(), NavigatorMode::Files)
+    CodeView::opening(PathBuf::from(root), root.to_owned(), ContentMode::Contents)
 }
 
 #[test]
@@ -765,6 +800,28 @@ fn a_reread_never_overwrites_keystrokes_typed_while_it_was_out() {
     );
 }
 
+/// Moving to another file in the tree points every mode at it: the diff
+/// read for the file left behind is not left standing under the new one,
+/// by the arrows or by a click.
+#[test]
+fn moving_to_another_file_in_the_tree_asks_for_its_diff() {
+    let machine = FakeMachine::default()
+        .with_file("/w/a.txt", "aaa\n")
+        .with_file("/w/b.txt", "bbb\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    view.changes.diff_pending = false;
+
+    press(&mut view, Command::SelectNext);
+    assert_eq!(view.selected.as_deref(), Some(Path::new("/w/b.txt")));
+    assert!(view.diff_pending(), "the arrows moved to another file");
+
+    view.changes.diff_pending = false;
+    handle_mouse(&mut view, Some(ViewHit::SelectItem(0)));
+    assert_eq!(view.selected.as_deref(), Some(Path::new("/w/a.txt")));
+    assert!(view.diff_pending(), "and so did the click");
+}
+
 /// An answer names the file it is about, so one that lands after the
 /// viewer opened something else is dropped.
 #[test]
@@ -797,16 +854,14 @@ fn a_read_that_arrives_late_does_not_replace_a_different_file() {
 #[test]
 fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
     let machine = FakeMachine::default().with_file("/w/a.rs", "one\ntwo\nthree\nfour\n");
-    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
     view.selected = Some(PathBuf::from("/w/a.rs"));
     view.changes.files = vec![ChangedFile {
         status: FileStatus::Modified,
         path: PathBuf::from("/w/a.rs"),
     }];
-    view.changes.diff = highlight_diff_rows(
-        pair_side_by_side(parse_unified_diff(
-            "@@ -1,4 +1,4 @@\n one\n two\n-old\n+three\n four\n",
-        )),
+    view.changes.diff = diff::read(
+        "@@ -1,4 +1,4 @@\n one\n two\n-old\n+three\n four\n",
         Path::new("/w/a.rs"),
         FALLBACK_SYNTAX_THEME,
     );
@@ -825,9 +880,61 @@ fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
     );
     assert_eq!(view.content, ContentMode::Contents);
     assert_eq!(
-        view.navigator,
+        view.navigator(),
         NavigatorMode::Files,
         "the navigator follows the content"
+    );
+}
+
+/// A replacement of several lines is drawn in Git's order — every removal,
+/// then every addition — and the line carried across the switch is still
+/// the one on screen, both ways: an addition's number is the new file's,
+/// and a removal that shares it is not where the reader comes back to.
+#[test]
+fn a_multi_line_replacement_carries_the_line_both_ways() {
+    let machine = FakeMachine::default().with_file("/w/a.rs", "one\nc\nd\nfour\n");
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
+    view.selected = Some(PathBuf::from("/w/a.rs"));
+    view.changes.files = vec![ChangedFile {
+        status: FileStatus::Modified,
+        path: PathBuf::from("/w/a.rs"),
+    }];
+    view.changes.diff = diff::read(
+        "@@ -1,4 +1,4 @@\n one\n-a\n-b\n+c\n+d\n four\n",
+        Path::new("/w/a.rs"),
+        FALLBACK_SYNTAX_THEME,
+    );
+    view.changes.diff_pending = false;
+    let Content::Lines { lines, .. } = super::view(&view, space()).content else {
+        panic!("a selected file has a diff");
+    };
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| (line.gutter.as_str(), line.number.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (" ", "1"),
+            ("-", "2"),
+            ("-", "3"),
+            ("+", "2"),
+            ("+", "3"),
+            (" ", "4")
+        ]
+    );
+    // On `+d`, line three of the new file.
+    view.scroll = 4;
+
+    press(&mut view, Command::Edit);
+    settle(&mut view, &machine);
+    let open = view.open.as_ref().expect("the file opened");
+    assert_eq!(open.lines[open.caret.line], "d");
+
+    press(&mut view, Command::Close);
+    view.show(ContentMode::Diff);
+    assert_eq!(
+        view.scroll, 4,
+        "back on `+d`, not on `-b` which shares its number"
     );
 }
 
@@ -839,7 +946,7 @@ fn switching_to_a_file_the_tree_has_not_listed_opens_its_ancestors() {
         .with_directory("/w/src")
         .with_directory("/w/src/ui")
         .with_file("/w/src/ui/deep.rs", "fn deep() {}\n");
-    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
     view.selected = Some(PathBuf::from("/w/src/ui/deep.rs"));
 
     press(&mut view, Command::Edit);
@@ -859,17 +966,17 @@ fn the_doors_switch_modes_once_the_surface_is_open() {
     let mut view = fixture();
     assert_eq!(view.content, ContentMode::Diff);
 
-    show(&mut view, ContentMode::Contents);
+    view.show(ContentMode::Contents);
     assert_eq!(view.content, ContentMode::Contents);
     assert_eq!(
-        view.navigator,
+        view.navigator(),
         NavigatorMode::Files,
         "the navigator follows the content"
     );
 
-    show(&mut view, ContentMode::Diff);
+    view.show(ContentMode::Diff);
     assert_eq!(view.content, ContentMode::Diff);
-    assert_eq!(view.navigator, NavigatorMode::Changes);
+    assert_eq!(view.navigator(), NavigatorMode::Changes);
 }
 
 /// A title is three things at once, and one run of text gives them all

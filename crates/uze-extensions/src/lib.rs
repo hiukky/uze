@@ -14,10 +14,10 @@
 //!
 //! One directory per extension, named after it, with the extension's own
 //! surface — its state, its keys, its registry entry — in the file beside
-//! it. What is genuinely shared by more than one lives under [`shared`],
-//! and nothing is put there in anticipation of a second reader (see that
-//! module for the rule). [`view`] is neither: it is the contract between
-//! an extension and whatever draws it, which is why it sits at the root
+//! it. What more than one extension needs would live under a `shared`
+//! module, created the day a second extension actually reaches for it and
+//! not before. [`view`] is neither: it is the contract between an
+//! extension and whatever draws it, which is why it sits at the root
 //! alongside [`Host`], the contract in the other direction.
 //!
 //! # An extension holds no machine access of its own
@@ -42,7 +42,6 @@
 
 pub mod code;
 pub mod registry;
-pub mod shared;
 pub mod view;
 
 /// Something a viewer did inside an extension's own surface, addressed to
@@ -58,7 +57,7 @@ pub enum ExtensionHit {
     /// tree and a file's contents are one surface in three modes, so
     /// they are one variant.
     Code(view::ViewHit),
-    /// The git extension's sidebar section — its commit timeline.
+    /// The code extension's sidebar section — its commit timeline.
     ///
     /// A second variant for a second *surface* of the one extension, not
     /// a second extension: `SelectItem(3)` means a different thing in a
@@ -118,10 +117,20 @@ impl PartialOrd for DirEntry {
 pub trait Host {
     /// Runs a read-only Git command in `root`, returning its stdout.
     ///
-    /// Exit `1` counts as an answer rather than a failure — `git diff`
-    /// uses it for "there are differences", which is the ordinary case for
-    /// a view whose whole job is showing them.
-    fn git(&self, root: &std::path::Path, args: &[&str]) -> Result<String, String>;
+    /// Exit `0` is always an answer. `answers` names the other exit codes
+    /// that are one for this command rather than a failure — only the
+    /// caller knows which: `git diff --no-index` exits `1` for "there are
+    /// differences", `rev-parse --verify --quiet` for "no such ref".
+    fn git(&self, root: &std::path::Path, args: &[&str], answers: &[i32])
+    -> Result<String, String>;
+
+    /// The working tree `path` sits in. Doubles as the "is this inside a
+    /// Git repository" check: outside one, Git's own message is the error.
+    ///
+    /// Named rather than spelled as a `git` call because its answer cannot
+    /// change while the path is still there, so a host may remember it —
+    /// and the change badge asks it on every refresh.
+    fn repository_root(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String>;
 
     /// A file's contents, or why they cannot be shown. Unreadable is a
     /// state a view renders, never an error it propagates — but the
@@ -141,10 +150,6 @@ pub trait Host {
             .map(|contents| contents.lines().count() as u32)
             .unwrap_or(0)
     }
-
-    /// The path as a person would recognise it — `~/relative/path` when it
-    /// sits under their home directory.
-    fn display_path(&self, path: &std::path::Path) -> String;
 
     /// The entries of `path`, directories first and each half sorted by
     /// name — the order every listing arrives in, so the same directory

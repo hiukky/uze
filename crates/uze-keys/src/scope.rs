@@ -22,238 +22,160 @@
 //!   Typing `q` into a filter must never quit, and that is a property of
 //!   the filter, not a guard every binding has to remember.
 
-use serde::{Deserialize, Serialize};
+/// Which of uze's two keyboards a surface belongs to.
+///
+/// The distinction is not cosmetic. In management uze owns the whole
+/// keyboard, so an action may hold a bare letter. In the workspace every
+/// bare key belongs to the program running in the pane, so an action there
+/// must carry a modifier or a function key. `Both` is for the handful of
+/// surfaces that mean the same thing in either place.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum Mode {
+    Management,
+    Workspace,
+    Both,
+}
 
-use crate::action::Mode;
+impl Mode {
+    /// Whether a surface of this mode shares `other`'s keyboard.
+    pub fn covers(self, other: Mode) -> bool {
+        self == Mode::Both || other == Mode::Both || self == other
+    }
+}
 
-/// One surface of the product, as far as the keyboard is concerned.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Scope {
+/// One row per scope: its variant, the name a keymap file writes, how the
+/// Keys screen groups it, its keyboard, whether it seals, and whether it
+/// takes typing as text.
+macro_rules! scopes {
+    ($(
+        $(#[$doc:meta])*
+        $variant:ident => $name:literal, $heading:literal, $mode:ident,
+            seals: $seals:literal, text: $consumes_text:literal;
+    )*) => {
+        /// One surface of the product, as far as the keyboard is concerned.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+        pub enum Scope {
+            $($(#[$doc])* $variant,)*
+        }
+
+        /// Every scope this build knows, outermost kinds first.
+        pub const ALL_SCOPES: &[Scope] = &[$(Scope::$variant,)*];
+
+        impl Scope {
+            /// The name a keymap file writes.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Scope::$variant => $name,)*
+                }
+            }
+
+            /// How the Keys screen groups this surface.
+            pub fn heading(self) -> &'static str {
+                match self {
+                    $(Scope::$variant => $heading,)*
+                }
+            }
+
+            /// Which keyboard this surface belongs to.
+            pub fn mode(self) -> Mode {
+                match self {
+                    $(Scope::$variant => Mode::$mode,)*
+                }
+            }
+
+            /// Whether this surface answers for everything below it, so
+            /// nothing outside it — [`Scope::Global`] excepted — can fire
+            /// while it is open.
+            pub fn seals(self) -> bool {
+                match self {
+                    $(Scope::$variant => $seals,)*
+                }
+            }
+
+            /// Whether ordinary typing reaches this surface as text rather
+            /// than as a chord to resolve.
+            pub fn consumes_text(self) -> bool {
+                match self {
+                    $(Scope::$variant => $consumes_text,)*
+                }
+            }
+
+            pub fn parse(name: &str) -> Option<Scope> {
+                match name {
+                    $($name => Some(Scope::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+scopes! {
     /// Live everywhere, including inside a sealed surface.
-    Global,
+    Global => "global", "Everywhere", Both, seals: false, text: false;
 
     /// Management, whatever route is open.
-    Management,
+    Management => "management", "Management", Management, seals: false, text: false;
     /// The route list, when it has focus.
-    ManagementSidebar,
-    Overview,
-    Plugins,
-    Extensions,
-    Harnesses,
-    Profiles,
+    ManagementSidebar => "management-sidebar", "The route list", Management,
+        seals: false, text: false;
+    Overview => "overview", "Overview", Management, seals: false, text: false;
+    Plugins => "plugins", "Plugins", Management, seals: false, text: false;
+    Extensions => "extensions", "Extensions", Management, seals: false, text: false;
+    Harnesses => "harnesses", "Integrations", Management, seals: false, text: false;
+    Profiles => "profiles", "Profiles", Management, seals: false, text: false;
     /// The preference editor inside Profiles. Its own surface because
     /// left/right change a value there and move focus everywhere else —
     /// which is a different surface, not a guard on a binding.
-    ProfileEditor,
+    ProfileEditor => "profile-editor", "Editing a preference", Management,
+        seals: false, text: false;
     /// The Keys screen itself.
-    Keys,
+    Keys => "keys", "Shortcuts", Management, seals: false, text: false;
     /// The Appearance screen: the palette and the glyph set, each chosen
     /// on its own.
-    Appearance,
+    Appearance => "appearance", "Appearance", Management, seals: false, text: false;
 
     /// A list's live filter.
-    Filter,
+    Filter => "filter", "While searching", Management, seals: true, text: true;
     /// A modal asking for a line of text.
-    TextPrompt,
+    TextPrompt => "text-prompt", "While typing an answer", Management,
+        seals: true, text: true;
     /// A modal asking a yes/no question.
-    Confirm,
+    Confirm => "confirm", "While being asked", Management, seals: true, text: false;
     /// The theme picker.
-    ThemePicker,
+    ThemePicker => "theme-picker", "The theme picker", Management,
+        seals: true, text: false;
 
     /// The workspace client, with nothing of uze's own open.
-    Workspace,
+    Workspace => "workspace", "Workspace", Workspace, seals: false, text: false;
     /// The code surface: a checkout's changes, its files and a file's
     /// contents, read.
-    Code,
+    Code => "code", "Code", Workspace, seals: true, text: false;
     /// The same surface with a file open for typing. Its own scope
     /// because it takes text — nothing behind it may answer a letter.
-    CodeEditing,
+    CodeEditing => "code-editing", "Editing a file", Workspace, seals: true, text: false;
     /// The directory picker a new space is born from.
-    RootPicker,
+    RootPicker => "root-picker", "Choosing a directory", Workspace, seals: true, text: true;
     /// The inline rename buffer over a tab or space label.
-    Rename,
+    Rename => "rename", "While renaming", Workspace, seals: true, text: true;
     /// The harness picker a new agent is born from.
-    AgentPicker,
+    AgentPicker => "agent-picker", "Choosing an agent", Workspace, seals: true, text: false;
     /// The list of work no live tab is in front of.
-    PreservedWork,
+    PreservedWork => "preserved-work", "Preserved work", Workspace,
+        seals: true, text: false;
     /// The tab/space context menu.
-    ContextMenu,
+    ContextMenu => "context-menu", "A tab's actions", Workspace, seals: true, text: false;
 
     /// The index of everything, in either mode.
-    ActionIndex,
+    ActionIndex => "action-index", "The index", Both, seals: true, text: true;
     /// The Keys screen waiting for a chord to bind. Takes every keystroke,
     /// including ones that are bound elsewhere — that is the point.
-    KeyCapture,
+    KeyCapture => "key-capture", "While binding a key", Management, seals: true, text: false;
 
     /// The program running in a pane. Last, and total: anything unbound
     /// above it belongs to whatever is in there.
-    Pane,
+    Pane => "pane", "The pane", Workspace, seals: false, text: false;
 }
-
-impl Scope {
-    /// Which keyboard this surface belongs to.
-    pub fn mode(self) -> Mode {
-        match self {
-            Scope::Global | Scope::ActionIndex => Mode::Both,
-            Scope::Management
-            | Scope::ManagementSidebar
-            | Scope::Overview
-            | Scope::Plugins
-            | Scope::Extensions
-            | Scope::Harnesses
-            | Scope::Profiles
-            | Scope::ProfileEditor
-            | Scope::Keys
-            | Scope::Appearance
-            | Scope::Filter
-            | Scope::TextPrompt
-            | Scope::Confirm
-            | Scope::ThemePicker
-            | Scope::KeyCapture => Mode::Management,
-            Scope::Workspace
-            | Scope::Code
-            | Scope::CodeEditing
-            | Scope::RootPicker
-            | Scope::Rename
-            | Scope::AgentPicker
-            | Scope::PreservedWork
-            | Scope::ContextMenu
-            | Scope::Pane => Mode::Workspace,
-        }
-    }
-
-    /// Whether this surface answers for everything below it, so nothing
-    /// outside it — [`Scope::Global`] excepted — can fire while it is open.
-    pub fn seals(self) -> bool {
-        self.consumes_text()
-            || matches!(
-                self,
-                Scope::Confirm
-                    | Scope::ThemePicker
-                    | Scope::Code
-                    | Scope::CodeEditing
-                    | Scope::AgentPicker
-                    | Scope::PreservedWork
-                    | Scope::ContextMenu
-                    | Scope::KeyCapture
-            )
-    }
-
-    /// Whether ordinary typing reaches this surface as text rather than as
-    /// a chord to resolve.
-    pub fn consumes_text(self) -> bool {
-        matches!(
-            self,
-            Scope::Filter
-                | Scope::TextPrompt
-                | Scope::RootPicker
-                | Scope::Rename
-                | Scope::ActionIndex
-        )
-    }
-
-    /// The name a keymap file writes.
-    pub fn name(self) -> &'static str {
-        match self {
-            Scope::Global => "global",
-            Scope::Management => "management",
-            Scope::ManagementSidebar => "management-sidebar",
-            Scope::Overview => "overview",
-            Scope::Plugins => "plugins",
-            Scope::Extensions => "extensions",
-            Scope::Harnesses => "harnesses",
-            Scope::Profiles => "profiles",
-            Scope::ProfileEditor => "profile-editor",
-            Scope::Keys => "keys",
-            Scope::Appearance => "appearance",
-            Scope::Filter => "filter",
-            Scope::TextPrompt => "text-prompt",
-            Scope::Confirm => "confirm",
-            Scope::ThemePicker => "theme-picker",
-            Scope::Workspace => "workspace",
-            Scope::Code => "code",
-            Scope::CodeEditing => "code-editing",
-            Scope::RootPicker => "root-picker",
-            Scope::Rename => "rename",
-            Scope::AgentPicker => "agent-picker",
-            Scope::PreservedWork => "preserved-work",
-            Scope::ContextMenu => "context-menu",
-            Scope::ActionIndex => "action-index",
-            Scope::KeyCapture => "key-capture",
-            Scope::Pane => "pane",
-        }
-    }
-
-    /// How the Keys screen groups this surface.
-    pub fn heading(self) -> &'static str {
-        match self {
-            Scope::Global => "Everywhere",
-            Scope::Management => "Management",
-            Scope::ManagementSidebar => "The route list",
-            Scope::Overview => "Overview",
-            Scope::Plugins => "Plugins",
-            Scope::Extensions => "Extensions",
-            Scope::Harnesses => "Integrations",
-            Scope::Profiles => "Profiles",
-            Scope::ProfileEditor => "Editing a preference",
-            Scope::Keys => "Shortcuts",
-            Scope::Appearance => "Appearance",
-            Scope::Filter => "While searching",
-            Scope::TextPrompt => "While typing an answer",
-            Scope::Confirm => "While being asked",
-            Scope::ThemePicker => "The theme picker",
-            Scope::Workspace => "Workspace",
-            Scope::Code => "Code",
-            Scope::CodeEditing => "Editing a file",
-            Scope::RootPicker => "Choosing a directory",
-            Scope::Rename => "While renaming",
-            Scope::AgentPicker => "Choosing an agent",
-            Scope::PreservedWork => "Preserved work",
-            Scope::ContextMenu => "A tab's actions",
-            Scope::ActionIndex => "The index",
-            Scope::KeyCapture => "While binding a key",
-            Scope::Pane => "The pane",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Scope> {
-        ALL_SCOPES
-            .iter()
-            .copied()
-            .find(|scope| scope.name() == name)
-    }
-}
-
-/// Every scope this build knows, outermost kinds first.
-pub const ALL_SCOPES: &[Scope] = &[
-    Scope::Global,
-    Scope::Management,
-    Scope::ManagementSidebar,
-    Scope::Overview,
-    Scope::Plugins,
-    Scope::Extensions,
-    Scope::Harnesses,
-    Scope::Profiles,
-    Scope::ProfileEditor,
-    Scope::Keys,
-    Scope::Appearance,
-    Scope::Filter,
-    Scope::TextPrompt,
-    Scope::Confirm,
-    Scope::ThemePicker,
-    Scope::Workspace,
-    Scope::Code,
-    Scope::CodeEditing,
-    Scope::RootPicker,
-    Scope::Rename,
-    Scope::AgentPicker,
-    Scope::PreservedWork,
-    Scope::ContextMenu,
-    Scope::ActionIndex,
-    Scope::KeyCapture,
-    Scope::Pane,
-];
 
 #[cfg(test)]
 mod tests {

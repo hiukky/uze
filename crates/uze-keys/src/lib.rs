@@ -45,7 +45,7 @@ pub mod keymap;
 pub mod load;
 pub mod scope;
 
-pub use action::{ALL_ACTIONS, Action, Mode};
+pub use action::{ALL_ACTIONS, Action};
 pub use active::{active, set_active};
 pub use chord::{Caveat, CaveatKind, Chord, ChordProblem, Key, Mods, Tier};
 pub use file::{CURRENT_VERSION, KeymapFile};

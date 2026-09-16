@@ -191,6 +191,12 @@ vocabulary! {
         /// A quiet tab the user is not on.
         StatusIdle = "status.idle",
 
+        // ── a checkout's history ───────────────────────────────────────
+        /// The commit `HEAD` is on.
+        CommitHead = "commit.head",
+        /// A commit in a checkout's history other than `HEAD`.
+        Commit = "commit",
+
         // ── structure ──────────────────────────────────────────────────
         /// A tree row with siblings below it.
         TreeBranch = "tree.branch",
@@ -232,6 +238,10 @@ vocabulary! {
         /// Points from a thing to where it is going — a delivery's target,
         /// a mapping's right-hand side.
         ArrowTo = "arrow.to",
+        /// Commits upstream has that the checkout does not — a pull.
+        SyncBehind = "sync.behind",
+        /// Commits the checkout has that upstream does not — a push.
+        SyncAhead = "sync.ahead",
         /// Points at the item under discussion.
         ChevronRight = "chevron.right",
         /// Steps a value back to the previous of its options.

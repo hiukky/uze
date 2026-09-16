@@ -65,7 +65,7 @@ mod tests {
     fn builtin_exposes_the_whole_extension_set_in_order() {
         let registry = ExtensionRegistry::builtin();
         let ids = registry.ids();
-        assert!(!ids.is_empty(), "at least the git extension ships");
+        assert!(!ids.is_empty(), "at least the code extension ships");
         assert_eq!(ids.len(), registry.all().len());
         assert!(ids.iter().all(|id| !id.is_empty()));
         assert_eq!(registry.get(ids[0]).map(|e| e.id), Some(ids[0]));

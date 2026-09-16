@@ -3,16 +3,16 @@
 //! going.
 //!
 //! Read for the sidebar's timeline section rather than for the overlay,
-//! which is why it sits apart from [`super::status`] — the two answer
+//! which is why it sits apart from [`super::changes`] — the two answer
 //! about different sides of the same checkout and share nothing but the
 //! way they reach Git.
 
 use std::{collections::BTreeSet, path::Path};
 
-use super::{changes::parse_numstat, current_branch, repository_root, run_git};
+use super::{changes::parse_numstat, current_branch};
 use crate::{
     Host,
-    view::{Role, Section, SectionRow, Span},
+    view::{Role, RowMark, Section, SectionRow, Span},
 };
 
 /// One commit of a checkout's [`Timeline`], newest first in the list it
@@ -55,9 +55,9 @@ pub fn timeline(
     limit: usize,
     target: Option<&str>,
 ) -> Option<Timeline> {
-    let root = repository_root(host, cwd).ok()?;
+    let root = host.repository_root(cwd).ok()?;
     let count = format!("--max-count={limit}");
-    let log = run_git(host, &root, &["log", &count, LOG_FORMAT]).ok()?;
+    let log = host.git(&root, &["log", &count, LOG_FORMAT], &[]).ok()?;
     let mut commits = parse_log(&log);
     if commits.is_empty() {
         return None;
@@ -69,25 +69,26 @@ pub fn timeline(
         // ancestry every delivered commit would still read as ahead.
         // `--cherry-pick` drops the ones the base holds an equivalent of;
         // a commit reworked on the way in stays ahead, which is the truth.
-        let ahead = run_git(
-            host,
-            &root,
-            &[
-                "rev-list",
-                "--cherry-pick",
-                "--right-only",
-                &count,
-                &format!("{base}...HEAD"),
-            ],
-        )
-        .map(|hashes| {
-            hashes
-                .lines()
-                .map(str::trim)
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
+        let ahead = host
+            .git(
+                &root,
+                &[
+                    "rev-list",
+                    "--cherry-pick",
+                    "--right-only",
+                    &count,
+                    &format!("{base}...HEAD"),
+                ],
+                &[],
+            )
+            .map(|hashes| {
+                hashes
+                    .lines()
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
         for commit in &mut commits {
             commit.ahead = ahead.contains(&commit.hash);
         }
@@ -125,14 +126,12 @@ pub fn timeline_section(timeline: &Timeline, collapsed: bool, scroll: usize) -> 
                     // the base — what a delivery or a push would move —
                     // and the target's own warning hue for what has
                     // landed in it.
-                    marker: Span::new(
-                        if head { "\u{25c9}" } else { "\u{25cf}" },
-                        if commit.ahead {
-                            Role::Info
-                        } else {
-                            Role::Warning
-                        },
-                    ),
+                    mark: if head { RowMark::Head } else { RowMark::Commit },
+                    mark_role: if commit.ahead {
+                        Role::Info
+                    } else {
+                        Role::Warning
+                    },
                     name: Span::new(
                         commit.subject.clone(),
                         if head { Role::Inactive } else { Role::Dim },
@@ -164,10 +163,9 @@ pub(super) fn comparison_base(
 }
 
 /// `--quiet --verify` exits `1` for a name that resolves to nothing, which
-/// the host reports as an empty answer rather than a failure.
+/// is an answer — an empty one — rather than a failure.
 pub(super) fn ref_exists(host: &dyn Host, root: &Path, name: &str) -> bool {
-    run_git(
-        host,
+    host.git(
         root,
         &[
             "rev-parse",
@@ -175,6 +173,7 @@ pub(super) fn ref_exists(host: &dyn Host, root: &Path, name: &str) -> bool {
             "--quiet",
             &format!("{name}^{{commit}}"),
         ],
+        &[1],
     )
     .is_ok_and(|stdout| !stdout.trim().is_empty())
 }
@@ -213,15 +212,18 @@ pub struct CommitDetail {
 /// The full account of `hash` in the checkout `cwd` is in, or `None` when
 /// there is no such commit to give one of.
 pub fn commit_detail(host: &dyn Host, cwd: &Path, hash: &str) -> Option<CommitDetail> {
-    let root = repository_root(host, cwd).ok()?;
-    let shown = run_git(
-        host,
-        &root,
-        &["show", "--no-patch", SHOW_DATE, SHOW_FORMAT, hash],
-    )
-    .ok()?;
+    let root = host.repository_root(cwd).ok()?;
+    let shown = host
+        .git(
+            &root,
+            &["show", "--no-patch", SHOW_DATE, SHOW_FORMAT, hash],
+            &[],
+        )
+        .ok()?;
     let mut detail = parse_show(&shown)?;
-    let numstat = run_git(host, &root, &["show", "--numstat", "--format=", hash]).ok()?;
+    let numstat = host
+        .git(&root, &["show", "--numstat", "--format=", hash], &[])
+        .ok()?;
     let (insertions, deletions) = parse_numstat(&numstat);
     detail.files_changed = numstat
         .lines()
@@ -376,43 +378,7 @@ mod tests {
 mod repository_tests {
     use super::*;
 
-    /// The same grant the workspace client makes, so these exercise the
-    /// real path rather than a stub. A fake would be the right tool for
-    /// testing *the view*; these test what the view reads.
-    struct TestHost;
-
-    impl Host for TestHost {
-        fn git(&self, root: &Path, args: &[&str]) -> Result<String, String> {
-            uze_git::read(root, args)
-                .map_err(|error| error.to_string())?
-                .or_exit(1)
-        }
-
-        fn read_file(&self, path: &Path) -> Result<String, String> {
-            std::fs::read_to_string(path).map_err(|error| error.to_string())
-        }
-
-        fn display_path(&self, path: &Path) -> String {
-            path.display().to_string()
-        }
-
-        fn syntax_theme(&self) -> String {
-            crate::shared::highlight::FALLBACK_SYNTAX_THEME.to_owned()
-        }
-
-        /// Never reached: what these read, they read through `git`.
-        fn list_dir(&self, _path: &Path) -> Result<Vec<crate::DirEntry>, String> {
-            unreachable!("the changes half lists no directory of its own")
-        }
-
-        fn write_file(&self, _path: &Path, _contents: &str) -> Result<(), String> {
-            unreachable!("reading what changed writes nothing")
-        }
-
-        fn delete_file(&self, _path: &Path) -> Result<(), String> {
-            unreachable!("reading what changed deletes nothing")
-        }
-    }
+    use crate::code::tests::RepositoryHost as TestHost;
 
     /// The popup's account is the commit's own: who, when, what it said,
     /// and how much it touched.
