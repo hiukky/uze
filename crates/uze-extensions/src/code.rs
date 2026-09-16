@@ -78,6 +78,7 @@ pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 
 use changes::Changes;
 use changes_tree::{FileTreeItem, file_tree_items};
+use diff::DiffLineKind;
 use editor::OpenFile;
 use files::Files;
 
@@ -458,17 +459,21 @@ impl CodeView {
             ContentMode::Contents | ContentMode::Preview => {
                 self.open.as_ref().map(|open| open.caret.line + 1)
             }
-            ContentMode::Diff => diff::unified_lines(&self.changes.diff)
+            ContentMode::Diff => self
+                .changes
+                .diff
                 .get(self.scroll as usize)
                 .map(|cell| cell.line_no as usize),
         }
     }
 
-    /// The diff row that mentions `line` on the new side.
+    /// The diff row that mentions `line` on the new side. A removal's
+    /// number is the old file's, so it never answers for the new one.
     fn diff_row_of(&self, line: usize) -> Option<u16> {
-        diff::unified_lines(&self.changes.diff)
+        self.changes
+            .diff
             .iter()
-            .position(|cell| cell.line_no as usize == line)
+            .position(|cell| cell.kind != DiffLineKind::Removed && cell.line_no as usize == line)
             .map(|row| row as u16)
     }
 

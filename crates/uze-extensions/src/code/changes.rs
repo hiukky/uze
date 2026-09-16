@@ -15,7 +15,7 @@ use std::{
 
 use super::{
     changes_tree::{FileTreeItem, tree_items},
-    diff::{DiffRow, highlight_diff_rows, pair_side_by_side, parse_unified_diff},
+    diff::{self, DiffCell},
     repository_root, run_git,
 };
 use crate::{
@@ -37,7 +37,7 @@ pub(super) struct Changes {
     /// selection: the diff being read stays the diff being read, its row
     /// just stops being drawn until the directory opens again.
     pub(super) folded: BTreeSet<String>,
-    pub(super) diff: Vec<DiffRow>,
+    pub(super) diff: Vec<DiffCell>,
     /// Set when the selection moved and cleared when a read catches up.
     ///
     /// Reading and highlighting a diff is the one thing here whose cost
@@ -123,11 +123,7 @@ impl Changes {
             run_git(host, root, &["diff", "HEAD", "--", &path.to_string_lossy()])
         };
         self.diff = match raw {
-            Ok(output) => highlight_diff_rows(
-                pair_side_by_side(parse_unified_diff(&output)),
-                &path,
-                &host.syntax_theme(),
-            ),
+            Ok(output) => diff::read(&output, &path, &host.syntax_theme()),
             Err(message) => {
                 self.error = Some(message);
                 Vec::new()

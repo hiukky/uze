@@ -13,7 +13,7 @@ use std::{
 
 use super::{
     changes::{ChangedFile, Changes, FileStatus},
-    diff::{highlight_diff_rows, pair_side_by_side, parse_unified_diff},
+    diff,
     render::changes_navigator as navigator,
     *,
 };
@@ -79,10 +79,8 @@ fn fixture() -> CodeView {
         ],
         1,
     );
-    view.changes.diff = highlight_diff_rows(
-        pair_side_by_side(parse_unified_diff(
-            "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
-        )),
+    view.changes.diff = diff::read(
+        "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
         Path::new("/repo/src/ui.rs"),
         FALLBACK_SYNTAX_THEME,
     );
@@ -803,10 +801,8 @@ fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
         status: FileStatus::Modified,
         path: PathBuf::from("/w/a.rs"),
     }];
-    view.changes.diff = highlight_diff_rows(
-        pair_side_by_side(parse_unified_diff(
-            "@@ -1,4 +1,4 @@\n one\n two\n-old\n+three\n four\n",
-        )),
+    view.changes.diff = diff::read(
+        "@@ -1,4 +1,4 @@\n one\n two\n-old\n+three\n four\n",
         Path::new("/w/a.rs"),
         FALLBACK_SYNTAX_THEME,
     );
@@ -828,6 +824,58 @@ fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
         view.navigator,
         NavigatorMode::Files,
         "the navigator follows the content"
+    );
+}
+
+/// A replacement of several lines is drawn in Git's order — every removal,
+/// then every addition — and the line carried across the switch is still
+/// the one on screen, both ways: an addition's number is the new file's,
+/// and a removal that shares it is not where the reader comes back to.
+#[test]
+fn a_multi_line_replacement_carries_the_line_both_ways() {
+    let machine = FakeMachine::default().with_file("/w/a.rs", "one\nc\nd\nfour\n");
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    view.selected = Some(PathBuf::from("/w/a.rs"));
+    view.changes.files = vec![ChangedFile {
+        status: FileStatus::Modified,
+        path: PathBuf::from("/w/a.rs"),
+    }];
+    view.changes.diff = diff::read(
+        "@@ -1,4 +1,4 @@\n one\n-a\n-b\n+c\n+d\n four\n",
+        Path::new("/w/a.rs"),
+        FALLBACK_SYNTAX_THEME,
+    );
+    view.changes.diff_pending = false;
+    let Content::Lines { lines, .. } = super::view(&view, space()).content else {
+        panic!("a selected file has a diff");
+    };
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| (line.gutter.as_str(), line.number.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (" ", "1"),
+            ("-", "2"),
+            ("-", "3"),
+            ("+", "2"),
+            ("+", "3"),
+            (" ", "4")
+        ]
+    );
+    // On `+d`, line three of the new file.
+    view.scroll = 4;
+
+    press(&mut view, Command::Edit);
+    settle(&mut view, &machine);
+    let open = view.open.as_ref().expect("the file opened");
+    assert_eq!(open.lines[open.caret.line], "d");
+
+    press(&mut view, Command::Close);
+    show(&mut view, ContentMode::Diff);
+    assert_eq!(
+        view.scroll, 4,
+        "back on `+d`, not on `-b` which shares its number"
     );
 }
 

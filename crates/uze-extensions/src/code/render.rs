@@ -13,7 +13,7 @@
 use super::{
     CodeView, ContentMode, Focus, NavigatorMode,
     changes_tree::{FileTreeItem, file_tree_items, selected_tree_row},
-    diff::{content_line, unified_lines},
+    diff::content_line,
 };
 use crate::view::{
     Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon, Size,
@@ -245,7 +245,7 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
             role: Role::Muted,
         };
     }
-    let diff = unified_lines(&code.changes.diff);
+    let diff = &code.changes.diff;
     Content::Lines {
         caret: None,
         total: diff.len(),
@@ -264,7 +264,7 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
         // Erring long costs a few unrendered lines; erring short would
         // show blank rows at the bottom of a long diff.
         lines: diff
-            .into_iter()
+            .iter()
             .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
             .map(content_line)
             .collect(),
