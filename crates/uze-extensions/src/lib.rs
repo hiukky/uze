@@ -14,10 +14,10 @@
 //!
 //! One directory per extension, named after it, with the extension's own
 //! surface — its state, its keys, its registry entry — in the file beside
-//! it. What is genuinely shared by more than one lives under [`shared`],
-//! and nothing is put there in anticipation of a second reader (see that
-//! module for the rule). [`view`] is neither: it is the contract between
-//! an extension and whatever draws it, which is why it sits at the root
+//! it. What more than one extension needs would live under a `shared`
+//! module, created the day a second extension actually reaches for it and
+//! not before. [`view`] is neither: it is the contract between an
+//! extension and whatever draws it, which is why it sits at the root
 //! alongside [`Host`], the contract in the other direction.
 //!
 //! # An extension holds no machine access of its own
@@ -42,7 +42,6 @@
 
 pub mod code;
 pub mod registry;
-pub mod shared;
 pub mod view;
 
 /// Something a viewer did inside an extension's own surface, addressed to
@@ -58,7 +57,7 @@ pub enum ExtensionHit {
     /// tree and a file's contents are one surface in three modes, so
     /// they are one variant.
     Code(view::ViewHit),
-    /// The git extension's sidebar section — its commit timeline.
+    /// The code extension's sidebar section — its commit timeline.
     ///
     /// A second variant for a second *surface* of the one extension, not
     /// a second extension: `SelectItem(3)` means a different thing in a

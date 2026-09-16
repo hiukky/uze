@@ -114,7 +114,7 @@ pub fn fulfill(host: &dyn Host, request: FileRequest) -> FileAnswer {
             // hold — travels as the sentence the view puts where the
             // content would be. Only the host can tell them apart.
             let file = host.read_file(&path).map(|text| {
-                let highlighted = crate::shared::highlight::lines(&text, &path, &theme);
+                let highlighted = crate::code::highlight::lines(&text, &path, &theme);
                 LoadedFile {
                     text,
                     highlighted,

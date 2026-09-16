@@ -174,19 +174,19 @@ pub(super) fn highlight_diff_rows(
     path: &Path,
     theme_name: &str,
 ) -> Vec<DiffRow> {
-    let mut left_highlighter = crate::shared::highlight::highlighter(path, theme_name);
-    let mut right_highlighter = crate::shared::highlight::highlighter(path, theme_name);
+    let mut left_highlighter = crate::code::highlight::highlighter(path, theme_name);
+    let mut right_highlighter = crate::code::highlight::highlighter(path, theme_name);
     rows.into_iter()
         .map(|row| DiffRow {
             left: row.left.map(|(line_no, kind, text)| DiffCell {
                 line_no,
                 kind,
-                spans: crate::shared::highlight::line(&mut left_highlighter, &text),
+                spans: crate::code::highlight::line(&mut left_highlighter, &text),
             }),
             right: row.right.map(|(line_no, kind, text)| DiffCell {
                 line_no,
                 kind,
-                spans: crate::shared::highlight::line(&mut right_highlighter, &text),
+                spans: crate::code::highlight::line(&mut right_highlighter, &text),
             }),
         })
         .collect()
@@ -241,7 +241,7 @@ pub(super) fn unified_lines(rows: &[DiffRow]) -> Vec<&DiffCell> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::highlight::FALLBACK_SYNTAX_THEME;
+    use crate::code::highlight::FALLBACK_SYNTAX_THEME;
 
     /// Highlighting is the one thing in this crate whose correctness depends
     /// on syntect's regex backend, and the failure mode of changing that

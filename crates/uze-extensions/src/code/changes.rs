@@ -436,7 +436,7 @@ mod repository_tests {
         }
 
         fn syntax_theme(&self) -> String {
-            crate::shared::highlight::FALLBACK_SYNTAX_THEME.to_owned()
+            crate::code::highlight::FALLBACK_SYNTAX_THEME.to_owned()
         }
 
         /// Never reached: what these read, they read through `git`.

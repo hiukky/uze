@@ -32,7 +32,7 @@ use std::path::Path;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::{
-    shared::highlight,
+    code::highlight,
     view::{ContentLine, LineTone, Role, Span},
 };
 
@@ -392,7 +392,7 @@ fn blank() -> ContentLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::highlight::FALLBACK_SYNTAX_THEME;
+    use crate::code::highlight::FALLBACK_SYNTAX_THEME;
 
     fn rendered(source: &str) -> Vec<ContentLine> {
         render(source, FALLBACK_SYNTAX_THEME)

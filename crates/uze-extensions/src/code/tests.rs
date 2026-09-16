@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     DirEntry,
-    shared::highlight::FALLBACK_SYNTAX_THEME,
+    code::highlight::FALLBACK_SYNTAX_THEME,
     view::{Command, Content, LineTone, NavigatorRow, Role, Size},
 };
 

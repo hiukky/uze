@@ -14,7 +14,7 @@
 //!
 //! The merge is not a de-duplication. What was genuinely shared already
 //! is: the host draws both (`src/ui/extension_view.rs`), and highlighting
-//! is [`crate::shared::highlight`]. The two navigators only look alike —
+//! is [`crate::code::highlight`]. The two navigators only look alike —
 //! [`changes`] compacts a flat, complete list from `git status`, and
 //! [`files`] flattens a partial tree that grows as directories are
 //! opened. What one extension can have and two cannot is a **selection
@@ -65,6 +65,7 @@ mod changes_tree;
 mod diff;
 mod editor;
 mod files;
+mod highlight;
 mod history;
 mod markdown;
 mod render;
