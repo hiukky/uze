@@ -45,64 +45,140 @@ pub enum RuntimeError {
 
 /// Connects to the user's one server, starting it when none answers —
 /// with its first space at `seat`, which only matters for a server that has
-/// nothing persisted yet. The caller then sends `Attach` naming the seat it wants a
-/// space for.
+/// nothing persisted yet. The caller then sends `Attach` naming the seat it
+/// wants a space for.
 pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
     let _span = tracing::info_span!("terminal.attach", root = %seat.root.display()).entered();
-    let endpoint = Endpoint::global()?;
-    // A server left running from a previous build (e.g. a `cargo install
-    // --force` while it was still up) is *alive*, so the connect below
-    // would succeed — this has to be caught before that, not after, since
-    // some `PROTOCOL_VERSION` bumps changed the wire framing itself (see
-    // its doc comment); there's no guarantee an incompatible server can
-    // even parse an `Attach` request enough to answer with a clean
-    // `ClientEvent::Error` rather than hanging the connection.
-    if endpoint.socket.exists() {
-        // The pid file is trusted on its own only where it is corroborated
-        // by the process table: it names a live `uze` and records the
-        // version this client speaks. Anything else — a recycled pid, a
-        // version that does not match, a file that says nothing — is
-        // settled by asking the socket who is behind it, which is the one
-        // answer nothing can forge and the one that can also rescue a live
-        // server of this build whose pid file a cleaner took away.
-        //
-        // A server whose workspace nobody holds is serving one that is gone:
-        // it claims the workspace before it binds (see [`serve`]), so a
-        // listener with the lock free holds a lock on a file that was
-        // deleted under it — `$UZE_HOME` removed while it ran. Attaching to
-        // it would show spaces from a world that no longer exists.
-        if workspace_is_unclaimed() {
-            replace_incompatible_server(&endpoint, listening_peer(&endpoint.socket))?;
-        } else {
-            match recorded_compatibility(&endpoint.pid) {
-                Compatibility::Known if pid_file_names_this_build(&endpoint.pid) => {}
-                _ => match probe_server(&endpoint) {
-                    Probe::Speaks { pid } => heal_pid_file(&endpoint, pid),
-                    Probe::Foreign { peer } => replace_incompatible_server(&endpoint, peer)?,
-                },
-            }
-        }
+    let socket = socket_path()?;
+    // Settled before connecting, and by who is behind the socket rather than
+    // by what it would say: a server of another build is alive, so a connect
+    // succeeds, and one built to another framing may never answer an
+    // `Attach` well enough to refuse it.
+    match arrival(workspace_is_claimed(), listener_at(&socket)) {
+        Arrival::Connect => return connect_waiting(&socket),
+        Arrival::Replace(pid) => retire(pid, &socket),
+        Arrival::Start => {}
     }
-    match UnixStream::connect(&endpoint.socket) {
-        Ok(stream) => Ok(stream),
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                || error.kind() == io::ErrorKind::ConnectionRefused =>
-        {
-            recover_stale_endpoint(&endpoint)?;
-            start_server(seat, &endpoint)?;
-            connect_waiting(&endpoint.socket)
-        }
-        Err(error) => Err(error.into()),
+    start_server(seat)?;
+    connect_waiting(&socket)
+}
+
+/// What [`attach`] does about the endpoint it found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Arrival {
+    Connect,
+    Start,
+    /// End the server at this pid, then start one.
+    Replace(u32),
+}
+
+/// The decision [`attach`] makes, from the two facts that can prove it: who
+/// holds the workspace claim, and who the kernel says is listening.
+///
+/// Nothing here unlinks an endpoint — only a server holding the claim does
+/// (see [`serve`]) — so a listener nobody can vouch for is connected to
+/// rather than taken down: a platform that cannot read the process table
+/// must never cost a live session its socket.
+fn arrival(claimed: bool, listener: Listener) -> Arrival {
+    match (claimed, listener) {
+        (true, Listener::AnotherBuild(pid)) => Arrival::Replace(pid),
+        (true, _) => Arrival::Connect,
+        // A server claims the workspace before it binds, so a `uze`
+        // listening with the claim free is serving a workspace deleted
+        // under it — `$UZE_HOME` removed while it ran. Attaching to it would
+        // show spaces from a world that no longer exists.
+        (false, Listener::ThisBuild(pid) | Listener::AnotherBuild(pid)) => Arrival::Replace(pid),
+        (false, Listener::Nobody | Listener::Unrecognized) => Arrival::Start,
     }
 }
 
-/// Where the user's server listens. For a client that must connect to a
-/// server it started itself and never start one — a test driving the
-/// runtime through the real binary — since [`attach`] starts a server from
-/// the current executable when none answers.
+/// Who answers at the endpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Listener {
+    Nobody,
+    /// This very executable, and so compiled with this `PROTOCOL_VERSION`.
+    ThisBuild(u32),
+    /// A `uze` running another image: `PROTOCOL_VERSION` is bumped by hand,
+    /// so two builds can carry one number and still disagree about a
+    /// request's shape — a `make install` over a running server is exactly
+    /// that.
+    AnotherBuild(u32),
+    /// A process the process table cannot vouch for as `uze`: another
+    /// program, or a platform that cannot say.
+    Unrecognized,
+}
+
+fn listener_at(socket: &Path) -> Listener {
+    listening_peer(socket).map_or(Listener::Nobody, identify)
+}
+
+fn identify(pid: u32) -> Listener {
+    if runs_this_executable(pid) {
+        Listener::ThisBuild(pid)
+    } else if signalable(pid).is_some_and(runs_uze) {
+        Listener::AnotherBuild(pid)
+    } else {
+        Listener::Unrecognized
+    }
+}
+
+/// Where the user's server listens — one per `UZE_HOME`, which is what
+/// "user" means to UZE: a second home is a second world, with a server of
+/// its own.
+///
+/// The directory is whichever of three candidates can hold the socket:
+/// the runtime directory the session names, an owner-scoped directory in
+/// the system temp dir, and `/tmp`. Two things disqualify one — being
+/// unwritable, and being too long.
+///
+/// Length matters more than it looks. `XDG_RUNTIME_DIR` is somebody
+/// else's variable and can be arbitrarily deep, and the system temp dir
+/// on macOS is a per-user `/var/folders/<hash>/T` that already spends
+/// half the budget before UZE adds anything. Falling back does not
+/// weaken isolation: the socket is named after a hash of `UZE_HOME`, so
+/// two homes stay two endpoints wherever they land.
 pub fn socket_path() -> Result<PathBuf, RuntimeError> {
-    Ok(Endpoint::global()?.socket)
+    let identity = identity_of(&uze_home_dir());
+    let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
+    let owner = unsafe { libc::getuid() };
+
+    let candidates = [
+        env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join(format!("uze-runtime-{owner}")),
+        env::temp_dir().join(format!("uze-runtime-{owner}")),
+        PathBuf::from("/tmp").join(format!("uze-runtime-{owner}")),
+    ];
+
+    let mut refused = None;
+    let runtime = candidates
+        .into_iter()
+        .find(|candidate| {
+            if named(candidate).as_os_str().len() > MAX_SOCKET_PATH {
+                return false;
+            }
+            // A sandboxed terminal can expose a runtime directory while
+            // denying writes below it, and a directory that already
+            // exists may be somebody else's — either way the next
+            // candidate is tried rather than the whole attach failing.
+            match fs::create_dir_all(candidate).and_then(|()| private_directory(candidate, owner)) {
+                Ok(()) => true,
+                Err(error) => {
+                    refused = Some(error);
+                    false
+                }
+            }
+        })
+        .ok_or_else(|| {
+            refused.unwrap_or_else(|| {
+                io::Error::other(
+                    "no runtime directory short enough for a socket path; \
+                     set XDG_RUNTIME_DIR to a shorter one",
+                )
+            })
+        })?;
+    Ok(named(&runtime))
 }
 
 /// Asks the running server for a space at `seat` — created when
@@ -112,8 +188,7 @@ pub fn socket_path() -> Result<PathBuf, RuntimeError> {
 /// no server is running.
 pub fn open_space(seat: SpaceSeat) -> Result<String, RuntimeError> {
     let _span = tracing::info_span!("terminal.open_space", root = %seat.root.display()).entered();
-    let endpoint = Endpoint::global()?;
-    let mut stream = UnixStream::connect(&endpoint.socket)
+    let mut stream = UnixStream::connect(socket_path()?)
         .map_err(|_| RuntimeError::Protocol("no running uze to open a space in".into()))?;
     send_request(
         &mut stream,
@@ -148,8 +223,7 @@ pub fn open_space(seat: SpaceSeat) -> Result<String, RuntimeError> {
 /// journey run end on a failure it was right to ignore.
 pub fn stop() -> Result<(), RuntimeError> {
     let _span = tracing::info_span!("terminal.stop").entered();
-    let endpoint = Endpoint::global()?;
-    let mut stream = match UnixStream::connect(&endpoint.socket) {
+    let mut stream = match UnixStream::connect(socket_path()?) {
         Ok(stream) => stream,
         Err(error)
             if matches!(
@@ -175,16 +249,17 @@ pub fn stop() -> Result<(), RuntimeError> {
 /// is persisted yet, and is otherwise ignored.
 pub fn serve(seat: SpaceSeat) -> Result<(), RuntimeError> {
     let _span = tracing::info_span!("terminal.serve", root = %seat.root.display()).entered();
-    let endpoint = Endpoint::global()?;
+    let socket = socket_path()?;
     // The workspace is claimed before the endpoint is: `Server::new` takes
     // the lock that makes this the one server restoring these spaces, so by
-    // the time the socket is bound no other live server can own it — which
-    // is what lets [`spawn_endpoint_watch`] treat a socket that is no longer
-    // the one bound here as something to reclaim rather than a peer's.
-    let (server, damage) = Server::new(seat, endpoint.clone())?;
+    // the time the socket is bound no other live server of this workspace
+    // can own it — whatever sits at the path is a crashed server's
+    // leftover or a server of a workspace deleted under it, and is
+    // reclaimed; and a socket that later stops being the one bound here is
+    // something [`spawn_endpoint_watch`] reclaims rather than a peer's.
+    let (server, damage) = Server::new(seat, socket.clone())?;
     let state = Arc::new(server);
-    recover_stale_endpoint(&endpoint)?;
-    let listener = bind_endpoint(&endpoint)?;
+    let listener = bind_endpoint(&socket)?;
     spawn_damage_broadcaster(Arc::clone(&state), damage);
     spawn_status_ticker(Arc::clone(&state));
     spawn_endpoint_watch(Arc::clone(&state));
@@ -200,20 +275,24 @@ pub fn serve(seat: SpaceSeat) -> Result<(), RuntimeError> {
         // with nobody having asked the server to stop.
         let mut stopped = state.stopped.lock().expect("stop state poisoned");
         *stopped = true;
-        let _ = fs::remove_file(&endpoint.socket);
-        let _ = fs::remove_file(&endpoint.pid);
+        let _ = fs::remove_file(&socket);
     }
     accepted
 }
 
-/// Binds the endpoint and records who is behind it. The socket is created
-/// inside a directory [`Endpoint::global`] has already proven to be this
-/// user's and unreachable by anyone else, so the moment between `bind` and
-/// the mode below is not a window anything can walk through.
-fn bind_endpoint(endpoint: &Endpoint) -> Result<UnixListener, RuntimeError> {
-    let listener = UnixListener::bind(&endpoint.socket)?;
-    fs::set_permissions(&endpoint.socket, fs::Permissions::from_mode(0o600))?;
-    write_pid_file(&endpoint.pid, std::process::id())?;
+/// Binds the endpoint over whatever sits at its path — only ever called by
+/// the server holding the workspace claim, for which nothing there can be a
+/// live peer. The socket is created inside a directory [`socket_path`] has
+/// already proven to be this user's and unreachable by anyone else, so the
+/// moment between `bind` and the mode below is not a window anything can
+/// walk through.
+fn bind_endpoint(socket: &Path) -> Result<UnixListener, RuntimeError> {
+    match fs::remove_file(socket) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
+    let listener = UnixListener::bind(socket)?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }
 
@@ -234,86 +313,14 @@ fn accept_connections(listener: UnixListener, server: Arc<Server>) -> Result<(),
     Ok(())
 }
 
-#[derive(Clone)]
-struct Endpoint {
-    socket: PathBuf,
-    pid: PathBuf,
-}
-
 /// How long a Unix-domain socket path may be, with room to spare.
 ///
 /// `sockaddr_un.sun_path` holds 104 bytes on macOS and 108 on Linux, and the
 /// whole path has to fit or `bind` fails with `SUN_LEN` — an error naming the
 /// limit and nothing about which directory exhausted it. The smaller of the
-/// two, less a little, is what [`Endpoint::global`] holds itself to, so the
+/// two, less a little, is what [`socket_path`] holds itself to, so the
 /// same directory is usable on either platform.
 const MAX_SOCKET_PATH: usize = 100;
-
-impl Endpoint {
-    /// One endpoint per user — per `UZE_HOME`, which is what "user" means
-    /// to UZE: a second home is a second world, with a server of its own.
-    ///
-    /// The directory is whichever of three candidates can hold the socket:
-    /// the runtime directory the session names, an owner-scoped directory in
-    /// the system temp dir, and `/tmp`. Two things disqualify one — being
-    /// unwritable, and being too long.
-    ///
-    /// Length matters more than it looks. `XDG_RUNTIME_DIR` is somebody
-    /// else's variable and can be arbitrarily deep, and the system temp dir
-    /// on macOS is a per-user `/var/folders/<hash>/T` that already spends
-    /// half the budget before UZE adds anything. Falling back does not
-    /// weaken isolation: the socket is named after a hash of `UZE_HOME`, so
-    /// two homes stay two endpoints wherever they land.
-    fn global() -> Result<Self, RuntimeError> {
-        let identity = identity_of(&uze_home_dir());
-        let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
-        let owner = unsafe { libc::getuid() };
-
-        let candidates = [
-            env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(env::temp_dir)
-                .join(format!("uze-runtime-{owner}")),
-            env::temp_dir().join(format!("uze-runtime-{owner}")),
-            PathBuf::from("/tmp").join(format!("uze-runtime-{owner}")),
-        ];
-
-        let mut refused = None;
-        let runtime = candidates
-            .into_iter()
-            .find(|candidate| {
-                if named(candidate).as_os_str().len() > MAX_SOCKET_PATH {
-                    return false;
-                }
-                // A sandboxed terminal can expose a runtime directory while
-                // denying writes below it, and a directory that already
-                // exists may be somebody else's — either way the next
-                // candidate is tried rather than the whole attach failing.
-                match fs::create_dir_all(candidate)
-                    .and_then(|()| private_directory(candidate, owner))
-                {
-                    Ok(()) => true,
-                    Err(error) => {
-                        refused = Some(error);
-                        false
-                    }
-                }
-            })
-            .ok_or_else(|| {
-                refused.unwrap_or_else(|| {
-                    io::Error::other(
-                        "no runtime directory short enough for a socket path; \
-                         set XDG_RUNTIME_DIR to a shorter one",
-                    )
-                })
-            })?;
-
-        Ok(Self {
-            socket: named(&runtime),
-            pid: runtime.join(format!("uze-{identity}.pid")),
-        })
-    }
-}
 
 /// Proves `candidate` is a directory `owner` owns and nobody else can reach
 /// into — the condition for putting a socket in it that carries every
@@ -361,7 +368,7 @@ fn uze_home_dir() -> PathBuf {
 }
 
 /// Where the server persists the workspace's space/tab shape between runs —
-/// deliberately not [`Endpoint::global`]'s `XDG_RUNTIME_DIR`/temp directory
+/// deliberately not [`socket_path`]'s `XDG_RUNTIME_DIR`/temp directory
 /// (that's routinely wiped on reboot, exactly the case this needs to
 /// survive). One file per user under `state/terminal/`, mirroring the
 /// `state/…json` layout `UzeHome::state_dir()` already uses for everything
@@ -381,74 +388,124 @@ fn workspace_lock_path() -> PathBuf {
 }
 
 /// Held for the life of a server: the proof that no other process is
-/// restoring — and persisting over — the same workspace.
+/// restoring — and persisting over — the same workspace, and the one proof
+/// of liveness [`attach`] trusts.
 ///
 /// The endpoint alone cannot give that proof. `systemd-tmpfiles` wiping
-/// `/tmp` under a live server takes the socket *and* the pid file with it,
-/// so the next `attach` reads "no server", starts a second one, and both
-/// restore the same `workspace.json`: every agent exists twice in the same
-/// checkout, and the two servers persist over each other. This lock lives
-/// where the workspace lives, so a cleaner that can reach it has taken the
-/// workspace too.
+/// `/tmp` under a live server takes the socket with it, so the next
+/// `attach` reads "no server", starts a second one, and both restore the
+/// same `workspace.json`: every agent exists twice in the same checkout,
+/// and the two servers persist over each other. This lock lives where the
+/// workspace lives, so a cleaner that can reach it has taken the workspace
+/// too.
 ///
 /// `flock` and not a pid file: the kernel releases it when the holder dies,
-/// however it dies, so a crashed server leaves nothing to clean up and a
-/// stale claim is impossible by construction.
+/// however it dies — a crash, a `kill -9`, a zombie nobody reaped — so a
+/// stale claim is impossible by construction. A server holds it exclusively;
+/// [`workspace_is_claimed`] asks with a shared lock. Panes never inherit it:
+/// the descriptor is opened close-on-exec, and `portable-pty` closes every
+/// descriptor above stdio in the child before `exec` besides.
 struct WorkspaceLock {
     _file: fs::File,
 }
 
 impl WorkspaceLock {
     fn acquire() -> Result<Self, RuntimeError> {
-        let path = workspace_lock_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)?;
+        let file = open_workspace_lock()?;
         loop {
-            // SAFETY: `file` owns the descriptor for the whole call, and the
-            // lock it takes is released by the kernel when this process exits.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                return Ok(Self { _file: file });
-            }
-            let refusal = io::Error::last_os_error();
-            match classify_lock_refusal(refusal.raw_os_error()) {
-                LockRefusal::Interrupted => continue,
-                LockRefusal::Contended => {
-                    return Err(RuntimeError::Protocol(
-                        "another uze terminal server is already serving this workspace".into(),
-                    ));
+            match flock(&file, libc::LOCK_EX | libc::LOCK_NB) {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(LockRefusal::Interrupted) => {}
+                Err(LockRefusal::Unsupported(error)) => return Err(RuntimeError::Io(error)),
+                Err(LockRefusal::Contended) => {
+                    if held_by_a_server(&file)? {
+                        return Err(RuntimeError::Protocol(
+                            "another uze terminal server is already serving this workspace".into(),
+                        ));
+                    }
+                    // A client was asking; it lets go as soon as it has its
+                    // answer.
+                    thread::yield_now();
                 }
-                LockRefusal::Unsupported => return Err(RuntimeError::Io(refusal)),
             }
         }
     }
 }
 
+/// Whether a live server holds the workspace claim. A filesystem that
+/// cannot lock answers "claimed": the lock proves nothing there, and
+/// replacing a server on no evidence would end a live session.
+fn workspace_is_claimed() -> bool {
+    open_workspace_lock()
+        .and_then(|file| held_by_a_server(&file))
+        .unwrap_or(true)
+}
+
+/// Whether the lock on `file` is held exclusively — by a server — asked by
+/// taking it shared for an instant.
+///
+/// Shared is how a client asks, so any number of clients ask at once, and a
+/// server starting while one does is not refused as though it had met
+/// another server: its exclusive attempt fails beside the asker, and this
+/// question, granted beside an asker and refused beside a server, is what
+/// tells the two apart.
+fn held_by_a_server(file: &fs::File) -> io::Result<bool> {
+    loop {
+        match flock(file, libc::LOCK_SH | libc::LOCK_NB) {
+            Ok(()) => {
+                let _ = flock(file, libc::LOCK_UN);
+                return Ok(false);
+            }
+            Err(LockRefusal::Interrupted) => {}
+            Err(LockRefusal::Contended) => return Ok(true),
+            Err(LockRefusal::Unsupported(error)) => return Err(error),
+        }
+    }
+}
+
+fn open_workspace_lock() -> io::Result<fs::File> {
+    let path = workspace_lock_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+}
+
+fn flock(file: &fs::File, operation: libc::c_int) -> Result<(), LockRefusal> {
+    // SAFETY: `file` owns the descriptor for the whole call, and a lock it
+    // takes is released by the kernel when the descriptor closes.
+    if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    Err(classify_lock_refusal(error))
+}
+
 /// Why `flock` said no.
 ///
-/// Only one of its answers means another server holds the workspace. A
-/// signal arriving mid-call is not an answer at all, and a filesystem that
-/// cannot lock — `ENOLCK`, and the `EOPNOTSUPP`/`ENOSYS` some NFS, FUSE and
-/// 9p mounts give — is a different failure entirely: reading either as
-/// contention told the person to go and stop a server that does not exist,
-/// permanently, with no command that could clear it.
+/// Only one of its answers means another holder. A signal arriving mid-call
+/// is not an answer at all, and a filesystem that cannot lock — `ENOLCK`,
+/// and the `EOPNOTSUPP`/`ENOSYS` some NFS, FUSE and 9p mounts give — is a
+/// different failure entirely: reading either as contention told the person
+/// to go and stop a server that does not exist, permanently, with no
+/// command that could clear it.
+#[derive(Debug)]
 enum LockRefusal {
     Interrupted,
     Contended,
-    Unsupported,
+    Unsupported(io::Error),
 }
 
-fn classify_lock_refusal(errno: Option<i32>) -> LockRefusal {
-    match errno {
+fn classify_lock_refusal(error: io::Error) -> LockRefusal {
+    match error.raw_os_error() {
         Some(libc::EINTR) => LockRefusal::Interrupted,
         // The same number on Linux, two names elsewhere; both mean held.
         Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => LockRefusal::Contended,
-        _ => LockRefusal::Unsupported,
+        _ => LockRefusal::Unsupported(error),
     }
 }
 
@@ -548,11 +605,11 @@ fn relaunch_command_for_process(process: &str) -> Option<Vec<String>> {
     Some(vec![trimmed.to_owned()])
 }
 
-fn start_server(seat: &SpaceSeat, endpoint: &Endpoint) -> Result<(), RuntimeError> {
+fn start_server(seat: &SpaceSeat) -> Result<(), RuntimeError> {
     use std::os::unix::process::CommandExt;
 
     let executable = env::current_exe()?;
-    let child = std::process::Command::new(executable)
+    std::process::Command::new(executable)
         .args(["terminal", "serve", "--root"])
         .arg(&seat.root)
         .args(["--kind", seat.kind.name()])
@@ -565,82 +622,51 @@ fn start_server(seat: &SpaceSeat, endpoint: &Endpoint) -> Result<(), RuntimeErro
         // the property this runtime exists to hold (ADR-038).
         .process_group(0)
         .spawn()?;
-    write_pid_file(&endpoint.pid, child.id())?;
     Ok(())
 }
 
+/// How long a client waits for a server to answer: one that is still
+/// restoring its panes, or one whose socket a cleaner took and whose
+/// [`spawn_endpoint_watch`] has yet to put it back.
+const READY_WITHIN: Duration = Duration::from_secs(2);
+
 fn connect_waiting(socket: &Path) -> Result<UnixStream, RuntimeError> {
-    for _ in 0..40 {
+    let deadline = Instant::now() + READY_WITHIN;
+    loop {
         match UnixStream::connect(socket) {
             Ok(stream) => return Ok(stream),
             Err(error)
-                if error.kind() == io::ErrorKind::NotFound
-                    || error.kind() == io::ErrorKind::ConnectionRefused =>
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) && Instant::now() < deadline =>
             {
                 thread::sleep(Duration::from_millis(25))
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                return Err(RuntimeError::Protocol(
+                    "terminal server did not become ready".into(),
+                ));
             }
             Err(error) => return Err(error.into()),
         }
     }
-    Err(RuntimeError::Protocol(
-        "terminal server did not become ready".into(),
-    ))
 }
 
-fn recover_stale_endpoint(endpoint: &Endpoint) -> Result<(), RuntimeError> {
-    if endpoint.socket.exists() && UnixStream::connect(&endpoint.socket).is_err() {
-        if runtime_process_is_alive(&endpoint.pid)? {
-            return Err(RuntimeError::Protocol(
-                "terminal endpoint is unavailable while its owner is still alive".into(),
-            ));
-        }
-        fs::remove_file(&endpoint.socket)?;
-    }
-    if endpoint.pid.exists() && !endpoint.socket.exists() {
-        fs::remove_file(&endpoint.pid)?;
-    }
-    Ok(())
-}
-
-fn runtime_process_is_alive(pid_path: &Path) -> Result<bool, RuntimeError> {
-    let Some(pid) = read_pid(pid_path) else {
-        return Ok(false);
-    };
-    // `kill(pid, 0)` only inspects whether this process is addressable; it
-    // does not send a signal. This is the proof required before stale socket
-    // cleanup can remove the old endpoint.
-    if unsafe { libc::kill(pid, 0) } != 0 {
-        return Ok(false);
-    }
-    // A zombie is addressable too. The client that starts a server never
-    // reaps it, so a server that crashed stays addressable for the rest of
-    // that client's life — which left this answering "alive" and
-    // `recover_stale_endpoint` refusing to clear an endpoint nothing was
-    // serving, until the person quit `uze` itself. A process that has
-    // actually exited no longer has an executable image, which is the
-    // difference the probe can see; it is also what makes a *recycled* pid
-    // running something else fail this check.
-    Ok(!platform_reads_processes() || process_probe::executable_of(pid as u32).is_some())
-}
-
-/// Whether [`process_probe`] can answer about a live process at all here,
-/// established by asking it about this one. Where it cannot, `None` means
-/// "cannot say" and never "dead", and every reading built on it has to
-/// fall back to what `kill(pid, 0)` alone can prove.
-fn platform_reads_processes() -> bool {
-    process_probe::executable_of(std::process::id()).is_some()
-}
-
-/// Whether `pid` is running `uze` — the proof required before signalling a
-/// process a file claims is a server.
+/// Whether `pid` is running `uze` — asked again right before a signal, since
+/// the kernel's answer about a socket's peer is a moment old by then.
 ///
-/// A pid file outlives the process that wrote it: under `/tmp` it survives
-/// a reboot, and pids are recycled, so the number in it is a claim rather
-/// than a fact. The *path* is expected to differ (an upgrade moving the
-/// binary is the ordinary reason a server is being replaced), so the image's
-/// file name is what is compared — through Linux's marker for a binary
-/// replaced underneath a live process, which is exactly the state the
-/// server being replaced is in.
+/// The *path* is expected to differ (an upgrade moving the binary is the
+/// ordinary reason a server is being replaced), so the image's file name is
+/// what is compared — through Linux's marker for a binary replaced
+/// underneath a live process, which is exactly the state the server being
+/// replaced is in. A process the table cannot read — a zombie, a platform
+/// [`process_probe`] does not answer for — is not `uze`.
 fn runs_uze(pid: libc::pid_t) -> bool {
     let Some(image) = process_probe::executable_of(pid as u32) else {
         return false;
@@ -652,138 +678,10 @@ fn runs_uze(pid: libc::pid_t) -> bool {
     name.strip_suffix(" (deleted)").unwrap_or(&name) == "uze"
 }
 
-/// Whether the process table corroborates a pid file's claim that `pid` is
-/// a server. Where nothing can corroborate it — a platform
-/// [`process_probe`] cannot answer for, or Linux with `/proc` unmounted —
-/// the answer is no, not "take the file's word for it": the only thing this
-/// gates is signalling a process, and declining to signal loses nothing,
-/// because unlinking the endpoint files is the whole recovery there anyway.
-fn corroborated_as_server(pid: libc::pid_t) -> bool {
-    platform_reads_processes() && runs_uze(pid)
-}
-
-/// Whether the pid file's claim is good enough to skip the probe in
-/// [`attach`] — a different question from [`corroborated_as_server`]'s, and
-/// deliberately the more forgiving of the two. Being wrong here costs one
-/// probe; being wrong there costs a process. So where the process table
-/// cannot answer, the file stands, exactly as it did before there was a
-/// process table to ask — reading "cannot say" as "not a server" would send
-/// every attach down the replace path and unlink the endpoint of a server
-/// that is alive and serving.
-///
-/// Where it can answer, the server must run this very executable, not
-/// merely a `uze`: `PROTOCOL_VERSION` is bumped by hand, so two builds can
-/// record the same number and still disagree about a request's shape — and
-/// a `make install` over a running server is exactly that.
-fn pid_file_names_this_build(pid_path: &Path) -> bool {
-    read_pid(pid_path)
-        .is_some_and(|pid| !platform_reads_processes() || runs_this_executable(pid as u32))
-}
-
-/// Whether no live server holds the workspace lock — asked by taking it
-/// and letting it go. A filesystem that cannot lock answers "claimed":
-/// the lock proves nothing there, and replacing a server on no evidence
-/// would end a live session.
-fn workspace_is_unclaimed() -> bool {
-    WorkspaceLock::acquire().is_ok()
-}
-
-/// A pid file's first line — see [`write_pid_file`] — and only where it
-/// names one process.
-///
-/// `libc::pid_t` is signed, so `-1` parses, and `kill(-1, …)` is not a
-/// process: it is every process the user owns. UZE never writes such a
-/// file, but this one is read from a world a `/tmp` cleaner, a crash and a
-/// text editor all reach, and the number in it goes straight to
-/// [`libc::kill`]. `0` is the caller's own process group, refused for the
-/// same reason.
-fn read_pid(pid_path: &Path) -> Option<libc::pid_t> {
-    let text = fs::read_to_string(pid_path).ok()?;
-    text.lines()
-        .next()?
-        .trim()
-        .parse::<libc::pid_t>()
-        .ok()
-        .filter(|pid| *pid > 0)
-}
-
-/// The `PROTOCOL_VERSION` the server holding this pid file was compiled
-/// with, from the file's second line — `None` for a pid file that is
-/// missing, unreadable or corrupt. `None` is silence, not an answer: what
-/// [`attach`] makes of it is [`Compatibility::Unrecorded`]'s business.
-fn server_protocol_version(pid_path: &Path) -> Option<u16> {
-    let text = fs::read_to_string(pid_path).ok()?;
-    text.lines().nth(1)?.trim().parse().ok()
-}
-
-/// Pairs a server's pid with the `PROTOCOL_VERSION` it was built with, so a
-/// later `attach` can tell "alive" apart from "alive and speaks a protocol
-/// this client understands" without opening a connection to find out — see
-/// `attach`'s pre-connect check.
-fn write_pid_file(pid_path: &Path, pid: u32) -> io::Result<()> {
-    fs::write(pid_path, format!("{pid}\n{PROTOCOL_VERSION}"))
-}
-
-/// What the pid file says about the server holding the endpoint.
-enum Compatibility {
-    /// It recorded the version this client speaks.
-    Known,
-    /// It recorded a different one: alive, and not worth connecting to.
-    Mismatched,
-    /// It records nothing — missing or unreadable. Silence is not evidence
-    /// of a mismatch: a runtime directory that fell back to `/tmp` can lose
-    /// its pid file to the distro's own cleaner while the server it named is
-    /// still serving, and reading that as a mismatch unlinks a live session's
-    /// socket and strands its panes behind a server nothing can reach.
-    Unrecorded,
-}
-
-fn recorded_compatibility(pid_path: &Path) -> Compatibility {
-    match server_protocol_version(pid_path) {
-        Some(version) if version == PROTOCOL_VERSION => Compatibility::Known,
-        Some(_) => Compatibility::Mismatched,
-        None => Compatibility::Unrecorded,
-    }
-}
-
-/// Who is behind the socket, asked of the socket itself because the pid
-/// file could not say.
-enum Probe {
-    /// The listener is running this very executable, and so was compiled
-    /// with this `PROTOCOL_VERSION` — a proof the wire cannot give more
-    /// cheaply, since a server built to another framing may never answer
-    /// the handshake that would ask it (see [`attach`]).
-    Speaks { pid: u32 },
-    /// Another build, another program, or nobody at all — carrying whoever
-    /// the kernel says is actually behind the socket, when anyone is. That
-    /// pid is the one piece of evidence a pid file cannot forge and a
-    /// recycled pid cannot survive, so [`replace_incompatible_server`]
-    /// takes its kill decision from it rather than from the file.
-    Foreign { peer: Option<u32> },
-}
-
-fn probe_server(endpoint: &Endpoint) -> Probe {
-    let peer = listening_peer(&endpoint.socket);
-    match peer.filter(|pid| runs_this_executable(*pid)) {
-        Some(pid) => Probe::Speaks { pid },
-        None => Probe::Foreign { peer },
-    }
-}
-
-/// The pid listening on `socket`. The kernel stamps the peer's credentials
-/// onto the connection, so this is the listener's own and not something a
-/// connection could claim. `None` when nobody answers, or when the
-/// platform cannot say.
-fn listening_peer(socket: &Path) -> Option<u32> {
-    let stream = UnixStream::connect(socket).ok()?;
-    process_probe::peer_pid(&stream)
-}
-
-/// Whether `pid` runs the same executable image as this process — and so
-/// was compiled with this `PROTOCOL_VERSION`. The image stops resolving to
-/// this path once the binary is replaced underneath a live server (a
-/// `cargo install --force` mid-session), which is exactly the state a
-/// server being replaced is in.
+/// Whether `pid` runs the same executable image as this process. The image
+/// stops resolving to this path once the binary is replaced underneath a
+/// live server (a `cargo install --force` mid-session), which is exactly
+/// the state a server being replaced is in.
 fn runs_this_executable(pid: u32) -> bool {
     let Some(mine) = env::current_exe().ok() else {
         return false;
@@ -791,51 +689,48 @@ fn runs_this_executable(pid: u32) -> bool {
     process_probe::executable_of(pid).is_some_and(|image| image == mine)
 }
 
-/// Records what the probe established, so the next attach reads the answer
-/// instead of deriving it again. Best-effort: a write that fails leaves
-/// exactly the state just recovered from, and the probe stands without it.
-fn heal_pid_file(endpoint: &Endpoint, pid: u32) {
-    let _ = write_pid_file(&endpoint.pid, pid);
+/// The pid listening on `socket`. The kernel stamps the listener's
+/// credentials onto the connection, so this is the listener's own and not
+/// something a connection could claim. `None` when nobody
+/// answers, or when the platform cannot say.
+fn listening_peer(socket: &Path) -> Option<u32> {
+    let stream = UnixStream::connect(socket).ok()?;
+    process_probe::peer_pid(&stream)
 }
 
-/// Tears down a server that's alive but speaking a `PROTOCOL_VERSION` this
-/// client can't talk to, so `attach`'s subsequent connect lands on a fresh
-/// one instead. Unlike [`recover_stale_endpoint`] (a dead owner, socket
-/// already unusable), this owner is alive and mid-session, so it gets a
-/// cooperative `SIGTERM` first — its own persisted-workspace snapshot (see
-/// `persist`) is what lets the fresh server restore the same tabs — with
-/// `SIGKILL` only as a last resort if it doesn't exit promptly.
-fn replace_incompatible_server(endpoint: &Endpoint, peer: Option<u32>) -> Result<(), RuntimeError> {
-    // Two independent witnesses have to name the same process before it is
-    // signalled, because what follows is fatal to whatever that pid names —
-    // an editor, a build, another agent — on an upgrade path a person takes
-    // deliberately. `peer` is the kernel's own answer to "who is behind
-    // this socket", which nothing can forge and a recycled pid cannot
-    // survive; the pid file is a claim that outlives its writer (see
-    // [`runs_uze`]), and `uze` is not a distinguishing name — a second
-    // server under a second `UZE_HOME`, or an in-flight `uze install`, is
-    // one too. Where the two do not agree, or where nobody is listening at
-    // all, clearing the endpoint files below is the whole recovery: the
-    // next connect then lands on a fresh server.
-    let named_by_both = peer
-        .and_then(|peer| libc::pid_t::try_from(peer).ok())
-        .filter(|peer| read_pid(&endpoint.pid) == Some(*peer));
-    if let Some(pid) = named_by_both.filter(|pid| corroborated_as_server(*pid)) {
-        let is_alive = || unsafe { libc::kill(pid, 0) == 0 };
-        unsafe { libc::kill(pid, libc::SIGTERM) };
-        for _ in 0..40 {
-            if !is_alive() {
-                break;
-            }
+/// `pid` as something `kill(2)` may be given — only where it names one
+/// process. `kill(0, …)` is the caller's own process group and a negative
+/// pid is a group too, `-1` every process the user owns.
+fn signalable(pid: u32) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)
+}
+
+/// How long a server being replaced has to let go before it is made to.
+const RETIRE_WITHIN: Duration = Duration::from_secs(1);
+
+/// Ends a server this client cannot use: a cooperative `SIGTERM` first —
+/// its persisted workspace is what lets the fresh server restore the same
+/// tabs — and `SIGKILL` only if it has not let go of the endpoint and the
+/// claim promptly. A pid that is not running `uze` by the time it would be
+/// signalled is left alone.
+fn retire(pid: u32, socket: &Path) {
+    let Some(target) = signalable(pid) else {
+        return;
+    };
+    let released = || listening_peer(socket) != Some(pid) && !workspace_is_claimed();
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        if !runs_uze(target) {
+            return;
+        }
+        unsafe { libc::kill(target, signal) };
+        let deadline = Instant::now() + RETIRE_WITHIN;
+        while !released() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(25));
         }
-        if is_alive() {
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+        if released() {
+            return;
         }
     }
-    let _ = fs::remove_file(&endpoint.socket);
-    let _ = fs::remove_file(&endpoint.pid);
-    Ok(())
 }
 
 /// What one attached client is looking at. The session itself carries the
@@ -860,7 +755,7 @@ struct Server {
     clients: Mutex<Vec<Client>>,
     next_client: std::sync::atomic::AtomicU64,
     stopped: Mutex<bool>,
-    endpoint: Endpoint,
+    socket: PathBuf,
     /// Held for as long as this server exists — see [`WorkspaceLock`].
     _workspace: WorkspaceLock,
     /// Serializes [`Server::persist`], so two structural changes landing at
@@ -880,7 +775,7 @@ struct Server {
 impl Server {
     fn new(
         seat: SpaceSeat,
-        endpoint: Endpoint,
+        socket: PathBuf,
     ) -> Result<(Self, mpsc::Receiver<PaneId>), RuntimeError> {
         // Taken before anything is read: restoring a workspace a live
         // server already holds is what turns one set of agents into two.
@@ -904,7 +799,7 @@ impl Server {
             clients: Mutex::new(Vec::new()),
             next_client: std::sync::atomic::AtomicU64::new(1),
             stopped: Mutex::new(false),
-            endpoint,
+            socket,
             _workspace: workspace_lock,
             persisting: Mutex::new(()),
             damage,
@@ -1019,11 +914,10 @@ impl Server {
         let mut reader = BufReader::new(Handshake::new(reader_stream, HANDSHAKE_DEADLINE));
         let first = read_message_within::<_, ClientRequest>(&mut reader, MAX_HANDSHAKE_FRAME);
         let attached = match first {
-            // Stopping needs no client and no session, and a server whose
-            // pid file or corroboration has gone is one only this can
-            // reach: the workspace lock makes a survivor refuse every
-            // replacement, so `uze terminal stop` failing to be heard left
-            // no way back in but a manual `kill`.
+            // Stopping needs no client and no session: the workspace claim
+            // makes a live server refuse every replacement of the same
+            // build, so `uze terminal stop` failing to be heard by one
+            // nobody attached to left no way back in but a manual `kill`.
             Ok(Some(ClientRequest::Stop)) => {
                 // Answered on the socket rather than through the writer
                 // thread: the acknowledgement has to be on the wire before
@@ -1633,7 +1527,7 @@ impl Server {
     fn shut_down(&self) {
         *self.stopped.lock().expect("stop state poisoned") = true;
         self.stop_panes();
-        let _ = UnixStream::connect(&self.endpoint.socket);
+        let _ = UnixStream::connect(&self.socket);
     }
 }
 
@@ -1684,10 +1578,10 @@ fn spawn_status_ticker(server: Arc<Server>) {
 }
 
 /// Puts back the directory the endpoint lives in, held to the same
-/// ownership and mode [`Endpoint::global`] demanded of it in the first
-/// place — a cleaner that took the socket usually took the directory too.
-fn restore_endpoint_directory(endpoint: &Endpoint) -> io::Result<()> {
-    let Some(directory) = endpoint.socket.parent() else {
+/// ownership and mode [`socket_path`] demanded of it in the first place — a
+/// cleaner that took the socket usually took the directory too.
+fn restore_endpoint_directory(socket: &Path) -> io::Result<()> {
+    let Some(directory) = socket.parent() else {
         return Ok(());
     };
     fs::create_dir_all(directory)?;
@@ -1705,12 +1599,12 @@ fn socket_identity(path: &Path) -> Option<(u64, u64)> {
 /// one it bound.
 ///
 /// The recorded WSL case: `systemd-tmpfiles` wipes `/tmp` about forty
-/// seconds after login, taking the socket and the pid file out from under a
-/// live server. The server never notices — it holds an open listener on an
-/// unlinked inode — so the next `attach` reads "no socket, no pid" as "no
-/// server" and starts a second one. The [`WorkspaceLock`] now stops that
-/// second server from restoring the same workspace, and this is the other
-/// half: the original reappears where clients look for it.
+/// seconds after login, taking the socket out from under a live server. The
+/// server never notices — it holds an open listener on an unlinked inode —
+/// and a client finding no socket would start a second one. The
+/// [`WorkspaceLock`] tells that client a server is alive, and stops a
+/// second server from restoring the same workspace; this is the other half:
+/// the original reappears where clients look for it.
 ///
 /// Reclaiming rather than yielding is safe *because* of that lock. This
 /// process holds it, so anything now sitting at the path is not another
@@ -1720,32 +1614,31 @@ fn socket_identity(path: &Path) -> Option<(u64, u64)> {
 /// read at the top. Reading it and then rebinding races the teardown at
 /// the end of [`serve`]: a shutdown landing between the two leaves a server
 /// on its way out rebinding a socket nothing will ever remove, and an
-/// endpoint pointing at a dead pid. `serve` takes the same lock before it
+/// endpoint nobody serves. `serve` takes the same lock before it
 /// clears the endpoint, which makes "rebound, then cleared" and "stopped,
 /// so never rebound" the only two orderings there are.
 fn spawn_endpoint_watch(server: Arc<Server>) {
     thread::spawn(move || {
-        let mut bound = socket_identity(&server.endpoint.socket);
+        let mut bound = socket_identity(&server.socket);
         loop {
             thread::sleep(STATUS_PROBE_INTERVAL);
             let stopped = server.stopped.lock().expect("stop state poisoned");
             if *stopped {
                 break;
             }
-            if socket_identity(&server.endpoint.socket) == bound {
+            if socket_identity(&server.socket) == bound {
                 continue;
             }
-            let _ = fs::remove_file(&server.endpoint.socket);
-            match restore_endpoint_directory(&server.endpoint)
+            match restore_endpoint_directory(&server.socket)
                 .map_err(RuntimeError::from)
-                .and_then(|()| bind_endpoint(&server.endpoint))
+                .and_then(|()| bind_endpoint(&server.socket))
             {
                 Ok(listener) => {
                     tracing::warn!(
-                        socket = %server.endpoint.socket.display(),
+                        socket = %server.socket.display(),
                         "the terminal endpoint vanished under a live server; rebound it"
                     );
-                    bound = socket_identity(&server.endpoint.socket);
+                    bound = socket_identity(&server.socket);
                     let accepting = Arc::clone(&server);
                     // The listener this replaces is left blocked in
                     // `accept` on an inode nothing can reach any more, so it
@@ -2381,13 +2274,12 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compatibility, Endpoint, Launch, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
-        PaneRuntime, PersistedWorkspace, Probe, ReplySink, RuntimeError, Selection, Server,
-        WorkspaceLock, corroborated_as_server, heal_pid_file, identity_of, persisted_state_path,
-        platform_reads_processes, probe_server, read_event, read_message, recorded_compatibility,
-        relaunch_command_for_process, replace_incompatible_server, runtime_process_is_alive,
-        send_request, server_protocol_version, snapshot, view_for, workspace_is_unclaimed,
-        workspace_lock_path, write_atomically, write_message, write_pid_file,
+        Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneRuntime,
+        PersistedWorkspace, ReplySink, RuntimeError, Selection, Server, WorkspaceLock, arrival,
+        bind_endpoint, held_by_a_server, identify, identity_of, listener_at, persisted_state_path,
+        read_event, read_message, relaunch_command_for_process, retire, send_request, signalable,
+        snapshot, socket_path, view_for, workspace_is_claimed, workspace_lock_path,
+        write_atomically, write_message,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -2483,69 +2375,6 @@ mod tests {
         );
     }
 
-    /// A pid file with no recorded version — exactly what a server built
-    /// before `write_pid_file` existed leaves behind — must read as
-    /// "unknown", not "compatible": see `attach`'s pre-connect check, which
-    /// goes and asks the socket rather than trusting a file that is silent.
-    #[test]
-    fn server_protocol_version_is_unknown_without_a_recorded_version() {
-        let scratch = uze_testkit::temp::scratch("terminal-protocol-version");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let pid_path = scratch.join("test.pid");
-
-        std::fs::write(&pid_path, "4242").unwrap();
-        assert_eq!(server_protocol_version(&pid_path), None);
-
-        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION)).unwrap();
-        assert_eq!(
-            server_protocol_version(&pid_path),
-            Some(super::PROTOCOL_VERSION)
-        );
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    }
-
-    /// The three readings `attach` acts on. The load-bearing one is the
-    /// last: an absent or silent pid file must never read as a mismatch,
-    /// because the only recovery for a mismatch kills the process the file
-    /// names and unlinks the socket it was serving on.
-    #[test]
-    fn a_pid_file_speaks_for_its_server_only_where_it_recorded_a_version() {
-        let scratch = uze_testkit::temp::scratch("terminal-recorded-compatibility");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let pid_path = scratch.join("test.pid");
-
-        assert!(matches!(
-            recorded_compatibility(&pid_path),
-            Compatibility::Unrecorded
-        ));
-
-        std::fs::write(&pid_path, "4242").unwrap();
-        assert!(matches!(
-            recorded_compatibility(&pid_path),
-            Compatibility::Unrecorded
-        ));
-
-        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION + 1)).unwrap();
-        assert!(matches!(
-            recorded_compatibility(&pid_path),
-            Compatibility::Mismatched
-        ));
-
-        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION)).unwrap();
-        assert!(matches!(
-            recorded_compatibility(&pid_path),
-            Compatibility::Known
-        ));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    }
-
-    /// The rescue itself: a server of this build whose pid file vanished —
-    /// the shape a `/tmp` cleaner leaves behind — is recognized through the
-    /// socket and given its file back, so the next attach reads the answer
-    /// instead of asking again. Without this the endpoint's live owner is
-    /// killed and whatever was running in its panes goes with it.
     /// `XDG_RUNTIME_DIR` is somebody else's variable and can be arbitrarily
     /// deep. A socket path that does not fit `sun_path` fails at `bind` with
     /// an error naming the limit and not the directory — which reached a
@@ -2559,25 +2388,25 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("XDG_RUNTIME_DIR", &deep);
 
-        let endpoint = Endpoint::global().expect("a too-long runtime directory is not fatal");
+        let socket = socket_path().expect("a too-long runtime directory is not fatal");
         assert!(
-            endpoint.socket.as_os_str().len() <= MAX_SOCKET_PATH,
+            socket.as_os_str().len() <= MAX_SOCKET_PATH,
             "the chosen socket path must fit sun_path, got {} bytes: {}",
-            endpoint.socket.as_os_str().len(),
-            endpoint.socket.display()
+            socket.as_os_str().len(),
+            socket.display()
         );
         assert!(
-            !endpoint.socket.starts_with(&deep),
+            !socket.starts_with(&deep),
             "the directory that could not hold the socket must not have been chosen"
         );
         // Binding is the only real proof: the length rule exists to make this
         // call succeed, so the test performs it rather than trusting the
         // arithmetic.
-        let _ = std::fs::remove_file(&endpoint.socket);
-        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket)
+        let _ = std::fs::remove_file(&socket);
+        let listener = std::os::unix::net::UnixListener::bind(&socket)
             .expect("the chosen path must actually bind");
         drop(listener);
-        let _ = std::fs::remove_file(&endpoint.socket);
+        let _ = std::fs::remove_file(&socket);
         let _ = std::fs::remove_dir_all(&deep);
     }
 
@@ -2593,19 +2422,19 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("XDG_RUNTIME_DIR", &scratch);
 
-        let endpoint = Endpoint::global().expect("an endpoint can always be named");
-        let _ = std::fs::remove_file(&endpoint.socket);
+        let socket = socket_path().expect("an endpoint can always be named");
+        let _ = std::fs::remove_file(&socket);
         assert!(
             super::stop().is_ok(),
             "no socket at all is nothing to stop, not a failure"
         );
 
         // The shape a cleaner leaves: the file is there, the server is not.
-        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket)
-            .expect("the endpoint path binds");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("the endpoint path binds");
         drop(listener);
         assert!(
-            endpoint.socket.exists(),
+            socket.exists(),
             "dropping the listener leaves the socket file behind, which is the case under test"
         );
         assert!(
@@ -2613,136 +2442,100 @@ mod tests {
             "a socket nobody answers is nothing to stop either"
         );
 
-        let _ = std::fs::remove_file(&endpoint.socket);
+        let _ = std::fs::remove_file(&socket);
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// The kernel names whoever listens on a socket, and the process table
+    /// says what that process runs: this very executable, a `uze` of
+    /// another build, or something nobody can vouch for as `uze` at all.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn a_server_of_this_build_is_adopted_when_its_pid_file_vanishes() {
-        let scratch = uze_testkit::temp::socket_scratch("adopt");
+    fn the_listener_is_told_apart_by_what_it_runs() {
+        let scratch = uze_testkit::temp::socket_scratch("identify");
         std::fs::create_dir_all(&scratch).unwrap();
-        let endpoint = Endpoint {
-            socket: scratch.join("test.sock"),
-            pid: scratch.join("test.pid"),
-        };
-        // This process holds the socket, and is by construction running the
-        // executable the probe compares against — the same relationship a
-        // real server has to a client built from the same binary.
-        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket).unwrap();
+        let socket = scratch.join("test.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert_eq!(
+            listener_at(&socket),
+            Listener::ThisBuild(std::process::id()),
+            "a listener running this very executable is this build"
+        );
+        drop(listener);
 
-        let Probe::Speaks { pid } = probe_server(&endpoint) else {
-            panic!("a listener running this very executable must answer the probe");
-        };
-        assert_eq!(pid, std::process::id());
+        let stranger = ReadyProcess::spawn(Path::new("/bin/sh"));
+        assert_eq!(identify(stranger.pid()), Listener::Unrecognized);
+        stranger.finish();
 
-        heal_pid_file(&endpoint, pid);
+        let uze_home = scratch.join("home");
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let another_build =
+            ClaimHolder::spawn_as(&another_build_of_this_binary(&scratch), &uze_home);
+        let pid = another_build.pid();
+        assert_eq!(identify(pid), Listener::AnotherBuild(pid));
+        another_build.release();
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A socket file nobody listens on names nobody, so there is nobody to
+    /// signal.
+    #[test]
+    fn a_socket_nobody_listens_on_names_nobody() {
+        let scratch = uze_testkit::temp::socket_scratch("nobody");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let socket = scratch.join("test.sock");
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        assert!(socket.exists());
+
+        assert_eq!(listener_at(&socket), Listener::Nobody);
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The server holding the workspace claim binds over whatever it finds
+    /// at the socket path: a crashed server's leftover file is not a peer,
+    /// and refusing to bind over it left the workspace unreachable.
+    #[test]
+    fn a_stale_socket_is_reclaimed_by_the_server_that_binds() {
+        let scratch = uze_testkit::temp::socket_scratch("reclaim");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let socket = scratch.join("test.sock");
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        assert!(std::os::unix::net::UnixStream::connect(&socket).is_err());
+
+        let listener = bind_endpoint(&socket).expect("a stale socket is bound over");
         assert!(
-            matches!(recorded_compatibility(&endpoint.pid), Compatibility::Known),
-            "the healed pid file must answer the next attach on its own"
+            std::os::unix::net::UnixStream::connect(&socket).is_ok(),
+            "the reclaimed endpoint answers"
         );
 
         drop(listener);
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    /// An endpoint file nobody answers on is not a server to adopt: the
-    /// probe has to say so, or a leftover socket would be healed into a pid
-    /// file naming a process that never existed.
-    #[test]
-    fn a_socket_no_one_listens_on_is_foreign() {
-        let scratch = uze_testkit::temp::scratch("terminal-probe-foreign");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let endpoint = Endpoint {
-            socket: scratch.join("test.sock"),
-            pid: scratch.join("test.pid"),
-        };
-        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
-
-        assert!(
-            matches!(probe_server(&endpoint), Probe::Foreign { peer: None }),
-            "with nobody listening there is no peer to name, and so nobody to signal"
-        );
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    }
-
-    /// The actual recovery `attach` relies on when it finds a live server
-    /// it can no longer talk to: it must terminate that process and clear
-    /// both endpoint files, so the caller's next connect lands on a fresh
-    /// server instead of the one it just gave up on.
-    ///
-    /// The victim is a copy of `sleep` named `uze`, and the probe's peer
-    /// pid names it too: those are the two independent witnesses
-    /// `replace_incompatible_server` now demands before signalling anything
-    /// — see the sibling tests for what a pid file naming an ordinary
-    /// process does, and for what happens when the two disagree.
+    /// A server of another build — a `make install` over a running one — is
+    /// ended, and not merely abandoned: it holds the workspace claim, and a
+    /// fresh server cannot restore the workspace until it lets go.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn replace_incompatible_server_kills_the_old_owner_and_clears_its_files() {
-        let scratch = uze_testkit::temp::scratch("terminal-replace-incompatible");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let socket = scratch.join("test.sock");
-        let pid_path = scratch.join("test.pid");
-        std::fs::write(&socket, b"placeholder").unwrap();
+    fn a_server_of_another_build_is_retired_and_lets_go_of_the_workspace() {
+        let scratch = uze_testkit::temp::socket_scratch("retire");
+        let uze_home = scratch.join("home");
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
 
-        let server_binary = scratch.join("uze");
-        uze_testkit::process::install_executable(
-            &server_binary,
-            &std::fs::read("/bin/sleep").unwrap(),
-        );
-        let mut child = std::process::Command::new(&server_binary)
-            .arg("30")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        // No version line: the exact shape `replace_incompatible_server` is
-        // meant to react to.
-        std::fs::write(&pid_path, pid.to_string()).unwrap();
-        // The replace signals only a pid the process table corroborates —
-        // and `spawn` returns before the child's image has necessarily been
-        // swapped for the copied binary: on a GitHub runner the probe read
-        // this test's own executable for the child's pid a moment after
-        // the spawn. A server being replaced has been running for ages, so
-        // production never sees that window; the test waits it out.
-        let exec_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !corroborated_as_server(pid as libc::pid_t) {
-            assert!(
-                std::time::Instant::now() < exec_deadline,
-                "the process table must corroborate the copied `uze` (pid {pid}): \
-                 executable_of = {:?}, platform reads processes = {}",
-                crate::process_probe::executable_of(pid),
-                platform_reads_processes()
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        let mut old = ClaimHolder::spawn_as(&another_build_of_this_binary(&scratch), &uze_home);
+        assert!(workspace_is_claimed());
 
-        let endpoint = Endpoint {
-            socket: socket.clone(),
-            pid: pid_path.clone(),
-        };
-        // The peer the probe would have learned from `SO_PEERCRED`, which
-        // here agrees with the file.
-        replace_incompatible_server(&endpoint, Some(pid)).unwrap();
+        retire(old.pid(), &scratch.join("test.sock"));
 
-        // `child` makes this test process the signaled child's parent, so
-        // (unlike the real server, which has no such relationship to the
-        // client that replaces it) it goes through a zombie state after
-        // dying — `kill(pid, 0)` alone would stay "addressable" until
-        // reaped. `try_wait` both reaps it and gives the real exit status.
-        let mut exited = child.try_wait().unwrap();
-        for _ in 0..40 {
-            if exited.is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(25));
-            exited = child.try_wait().unwrap();
-        }
         assert!(
-            exited.is_some(),
-            "old server process must not survive replace_incompatible_server"
+            !workspace_is_claimed(),
+            "the retired server let go of the workspace before retire returned"
         );
-        assert!(!socket.exists());
-        assert!(!pid_path.exists());
+        assert!(!old.process.wait().unwrap().success(), "it was ended");
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -3150,8 +2943,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
         let server = Arc::new(server);
         // A second space, so closing the launch space leaves a survivor
         // rather than opening a replacement.
@@ -3251,8 +3044,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (first, _damage) = Server::new(worktree_seat(&project), endpoint.clone()).unwrap();
+        let socket = socket_path().unwrap();
+        let (first, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
         let agent_pane = first
             .session
             .lock()
@@ -3279,7 +3072,7 @@ mod tests {
         // lock is there to refuse.
         drop(first);
 
-        let (second, _damage2) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let (second, _damage2) = Server::new(worktree_seat(&project), socket).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             assert_eq!(session.workspace.spaces.len(), 2, "both spaces restored");
@@ -3319,8 +3112,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
         let pane = server
             .session
             .lock()
@@ -3398,8 +3191,8 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (first, _damage) = Server::new(worktree_seat(&project), endpoint.clone()).unwrap();
+        let socket = socket_path().unwrap();
+        let (first, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
         let pane_id = first
             .session
             .lock()
@@ -3416,7 +3209,7 @@ mod tests {
         first.stop_panes();
         drop(first);
 
-        let (second, _damage2) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let (second, _damage2) = Server::new(worktree_seat(&project), socket).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             let tab = session.selected_tab();
@@ -3456,8 +3249,8 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).expect("server");
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).expect("server");
         {
             let mut session = server.session.lock().expect("session poisoned");
             let space = session.workspace.selected_space;
@@ -3509,8 +3302,8 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_vec(&stale).unwrap()).unwrap();
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint)
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket)
             .expect("a stale persisted command must not fail server startup");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -3654,8 +3447,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
         let server = Arc::new(server);
         let pane = server
             .session
@@ -3925,8 +3718,8 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
         assert_eq!(read_when_written(&report), "agent-restarted");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -3953,8 +3746,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
         let pane = server
             .session
             .lock()
@@ -4070,83 +3863,51 @@ mod tests {
         );
     }
 
-    /// The pid in an endpoint file is a claim, not a fact: the file
-    /// survives a reboot under `/tmp`, and pids are recycled. Acting on it
-    /// unchecked let an ordinary upgrade kill an unrelated process of the
-    /// person's own — an editor, a build, another agent.
+    /// The pid behind a socket is the kernel's answer, but a moment old by
+    /// the time it would be signalled, and pids are recycled: a process that
+    /// is not running `uze` is never signalled — an editor, a build, another
+    /// agent of the person's own.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn replace_incompatible_server_leaves_a_process_that_is_not_a_server_running() {
-        let scratch = uze_testkit::temp::scratch("terminal-replace-unrelated");
+    fn a_process_that_is_not_uze_is_never_signalled() {
+        let scratch = uze_testkit::temp::socket_scratch("bystander");
         std::fs::create_dir_all(&scratch).unwrap();
-        let endpoint = Endpoint {
-            socket: scratch.join("test.sock"),
-            pid: scratch.join("test.pid"),
-        };
-        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &scratch);
 
-        let mut bystander = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        std::fs::write(&endpoint.pid, bystander.id().to_string()).unwrap();
-
-        // Both witnesses name it, and it is still not a server: `sleep` is
-        // not `uze`, which is the reading the process table settles.
-        replace_incompatible_server(&endpoint, Some(bystander.id())).unwrap();
+        let bystander = ReadyProcess::spawn(Path::new("/bin/sh"));
+        retire(bystander.pid(), &scratch.join("test.sock"));
 
         assert!(
-            bystander.try_wait().unwrap().is_none(),
-            "a pid file naming somebody else's process must not get it killed"
+            bystander.finish(),
+            "a process that is not uze must be left running"
         );
-        assert!(!endpoint.socket.exists(), "the endpoint is still cleared");
-        assert!(!endpoint.pid.exists());
-
-        let _ = bystander.kill();
-        let _ = bystander.wait();
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A server the client started and never reaped is a zombie: still
-    /// addressable by `kill(pid, 0)`, which left `recover_stale_endpoint`
-    /// refusing to clear an endpoint nothing was serving — for the whole
-    /// remaining life of that client, so the person could not reattach
-    /// without quitting `uze` itself.
+    /// addressable by `kill(pid, 0)`, which once left the endpoint held
+    /// hostage for the whole remaining life of that client. A zombie holds
+    /// no descriptor, so it holds no claim.
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_crashed_server_nobody_reaped_does_not_count_as_alive() {
+    fn a_crashed_server_nobody_reaped_holds_no_claim() {
         let scratch = uze_testkit::temp::scratch("terminal-zombie");
         std::fs::create_dir_all(&scratch).unwrap();
-        let pid_path = scratch.join("test.pid");
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &scratch);
 
-        let mut child = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        write_pid_file(&pid_path, child.id()).unwrap();
+        let holder = ClaimHolder::spawn(&scratch);
+        assert!(workspace_is_claimed(), "a running server holds its claim");
+
+        let zombie = holder.crash();
         assert!(
-            runtime_process_is_alive(&pid_path).unwrap(),
-            "a running server is alive"
+            !workspace_is_claimed(),
+            "an unreaped dead server must not hold its workspace hostage"
         );
 
-        // Killed and deliberately not waited on — exactly the relationship
-        // a client has to the server it spawned.
-        let _ = child.kill();
-        let mut zombie = false;
-        for _ in 0..80 {
-            if !runtime_process_is_alive(&pid_path).unwrap() {
-                zombie = true;
-                break;
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
-        let _ = child.wait();
+        zombie.reap();
         let _ = std::fs::remove_dir_all(&scratch);
-
-        assert!(
-            zombie,
-            "an unreaped dead server must not hold its endpoint hostage"
-        );
     }
 
     /// The endpoint directory decides where a socket carrying every pane's
@@ -4167,11 +3928,11 @@ mod tests {
 
         let mut env = uze_testkit::env::scope();
         env.set("XDG_RUNTIME_DIR", &xdg);
-        let endpoint = Endpoint::global().expect("a bad candidate is stepped over, not fatal");
+        let socket = socket_path().expect("a bad candidate is stepped over, not fatal");
         assert!(
-            !endpoint.socket.starts_with(&xdg),
+            !socket.starts_with(&xdg),
             "a symlinked candidate must not be adopted, got {}",
-            endpoint.socket.display()
+            socket.display()
         );
 
         // A directory this user genuinely owns is theirs to correct rather
@@ -4180,8 +3941,8 @@ mod tests {
         std::fs::remove_file(&candidate).unwrap();
         std::fs::create_dir_all(&candidate).unwrap();
         std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let endpoint = Endpoint::global().expect("our own directory is usable");
-        assert!(endpoint.socket.starts_with(&candidate));
+        let socket = socket_path().expect("our own directory is usable");
+        assert!(socket.starts_with(&candidate));
         let mode = std::fs::metadata(&candidate).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700, "the mode is corrected, not inherited");
 
@@ -4189,9 +3950,9 @@ mod tests {
     }
 
     /// The recorded WSL case: `/tmp` wiped under a live server takes the
-    /// socket and the pid file with it, the next attach reads "no server",
-    /// and a second one restores the same `workspace.json` — every agent
-    /// twice in the same checkout, both servers persisting over each other.
+    /// socket with it, and a second server started then would restore the
+    /// same `workspace.json` — every agent twice in the same checkout, both
+    /// servers persisting over each other.
     /// The claim lives beside the workspace, under `$UZE_HOME`, so a
     /// cleaner that can reach it has taken the workspace too.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -4205,21 +3966,21 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
 
-        let endpoint = Endpoint::global().unwrap();
+        let socket = socket_path().unwrap();
         assert!(
             workspace_lock_path().starts_with(&uze_home),
             "the claim must live beside the workspace, never in a wipeable temp directory"
         );
 
         let first = ClaimHolder::spawn(&uze_home);
-        let second = Server::new(worktree_seat(&project), endpoint.clone());
+        let second = Server::new(worktree_seat(&project), socket.clone());
         assert!(
             matches!(second, Err(RuntimeError::Protocol(_))),
             "a workspace a live server holds must not be restored a second time"
         );
 
         first.release();
-        let (third, _damage3) = Server::new(worktree_seat(&project), endpoint)
+        let (third, _damage3) = Server::new(worktree_seat(&project), socket)
             .expect("the claim is released with its holder");
         third.stop_panes();
 
@@ -4250,41 +4011,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    /// Two builds can record the same hand-bumped `PROTOCOL_VERSION`, so a
-    /// pid file only skips the probe for a server running this very
-    /// executable — a binary installed over a live server does not.
+    /// A client asks for the claim shared and a server takes it exclusively,
+    /// so a server starting while a client asks can tell the asker from a
+    /// server — and gives up only for a server.
     #[test]
-    fn a_pid_file_skips_the_probe_only_for_this_build() {
-        if !platform_reads_processes() {
-            return;
-        }
-        let scratch = uze_testkit::temp::scratch("terminal-pid-build");
+    fn an_asker_is_never_mistaken_for_a_server() {
+        let scratch = uze_testkit::temp::scratch("terminal-lock-asker");
         std::fs::create_dir_all(&scratch).unwrap();
-        let pid_path = scratch.join("uze.pid");
+        let path = scratch.join("workspace.lock");
+        let open = || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap()
+        };
+        let starting = open();
 
-        std::fs::write(
-            &pid_path,
-            format!("{}\n{}", std::process::id(), super::PROTOCOL_VERSION),
-        )
-        .unwrap();
-        assert!(super::pid_file_names_this_build(&pid_path));
+        let asker = open();
+        super::flock(&asker, libc::LOCK_SH | libc::LOCK_NB).expect("an asker takes it shared");
+        assert!(!held_by_a_server(&starting).unwrap());
+        drop(asker);
 
-        let mut other = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        std::fs::write(
-            &pid_path,
-            format!("{}\n{}", other.id(), super::PROTOCOL_VERSION),
-        )
-        .unwrap();
-        let named = super::pid_file_names_this_build(&pid_path);
-        let _ = other.kill();
-        let _ = other.wait();
-        assert!(
-            !named,
-            "another executable with the same version is another build"
-        );
+        let server = open();
+        super::flock(&server, libc::LOCK_EX | libc::LOCK_NB)
+            .expect("a server takes it exclusively");
+        assert!(held_by_a_server(&starting).unwrap());
+        drop(server);
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -4301,11 +4055,11 @@ mod tests {
         env.set("UZE_HOME", &scratch);
 
         let holder = ClaimHolder::spawn(&scratch);
-        assert!(!workspace_is_unclaimed(), "a live claim is a claim");
+        assert!(workspace_is_claimed(), "a live claim is a claim");
 
         std::fs::remove_dir_all(scratch.join("state")).unwrap();
         assert!(
-            workspace_is_unclaimed(),
+            !workspace_is_claimed(),
             "a claim on a deleted file holds nothing anybody can reach"
         );
 
@@ -4355,7 +4109,13 @@ mod tests {
     impl ClaimHolder {
         /// Returns once the holder says the claim is its.
         fn spawn(uze_home: &Path) -> Self {
-            let mut process = std::process::Command::new(std::env::current_exe().unwrap())
+            Self::spawn_as(&std::env::current_exe().unwrap(), uze_home)
+        }
+
+        /// The same holder, run from `executable` — a copy of this test
+        /// binary, for a server of another build.
+        fn spawn_as(executable: &Path, uze_home: &Path) -> Self {
+            let mut process = std::process::Command::new(executable)
                 .args([
                     "--ignored",
                     "--exact",
@@ -4385,12 +4145,106 @@ mod tests {
             }
         }
 
+        fn pid(&self) -> u32 {
+            self.process.id()
+        }
+
         /// Lets the holder exit and waits for it: the kernel releases the
         /// claim with the process, so once this returns nothing holds it.
         fn release(mut self) {
             drop(self.process.stdin.take());
             let status = self.process.wait().expect("the holder is waited on");
             assert!(status.success(), "the holder's own run failed: {status}");
+        }
+
+        /// Kills the holder and leaves it unreaped — what a client that
+        /// started a server and never waited on it is left with.
+        #[cfg(target_os = "linux")]
+        fn crash(mut self) -> Zombie {
+            self.process.kill().expect("the holder is killed");
+            let mut exited: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // `WNOWAIT` blocks until the holder has exited and leaves it a
+            // zombie rather than reaping it.
+            let waited = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.pid(),
+                    &mut exited,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
+            Zombie(self)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct Zombie(ClaimHolder);
+
+    #[cfg(target_os = "linux")]
+    impl Zombie {
+        fn reap(mut self) {
+            let _ = self.0.process.wait();
+        }
+    }
+
+    /// This test binary under the name `uze` at another path: to the
+    /// process table, a `uze` that is not this build.
+    fn another_build_of_this_binary(scratch: &Path) -> PathBuf {
+        let directory = scratch.join("another-build");
+        std::fs::create_dir_all(&directory).unwrap();
+        let copy = directory.join("uze");
+        // Copied by a child that has exited before the copy runs, so no
+        // descriptor open for writing on it lingers in a process a sibling
+        // test forked — the kernel's `ETXTBSY`.
+        let copied = std::process::Command::new("cp")
+            .arg(std::env::current_exe().unwrap())
+            .arg(&copy)
+            .status()
+            .expect("cp runs");
+        assert!(copied.success());
+        copy
+    }
+
+    /// A shell that has certainly `exec`ed — it said so — and waits to be
+    /// told to finish.
+    struct ReadyProcess {
+        process: std::process::Child,
+        output: std::io::BufReader<std::process::ChildStdout>,
+    }
+
+    impl ReadyProcess {
+        fn spawn(shell: &Path) -> Self {
+            let mut process = std::process::Command::new(shell)
+                .args(["-c", "echo ready; read line; echo alive"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("the shell runs");
+            let mut output = std::io::BufReader::new(process.stdout.take().unwrap());
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut output, &mut line).unwrap();
+            assert_eq!(line.trim_end(), "ready");
+            Self { process, output }
+        }
+
+        fn pid(&self) -> u32 {
+            self.process.id()
+        }
+
+        /// Tells it to finish, and says whether it was still there to.
+        fn finish(mut self) -> bool {
+            let told = self
+                .process
+                .stdin
+                .take()
+                .is_some_and(|mut stdin| std::io::Write::write_all(&mut stdin, b"\n").is_ok());
+            let mut line = String::new();
+            let answered = told
+                && std::io::BufRead::read_line(&mut self.output, &mut line).is_ok()
+                && line.trim_end() == "alive";
+            let _ = self.process.wait();
+            answered
         }
     }
 
@@ -4436,8 +4290,8 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&roots[0]), endpoint).unwrap();
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&roots[0]), socket).unwrap();
         let server = Arc::new(server);
         for root in &roots[1..] {
             server
@@ -4593,7 +4447,7 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::global().unwrap();
+        let socket = socket_path().unwrap();
         let (served, serving) = std::sync::mpsc::channel();
         let serve_root = project.clone();
         std::thread::spawn(move || {
@@ -4602,7 +4456,7 @@ mod tests {
 
         let mut ready = false;
         for _ in 0..200 {
-            if std::os::unix::net::UnixStream::connect(&endpoint.socket).is_ok() {
+            if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
                 ready = true;
                 break;
             }
@@ -4616,7 +4470,7 @@ mod tests {
             .expect("the stopped server must leave its accept loop")
             .expect("and leave it cleanly");
         assert!(
-            !endpoint.socket.exists() && !endpoint.pid.exists(),
+            !socket.exists(),
             "a stopped server clears the endpoint it was reached at"
         );
 
@@ -4629,119 +4483,59 @@ mod tests {
     /// on NFS, FUSE or a 9p mount, with no command that could clear it.
     #[test]
     fn only_a_held_lock_reads_as_another_server() {
+        let refusal =
+            |errno| super::classify_lock_refusal(std::io::Error::from_raw_os_error(errno));
         assert!(matches!(
-            super::classify_lock_refusal(Some(libc::EWOULDBLOCK)),
+            refusal(libc::EWOULDBLOCK),
             super::LockRefusal::Contended
         ));
         assert!(matches!(
-            super::classify_lock_refusal(Some(libc::EINTR)),
+            refusal(libc::EINTR),
             super::LockRefusal::Interrupted
         ));
         for unsupported in [libc::ENOLCK, libc::EOPNOTSUPP, libc::ENOSYS, libc::EBADF] {
             assert!(
-                matches!(
-                    super::classify_lock_refusal(Some(unsupported)),
-                    super::LockRefusal::Unsupported
-                ),
+                matches!(refusal(unsupported), super::LockRefusal::Unsupported(_)),
                 "errno {unsupported} is a filesystem that cannot lock, not a server that holds one"
             );
         }
     }
 
-    /// The number in a pid file goes straight to [`libc::kill`], and
-    /// `libc::pid_t` is signed: `-1` is not a process, it is every process
-    /// the user owns. UZE never writes such a file, but it reads one from a
-    /// world a `/tmp` cleaner, a crash and a text editor all reach.
+    /// `kill(2)` reads `0` as the caller's own process group and a negative
+    /// pid as a group, `-1` as every process the user owns. A pid that does
+    /// not fit is never turned into one of those.
     #[test]
-    fn a_pid_file_that_does_not_name_one_process_names_none() {
-        let scratch = uze_testkit::temp::scratch("terminal-pid-negative");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let pid_path = scratch.join("test.pid");
+    fn a_pid_that_does_not_name_one_process_is_never_signalled() {
+        assert_eq!(signalable(0), None);
+        assert_eq!(signalable(u32::MAX), None, "which would read as -1");
+        assert_eq!(signalable(i32::MAX as u32 + 1), None);
+        assert_eq!(signalable(4192325), Some(4192325));
+    }
 
-        for refused in ["-1", "0", "-4192325", "not-a-pid", ""] {
-            std::fs::write(&pid_path, refused).unwrap();
+    /// Only two facts decide what an attach does to the endpoint: who holds
+    /// the workspace claim, and who the kernel and the process table say is
+    /// listening. A claimed workspace is never taken from a listener
+    /// nobody can vouch for — without a readable process table that is
+    /// every listener, and the one serving is alive.
+    #[test]
+    fn an_attach_replaces_only_a_server_it_can_name() {
+        let pid = 4242;
+        for (claimed, listener, expected) in [
+            (true, Listener::ThisBuild(pid), Arrival::Connect),
+            (true, Listener::Unrecognized, Arrival::Connect),
+            (true, Listener::Nobody, Arrival::Connect),
+            (true, Listener::AnotherBuild(pid), Arrival::Replace(pid)),
+            (false, Listener::ThisBuild(pid), Arrival::Replace(pid)),
+            (false, Listener::AnotherBuild(pid), Arrival::Replace(pid)),
+            (false, Listener::Unrecognized, Arrival::Start),
+            (false, Listener::Nobody, Arrival::Start),
+        ] {
             assert_eq!(
-                super::read_pid(&pid_path),
-                None,
-                "{refused:?} must never reach kill(2)"
+                arrival(claimed, listener),
+                expected,
+                "claimed: {claimed}, listener: {listener:?}"
             );
         }
-        std::fs::write(&pid_path, "4192325\n11").unwrap();
-        assert_eq!(super::read_pid(&pid_path), Some(4192325));
-
-        let _ = std::fs::remove_dir_all(&scratch);
-    }
-
-    /// Corroboration gates one thing only: signalling a process. Where
-    /// nothing can corroborate — a platform [`process_probe`] cannot answer
-    /// for, or Linux with `/proc` unmounted — declining to signal loses
-    /// nothing, because clearing the endpoint files is the whole recovery
-    /// there. Taking the file's word for it instead is how a pid file could
-    /// have aimed a `SIGKILL`.
-    #[test]
-    fn nothing_is_signalled_where_nothing_can_corroborate_it() {
-        assert_eq!(
-            corroborated_as_server(std::process::id() as libc::pid_t),
-            platform_reads_processes() && super::runs_uze(std::process::id() as libc::pid_t),
-            "corroboration is the process table's answer, never the absence of one"
-        );
-        if !platform_reads_processes() {
-            assert!(
-                !corroborated_as_server(std::process::id() as libc::pid_t),
-                "a platform that cannot read processes corroborates nothing"
-            );
-        }
-    }
-
-    /// `SO_PEERCRED` names the process actually behind the socket, and the
-    /// kernel stamps it — a pid file cannot forge it and a recycled pid
-    /// cannot survive it. A file naming somebody else than the peer is the
-    /// recycled-pid case itself, and `uze` is not a distinguishing name: a
-    /// second server under a second `$UZE_HOME`, or an in-flight
-    /// `uze install`, is one too.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn a_pid_file_that_disagrees_with_the_peer_gets_nobody_signalled() {
-        let scratch = uze_testkit::temp::scratch("terminal-replace-disagree");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let endpoint = Endpoint {
-            socket: scratch.join("test.sock"),
-            pid: scratch.join("test.pid"),
-        };
-        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
-
-        let server_binary = scratch.join("uze");
-        uze_testkit::process::install_executable(
-            &server_binary,
-            &std::fs::read("/bin/sleep").unwrap(),
-        );
-        let mut named = std::process::Command::new(&server_binary)
-            .arg("30")
-            .spawn()
-            .unwrap();
-        std::fs::write(&endpoint.pid, named.id().to_string()).unwrap();
-
-        // Everything the old rule asked for is true of the file — it names
-        // a live process the table corroborates as `uze`. The peer is
-        // somebody else, and that is the whole difference.
-        assert!(corroborated_as_server(named.id() as libc::pid_t));
-        replace_incompatible_server(&endpoint, Some(named.id() + 1)).unwrap();
-        assert!(
-            named.try_wait().unwrap().is_none(),
-            "a pid file the socket's own peer contradicts must not get anything killed"
-        );
-
-        // And with no peer at all — a socket nobody listens on — there is
-        // nothing to agree with, so there is nothing to signal either.
-        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
-        replace_incompatible_server(&endpoint, None).unwrap();
-        assert!(named.try_wait().unwrap().is_none());
-        assert!(!endpoint.socket.exists(), "the endpoint is still cleared");
-        assert!(!endpoint.pid.exists());
-
-        let _ = named.kill();
-        let _ = named.wait();
-        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// `SO_RCVTIMEO` restarts on every successful read, so a deadline
