@@ -10,7 +10,7 @@ use ratatui::{
 use uze_keys::Action;
 
 use super::hit::Hit;
-use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
+use super::model::{Confirmation, Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
 use crate::ui::theme::{self, Symbol, Token};
 
@@ -62,45 +62,25 @@ impl TuiModel {
                     _ => Intent::None,
                 }
             }
-            Overlay::ConfirmRemove { id, focus } => match action {
-                Action::FocusNext | Action::FocusPrevious => {
-                    self.overlay = Overlay::ConfirmRemove {
-                        id,
-                        focus: 1 - focus,
+            Overlay::Confirm { kind, focus } => match action {
+                Action::FocusNext | Action::FocusPrevious if focus.is_some() => {
+                    self.overlay = Overlay::Confirm {
+                        kind,
+                        focus: focus.map(|focus| 1 - focus),
                     };
                     Intent::None
                 }
-                Action::Activate if focus == 1 => {
-                    self.close_overlay();
-                    Intent::Remove(id)
-                }
-                Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::Remove(id)
-                }
-                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
+                // A notice has no affirmative: `yes` is not an answer to it.
+                Action::ConfirmYes if kind.is_notice() => Intent::None,
+                Action::Activate if focus == Some(CANCEL) || kind.is_notice() => {
                     self.close_overlay();
                     Intent::None
                 }
-                _ => Intent::None,
-            },
-            Overlay::ConfirmDeleteProfile { id, focus } => match action {
-                Action::FocusNext | Action::FocusPrevious => {
-                    self.overlay = Overlay::ConfirmDeleteProfile {
-                        id,
-                        focus: 1 - focus,
-                    };
-                    Intent::None
-                }
-                Action::Activate if focus == 1 => {
+                Action::Activate | Action::ConfirmYes => {
                     self.close_overlay();
-                    Intent::DeleteProfile(id)
+                    kind.intent(self)
                 }
-                Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::DeleteProfile(id)
-                }
-                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
+                Action::ConfirmNo | Action::Dismiss => {
                     self.close_overlay();
                     Intent::None
                 }
@@ -131,62 +111,6 @@ impl TuiModel {
                     }
                 }
                 Action::Dismiss => {
-                    self.close_overlay();
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            Overlay::ConfirmClearPromptHistory => match action {
-                Action::Activate | Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::ClearPromptHistory
-                }
-                Action::ConfirmNo | Action::Dismiss => {
-                    self.close_overlay();
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            Overlay::ConfirmUpdate(id) => match action {
-                Action::Activate | Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::Update(id, TrustGrant::Ask)
-                }
-                Action::ConfirmNo | Action::Dismiss => {
-                    self.close_overlay();
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            Overlay::ConfirmInstall { name, marketplace } => match action {
-                Action::Activate | Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::Install {
-                        name,
-                        marketplace,
-                        grant: TrustGrant::Ask,
-                    }
-                }
-                Action::ConfirmNo | Action::Dismiss => {
-                    self.close_overlay();
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            Overlay::ConfirmContextApply => match action {
-                Action::Activate | Action::ConfirmYes => {
-                    self.close_overlay();
-                    Intent::ContextApply(self.workspace_root())
-                }
-                Action::ConfirmNo | Action::Dismiss => {
-                    self.close_overlay();
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            // Nothing to decide: it explains why an action was refused.
-            Overlay::ProtectedPlugin(_) => match action {
-                Action::Activate | Action::ConfirmNo | Action::Dismiss => {
                     self.close_overlay();
                     Intent::None
                 }
@@ -232,25 +156,6 @@ impl TuiModel {
                     let mut input = input;
                     input.pop();
                     self.overlay = Overlay::NewProfile(input);
-                    Intent::None
-                }
-                _ => Intent::None,
-            },
-            Overlay::TrustRequired { retry, .. } => match action {
-                Action::Activate | Action::ConfirmYes => {
-                    let intent = match retry {
-                        TrustedRetry::Install { name, marketplace } => Intent::Install {
-                            name,
-                            marketplace,
-                            grant: TrustGrant::Granted,
-                        },
-                        TrustedRetry::Update(id) => Intent::Update(id, TrustGrant::Granted),
-                    };
-                    self.close_overlay();
-                    intent
-                }
-                Action::ConfirmNo | Action::Dismiss => {
-                    self.close_overlay();
                     Intent::None
                 }
                 _ => Intent::None,
@@ -521,126 +426,6 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     );
 }
 
-pub(crate) fn render_confirm_remove(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    id: &str,
-    focus: usize,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Danger,
-            title: "Remove plugin",
-            subject: Some(Line::from(id.to_owned())),
-            body: vec![
-                "Takes back everything it delivered to each harness. If any of it was changed \
-                 by hand, nothing is removed."
-                    .to_owned(),
-            ],
-            confirm: Some("Remove"),
-            focus: Some(focus),
-        },
-        hits,
-    );
-}
-
-pub(crate) fn render_protected_plugin(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    id: &str,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Caution,
-            title: "Protected plugin",
-            subject: Some(Line::from(id.to_owned())),
-            body: vec![
-                "An official marketplace plugin can't be removed from here. Install it from a \
-                 custom source to make it removable."
-                    .to_owned(),
-            ],
-            confirm: None,
-            focus: None,
-        },
-        hits,
-    );
-}
-
-pub(crate) fn render_confirm_update(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    id: &str,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Neutral,
-            title: "Update plugin",
-            subject: Some(Line::from(id.to_owned())),
-            body: vec!["Moves it to the latest revision its marketplace publishes.".to_owned()],
-            confirm: Some("Update"),
-            focus: None,
-        },
-        hits,
-    );
-}
-
-pub(crate) fn render_confirm_clear_prompt_history(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Danger,
-            title: "Clear prompt history",
-            subject: None,
-            body: vec![
-                "Deletes every prompt recorded for this workspace. This cannot be undone."
-                    .to_owned(),
-            ],
-            confirm: Some("Clear"),
-            focus: None,
-        },
-        hits,
-    );
-}
-
-pub(crate) fn render_confirm_install(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    name: &str,
-    marketplace: &str,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Neutral,
-            title: "Install plugin",
-            subject: Some(Line::from(vec![
-                Span::raw(name.to_owned()),
-                Span::styled(format!("  from {marketplace}"), theme::fg(Token::TextMuted)),
-            ])),
-            body: vec!["Delivered to every harness on this machine, from one copy.".to_owned()],
-            confirm: Some("Install"),
-            focus: None,
-        },
-        hits,
-    );
-}
-
 /// A dialog that asks for one line of text: what it is for, the field, and
 /// the keys that answer it. `confirm` is the affirmative's own word.
 pub(crate) fn render_text_prompt(
@@ -777,74 +562,132 @@ pub(crate) fn render_theme_picker(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(crate) fn render_confirm_delete_profile(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    id: &str,
-    focus: usize,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Danger,
-            title: "Delete profile",
-            subject: Some(Line::from(id.to_owned())),
-            body: vec![
-                "Removes UZE's own record of this profile. No harness configuration is touched."
-                    .to_owned(),
-            ],
-            confirm: Some("Delete"),
-            focus: Some(focus),
-        },
-        hits,
-    );
+/// Which of a focus-carrying dialog's two answers is the way out.
+const CANCEL: usize = 0;
+
+impl Confirmation {
+    /// Whether this only explains, with one way out and nothing to agree to.
+    fn is_notice(&self) -> bool {
+        matches!(self, Self::ProtectedPlugin(_))
+    }
+
+    /// What agreeing asks for.
+    fn intent(self, model: &TuiModel) -> Intent {
+        match self {
+            Self::RemovePlugin(id) => Intent::Remove(id),
+            Self::UpdatePlugin(id) => Intent::Update(id, TrustGrant::Ask),
+            Self::InstallPlugin { name, marketplace } => Intent::Install {
+                name,
+                marketplace,
+                grant: TrustGrant::Ask,
+            },
+            Self::ApplyContext => Intent::ContextApply(model.workspace_root()),
+            Self::ClearPromptHistory => Intent::ClearPromptHistory,
+            Self::ProtectedPlugin(_) => Intent::None,
+            Self::DeleteProfile(id) => Intent::DeleteProfile(id),
+            Self::Trust { retry, .. } => match retry {
+                TrustedRetry::Install { name, marketplace } => Intent::Install {
+                    name,
+                    marketplace,
+                    grant: TrustGrant::Granted,
+                },
+                TrustedRetry::Update(id) => Intent::Update(id, TrustGrant::Granted),
+            },
+        }
+    }
+
+    /// The question as it is drawn.
+    fn dialog(&self, focus: Option<usize>) -> Dialog<'_> {
+        let dialog = |tone, title, subject: Option<Line<'static>>, body: &str, confirm| Dialog {
+            tone,
+            title,
+            subject,
+            body: vec![body.to_owned()],
+            confirm,
+            focus,
+        };
+        let named = |id: &str| Some(Line::from(id.to_owned()));
+        match self {
+            Self::RemovePlugin(id) => dialog(
+                Tone::Danger,
+                "Remove plugin",
+                named(id),
+                "Takes back everything it delivered to each harness. If any of it was changed \
+                 by hand, nothing is removed.",
+                Some("Remove"),
+            ),
+            Self::UpdatePlugin(id) => dialog(
+                Tone::Neutral,
+                "Update plugin",
+                named(id),
+                "Moves it to the latest revision its marketplace publishes.",
+                Some("Update"),
+            ),
+            Self::InstallPlugin { name, marketplace } => dialog(
+                Tone::Neutral,
+                "Install plugin",
+                Some(Line::from(vec![
+                    Span::raw(name.to_owned()),
+                    Span::styled(format!("  from {marketplace}"), theme::fg(Token::TextMuted)),
+                ])),
+                "Delivered to every harness on this machine, from one copy.",
+                Some("Install"),
+            ),
+            Self::ApplyContext => dialog(
+                Tone::Caution,
+                "Apply context changes",
+                None,
+                "Reconciles AGENTS.md and the bridge each harness reads.",
+                Some("Apply"),
+            ),
+            Self::ClearPromptHistory => dialog(
+                Tone::Danger,
+                "Clear prompt history",
+                None,
+                "Deletes every prompt recorded for this workspace. This cannot be undone.",
+                Some("Clear"),
+            ),
+            Self::ProtectedPlugin(id) => dialog(
+                Tone::Caution,
+                "Protected plugin",
+                named(id),
+                "An official marketplace plugin can't be removed from here. Install it from a \
+                 custom source to make it removable.",
+                None,
+            ),
+            Self::DeleteProfile(id) => dialog(
+                Tone::Danger,
+                "Delete profile",
+                named(id),
+                "Removes UZE's own record of this profile. No harness configuration is touched.",
+                Some("Delete"),
+            ),
+            Self::Trust { plugin, detail, .. } => Dialog {
+                body: vec![
+                    "It declares an executable capability that was not trusted before:".to_owned(),
+                    detail.clone(),
+                ],
+                ..dialog(
+                    Tone::Caution,
+                    "Trust required",
+                    named(plugin),
+                    "",
+                    Some("Trust and continue"),
+                )
+            },
+        }
+    }
 }
 
-pub(crate) fn render_confirm_context_apply(
+/// A question on screen, drawn with the answer the keyboard is on.
+pub(crate) fn render_confirmation(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    kind: &Confirmation,
+    focus: Option<usize>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Caution,
-            title: "Apply context changes",
-            subject: None,
-            body: vec!["Reconciles AGENTS.md and the bridge each harness reads.".to_owned()],
-            confirm: Some("Apply"),
-            focus: None,
-        },
-        hits,
-    );
-}
-
-pub(crate) fn render_trust_required(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    plugin: &str,
-    detail: &str,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    render_dialog(
-        frame,
-        area,
-        &Dialog {
-            tone: Tone::Caution,
-            title: "Trust required",
-            subject: Some(Line::from(plugin.to_owned())),
-            body: vec![
-                "It declares an executable capability that was not trusted before:".to_owned(),
-                detail.to_owned(),
-            ],
-            confirm: Some("Trust and continue"),
-            focus: None,
-        },
-        hits,
-    );
+    render_dialog(frame, area, &kind.dialog(focus), hits);
 }
 
 /// How much is at stake in a dialog's answer. It colours the thing being
@@ -1033,7 +876,7 @@ fn render_dialog_buttons(
         "  Close  "
     };
     let confirm = dialog.confirm.map(|label| format!("  {label}  "));
-    let on_cancel = dialog.focus == Some(0) || dialog.confirm.is_none();
+    let on_cancel = dialog.focus == Some(CANCEL) || dialog.confirm.is_none();
     let mut buttons: Vec<(String, Style, uze_keys::Action)> = vec![(
         cancel.to_owned(),
         crate::ui::view::button_style(Token::TextSecondary, on_cancel, Token::SurfaceBackground),

@@ -436,18 +436,9 @@ pub(crate) fn render(
             selected,
         } => overlay::render_action_index(frame, area, model, scopes, filter, *selected, hits),
         Overlay::HarnessHelp => overlay::render_harness_help(frame, area),
-        Overlay::ConfirmRemove { id, focus } => {
-            overlay::render_confirm_remove(frame, area, id, *focus, hits)
+        Overlay::Confirm { kind, focus } => {
+            overlay::render_confirmation(frame, area, kind, *focus, hits)
         }
-        Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, area, id, hits),
-        Overlay::ConfirmInstall { name, marketplace } => {
-            overlay::render_confirm_install(frame, area, name, marketplace, hits)
-        }
-        Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, area, hits),
-        Overlay::ConfirmClearPromptHistory => {
-            overlay::render_confirm_clear_prompt_history(frame, area, hits)
-        }
-        Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, area, id, hits),
         Overlay::AddMarketplace(input) => overlay::render_text_prompt(
             frame,
             area,
@@ -461,12 +452,6 @@ pub(crate) fn render(
         }
         Overlay::NewProfile(input) => {
             overlay::render_text_prompt(frame, area, "New profile", "Profile name", input, "create")
-        }
-        Overlay::ConfirmDeleteProfile { id, focus } => {
-            overlay::render_confirm_delete_profile(frame, area, id, *focus, hits)
-        }
-        Overlay::TrustRequired { plugin, detail, .. } => {
-            overlay::render_trust_required(frame, area, plugin, detail, hits)
         }
     }
 }

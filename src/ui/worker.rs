@@ -20,7 +20,7 @@ use uze_application::{
     },
 };
 
-use super::model::{Overlay, RefreshData, Status, TrustedRetry, TuiModel};
+use super::model::{Confirmation, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
 use super::tui_application;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -765,10 +765,13 @@ pub(crate) fn drain_worker_results(
                 detail,
                 retry,
             } => {
-                model.overlay = Overlay::TrustRequired {
-                    plugin,
-                    detail,
-                    retry,
+                model.overlay = Overlay::Confirm {
+                    kind: Confirmation::Trust {
+                        plugin,
+                        detail,
+                        retry,
+                    },
+                    focus: None,
                 };
                 model.status = Status::Idle;
             }

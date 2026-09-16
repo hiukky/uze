@@ -15,7 +15,7 @@ use uze_keys::{Action, Resolution, Scope};
 
 use super::hit::Hit;
 use super::keys;
-use super::model::{Focus, Overlay, ProfilePanel, ResizablePanel, Route, TuiModel};
+use super::model::{Confirmation, Focus, Overlay, ProfilePanel, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -228,7 +228,10 @@ impl TuiModel {
                     .filter(|plugin| !plugin.installed)
                     .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
                 {
-                    self.overlay = Overlay::ConfirmInstall { name, marketplace };
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::InstallPlugin { name, marketplace },
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -238,7 +241,10 @@ impl TuiModel {
                     .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
                     .map(|plugin| self.marketplace_plugin_id(&plugin))
                 {
-                    self.overlay = Overlay::ConfirmUpdate(id);
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::UpdatePlugin(id),
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -250,9 +256,15 @@ impl TuiModel {
                         // protected — remove is blocked with an explanation
                         // instead of silently offering a destructive (and
                         // pointless, it re-seeds) operation.
-                        Overlay::ProtectedPlugin(id)
+                        Overlay::Confirm {
+                            kind: Confirmation::ProtectedPlugin(id),
+                            focus: None,
+                        }
                     } else {
-                        Overlay::ConfirmRemove { id, focus: 1 }
+                        Overlay::Confirm {
+                            kind: Confirmation::RemovePlugin(id),
+                            focus: Some(1),
+                        }
                     };
                 }
                 Intent::None
@@ -272,7 +284,10 @@ impl TuiModel {
             }
             Action::ClearPromptHistory => {
                 if !self.prompt_history.is_empty() {
-                    self.overlay = Overlay::ConfirmClearPromptHistory;
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::ClearPromptHistory,
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -286,7 +301,10 @@ impl TuiModel {
                     .as_ref()
                     .is_some_and(ContextPlan::has_changes)
                 {
-                    self.overlay = Overlay::ConfirmContextApply;
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::ApplyContext,
+                        focus: None,
+                    };
                 }
                 Intent::None
             }
@@ -298,9 +316,9 @@ impl TuiModel {
                 if self.profile_panel == ProfilePanel::List
                     && let Some(profile) = self.selected_profile()
                 {
-                    self.overlay = Overlay::ConfirmDeleteProfile {
-                        id: profile.id.clone(),
-                        focus: 1,
+                    self.overlay = Overlay::Confirm {
+                        kind: Confirmation::DeleteProfile(profile.id.clone()),
+                        focus: Some(1),
                     };
                 }
                 Intent::None
@@ -609,7 +627,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::super::keys::press;
-    use super::super::model::{Overlay, ResizablePanel, Route, TuiModel};
+    use super::super::model::{Confirmation, Overlay, ResizablePanel, Route, TuiModel};
 
     #[test]
     fn dragging_a_content_divider_records_its_route_local_width() {
@@ -647,11 +665,20 @@ mod tests {
     fn a_question_on_screen_answers_before_the_screen_does() {
         let mut model = TuiModel {
             route: Route::Plugins,
-            overlay: Overlay::ConfirmClearPromptHistory,
+            overlay: Overlay::Confirm {
+                kind: Confirmation::ClearPromptHistory,
+                focus: None,
+            },
             ..TuiModel::default()
         };
         // `r` reaches the confirmation, not the plugin list behind it.
         model.apply_key(press(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
+        assert!(matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::ClearPromptHistory,
+                ..
+            }
+        ));
     }
 }

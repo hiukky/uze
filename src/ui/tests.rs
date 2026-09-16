@@ -11,8 +11,8 @@ use uze_application::application::{
 use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
-    Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route, Status,
-    TrustedRetry, TuiModel,
+    Confirmation, Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route,
+    Status, TrustedRetry, TuiModel,
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
@@ -234,31 +234,49 @@ fn every_overlay_renders_without_panicking() {
             selected: 0,
         },
         Overlay::HarnessHelp,
-        Overlay::ConfirmRemove {
-            id: "one".to_owned(),
-            focus: 1,
+        Overlay::Confirm {
+            kind: Confirmation::RemovePlugin("one".to_owned()),
+            focus: Some(1),
         },
-        Overlay::ConfirmUpdate("one".to_owned()),
-        Overlay::ConfirmInstall {
-            name: "flow".to_owned(),
-            marketplace: "uze-official".to_owned(),
+        Overlay::Confirm {
+            kind: Confirmation::UpdatePlugin("one".to_owned()),
+            focus: None,
         },
-        Overlay::ConfirmContextApply,
-        Overlay::ConfirmClearPromptHistory,
-        Overlay::ProtectedPlugin("one".to_owned()),
-        Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
-        Overlay::NewProfile("dev-autonomous".to_owned()),
-        Overlay::ConfirmDeleteProfile {
-            id: "default".to_owned(),
-            focus: 1,
-        },
-        Overlay::TrustRequired {
-            plugin: "one".to_owned(),
-            detail: "one -> mcp-server".to_owned(),
-            retry: TrustedRetry::Install {
-                name: "one".to_owned(),
+        Overlay::Confirm {
+            kind: Confirmation::InstallPlugin {
+                name: "flow".to_owned(),
                 marketplace: "uze-official".to_owned(),
             },
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ApplyContext,
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ClearPromptHistory,
+            focus: None,
+        },
+        Overlay::Confirm {
+            kind: Confirmation::ProtectedPlugin("one".to_owned()),
+            focus: None,
+        },
+        Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
+        Overlay::NewProfile("dev-autonomous".to_owned()),
+        Overlay::Confirm {
+            kind: Confirmation::DeleteProfile("default".to_owned()),
+            focus: Some(1),
+        },
+        Overlay::Confirm {
+            kind: Confirmation::Trust {
+                plugin: "one".to_owned(),
+                detail: "one -> mcp-server".to_owned(),
+                retry: TrustedRetry::Install {
+                    name: "one".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
+            },
+            focus: None,
         },
     ];
     for overlay in overlays {
@@ -357,7 +375,9 @@ fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
 fn remove_confirmation_flow() {
     let mut model = model_with_plugins(&["one"]);
     model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-    assert!(matches!(model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
+    assert!(
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::RemovePlugin(ref id), .. } if id == "one")
+    );
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
     assert_eq!(model.overlay, Overlay::None);
@@ -383,7 +403,9 @@ fn update_only_offered_when_available() {
     );
     model.plugins[0].update_available = Some(true);
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    assert!(matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"));
+    assert!(
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id == "one")
+    );
 }
 
 #[test]
@@ -445,9 +467,9 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
     // What one visit ends holding — including work it was in the middle
     // of, which the next visit must not inherit.
     model.status = Status::Working("Inspecting one…".to_owned());
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 0,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(0),
     };
     model.maintenance_in_flight = true;
     model.inspection_in_flight = Some(Intent::InspectPlugin("one".to_owned()));
@@ -579,7 +601,7 @@ fn a_route_action_key_works_from_the_sidebar_too() {
     model.focus = Focus::Sidebar;
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     assert!(
-        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"),
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id == "one"),
         "`u` must not be swallowed just because the sidebar holds focus"
     );
 }
@@ -587,13 +609,16 @@ fn a_route_action_key_works_from_the_sidebar_too() {
 #[test]
 fn trust_required_overlay_confirm_regrants_with_trust() {
     let mut model = TuiModel {
-        overlay: Overlay::TrustRequired {
-            plugin: "acme".to_owned(),
-            detail: "acme -> mcp-server".to_owned(),
-            retry: TrustedRetry::Install {
-                name: "acme".to_owned(),
-                marketplace: "uze-official".to_owned(),
+        overlay: Overlay::Confirm {
+            kind: Confirmation::Trust {
+                plugin: "acme".to_owned(),
+                detail: "acme -> mcp-server".to_owned(),
+                retry: TrustedRetry::Install {
+                    name: "acme".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
             },
+            focus: None,
         },
         ..TuiModel::default()
     };
@@ -679,9 +704,9 @@ fn scroll_moves_selection_without_mutating_anything() {
 #[test]
 fn click_outside_overlay_dismisses_without_confirming() {
     let mut model = model_with_plugins(&["one"]);
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     let intent = model.apply_mouse(
         MouseEvent {
@@ -785,7 +810,13 @@ fn the_index_narrows_as_you_type_and_performs_what_you_choose() {
     );
     model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(
-        matches!(model.overlay, Overlay::ConfirmRemove { .. }),
+        matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::RemovePlugin(_),
+                ..
+            }
+        ),
         "choosing from the index performs it: {:?}",
         model.overlay
     );
@@ -975,7 +1006,7 @@ fn the_drawers_delete_button_opens_the_delete_confirmation() {
     assert_eq!(model.click(12, 4), Intent::None);
     assert!(matches!(
         &model.overlay,
-        Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+        Overlay::Confirm { kind: Confirmation::DeleteProfile(confirmed_id), .. } if *confirmed_id == id
     ));
 }
 
@@ -1453,7 +1484,7 @@ fn d_on_the_list_panel_opens_a_delete_confirmation_that_a_stray_click_cannot_con
     model.apply_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(matches!(
         &model.overlay,
-        Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+        Overlay::Confirm { kind: Confirmation::DeleteProfile(confirmed_id), .. } if *confirmed_id == id
     ));
 
     let intent = model.apply_mouse(
@@ -1727,7 +1758,9 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
 
     let mut plugins_model = model_with_plugins(&["one"]);
     let intent = plugins_model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-    assert!(matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
+    assert!(
+        matches!(plugins_model.overlay, Overlay::Confirm { kind: Confirmation::RemovePlugin(ref id), .. } if id == "one")
+    );
     assert_eq!(intent, Intent::None);
     assert_eq!(
         model_with_plugins(&["one"])
@@ -2653,9 +2686,9 @@ fn distance_from_the_backdrop(color: ratatui::style::Color) -> u32 {
 fn a_modal_pushes_the_screen_it_interrupts_behind_it() {
     let quiet = drawn(&model_with_plugins(&["flow"]));
     let asked = drawn(&TuiModel {
-        overlay: Overlay::ConfirmRemove {
-            id: "flow".to_owned(),
-            focus: 0,
+        overlay: Overlay::Confirm {
+            kind: Confirmation::RemovePlugin("flow".to_owned()),
+            focus: Some(0),
         },
         ..model_with_plugins(&["flow"])
     });
@@ -3111,7 +3144,13 @@ fn clearing_the_history_is_confirmed_before_it_happens() {
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
-    assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
+    assert_eq!(
+        model.overlay,
+        Overlay::Confirm {
+            kind: Confirmation::ClearPromptHistory,
+            focus: None,
+        }
+    );
 
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::ClearPromptHistory);
@@ -3543,7 +3582,7 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
     let (update, _) = buttons[0];
     model.click(update.x, update.y);
     assert!(
-        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id.contains("kit")),
+        matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id.contains("kit")),
         "the button asks, the same way the menu entry does: {:?}",
         model.overlay
     );
@@ -4293,9 +4332,9 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
 fn a_question_is_answered_with_the_pointer_too() {
     let mut model = model_with_plugins(&["one"]);
     model.focus = Focus::Content;
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let mut hits = Vec::new();
@@ -4319,16 +4358,16 @@ fn a_question_is_answered_with_the_pointer_too() {
     assert_eq!(model.click(0, 0), Intent::None);
     assert_eq!(model.overlay, Overlay::None);
 
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     assert_eq!(model.click(cancel.x, cancel.y), Intent::None);
     assert_eq!(model.overlay, Overlay::None);
 
-    model.overlay = Overlay::ConfirmRemove {
-        id: "one".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::RemovePlugin("one".to_owned()),
+        focus: Some(1),
     };
     assert_eq!(
         model.click(confirm.x, confirm.y),
@@ -4621,9 +4660,9 @@ fn a_confirmation_dialog_reads_as_heading_subject_body_and_answers() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut model = model_with_data();
-    model.overlay = Overlay::ConfirmDeleteProfile {
-        id: "default".to_owned(),
-        focus: 1,
+    model.overlay = Overlay::Confirm {
+        kind: Confirmation::DeleteProfile("default".to_owned()),
+        focus: Some(1),
     };
     let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
     let mut hits = Vec::new();

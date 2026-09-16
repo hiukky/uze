@@ -301,31 +301,18 @@ pub(crate) enum Overlay {
     /// done here, so it is a surface of its own rather than a section of
     /// the index.
     HarnessHelp,
-    ConfirmRemove {
-        id: String,
-        focus: usize,
+    /// A question the operator answers, or a notice they dismiss. `focus`
+    /// is which answer the keyboard is on — 0 the way out, 1 the
+    /// affirmative — for the destructive questions that let it move.
+    Confirm {
+        kind: Confirmation,
+        focus: Option<usize>,
     },
-    ConfirmUpdate(String),
-    ConfirmInstall {
-        name: String,
-        marketplace: String,
-    },
-    ConfirmContextApply,
-    ProtectedPlugin(String),
     /// Free-text input, appended to on every character key and popped on
     /// backspace — see `TuiModel::overlay_key`'s `AddMarketplace` arms.
     AddMarketplace(String),
     /// A new profile's id, typed the same way as `AddMarketplace`.
     NewProfile(String),
-    /// Mirrors `ConfirmRemove` exactly, as its own variant rather than an
-    /// overload — `ConfirmRemove` is plugin-specific today.
-    ConfirmDeleteProfile {
-        id: String,
-        focus: usize,
-    },
-    /// Deleting the workspace's recorded prompts. Destructive and not
-    /// undoable, so it is confirmed like any other removal.
-    ConfirmClearPromptHistory,
     /// Choosing what UZE looks like. Carries the list rather than reading
     /// it per frame: it is a directory listing, and a list that changed
     /// under the cursor between two frames would move the selection out
@@ -337,10 +324,29 @@ pub(crate) enum Overlay {
         themes: Vec<(String, bool)>,
         selected: usize,
     },
+}
+
+/// What a confirmation is about, and so what agreeing to it does.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Confirmation {
+    RemovePlugin(String),
+    UpdatePlugin(String),
+    InstallPlugin {
+        name: String,
+        marketplace: String,
+    },
+    ApplyContext,
+    /// Deleting the workspace's recorded prompts. Destructive and not
+    /// undoable, so it is confirmed like any other removal.
+    ClearPromptHistory,
+    /// Why a plugin from the embedded official snapshot cannot be removed.
+    /// Nothing to agree to: it explains a refusal.
+    ProtectedPlugin(String),
+    DeleteProfile(String),
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
-    TrustRequired {
+    Trust {
         plugin: String,
         detail: String,
         retry: TrustedRetry,
