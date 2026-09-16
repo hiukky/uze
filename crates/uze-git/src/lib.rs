@@ -6,19 +6,22 @@
 //! # Why a crate rather than a module in `uze-core`
 //!
 //! Not because Git is peripheral — it is essential — but because of which
-//! way the dependencies run. Three crates need it, and two of them cannot
-//! depend on the domain: `uze-extensions` is forbidden to by an enforced
-//! rule (an extension never names the domain crate), and `uze-testkit`
-//! would form a cycle, since `uze-core` dev-depends on it. A leaf with no
-//! dependencies of its own is the only position all three can share. What it owns is the part every caller was reinventing — how the
-//! process is spawned, what environment it inherits, and what a non-zero
-//! exit means.
+//! way the dependencies run. The domain needs it, and so do two callers
+//! that may not name the domain: the workspace client's extension host,
+//! which is how an extension reaches Git (presentation never names
+//! `uze-core`, an enforced rule), and `uze-testkit`, which would form a
+//! cycle, since `uze-core` dev-depends on it. A leaf that depends on no
+//! other crate of the workspace is the only position all of them can share.
+//!
+//! What it owns is the part every caller was reinventing — how the process
+//! is spawned, what environment it inherits, and what a non-zero exit
+//! means.
 //!
 //! # Why a non-zero exit is not an error
 //!
 //! Two callers grew two incompatible conventions. `worktree` treated any
 //! non-zero exit as failure; the diff view treated `1` as success, because
-//! `git diff` uses it for "there are differences". Both were right for
+//! `git diff --no-index` uses it for "there are differences". Both were right for
 //! their own command and wrong for the other's, and a third caller would
 //! have had to guess again — `git rebase` exits 1 on a conflict, which is a
 //! state, and `git rev-parse --verify --quiet` exits 1 for "no such ref",
