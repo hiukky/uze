@@ -997,7 +997,7 @@ impl Server {
                         .zip(&persisted_space.tabs)
                         .map(|(tab, persisted_tab)| {
                             (
-                                tab.focus.pane,
+                                tab.pane.id,
                                 persisted_tab.command.clone(),
                                 persisted_tab.env.clone(),
                             )
@@ -1026,8 +1026,8 @@ impl Server {
                 .lock()
                 .expect("session poisoned")
                 .selected_tab()
-                .focus
-                .pane;
+                .pane
+                .id;
             server.spawn_pane(first, None, &[])?;
         }
         Ok((server, damage_events))
@@ -1055,14 +1055,13 @@ impl Server {
                     tabs: space
                         .tabs
                         .iter()
-                        .filter_map(|tab| {
+                        .map(|tab| {
                             // By position, since a restored tab is minted a
                             // fresh id — and against this same list, which
                             // is the one `Session::restore` will rebuild.
                             let agent = tab.agent.and_then(|agent| {
                                 space.tabs.iter().position(|other| other.id == agent)
                             });
-                            let pane = find_in_layout(&tab.layout, tab.focus.pane)?;
                             // A tab spawned plain but with something other
                             // than a shell now running in it (someone typed
                             // `claude` straight into a "$ shell" tab, never
@@ -1070,10 +1069,10 @@ impl Server {
                             // much "had an agent" as one `CreateTab` was
                             // told to launch directly — restoring it back
                             // to a bare shell would silently drop that.
-                            let runtime = panes.get(&tab.focus.pane);
+                            let runtime = panes.get(&tab.pane.id);
                             let command = runtime
                                 .and_then(|runtime| runtime.spawn_command.clone())
-                                .or_else(|| relaunch_command_for_process(&pane.process));
+                                .or_else(|| relaunch_command_for_process(&tab.pane.process));
                             // The environment follows the command it was
                             // launched with, and only that one: a process
                             // typed into a shell was launched by nobody.
@@ -1081,13 +1080,13 @@ impl Server {
                                 .filter(|runtime| runtime.spawn_command.is_some())
                                 .map(|runtime| runtime.spawn_env.clone())
                                 .unwrap_or_default();
-                            Some(PersistedTab {
+                            PersistedTab {
                                 label: tab.label.clone(),
-                                cwd: pane.cwd,
+                                cwd: tab.pane.cwd.clone(),
                                 agent,
                                 command,
                                 env,
-                            })
+                            }
                         })
                         .collect(),
                 })
@@ -1492,7 +1491,7 @@ impl Server {
     }
 
     fn selected_pane_of(&self, client: u64) -> PaneId {
-        self.view_of(client).selected_tab().focus.pane
+        self.view_of(client).selected_tab().pane.id
     }
     /// Takes the attached client's palette. Every pane shares the one
     /// `Arc`, so panes that were already running answer with it too — a
@@ -1510,7 +1509,12 @@ impl Server {
         command: Option<&[String]>,
         env: &[(String, String)],
     ) -> Result<(), RuntimeError> {
-        let pane = find_pane(&self.session.lock().expect("session poisoned"), pane_id)
+        let pane = self
+            .session
+            .lock()
+            .expect("session poisoned")
+            .pane(pane_id)
+            .cloned()
             .ok_or_else(|| RuntimeError::Protocol("unknown pane".into()))?;
         let runtime = PaneRuntime::spawn(
             pane_id,
@@ -2360,24 +2364,6 @@ fn view_for(session: &Session, selection: &Selection) -> Session {
         }
     }
     view
-}
-
-fn find_pane(session: &Session, wanted: PaneId) -> Option<crate::Pane> {
-    session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .find_map(|tab| find_in_layout(&tab.layout, wanted))
-}
-fn find_in_layout(layout: &crate::Layout, wanted: PaneId) -> Option<crate::Pane> {
-    match layout {
-        crate::Layout::Pane(pane) if pane.id == wanted => Some(pane.clone()),
-        crate::Layout::Split { first, second, .. } => {
-            find_in_layout(first, wanted).or_else(|| find_in_layout(second, wanted))
-        }
-        _ => None,
-    }
 }
 
 pub fn send_request<W: Write>(writer: &mut W, value: &ClientRequest) -> Result<(), RuntimeError> {
@@ -3462,7 +3448,7 @@ mod tests {
             let tab = &frontend.tabs[0];
             let panes = second.panes.lock().expect("panes poisoned");
             let runtime = panes
-                .get(&tab.focus.pane)
+                .get(&tab.pane.id)
                 .expect("restored tab's pane was actually spawned");
             assert_eq!(
                 runtime.spawn_command.as_deref(),
@@ -3584,8 +3570,8 @@ mod tests {
             .lock()
             .expect("session poisoned")
             .selected_tab()
-            .focus
-            .pane;
+            .pane
+            .id;
         first
             .session
             .lock()
@@ -3602,7 +3588,7 @@ mod tests {
             let tab = session.selected_tab();
             let panes = second.panes.lock().expect("panes poisoned");
             let runtime = panes
-                .get(&tab.focus.pane)
+                .get(&tab.pane.id)
                 .expect("restored tab's pane was actually spawned");
             assert_eq!(
                 runtime.spawn_command.as_deref(),
@@ -3692,7 +3678,7 @@ mod tests {
         let tab = session.selected_tab();
         let panes = server.panes.lock().expect("panes poisoned");
         assert!(
-            panes.contains_key(&tab.focus.pane),
+            panes.contains_key(&tab.pane.id),
             "the tab still got a pane, spawned as a plain shell instead"
         );
         drop(panes);
@@ -3839,8 +3825,8 @@ mod tests {
             .lock()
             .expect("session poisoned")
             .selected_tab()
-            .focus
-            .pane;
+            .pane
+            .id;
 
         let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
         let serving = {

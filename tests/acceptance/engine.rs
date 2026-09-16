@@ -202,14 +202,9 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane)
-                    if pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot =>
-                {
-                    Some(pane.id)
-                }
-                _ => None,
-            })
+            .map(|tab| &tab.pane)
+            .find(|pane| pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot)
+            .map(|pane| pane.id)
     }
 
     /// Reads session updates until `accept` holds: the server also pushes
@@ -246,10 +241,7 @@ impl Engine {
             .into_iter()
             .flat_map(|session| &session.workspace.spaces)
             .flat_map(|space| &space.tabs)
-            .filter_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane) => Some(pane.cwd.clone()),
-                _ => None,
-            })
+            .map(|tab| tab.pane.cwd.clone())
             .collect()
     }
 
@@ -264,7 +256,7 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find(|tab| tab.focus.pane == pane)
+            .find(|tab| tab.pane.id == pane)
             .expect("the pane belongs to a tab")
             .id;
         send_request(&mut self.stream, &ClientRequest::CloseTab { tab }).unwrap();

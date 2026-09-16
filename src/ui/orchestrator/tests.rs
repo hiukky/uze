@@ -62,8 +62,8 @@ mod workspace_tests {
     use uze_core::UzeHome;
     use uze_extensions::view::ViewHit;
     use uze_terminal::{
-        CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
-        PaneDamage, PaneId, RenderCell, Session, SpaceId, Tab, TabId, TerminalColor, WorkspaceId,
+        CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, Pane, PaneDamage, PaneId,
+        RenderCell, Session, SpaceId, Tab, TabId, TerminalColor, WorkspaceId,
     };
 
     fn identities_fixture() -> Vec<AgentIdentity> {
@@ -2517,8 +2517,8 @@ mod workspace_tests {
         let mut model = agent_with_task(TaskStateView::Running, 0);
         stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
         let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-pane-task-home"));
         let (sender, _receiver) = std::sync::mpsc::channel();
@@ -2554,8 +2554,8 @@ mod workspace_tests {
     fn a_checkout_that_vanished_under_a_pane_asks_its_repository_again() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         model
             .pane_checkouts
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
@@ -2582,8 +2582,8 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
         stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
         model.tasks.insert(
             PathBuf::from("/repo"),
@@ -2616,8 +2616,8 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
 
         // What a re-read answers once the directory is gone: the slot is
@@ -2707,8 +2707,8 @@ mod workspace_tests {
         // orphaned task of both its checkout and its checkout id.
         let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         model
             .pane_checkouts
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
@@ -3133,9 +3133,7 @@ mod workspace_tests {
         );
         let tab = &mut session.workspace.spaces[0].tabs[0];
         tab.label = "Agent".into();
-        if let Layout::Pane(pane) = &mut tab.layout {
-            pane.cwd = cwd.into();
-        }
+        tab.pane.cwd = cwd.into();
         WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
@@ -3152,14 +3150,13 @@ mod workspace_tests {
         let mut tab = space.tabs[0].clone();
         tab.id = TabId(2);
         tab.label = "Second".into();
-        tab.layout = Layout::Pane(Pane {
+        tab.pane = Pane {
             id: PaneId(2),
             cwd: second.into(),
             columns: 80,
             rows: 24,
             process: "agent".to_owned(),
-        });
-        tab.focus = Focus { pane: PaneId(2) };
+        };
         space.tabs.push(tab);
         model
     }
@@ -4923,9 +4920,7 @@ mod workspace_tests {
             session.add_tab(SpaceId(1), label.into(), None, 80, 24, "/repo".into());
         }
         for tab in &mut session.workspace.spaces[0].tabs {
-            if let Layout::Pane(pane) = &mut tab.layout {
-                pane.process = "agent".into();
-            }
+            tab.pane.process = "agent".into();
         }
 
         let requests = adopt_agent_labels(&mut model, &identities_fixture());
@@ -5644,8 +5639,7 @@ mod workspace_tests {
             label: label.to_owned(),
             agent: None,
             env: Vec::new(),
-            layout: Layout::Pane(pane),
-            focus: Focus { pane: PaneId(1) },
+            pane,
         }
     }
 
@@ -6243,8 +6237,8 @@ mod workspace_tests {
     ) -> WorkspaceModel {
         let mut model = agent_session_in(&format!("{} (deleted)", checkout.display()));
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
+            .pane
+            .id;
         // Rows under the one that lost its checkout: what the picker
         // opens over, and what its own rows have to answer ahead of.
         if let Some(session) = model.session.as_mut() {

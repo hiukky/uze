@@ -135,24 +135,7 @@ pub struct Tab {
     /// for a shell, and emptied again when a finished agent's pane is
     /// respawned as one.
     pub env: crate::launch::Environment,
-    pub layout: Layout,
-    pub focus: Focus,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum Layout {
-    Pane(Pane),
-    Split {
-        axis: SplitAxis,
-        first: Box<Layout>,
-        second: Box<Layout>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum SplitAxis {
-    Horizontal,
-    Vertical,
+    pub pane: Pane,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -167,11 +150,6 @@ pub struct Pane {
     /// Best-known foreground process name (e.g. the shell, or whatever it
     /// last exec'd into) — same live-probe caveat as `cwd`.
     pub process: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Focus {
-    pub pane: PaneId,
 }
 
 /// What [`Session::open_space`] found or did — the caller only has a pane
@@ -226,8 +204,7 @@ impl Session {
             label: "shell".to_owned(),
             agent: None,
             env: Vec::new(),
-            layout: Layout::Pane(pane),
-            focus: Focus { pane: PaneId(1) },
+            pane,
         };
         let space = Space {
             id: SpaceId(1),
@@ -293,14 +270,13 @@ impl Session {
                         .filter(|agent| *agent != index && *agent < seeded)
                         .map(|agent| TabId(first_tab_id + agent as u64)),
                     env: tab_seed.env,
-                    layout: Layout::Pane(Pane {
+                    pane: Pane {
                         id: pane_id,
                         cwd: tab_seed.cwd,
                         columns,
                         rows,
                         process: "shell".to_owned(),
-                    }),
-                    focus: Focus { pane: pane_id },
+                    },
                 });
             }
             let selected_tab = tabs[0].id;
@@ -464,14 +440,13 @@ impl Session {
                 label: "shell".to_owned(),
                 agent: None,
                 env: Vec::new(),
-                layout: Layout::Pane(Pane {
+                pane: Pane {
                     id: pane_id,
                     cwd: root.clone(),
                     columns,
                     rows,
                     process: "shell".to_owned(),
-                }),
-                focus: Focus { pane: pane_id },
+                },
             }],
             root,
             kind,
@@ -495,11 +470,7 @@ impl Session {
     ) -> Option<RemovedSpace> {
         let index = self.workspace.spaces.iter().position(|s| s.id == space)?;
         let removed = self.workspace.spaces.remove(index);
-        let panes = removed
-            .tabs
-            .iter()
-            .flat_map(|tab| panes_in_layout(&tab.layout))
-            .collect();
+        let panes = removed.tabs.iter().map(|tab| tab.pane.id).collect();
         if self.workspace.spaces.is_empty() {
             let SpaceSeat { root, kind } = replacement;
             let pane = self.create_space(None, root, kind, columns, rows);
@@ -583,14 +554,13 @@ impl Session {
             label,
             agent,
             env: Vec::new(),
-            layout: Layout::Pane(Pane {
+            pane: Pane {
                 id: pane_id,
                 cwd,
                 columns,
                 rows,
                 process: "shell".to_owned(),
-            }),
-            focus: Focus { pane: pane_id },
+            },
         });
         space.selected_tab = tab_id;
         pane_id
@@ -639,7 +609,7 @@ impl Session {
         for orphan in space.tabs.iter_mut().filter(|t| t.agent == Some(tab)) {
             orphan.agent = None;
         }
-        Some(panes_in_layout(&removed.layout))
+        Some(vec![removed.pane.id])
     }
 
     /// Renames `tab` (found by searching every space), trimming the given
@@ -710,44 +680,54 @@ impl Session {
         true
     }
 
-    /// Applies a fresh live-probe reading for `pane`'s cwd/process (found by
-    /// searching every space's tabs), and reports whether anything actually
-    /// changed — so the caller only broadcasts a `SessionUpdated` when the
-    /// sidebar tree would show something new, not on every probe tick.
     /// Records what `pane`'s tab was launched with: the environment the
     /// spawn applied, or none when the pane came up as a plain shell. The
     /// server is the only writer, at the moment it spawns, so what a tab
     /// reports is the server's own record of the launch it made and never
     /// something a pane's processes can rewrite.
     pub fn record_launch(&mut self, pane: PaneId, env: crate::launch::Environment) -> bool {
-        for space in &mut self.workspace.spaces {
-            for tab in &mut space.tabs {
-                if panes_in_layout(&tab.layout).contains(&pane) {
-                    if tab.env == env {
-                        return false;
-                    }
-                    tab.env = env;
-                    return true;
-                }
-            }
+        let Some(tab) = self.tab_of_pane_mut(pane) else {
+            return false;
+        };
+        if tab.env == env {
+            return false;
         }
-        false
+        tab.env = env;
+        true
     }
 
+    /// Applies a fresh live-probe reading for `pane`'s cwd/process, and
+    /// reports whether anything actually changed — so the caller only
+    /// broadcasts a `SessionUpdated` when the sidebar tree would show
+    /// something new, not on every probe tick.
     pub fn update_pane_status(&mut self, pane: PaneId, cwd: PathBuf, process: String) -> bool {
-        for space in &mut self.workspace.spaces {
-            for tab in &mut space.tabs {
-                if let Some(found) = find_pane_mut(&mut tab.layout, pane) {
-                    if found.cwd == cwd && found.process == process {
-                        return false;
-                    }
-                    found.cwd = cwd;
-                    found.process = process;
-                    return true;
-                }
-            }
+        let Some(tab) = self.tab_of_pane_mut(pane) else {
+            return false;
+        };
+        if tab.pane.cwd == cwd && tab.pane.process == process {
+            return false;
         }
-        false
+        tab.pane.cwd = cwd;
+        tab.pane.process = process;
+        true
+    }
+
+    /// The pane `pane`, in whichever space's tab it lives.
+    pub fn pane(&self, pane: PaneId) -> Option<&Pane> {
+        self.workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .map(|tab| &tab.pane)
+            .find(|candidate| candidate.id == pane)
+    }
+
+    fn tab_of_pane_mut(&mut self, pane: PaneId) -> Option<&mut Tab> {
+        self.workspace
+            .spaces
+            .iter_mut()
+            .flat_map(|space| &mut space.tabs)
+            .find(|tab| tab.pane.id == pane)
     }
 }
 
@@ -755,27 +735,6 @@ fn space_containing_tab_mut(spaces: &mut [Space], tab: TabId) -> Option<&mut Spa
     spaces
         .iter_mut()
         .find(|space| space.tabs.iter().any(|t| t.id == tab))
-}
-
-fn panes_in_layout(layout: &Layout) -> Vec<PaneId> {
-    match layout {
-        Layout::Pane(pane) => vec![pane.id],
-        Layout::Split { first, second, .. } => {
-            let mut panes = panes_in_layout(first);
-            panes.extend(panes_in_layout(second));
-            panes
-        }
-    }
-}
-
-fn find_pane_mut(layout: &mut Layout, wanted: PaneId) -> Option<&mut Pane> {
-    match layout {
-        Layout::Pane(pane) if pane.id == wanted => Some(pane),
-        Layout::Pane(_) => None,
-        Layout::Split { first, second, .. } => {
-            find_pane_mut(first, wanted).or_else(|| find_pane_mut(second, wanted))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -791,7 +750,7 @@ mod tests {
             80,
             24,
         );
-        assert_eq!(session.selected_tab().focus.pane, PaneId(1));
+        assert_eq!(session.selected_tab().pane.id, PaneId(1));
         assert_eq!(
             session.add_tab(
                 session.workspace.selected_space,
@@ -804,9 +763,7 @@ mod tests {
             PaneId(2)
         );
         assert_eq!(session.selected_space().selected_tab, TabId(2));
-        let Layout::Pane(pane) = &session.selected_tab().layout else {
-            panic!("expected a single pane layout");
-        };
+        let pane = &session.selected_tab().pane;
         assert_eq!(pane.cwd, PathBuf::from("/tmp/agent"));
         let encoded = serde_json::to_string(&session).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&encoded).unwrap(), session);
@@ -977,10 +934,8 @@ mod tests {
         );
         assert!(!session.update_pane_status(PaneId(1), PathBuf::from("/tmp/a"), "shell".into()));
         assert!(session.update_pane_status(PaneId(1), PathBuf::from("/tmp/b"), "vim".into()));
-        assert_eq!(session.selected_tab().focus.pane, PaneId(1));
-        let Layout::Pane(pane) = &session.selected_tab().layout else {
-            panic!("expected a single pane layout");
-        };
+        assert_eq!(session.selected_tab().pane.id, PaneId(1));
+        let pane = &session.selected_tab().pane;
         assert_eq!(pane.cwd, PathBuf::from("/tmp/b"));
         assert_eq!(pane.process, "vim");
         assert!(!session.update_pane_status(PaneId(99), PathBuf::from("/tmp/c"), "x".into()));
@@ -1038,7 +993,7 @@ mod tests {
             session.selected_space().root,
             PathBuf::from("/tmp/frontend")
         );
-        assert_eq!(session.selected_tab().focus.pane, pane);
+        assert_eq!(session.selected_tab().pane.id, pane);
 
         session.create_space(
             None,
@@ -1079,7 +1034,7 @@ mod tests {
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.selected_space().label, "frontend");
         assert_eq!(session.selected_space().tabs.len(), 1);
-        assert_eq!(session.selected_tab().focus.pane, pane);
+        assert_eq!(session.selected_tab().pane.id, pane);
     }
 
     /// "Take me to this directory" is answered by the space that has it,
@@ -1108,7 +1063,7 @@ mod tests {
         };
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.selected_space().label, "frontend");
-        assert_eq!(session.selected_tab().focus.pane, pane);
+        assert_eq!(session.selected_tab().pane.id, pane);
 
         let again = session.open_space(
             Some("a second name".into()),
@@ -1188,7 +1143,7 @@ mod tests {
         assert_ne!(space.id, only, "a new space, not the closed one kept");
         assert_eq!(space.root, PathBuf::from("/home/someone"));
         assert_eq!(space.kind, SpaceKind::Workspace);
-        assert_eq!(session.selected_tab().focus.pane, replacement);
+        assert_eq!(session.selected_tab().pane.id, replacement);
     }
 
     fn home_seat() -> SpaceSeat {
@@ -1337,7 +1292,7 @@ mod tests {
             24,
         );
         let original_tab = session.selected_tab().id;
-        let original_pane = session.selected_tab().focus.pane;
+        let original_pane = session.selected_tab().pane.id;
         session.add_space(
             "frontend".into(),
             PathBuf::from("/tmp/frontend"),
@@ -1361,9 +1316,7 @@ mod tests {
         let original_space = session.workspace.spaces[0].id;
         session.select_space(original_space);
         assert_eq!(session.selected_tab().label, "renamed");
-        let Layout::Pane(pane) = &session.selected_tab().layout else {
-            panic!("expected a single pane layout");
-        };
+        let pane = &session.selected_tab().pane;
         assert_eq!(pane.cwd, PathBuf::from("/tmp/moved"));
     }
 
@@ -1463,9 +1416,7 @@ mod tests {
         assert_eq!(frontend.selected_tab, frontend.tabs[0].id);
         assert_eq!(frontend.tabs[0].id, TabId(1));
         assert_eq!(frontend.tabs[0].label, "claude");
-        let Layout::Pane(pane) = &frontend.tabs[0].layout else {
-            panic!("expected a single pane layout");
-        };
+        let pane = &frontend.tabs[0].pane;
         assert_eq!(pane.id, PaneId(1));
         assert_eq!(pane.cwd, PathBuf::from("/tmp/a/web"));
         assert_eq!(frontend.tabs[1].id, TabId(2));
@@ -1473,9 +1424,7 @@ mod tests {
         let backend = &session.workspace.spaces[1];
         assert_eq!(backend.id, SpaceId(2));
         assert_eq!(backend.tabs[0].id, TabId(3));
-        let Layout::Pane(pane) = &backend.tabs[0].layout else {
-            panic!("expected a single pane layout");
-        };
+        let pane = &backend.tabs[0].pane;
         assert_eq!(pane.id, PaneId(3));
 
         // Ids allocated after a restore must not collide with any restored
