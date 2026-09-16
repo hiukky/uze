@@ -25,12 +25,12 @@ use uze_application::UzeApplication;
 use uze_core::{
     PackageSource, Resource, UzeHome, UzeStore,
     capability::CapabilityKind,
+    capability::Resource as ProjectResource,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
         ManagedArtifact, qualified_capability_name,
     },
-    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
     router::{CompatibilityRoute, HarnessCapabilities},
     state,

@@ -275,7 +275,10 @@ fn a_mutual_symlink_cycle_does_not_hang_discovery() {
     let (home, result) = install(&root);
     let installed = result.expect("a cyclic but contained package installs");
     // The real skill is still found; the cycle is simply not entered.
-    let found = uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md").unwrap();
+    let found = uze_core::engine::discover_files(&installed.root.join("skills"), |path| {
+        path.ends_with("SKILL.md")
+    })
+    .unwrap();
     assert_eq!(found.len(), 1);
 
     let _ = fs::remove_dir_all(home.root());
@@ -293,9 +296,10 @@ fn a_self_referencing_symlink_does_not_hang_discovery() {
     let (home, result) = install(&root);
     let installed = result.expect("a self-linked but contained package installs");
     assert_eq!(
-        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
-            .unwrap()
-            .len(),
+        uze_core::engine::discover_files(&installed.root.join("skills"), |path| path
+            .ends_with("SKILL.md"))
+        .unwrap()
+        .len(),
         1
     );
 
@@ -315,9 +319,10 @@ fn a_symlinked_directory_pointing_at_its_own_ancestor_does_not_hang_discovery() 
     let (home, result) = install(&root);
     let installed = result.expect("an ancestor-linked but contained package installs");
     assert_eq!(
-        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
-            .unwrap()
-            .len(),
+        uze_core::engine::discover_files(&installed.root.join("skills"), |path| path
+            .ends_with("SKILL.md"))
+        .unwrap()
+        .len(),
         1
     );
     // Digesting walks the same tree the lock pins, so it has to survive the
@@ -358,9 +363,10 @@ fn content_reachable_only_through_a_symlinked_directory_is_not_discovered() {
         "the symlink was not preserved as package content"
     );
     assert_eq!(
-        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
-            .unwrap()
-            .len(),
+        uze_core::engine::discover_files(&installed.root.join("skills"), |path| path
+            .ends_with("SKILL.md"))
+        .unwrap()
+        .len(),
         1,
         "discovery walked through a symlinked directory"
     );

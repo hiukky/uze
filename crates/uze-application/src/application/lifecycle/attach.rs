@@ -7,9 +7,9 @@ use std::collections::BTreeSet;
 use uze_core::{
     Result,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::ExposureMechanism,
     integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
-    project::Resource,
     state,
     store::StoredPackage,
 };

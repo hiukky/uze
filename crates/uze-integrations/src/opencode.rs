@@ -23,6 +23,7 @@ use std::{
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
     hook::PortableHook,
@@ -35,7 +36,6 @@ use uze_core::{
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities},
     state,
@@ -228,9 +228,7 @@ impl IntegrationPort for OpenCodeIntegration {
     /// never mixed just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
-                return Vec::new();
-            };
+            let active_name = active_plugin_name(&self.uze_home, resource);
             return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
@@ -266,9 +264,6 @@ impl IntegrationPort for OpenCodeIntegration {
         )
     }
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported("OpenCode attachment needs a UZE-stored package.");
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
             CapabilityKind::Mcp => self.mcp_plan(resource),
@@ -509,19 +504,12 @@ impl OpenCodeIntegration {
                         .unwrap_or_else(|| "no compatible hook route".to_owned()),
                 }
             }
-            _ => {
-                let package_id = match &resource.origin {
-                    uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
-                    uze_core::project::ResourceOrigin::Project { .. } => {
-                        return unsupported(
-                            "OpenCode hooks need a UZE-stored package for their owned bridge.",
-                        );
-                    }
-                };
-                ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile {
-                    path: hook_projection::opencode_bridge_path(self.config_root(), package_id),
-                })
-            }
+            _ => ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile {
+                path: hook_projection::opencode_bridge_path(
+                    self.config_root(),
+                    resource.package_id.as_str(),
+                ),
+            }),
         };
         let base = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file, so the delivered artifact is a generated Plugin.define plugin that IS the wrapper: it registers ctx.tool.hook callbacks and runs the authored handlers sequentially on the harness's embedded Bun runtime against the portable HOOK_* contract (per-handler timeouts, PLUGIN_ROOT injected, first-deny-wins, fail-closed by effect) with the package's groups as data. The V2 tool hooks carry the tool input but no block signal, and the only decision point (permission.evaluate) carries the action's resources rather than the input, so deny/ask are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the plugin can never be loaded twice.";
         let evidence = match &compatibility.reason {
@@ -549,17 +537,8 @@ impl OpenCodeIntegration {
     /// package converges on one deterministic file regardless of attach
     /// order.
     fn attach_hook_bridge(&self, resource: &Resource, bridge_path: &Path) -> Result<()> {
-        let package_root = resource.package_root().ok_or_else(|| {
-            UzeError::ExposureUnavailable("OpenCode hooks need a UZE-stored package".to_owned())
-        })?;
-        let package_id = match &resource.origin {
-            uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
-            uze_core::project::ResourceOrigin::Project { .. } => {
-                return Err(UzeError::ExposureUnavailable(
-                    "OpenCode hooks need a UZE-stored package".to_owned(),
-                ));
-            }
-        };
+        let package_root = resource.package_root.as_path();
+        let package_id = resource.package_id.as_str();
         let current = serde_json::from_slice::<PortableHook>(&resource.capability.payload)
             .map_err(|source| UzeError::Json {
                 path: resource.capability.path.clone(),

@@ -8,8 +8,8 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf, proc
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     integration::{AttachmentInspection, AttachmentReceipt, AttachmentState, ManagedArtifact},
-    project::Resource,
     store::StoredPackage,
 };
 
@@ -416,10 +416,10 @@ mod claude_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use uze_core::capability::Resource;
     use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::ClaudeIntegration;
     use super::claude_catalogue_document;

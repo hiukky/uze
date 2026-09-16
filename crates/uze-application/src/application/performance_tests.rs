@@ -21,9 +21,9 @@ use std::{
 
 use super::*;
 use uze_core::{
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::HarnessDetection,
-    project::Resource,
     router::{CompatibilityRoute, HarnessCapabilities},
     trust::AlwaysTrust,
 };

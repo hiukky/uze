@@ -47,10 +47,10 @@ use std::path::{Path, PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
     router::CompatibilityRoute,
     state,
 };
@@ -61,8 +61,9 @@ use super::unsupported;
 /// Root of every generated OpenCode Skill wrapper directory. Under
 /// `$UZE_HOME/state/attachments/opencode/skills/`, never under the Store.
 pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = Resource::package_root(resource)
-        .and_then(|root| root.file_name())
+    let package_id = resource
+        .package_root
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let name = resource
@@ -115,12 +116,10 @@ pub(super) fn materialize_generated_skill(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let label = uze_core::integration::active_plugin_name(uze_home, resource)
-        .and_then(|active_name| {
-            uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
-                .into_iter()
-                .next()
-        })
+    let active_name = uze_core::integration::active_plugin_name(uze_home, resource);
+    let label = uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
+        .into_iter()
+        .next()
         .unwrap_or_else(|| fallback_name.to_owned());
     crate::shared::skill::write_superset_skill_wrapper(
         &dir,

@@ -44,10 +44,10 @@ use std::{
 // `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
 
 use uze_core::{
+    capability::Resource,
     capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::{AttachmentState, IntegrationPort, ManagedArtifact},
-    project::Resource,
     state,
 };
 

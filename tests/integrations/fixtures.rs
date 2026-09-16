@@ -17,10 +17,10 @@ use std::{
 
 use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
+    capability::Resource,
     capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
     state,
     store::{PackageId, StoredPackage},
 };

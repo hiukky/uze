@@ -322,7 +322,7 @@ pub trait IntegrationPort {
 
     /// The integration, not the resource representation, selects how the
     /// harness receives a capability from a composed UZE environment.
-    fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan;
+    fn exposure_plan(&self, resource: &crate::capability::Resource) -> ExposurePlan;
 
     /// Ordered, harness-appropriate candidates for `resource`'s physical
     /// exposure name — most preferred first. This method only *proposes*:
@@ -340,7 +340,7 @@ pub trait IntegrationPort {
     /// An integration overrides this only when its own harness's UX
     /// genuinely depends on the physical name (Claude Code's decomposed
     /// Skill delivery is the one case today).
-    fn exposure_name_candidates(&self, resource: &crate::project::Resource) -> Vec<String> {
+    fn exposure_name_candidates(&self, resource: &crate::capability::Resource) -> Vec<String> {
         default_exposure_name_candidates(resource)
     }
 
@@ -367,7 +367,7 @@ pub trait IntegrationPort {
     fn package_exposure_plan(
         &self,
         _package: &StoredPackage,
-        _resources: &[&crate::project::Resource],
+        _resources: &[&crate::capability::Resource],
     ) -> Option<PackageExposurePlan> {
         None
     }
@@ -461,7 +461,7 @@ pub trait IntegrationPort {
     /// Idempotently creates or refreshes this harness's managed attachment
     /// for one resource and returns the artifact it now owns. `None` when
     /// the plan has nothing to attach (e.g. setup has not completed).
-    fn attach(&self, resource: &crate::project::Resource) -> Result<Option<ManagedArtifact>> {
+    fn attach(&self, resource: &crate::capability::Resource) -> Result<Option<ManagedArtifact>> {
         let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
             return Ok(None);
         };
@@ -528,16 +528,13 @@ pub trait IntegrationPort {
     /// Returns a typed ownership receipt after a successful resource attach.
     fn attach_receipt(
         &self,
-        resource: &crate::project::Resource,
+        resource: &crate::capability::Resource,
     ) -> Result<Option<AttachmentReceipt>> {
-        let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
-            return Ok(None);
-        };
         let Some(artifact) = self.attach(resource)? else {
             return Ok(None);
         };
         Ok(Some(AttachmentReceipt {
-            package_id: id.as_str().to_owned(),
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact,
@@ -581,14 +578,11 @@ pub trait IntegrationPort {
 /// for another (e.g. MCP, which deliberately stays on this policy while
 /// Skills/Commands move to stable namespaced labels — capability naming
 /// policies are never mixed just because all are `Resource`s).
-pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
-    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
-        return Vec::new();
-    };
+pub fn default_exposure_name_candidates(resource: &crate::capability::Resource) -> Vec<String> {
     let Some(logical) = resource.logical_capability_name() else {
         return Vec::new();
     };
-    vec![format!("{}-{}", id.as_str(), logical)]
+    vec![format!("{}-{}", resource.package_id.as_str(), logical)]
 }
 
 /// The stable, plugin-qualified invocation label (ADR-026):
@@ -605,16 +599,12 @@ pub fn qualified_capability_name(active_plugin_name: &str, logical_name: &str) -
 /// Resolves the resource's package to the local invocation name it is
 /// currently active under (`UzeStore::active_name_for`) — its own bare
 /// plugin name unless an install-time alias resolved a collision with
-/// another marketplace's same-named plugin (ADR-038). `None` for a
-/// Project-origin resource, which has no package identity to resolve.
+/// another marketplace's same-named plugin (ADR-038).
 pub fn active_plugin_name(
     home: &crate::home::UzeHome,
-    resource: &crate::project::Resource,
-) -> Option<String> {
-    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
-        return None;
-    };
-    Some(crate::store::UzeStore::new(home.clone()).active_name_for(id))
+    resource: &crate::capability::Resource,
+) -> String {
+    crate::store::UzeStore::new(home.clone()).active_name_for(&resource.package_id)
 }
 
 /// The single candidate for every UZE-projected Skill: its own stable
@@ -627,15 +617,9 @@ pub fn active_plugin_name(
 /// access to a `UzeHome` resolve it once and pass it in, rather than this
 /// pure label-formatting function doing its own state read.
 pub fn qualified_exposure_name_candidates(
-    resource: &crate::project::Resource,
+    resource: &crate::capability::Resource,
     active_plugin_name: &str,
 ) -> Vec<String> {
-    if !matches!(
-        resource.origin,
-        crate::project::ResourceOrigin::Package { .. }
-    ) {
-        return Vec::new();
-    }
     if resource.capability.kind != CapabilityKind::AgentSkill {
         return Vec::new();
     }

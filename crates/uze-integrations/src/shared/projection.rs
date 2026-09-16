@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use uze_core::{UzeError, project::Resource};
+use uze_core::{UzeError, capability::Resource};
 
 /// Deterministic, pre-attach projection conflict: the shared
 /// `~/.agents/skills` entry this resource would reuse is already owned by

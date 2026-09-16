@@ -261,7 +261,7 @@ pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result
 /// exactly like Claude's malformed-manifest handling.
 pub(super) fn codex_exact_coverage(
     package: &StoredPackage,
-    resources: &[&uze_core::project::Resource],
+    resources: &[&uze_core::capability::Resource],
 ) -> std::collections::BTreeSet<String> {
     let manifest_path = package.root.join(".codex-plugin/plugin.json");
     let bytes = match fs::read(&manifest_path) {
@@ -378,10 +378,10 @@ mod codex_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use uze_core::capability::Resource;
     use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
     use super::codex_exact_coverage;

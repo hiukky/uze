@@ -25,9 +25,9 @@ use std::path::PathBuf;
 use uze_core::{
     PackageId, UzeHome,
     acquisition::{PackageSource, Provenance, ResolvedSource},
+    capability::Resource,
     capability::{Capability, CapabilityKind},
     integration::{ContextDelivery, IntegrationPort, SessionContinuity},
-    project::Resource,
     router::CompatibilityRoute,
     store::StoredPackage,
 };

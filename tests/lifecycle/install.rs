@@ -81,11 +81,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .iter()
             .any(|r| r.capability.kind == CapabilityKind::Mcp)
     );
-    assert!(
-        resources
-            .iter()
-            .all(|r| r.package_root() == Some(package.root.as_path()))
-    );
+    assert!(resources.iter().all(|r| r.package_root == package.root));
     assert!(
         package.root.join(".codex-plugin/plugin.json").is_file(),
         "original native envelope is preserved"

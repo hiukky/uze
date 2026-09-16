@@ -8,7 +8,7 @@ requiring a `uze sync` step.
 ## Requirements
 ### Requirement: MCP is a distinct capability, never converted to or from a Skill
 The system SHALL represent an MCP server as its own capability kind,
-composed in the same `EffectiveEnvironment` as Agent Skills without merging
+read from the same package as Agent Skills without merging
 or converting either representation into the other's format.
 
 #### Scenario: A package with both a Skill and an MCP server

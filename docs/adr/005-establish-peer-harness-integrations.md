@@ -46,6 +46,13 @@ incompatibility.
 resources remain project-owned. `UzeEngine` composes both sources into one
 effective environment before routing it to integrations.
 
+> Note (2026-09): project-owned resource composition (`resolve_project`,
+> `ResourceOrigin::Project`, `UzeEngine::compose_project`) only ever ran in
+> tests — a project's own `AGENTS.md`, `.agents/skills` and `mcp.json` are
+> read by each harness natively, never delivered by UZE. A `Resource` is now
+> always a package's (`capability::Resource` carries its package id and
+> root), and `engine::package_resources` reads one installed package.
+
 **Normal harness invocation is the target DX.** The user runs `claude`,
 `codex`, `agy`, or `opencode` in the real project directory. A UZE launcher,
 a per-session flag, or replacing the harness executable on `PATH` is not the

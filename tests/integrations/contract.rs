@@ -69,7 +69,6 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     );
 
     let resource = resources.first().unwrap();
-    assert!(resource.package_root().is_some());
 
     for (id, plan) in [
         ("claude", claude.exposure_plan(resource)),

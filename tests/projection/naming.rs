@@ -39,12 +39,12 @@ use std::{
 use uze_application::UzeApplication;
 use uze_core::{
     PackageSource, Resource, UzeHome, UzeStore,
+    capability::Resource as ProjectResource,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
         IntegrationStatus, PublicationStatus, default_exposure_name_candidates,
     },
-    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
     router::HarnessCapabilities,
     store::StoredPackage,

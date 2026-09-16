@@ -1,10 +1,10 @@
 //! Canonical Agent capability routes remain explicit across every harness.
 
 use uze_core::{
+    capability::Resource,
     capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
     router::CompatibilityRoute,
     store::PackageId,
 };

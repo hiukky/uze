@@ -18,7 +18,7 @@
 
 use serde::Serialize;
 
-use crate::{capability::CapabilityKind, project::Resource};
+use crate::{capability::CapabilityKind, capability::Resource};
 
 /// One capability that will cause a process to run once a harness picks it
 /// up. Carries what a person needs to judge it, and nothing else.

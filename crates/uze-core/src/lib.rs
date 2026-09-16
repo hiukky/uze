@@ -77,12 +77,9 @@ pub use project::{
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
+pub use capability::Resource;
 pub use error::{ProjectionConflictDetails, Result, UzeError};
 pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan};
 pub use home::UzeHome;
-pub use project::{
-    EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
-    resolve_project_resources,
-};
 pub use skill::SkillInvocationPolicy;
 pub use store::{PackageId, StoredPackage, UzeStore};

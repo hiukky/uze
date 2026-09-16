@@ -8,9 +8,9 @@ use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
-    project::Resource,
     router::CompatibilityRoute,
     skill::SkillInvocationPolicy,
     state,

@@ -382,7 +382,7 @@ mod tests {
         fn capabilities(&self) -> HarnessCapabilities {
             HarnessCapabilities::default()
         }
-        fn exposure_plan(&self, _resource: &uze_core::project::Resource) -> ExposurePlan {
+        fn exposure_plan(&self, _resource: &uze_core::capability::Resource) -> ExposurePlan {
             ExposurePlan {
                 route: uze_core::router::CompatibilityRoute::Unsupported,
                 mechanism: uze_core::exposure::ExposureMechanism::Unsupported {

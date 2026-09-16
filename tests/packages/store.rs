@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use uze_core::{ResourceOrigin, UzeHome, UzeStore, capability::CapabilityKind};
+use uze_core::{UzeHome, UzeStore, capability::CapabilityKind};
 
 /// The acquisition pipeline every install now goes through: a source is
 /// acquired into a materialized package, and only then does the Store ingest
@@ -183,10 +183,7 @@ fn engine_composes_a_standard_resource_from_the_store() {
     assert_eq!(resources.len(), 1);
     let resource = &resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::AgentSkill);
-    assert!(matches!(
-        resource.origin,
-        ResourceOrigin::Package { ref id, .. } if id == &package.id
-    ));
+    assert_eq!(resource.package_id, package.id);
     assert!(resource.capability.path.starts_with(&package.root));
 
     fs::remove_dir_all(root).unwrap();

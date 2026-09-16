@@ -10,9 +10,9 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
-    project::Resource,
     router::CompatibilityRoute,
     state,
 };

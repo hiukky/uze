@@ -18,6 +18,7 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     hook::{
@@ -26,7 +27,6 @@ use uze_core::{
     },
     integration::{AttachmentInspection, AttachmentState},
     persistence::write_atomic,
-    project::Resource,
     router::CompatibilityRoute,
 };
 
@@ -1782,13 +1782,10 @@ pub(crate) fn hook_exposure_plan(
             }
         }
         _ => {
-            let package_root = resource
-                .package_root()
-                .expect("hook exposure_plan is only reached for packages");
             match hook_delivery(
                 target,
                 &hook,
-                package_root,
+                &resource.package_root,
                 Some(shared_wrapper_path(uze_home, target)),
                 exec_form,
             ) {
@@ -1865,11 +1862,8 @@ pub(crate) fn antigravity_hook_exposure_plan(
             }
         }
         _ => {
-            let package_root = resource
-                .package_root()
-                .expect("hook exposure_plan is only reached for packages");
             let wrapper = shared_wrapper_path(uze_home, ANTIGRAVITY_TARGET);
-            let entry = agy_named_entry(&hook, &wrapper, package_root);
+            let entry = agy_named_entry(&hook, &wrapper, &resource.package_root);
             ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name: hook_entry_name(resource, &hook),
@@ -1898,12 +1892,7 @@ pub(crate) fn antigravity_hook_exposure_plan(
 /// The stable UZE identity for one hook group entry, mirroring the
 /// qualified-capability naming policy (ADR-026): `<package>:<hook-id>`.
 pub(crate) fn hook_entry_name(resource: &Resource, hook: &PortableHook) -> String {
-    match &resource.origin {
-        uze_core::project::ResourceOrigin::Package { id, .. } => {
-            format!("{}:{}", id.as_str(), hook.id)
-        }
-        uze_core::project::ResourceOrigin::Project { .. } => hook.id.clone(),
-    }
+    format!("{}:{}", resource.package_id.as_str(), hook.id)
 }
 
 fn unsupported_plan(rationale: &str) -> ExposurePlan {

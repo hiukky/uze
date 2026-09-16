@@ -18,9 +18,9 @@ use super::services::Plugins;
 use super::*;
 use uze_core::{
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::{AttachmentReceipt, ContextDelivery, HarnessDetection, ManagedArtifact},
-    project::Resource,
     router::{CompatibilityRoute, HarnessCapabilities},
 };
 
@@ -125,10 +125,7 @@ impl IntegrationPort for AllResourceSymlinkIntegration {
             }
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
@@ -181,10 +178,7 @@ impl IntegrationPort for PartialIntegration {
         })?;
         self.attached.set(true);
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
@@ -1479,10 +1473,7 @@ impl IntegrationPort for HealthySymlinkIntegration {
             }
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
@@ -1524,9 +1515,7 @@ impl IntegrationPort for ForeignFailingIntegration {
         // any other package should succeed so per-package resilience can be
         // observed (the same shape as the real Antigravity preflight which
         // only blocks the conflicting name).
-        if let uze_core::ResourceOrigin::Package { id, .. } = &resource.origin
-            && id.as_str().eq("uze")
-        {
+        if resource.package_id.as_str() == "uze" {
             return Ok(None);
         }
         let path = self.root.join(resource.name());
@@ -1546,10 +1535,7 @@ impl IntegrationPort for ForeignFailingIntegration {
             })?;
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
             artifact: ManagedArtifact::SymlinkReference {

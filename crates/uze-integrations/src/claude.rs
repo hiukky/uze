@@ -18,6 +18,7 @@ use std::{fs, path::Path};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
@@ -29,7 +30,6 @@ use uze_core::{
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities},
     state,
@@ -399,11 +399,6 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported(
-                "Claude Code needs a UZE-stored Agent Plugin package for this attachment.",
-            );
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
@@ -429,9 +424,7 @@ impl IntegrationPort for ClaudeIntegration {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
-            return Vec::new();
-        };
+        let active_name = active_plugin_name(&self.uze_home, resource);
         qualified_exposure_name_candidates(resource, &active_name)
     }
 
@@ -553,7 +546,7 @@ impl IntegrationPort for ClaudeIntegration {
                         target,
                         skill_source_dir,
                         entry_name,
-                        namespace.as_deref(),
+                        Some(&namespace),
                         &policy,
                     )?;
                 }

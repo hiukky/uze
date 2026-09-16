@@ -16,6 +16,7 @@ use std::{fs, path::Path, path::PathBuf};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
@@ -27,7 +28,6 @@ use uze_core::{
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities},
     state,
@@ -438,9 +438,6 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported("Codex attachment needs a UZE-stored Agent Plugin package.");
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),

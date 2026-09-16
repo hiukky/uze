@@ -1,4 +1,4 @@
-//! L1 contract: one Store installation, one `EffectiveEnvironment`, and the
+//! L1 contract: one Store installation, the resources it contributes, and the
 //! exposure each peer `IntegrationPort` plans from it.
 //!
 //! Deterministic by construction. No harness binary is spawned, no model is
@@ -110,7 +110,7 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
         .expect("empty caller project composes with the installed package");
     let resource = resources
         .into_iter()
-        .find(|resource| resource.package_root().is_some())
+        .next()
         .expect("fixture contributes one store-owned skill");
     assert_clean_workspace(&workspace);
 
@@ -200,7 +200,7 @@ fn a_derived_mcp_entry_name_leaves_room_for_a_tool_name() {
         uze_core::engine::package_resources(&installed).expect("MCP-only package composes");
     let resource = resources
         .into_iter()
-        .find(|resource| resource.package_root().is_some())
+        .next()
         .expect("fixture contributes one store-owned MCP resource");
 
     let entry_name = default_exposure_name_candidates(&resource)

@@ -16,9 +16,9 @@ use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     home::UzeHome,
     integration::{AttachmentReceipt, ManagedArtifact},
-    project::Resource,
     store::{StoredPackage, is_valid_qualified_id},
 };
 
@@ -575,10 +575,10 @@ mod generated_native_tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use uze_core::capability::Resource;
     use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
     use super::*;

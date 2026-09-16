@@ -7,11 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use uze_core::{
+    capability::Resource,
     engine::package_resources_at,
     home::UzeHome,
     hook::HookEvent,
     integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
-    project::Resource,
     router::CompatibilityRoute,
     state,
     store::PackageId,

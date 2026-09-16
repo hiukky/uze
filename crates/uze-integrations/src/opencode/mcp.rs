@@ -9,11 +9,11 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     harness_runtime::resolve_real_executable,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
-    project::Resource,
     router::CompatibilityRoute,
     state,
 };

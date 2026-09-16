@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{project::Resource, store::PackageId};
+use crate::{capability::Resource, store::PackageId};
 
 use serde::{Deserialize, Serialize};
 

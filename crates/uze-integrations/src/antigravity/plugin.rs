@@ -20,8 +20,8 @@ use std::{
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     integration::{AttachmentInspection, AttachmentReceipt, AttachmentState, IntegrationPort},
-    project::Resource,
     store::StoredPackage,
 };
 
@@ -439,10 +439,10 @@ mod plugin_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use uze_core::capability::Resource;
     use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::{AttachmentState, IntegrationPort};
-    use uze_core::project::Resource;
     use uze_core::store::StoredPackage;
 
     use super::super::AntigravityIntegration;
