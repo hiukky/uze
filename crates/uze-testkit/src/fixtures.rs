@@ -20,6 +20,26 @@ use std::path::{Path, PathBuf};
 
 use crate::workspace_root;
 
+/// Copies the tree at `source` into `destination`, creating it — how a
+/// test stages a fixture somewhere it is free to change.
+pub fn copy_tree(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination)
+        .unwrap_or_else(|error| panic!("create {}: {error}", destination.display()));
+    let entries = std::fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        if from.is_dir() {
+            copy_tree(&from, &to);
+        } else {
+            std::fs::copy(&from, &to)
+                .unwrap_or_else(|error| panic!("copy {from:?} -> {to:?}: {error}"));
+        }
+    }
+}
+
 /// `tests/_fixtures/`.
 ///
 /// Resolved through `$UZE_TESTKIT_FIXTURES_ROOT` when set (the Lab image

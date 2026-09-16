@@ -76,7 +76,7 @@ fn a_marketplace_registered_by_url_is_listed_without_its_repository() {
     let env = TestEnvironment::isolated();
     let market = env.root().join("remote-market");
     let plugin = uze_testkit::fixtures::canonical("flow");
-    copy_tree(&plugin, &market.join("plugins/flow"));
+    uze_testkit::fixtures::copy_tree(&plugin, &market.join("plugins/flow"));
     fs::write(
         market.join("marketplace.json"),
         r#"{"name":"remote","plugins":[{"name":"flow","source":"./plugins/flow"}]}"#,
@@ -105,17 +105,4 @@ fn a_marketplace_registered_by_url_is_listed_without_its_repository() {
         detail.contains("Plugins") && detail.lines().any(|line| line.trim() == "1"),
         "inspecting the marketplace reads the cached catalogue: {detail}"
     );
-}
-
-fn copy_tree(source: &Path, destination: &Path) {
-    fs::create_dir_all(destination).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
 }
