@@ -392,10 +392,6 @@ mod repository_tests {
             std::fs::read_to_string(path).map_err(|error| error.to_string())
         }
 
-        fn display_path(&self, path: &Path) -> String {
-            path.display().to_string()
-        }
-
         fn syntax_theme(&self) -> String {
             crate::code::highlight::FALLBACK_SYNTAX_THEME.to_owned()
         }

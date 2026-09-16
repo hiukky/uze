@@ -486,10 +486,6 @@ impl Host for FakeMachine {
         Ok(())
     }
 
-    fn display_path(&self, path: &Path) -> String {
-        path.display().to_string()
-    }
-
     fn syntax_theme(&self) -> String {
         FALLBACK_SYNTAX_THEME.to_owned()
     }

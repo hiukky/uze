@@ -141,10 +141,6 @@ pub trait Host {
             .unwrap_or(0)
     }
 
-    /// The path as a person would recognise it — `~/relative/path` when it
-    /// sits under their home directory.
-    fn display_path(&self, path: &std::path::Path) -> String;
-
     /// The entries of `path`, directories first and each half sorted by
     /// name — the order every listing arrives in, so the same directory
     /// never reads differently twice.
