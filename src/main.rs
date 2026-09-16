@@ -713,7 +713,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
             let label = uze_terminal::open_space(&root, uze::ui::space_kind_for(&root))
-                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))?;
+                .map_err(terminal_error)?;
             println!(
                 "opened space `{label}` at {} in the running uze",
                 root.display()
@@ -740,10 +740,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         return Ok(());
     };
     if let Command::Terminal { action } = command {
-        let root = std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
-            path: PathBuf::from("."),
-            source,
-        })?;
+        let root = cwd()?;
         return match action {
             TerminalAction::Attach => uze::ui::run(home),
             // Resolved the same way `ui::orchestrator` resolves it before
@@ -751,16 +748,12 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             // actually started, not one keyed on the raw cwd.
             TerminalAction::Stop => {
                 uze_terminal::stop(&uze_application::workspace_root_or_self(&root))
-                    .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
+                    .map_err(terminal_error)
             }
             TerminalAction::Serve { root, kind } => {
-                let kind = uze_terminal::SpaceKind::from_name(&kind).ok_or_else(|| {
-                    uze_application::UzeError::TerminalRuntime(format!(
-                        "`{kind}` is not a kind of space"
-                    ))
-                })?;
-                uze_terminal::serve(root, kind)
-                    .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
+                let kind = uze_terminal::SpaceKind::from_name(&kind)
+                    .ok_or_else(|| terminal_error(format!("`{kind}` is not a kind of space")))?;
+                uze_terminal::serve(root, kind).map_err(terminal_error)
             }
         };
     }
@@ -784,59 +777,34 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             format,
         } => {
             let authority = trust_authority(trust);
-            let spinner = progress::spinner("Installing project environment...");
-            match app
-                .project()
-                .install(&context_path(path), authority.as_ref())
-            {
-                Ok(report) => {
-                    let message = match &report {
-                        uze_application::application::InstallReport::NoChanges => {
-                            "Already up to date"
-                        }
-                        uze_application::application::InstallReport::Installed { .. } => {
-                            "Environment installed"
-                        }
-                    };
-                    spinner.finish_with_message(message);
-                    match format {
-                        OutputFormat::Text => print!("{}", render_install(&report)),
-                        OutputFormat::Json => print_json(&report),
-                    }
-                }
-                Err(e) => {
-                    spinner.finish_and_clear();
-                    progress::error(&format!("Failed to install environment: {e}"));
-                    return Err(e);
-                }
-            }
+            let report = with_spinner(
+                "Installing project environment...",
+                "Failed to install environment",
+                || {
+                    app.project()
+                        .install(&context_path(path), authority.as_ref())
+                },
+            )?;
+            emit(format, &report, render_install);
         }
         Command::Remove { plugin, format } => {
-            let current_dir =
-                std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
-                    path: PathBuf::from("."),
-                    source,
-                })?;
-            let spinner = progress::spinner(&format!("Removing {plugin} from this project..."));
-            let report = match app.project().remove(&plugin, &current_dir) {
-                Ok(report) => report,
-                Err(e) => {
-                    spinner.finish_and_clear();
-                    progress::error(&format!("Failed to remove {plugin}: {e}"));
-                    return Err(e);
-                }
-            };
+            let current_dir = cwd()?;
+            let report = with_spinner(
+                &format!("Removing {plugin} from this project..."),
+                &format!("Failed to remove {plugin}"),
+                || app.project().remove(&plugin, &current_dir),
+            )?;
             match report {
                 RemoveProjectPluginReport::Removed { .. } => {
-                    spinner.finish_and_clear();
-                    match format {
-                        OutputFormat::Text => {
-                            progress::success(&format!("Removed {plugin} from project"));
-                        }
-                        OutputFormat::Json => {
-                            print_json(&RemoveProjectPluginReport::Removed { plugin })
-                        }
-                    }
+                    let message = format!(
+                        "{} Removed {plugin} from project\n",
+                        progress::success_icon()
+                    );
+                    emit(
+                        format,
+                        &RemoveProjectPluginReport::Removed { plugin },
+                        |_| message,
+                    );
                 }
                 // Strictly project-scoped, by design (ADR-019): neither of
                 // these falls through to machine-level removal. `?` below
@@ -844,21 +812,16 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 // PluginNotUsedByProject}` through the same `uze: {error}`
                 // path every other failure in this program uses.
                 RemoveProjectPluginReport::NoLock => {
-                    spinner.finish_and_clear();
                     return Err(uze_application::UzeError::NoProjectEnvironment { plugin });
                 }
                 RemoveProjectPluginReport::NotInLock { .. } => {
-                    spinner.finish_and_clear();
                     return Err(uze_application::UzeError::PluginNotUsedByProject { plugin });
                 }
             }
         }
         Command::Status { path, format } => {
             let report = app.health().status(&context_path(path))?;
-            match format {
-                OutputFormat::Text => print!("{}", render_status(&report)),
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, render_status);
         }
         Command::Agent { action } => run_agent(&app, action)?,
         Command::Context { action } => run_context(&app, action)?,
@@ -869,10 +832,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             let spinner = progress::spinner("Running diagnostics...");
             let report = app.health().report();
             spinner.finish_with_message("Diagnostics complete");
-            match format {
-                OutputFormat::Text => print!("{}", render_doctor(&report)),
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, render_doctor);
         }
         Command::Setup { arguments } => run_setup_command(&app, &home, &arguments, verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
@@ -985,26 +945,17 @@ fn run_context(app: &UzeApplication, action: ContextAction) -> Result<()> {
     match action {
         ContextAction::Inspect { path, format } => {
             let status = app.context().inspect(&context_path(path))?;
-            match format {
-                OutputFormat::Text => print!("{}", render_context_status(&status)),
-                OutputFormat::Json => print_json(&status),
-            }
+            emit(format, &status, render_context_status);
         }
         ContextAction::Plan { path, format } => {
             let plan = app.context().plan(&context_path(path))?;
-            match format {
-                OutputFormat::Text => print!("{}", render_context_plan(&plan, app)),
-                OutputFormat::Json => print_json(&plan),
-            }
+            emit(format, &plan, |plan| render_context_plan(plan, app));
         }
         ContextAction::Reconcile { path, format } => {
             let report = app.context().reconcile(&context_path(path))?;
-            match format {
-                OutputFormat::Text => {
-                    print!("{}", render_context_reconciliation(&report, app));
-                }
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, |report| {
+                render_context_reconciliation(report, app)
+            });
         }
     }
     Ok(())
@@ -1015,10 +966,7 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
     match action {
         ThemeAction::List { format } => {
             let themes = app.themes().list(uze_theme::builtin_names())?;
-            match format {
-                OutputFormat::Text => print!("{}", render_theme_list(&themes)),
-                OutputFormat::Json => print_json(&themes),
-            }
+            emit(format, &themes, |themes| render_theme_list(themes));
         }
         ThemeAction::Set { id } => {
             // Load it before recording the choice: a theme that will not
@@ -1035,10 +983,7 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
         ThemeAction::Glyphs { set, format } => match set {
             None => {
                 let sets = app.themes().glyph_sets(uze_theme::glyph_sets())?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_glyph_sets(&sets)),
-                    OutputFormat::Json => print_json(&sets),
-                }
+                emit(format, &sets, |sets| render_glyph_sets(sets));
             }
             Some(set) => {
                 if !uze_theme::glyph_sets().contains(&set.as_str()) {
@@ -1070,10 +1015,11 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
                     .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned()),
             };
             let (resolved, layers) = uze::theme::resolve_with_layers(app, home, &id)?;
-            match format {
-                OutputFormat::Text => print!("{}", render_theme(&id, layers.clone(), &resolved)),
-                OutputFormat::Json => print_json(&theme_report(&id, layers, &resolved)),
-            }
+            emit(
+                format,
+                &theme_report(&id, layers.clone(), &resolved),
+                |_| render_theme(&id, layers, &resolved),
+            );
         }
     }
     Ok(())
@@ -1240,29 +1186,20 @@ fn render_theme(id: &str, layers: Vec<String>, loaded: &uze_theme::Loaded) -> St
 fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
     match action {
         MarketAction::Add { source } => {
-            let spinner = progress::spinner("Adding marketplace...");
-            match app.marketplace().add(&source) {
-                Ok(true) => {
-                    spinner.finish_and_clear();
-                    progress::success(&format!("Added marketplace from {source}"));
-                }
-                Ok(false) => {
-                    spinner.finish_and_clear();
-                    progress::success(&format!("Marketplace from {source} is already added"));
-                }
-                Err(e) => {
-                    spinner.finish_and_clear();
-                    progress::error(&format!("Failed to add marketplace: {e}"));
-                    return Err(e);
-                }
+            let added = with_spinner("Adding marketplace...", "Failed to add marketplace", || {
+                app.marketplace().add(&source)
+            })?;
+            if added {
+                progress::success(&format!("Added marketplace from {source}"));
+            } else {
+                progress::success(&format!("Marketplace from {source} is already added"));
             }
         }
         MarketAction::List { format } => {
-            let mps = app.marketplace().list()?;
-            match format {
-                OutputFormat::Text => print!("{}", render_market_list(&mps)),
-                OutputFormat::Json => print_json(&mps),
-            }
+            let marketplaces = app.marketplace().list()?;
+            emit(format, &marketplaces, |marketplaces| {
+                render_market_list(marketplaces)
+            });
         }
         MarketAction::Remove { name } => {
             app.marketplace().remove(&name)?;
@@ -1270,10 +1207,7 @@ fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
         }
         MarketAction::Inspect { name, format } => {
             let detail = app.marketplace().inspect(&name)?;
-            match format {
-                OutputFormat::Text => print!("{}", render_market_detail(&detail)),
-                OutputFormat::Json => print_json(&detail),
-            }
+            emit(format, &detail, render_market_detail);
         }
     }
     Ok(())
@@ -1291,110 +1225,62 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
         } => {
             let authority = trust_authority(trust);
             let name_authority = name_collision_authority(alias, replace);
-            let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
             // Every install goes through a marketplace that must have
             // been added first: `uze market add <market>` then
             // `uze plugin install <name>@<market>`. A direct source
             // (path or Git URL) is never accepted — the marketplace is
             // the product's provenance contract (see ADR-019).
-            let installed = if plugin.contains('@') {
-                app.marketplace().install_plugin_resolving(
-                    &plugin,
-                    authority.as_ref(),
-                    name_authority.as_ref(),
-                )
-            } else {
+            if !plugin.contains('@') {
                 return Err(uze_application::UzeError::UnknownPackage(format!(
                     "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
                      `uze market add <market>` first, then install with \
                      `uze plugin install {plugin}@<market>`"
                 )));
-            };
-            match installed {
-                Ok(report) => {
-                    spinner.finish_and_clear();
-                    match format {
-                        OutputFormat::Text => {
-                            println!(
-                                "{}",
-                                progress::report_title("Plugin installed", Some(&report.plugin.id))
-                            );
-                            println!(
-                                "{}",
-                                progress::key_value(
-                                    "Store path",
-                                    report.plugin.store_path.display().to_string()
-                                )
-                            );
-                            print!("{}", render_add_report(&report, verbose, app));
-                            for publication in &report.publications {
-                                if let Some(error) = &publication.error {
-                                    progress::warn(&format!(
-                                        "{} could not publish: {error}",
-                                        app.health().integration_label(&publication.integration)
-                                    ));
-                                }
-                            }
-                        }
-                        OutputFormat::Json => print_json(&report),
+            }
+            let report = with_spinner(
+                &format!("Installing plugin {plugin}..."),
+                "Failed to install plugin",
+                || {
+                    app.marketplace().install_plugin_resolving(
+                        &plugin,
+                        authority.as_ref(),
+                        name_authority.as_ref(),
+                    )
+                },
+            )?;
+            emit(format, &report, |report| {
+                format!(
+                    "{}\n{}\n{}",
+                    progress::report_title("Plugin installed", Some(&report.plugin.id)),
+                    progress::key_value(
+                        "Store path",
+                        report.plugin.store_path.display().to_string()
+                    ),
+                    render_add_report(report, verbose, app)
+                )
+            });
+            if matches!(format, OutputFormat::Text) {
+                for publication in &report.publications {
+                    if let Some(error) = &publication.error {
+                        progress::warn(&format!(
+                            "{} could not publish: {error}",
+                            app.health().integration_label(&publication.integration)
+                        ));
                     }
-                }
-                Err(e) => {
-                    spinner.finish_and_clear();
-                    progress::error(&format!("Failed to install plugin: {e}"));
-                    return Err(e);
                 }
             }
         }
         PluginAction::List { format } => {
             let plugins = app.plugins().list()?;
-            match format {
-                OutputFormat::Text => {
-                    println!(
-                        "{}",
-                        progress::report_title("Plugins", Some("Installed on this machine"))
-                    );
-                    if plugins.is_empty() {
-                        println!("  No plugins installed");
-                    } else {
-                        println!(
-                            "{}",
-                            progress::aligned_rows(
-                                plugins
-                                    .iter()
-                                    .map(|plugin| {
-                                        let origin = if plugin.active_name == plugin.id {
-                                            String::new()
-                                        } else {
-                                            progress::label(format!("origin: {}", plugin.id))
-                                        };
-                                        vec![
-                                            progress::title(&plugin.active_name),
-                                            origin,
-                                            format!("{} capabilities", plugin.capability_count),
-                                        ]
-                                    })
-                                    .collect()
-                            )
-                        );
-                    }
-                }
-                OutputFormat::Json => print_json(&plugins),
-            }
+            emit(format, &plugins, |plugins| render_plugin_list(plugins));
         }
         PluginAction::Inspect { plugin, format } => {
             let report = app.plugins().inspect(&plugin)?;
-            match format {
-                OutputFormat::Text => print!("{}", render_inspection(&report)),
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, render_inspection);
         }
         PluginAction::Remove { plugin, format } => {
             let report = app.plugins().remove(&plugin)?;
-            match format {
-                OutputFormat::Text => print!("{}", render_remove(&report)),
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, render_remove);
             if let RemovePluginReport::Blocked { report, plan } = &report {
                 return Err(blocked("removal", &report.package_id, plan));
             }
@@ -1406,10 +1292,7 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
         } => {
             let authority = trust_authority(trust);
             let report = app.plugins().update(&plugin, authority.as_ref())?;
-            match format {
-                OutputFormat::Text => print!("{}", render_update(&report)),
-                OutputFormat::Json => print_json(&report),
-            }
+            emit(format, &report, render_update);
             if let uze_application::application::UpdatePluginReport::Blocked { report, plan } =
                 &report
             {
@@ -1976,36 +1859,20 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     let shorthand = ShorthandArgs::try_parse_from(std::iter::once("uze".to_owned()).chain(args))
         .unwrap_or_else(|error| error.exit());
 
-    let current_dir =
-        std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
-            path: PathBuf::from("."),
-            source,
-        })?;
+    let current_dir = cwd()?;
     let authority = trust_authority(shorthand.trust);
     let report = app
         .project()
         .add(&plugin, &marketplace, &current_dir, authority.as_ref())?;
 
-    match shorthand.format {
-        OutputFormat::Text => {
-            println!(
-                "{}",
-                progress::report_title(
-                    "Added to project",
-                    Some(&format!("{plugin}@{marketplace}"))
-                )
-            );
-            println!(
-                "{}",
-                progress::key_value("Store path", report.plugin.store_path.display().to_string())
-            );
-            print!(
-                "{}",
-                render_add_report(&report, verbose || shorthand.verbose, app)
-            );
-        }
-        OutputFormat::Json => print_json(&report),
-    }
+    emit(shorthand.format, &report, |report| {
+        format!(
+            "{}\n{}\n{}",
+            progress::report_title("Added to project", Some(&format!("{plugin}@{marketplace}"))),
+            progress::key_value("Store path", report.plugin.store_path.display().to_string()),
+            render_add_report(report, verbose || shorthand.verbose, app)
+        )
+    });
     Ok(())
 }
 
@@ -2184,6 +2051,68 @@ fn print_json(value: &impl serde::Serialize) {
         "{}",
         serde_json::to_string_pretty(value).expect("application report serializable")
     );
+}
+
+/// Prints `report` the way `format` asks: as JSON for a program, or drawn
+/// by `render` for a person.
+fn emit<T: serde::Serialize>(format: OutputFormat, report: &T, render: impl FnOnce(&T) -> String) {
+    match format {
+        OutputFormat::Text => print!("{}", render(report)),
+        OutputFormat::Json => print_json(report),
+    }
+}
+
+/// Runs `operation` under a spinner saying `message`, which is gone before
+/// anything else is printed. A failure is announced after `failure` and
+/// returned.
+fn with_spinner<T>(
+    message: &str,
+    failure: &str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let spinner = progress::spinner(message);
+    let outcome = operation();
+    spinner.finish_and_clear();
+    if let Err(error) = &outcome {
+        progress::error(&format!("{failure}: {error}"));
+    }
+    outcome
+}
+
+/// The directory the command was run from, which a project command speaks
+/// about.
+fn cwd() -> Result<PathBuf> {
+    std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
+        path: PathBuf::from("."),
+        source,
+    })
+}
+
+fn terminal_error(error: impl std::fmt::Display) -> uze_application::UzeError {
+    uze_application::UzeError::TerminalRuntime(error.to_string())
+}
+
+fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -> String {
+    let title = progress::report_title("Plugins", Some("Installed on this machine"));
+    if plugins.is_empty() {
+        return format!("{title}\n  No plugins installed\n");
+    }
+    let rows = plugins
+        .iter()
+        .map(|plugin| {
+            let origin = if plugin.active_name == plugin.id {
+                String::new()
+            } else {
+                progress::label(format!("origin: {}", plugin.id))
+            };
+            vec![
+                progress::title(&plugin.active_name),
+                origin,
+                format!("{} capabilities", plugin.capability_count),
+            ]
+        })
+        .collect();
+    format!("{title}\n{}\n", progress::aligned_rows(rows))
 }
 
 fn render_inspection(report: &PluginInspection) -> String {
@@ -2388,11 +2317,7 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
     let AgentAction::Task { action } = action;
     match action {
         AgentTaskAction::Name { name, format } => {
-            let cwd =
-                std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
-                    path: PathBuf::from("."),
-                    source,
-                })?;
+            let cwd = cwd()?;
             // The identity the agent's launch carried, inherited by every
             // process the harness starts — this one included. Without it
             // there is no agent to name: a person's shell, or a harness
@@ -2408,15 +2333,14 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
             let named = app
                 .workspace()
                 .name_task(uze_application::Claim { id: &id, cwd: &cwd }, &name)?;
-            match format {
-                OutputFormat::Text => println!(
-                    "{} named `{}` on branch `{}`",
+            emit(format, &NamedTaskReport::from(&named), |_| {
+                format!(
+                    "{} named `{}` on branch `{}`\n",
                     progress::success_icon(),
                     named.label,
                     named.branch
-                ),
-                OutputFormat::Json => print_json(&NamedTaskReport::from(&named)),
-            }
+                )
+            });
         }
     }
     Ok(())
