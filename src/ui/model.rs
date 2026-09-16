@@ -101,6 +101,14 @@ impl Route {
         ROUTES.iter().position(|route| *route == self).unwrap()
     }
 
+    /// The route one step along the sidebar, wrapping at either end. Only
+    /// the direction of `delta` counts.
+    pub(crate) fn neighbour(self, delta: isize) -> Self {
+        let count = ROUTES.len();
+        let step = if delta > 0 { 1 } else { count - 1 };
+        ROUTES[(self.index() + step) % count]
+    }
+
     /// The name this route is remembered by between runs (see
     /// `ManagementLayout::route`). The user-facing one, so the file reads
     /// the way the sidebar does; stable, so a variant renamed in code
@@ -216,7 +224,6 @@ fn cycle_model(current: ModelPreference, forward: bool) -> ModelPreference {
 pub(crate) enum Focus {
     Sidebar,
     Content,
-    Overlay,
 }
 
 /// One rebindable line of the Keys screen.

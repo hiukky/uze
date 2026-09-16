@@ -20,7 +20,7 @@ use uze_application::{
     },
 };
 
-use super::model::{Focus, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
+use super::model::{Overlay, RefreshData, Status, TrustedRetry, TuiModel};
 use super::tui_application;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -770,7 +770,6 @@ pub(crate) fn drain_worker_results(
                     detail,
                     retry,
                 };
-                model.focus = Focus::Overlay;
                 model.status = Status::Idle;
             }
             WorkerResult::ContextAnalyzed(Ok((status, plan))) => {

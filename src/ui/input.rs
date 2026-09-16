@@ -15,7 +15,7 @@ use uze_keys::{Action, Resolution, Scope};
 
 use super::hit::Hit;
 use super::keys;
-use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
+use super::model::{Focus, Overlay, ProfilePanel, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -62,7 +62,7 @@ impl TuiModel {
         // so any keystroke closes it. That is a property of the surface,
         // not a binding, and so not the keymap's to hold.
         if self.overlay == Overlay::HarnessHelp {
-            self.overlay = Overlay::None;
+            self.close_overlay();
             return Intent::None;
         }
         let Some(chord) = keys::chord_of(key) else {
@@ -141,12 +141,10 @@ impl TuiModel {
                     filter: String::new(),
                     selected: 0,
                 };
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::OpenGlossary => {
                 self.overlay = Overlay::HarnessHelp;
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::SwitchMode => Intent::SwitchToWorkspace,
@@ -231,7 +229,6 @@ impl TuiModel {
                     .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
                 {
                     self.overlay = Overlay::ConfirmInstall { name, marketplace };
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
@@ -242,7 +239,6 @@ impl TuiModel {
                     .map(|plugin| self.marketplace_plugin_id(&plugin))
                 {
                     self.overlay = Overlay::ConfirmUpdate(id);
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
@@ -258,13 +254,11 @@ impl TuiModel {
                     } else {
                         Overlay::ConfirmRemove { id, focus: 1 }
                     };
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
             Action::AddMarketplace => {
                 self.overlay = Overlay::AddMarketplace(String::new());
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::InstallProjectEnvironment => {
@@ -279,7 +273,6 @@ impl TuiModel {
             Action::ClearPromptHistory => {
                 if !self.prompt_history.is_empty() {
                     self.overlay = Overlay::ConfirmClearPromptHistory;
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
@@ -294,13 +287,11 @@ impl TuiModel {
                     .is_some_and(ContextPlan::has_changes)
                 {
                     self.overlay = Overlay::ConfirmContextApply;
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
             Action::NewProfile => {
                 self.overlay = Overlay::NewProfile(String::new());
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Action::DeleteProfile => {
@@ -311,7 +302,6 @@ impl TuiModel {
                         id: profile.id.clone(),
                         focus: 1,
                     };
-                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }
@@ -333,9 +323,7 @@ impl TuiModel {
     /// dropped — and stays empty, because arriving is the only moment it
     /// asks.
     fn step_route(&mut self, delta: isize) -> Intent {
-        let count = ROUTES.len();
-        let step = if delta > 0 { 1 } else { count - 1 };
-        let entering = self.set_route(ROUTES[(self.route.index() + step) % count]);
+        let entering = self.set_route(self.route.neighbour(delta));
         self.focus = Focus::Content;
         entering
     }
@@ -345,9 +333,7 @@ impl TuiModel {
     /// profile's three panels, or the ordinary content rows.
     fn move_by(&mut self, delta: isize) -> Intent {
         if self.focus == Focus::Sidebar {
-            let count = ROUTES.len();
-            let step = if delta > 0 { 1 } else { count - 1 };
-            return self.set_route(ROUTES[(self.route.index() + step) % count]);
+            return self.set_route(self.route.neighbour(delta));
         }
         match self.route {
             Route::Profiles if self.profile_preview_open => {
@@ -397,11 +383,9 @@ impl TuiModel {
             };
             return Intent::None;
         }
-        self.focus = match (self.focus, forward) {
-            (Focus::Sidebar, true) => Focus::Content,
-            (Focus::Content, false) => Focus::Sidebar,
-            (Focus::Content, true) => Focus::Sidebar,
-            (_, _) => Focus::Content,
+        self.focus = match self.focus {
+            Focus::Sidebar => Focus::Content,
+            Focus::Content => Focus::Sidebar,
         };
         Intent::None
     }

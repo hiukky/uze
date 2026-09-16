@@ -267,7 +267,6 @@ fn every_overlay_renders_without_panicking() {
             plugins: base.plugins.clone(),
             marketplace_plugins: base.marketplace_plugins.clone(),
             doctor: base.doctor.clone(),
-            focus: Focus::Overlay,
             ..TuiModel::default()
         };
         let mut hits = Vec::new();
@@ -359,7 +358,6 @@ fn remove_confirmation_flow() {
     let mut model = model_with_plugins(&["one"]);
     model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     assert!(matches!(model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
-    assert_eq!(model.focus, Focus::Overlay);
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     assert_eq!(intent, Intent::None);
     assert_eq!(model.overlay, Overlay::None);
@@ -451,7 +449,6 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
         id: "one".to_owned(),
         focus: 0,
     };
-    model.focus = Focus::Overlay;
     model.maintenance_in_flight = true;
     model.inspection_in_flight = Some(Intent::InspectPlugin("one".to_owned()));
     model.hits = vec![(Rect::new(0, 0, 1, 1), Hit::Route(Route::Plugins))];
@@ -598,7 +595,6 @@ fn trust_required_overlay_confirm_regrants_with_trust() {
                 marketplace: "uze-official".to_owned(),
             },
         },
-        focus: Focus::Overlay,
         ..TuiModel::default()
     };
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -687,7 +683,6 @@ fn click_outside_overlay_dismisses_without_confirming() {
         id: "one".to_owned(),
         focus: 1,
     };
-    model.focus = Focus::Overlay;
     let intent = model.apply_mouse(
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -950,7 +945,6 @@ fn n_opens_new_profile_overlay_and_submitting_creates_it() {
     model.focus = Focus::Content;
     model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
-    assert_eq!(model.focus, Focus::Overlay);
     for ch in "Team Backend".chars() {
         model.apply_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
@@ -966,7 +960,6 @@ fn clicking_new_profile_opens_the_profile_overlay() {
 
     assert_eq!(model.click(12, 4), Intent::None);
     assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
-    assert_eq!(model.focus, Focus::Overlay);
 }
 
 #[test]
@@ -984,7 +977,6 @@ fn the_drawers_delete_button_opens_the_delete_confirmation() {
         &model.overlay,
         Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
     ));
-    assert_eq!(model.focus, Focus::Overlay);
 }
 
 #[test]
@@ -1463,7 +1455,6 @@ fn d_on_the_list_panel_opens_a_delete_confirmation_that_a_stray_click_cannot_con
         &model.overlay,
         Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
     ));
-    assert_eq!(model.focus, Focus::Overlay);
 
     let intent = model.apply_mouse(
         MouseEvent {
@@ -1706,7 +1697,6 @@ fn add_marketplace_overlay_types_and_submits() {
 fn add_marketplace_overlay_esc_cancels_without_intent() {
     let mut model = TuiModel {
         overlay: Overlay::AddMarketplace("abc".to_owned()),
-        focus: Focus::Overlay,
         ..TuiModel::default()
     };
     let intent = model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));

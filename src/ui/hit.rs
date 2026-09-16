@@ -187,7 +187,6 @@ impl TuiModel {
             }
             Hit::NewProfile => {
                 self.overlay = Overlay::NewProfile(String::new());
-                self.focus = Focus::Overlay;
                 Intent::None
             }
             Hit::PreviewHarness(index) => {
