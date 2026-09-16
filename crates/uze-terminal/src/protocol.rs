@@ -2,54 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{PaneId, Session, SpaceId, TabId};
 
-/// Bumped for the `Space` grouping layer: the `Session`/`Workspace` shape
-/// changed (`Workspace::tabs` → `Workspace::spaces` of `Space`, each with
-/// its own `tabs`) and four requests were added. `Session` is in-memory
-/// only on the server (never persisted — see `runtime::serve`), so there is
-/// nothing to migrate; a server still running the previous shape simply
-/// fails this version check instead of desyncing.
-///
-/// Bumped again for `MouseMode` on `PaneSnapshot`/`PaneDamage`: unlike a
-/// request-shape change (rejected cleanly by the check above, on the one
-/// message a client sends once), a *pushed* shape a still-running old
-/// server keeps sending forever has no such gate — a client built against
-/// the new shape fails to deserialize every `Snapshot`/`Damage` event from
-/// an unbumped old server, which silently kills its read thread and never
-/// surfaces as more than a pane stuck on "starting shell…". Any field
-/// added to either struct needs this bumped too, for the same reason.
-///
-/// Bumped again for `bracketed_paste` on the same two structs, for the
-/// same reason.
-///
-/// Bumped again for the wire framing itself switching from newline-
-/// delimited JSON to length-prefixed bincode (see `runtime::write_message`)
-/// — an old client/server speaking the previous framing would otherwise
-/// misread a length prefix as JSON bytes or vice versa, corrupting the
-/// stream instead of failing this version check cleanly.
-///
-/// Bumped again for terminal-owned scrollback requests.
-///
-/// Bumped again for a tab belonging with an agent: `Tab` carries the agent
-/// tab a shell was born from and `CreateTab` names it, which changes both
-/// a request shape and the pushed `Session` — see the paragraph above for
-/// why the pushed half is what makes the bump mandatory rather than
-/// merely tidy.
-///
-/// Bumped again for one server per user: a `Space` carries its `root`,
-/// `Workspace` no longer does, `Attach` names the root the client wants a
-/// space for, `CreateSpace` names the new space's root, and the selection
-/// a `Session` carries is the receiving client's own.
-///
-/// Bumped again for `ReorderTab`, a new request moving a tab within its
-/// own space's `tabs` order.
-///
-/// Bumped again for a launch environment: `CreateTab` carries the
-/// variables its command starts with and `Tab` reports them back, which
-/// changes a request shape and the pushed `Session`.
-///
-/// Bumped again for a space's kind: `Attach` and `CreateSpace` name it and
-/// `Space` reports it, and `CloseSpace` names the space that replaces the
-/// last one.
+/// The wire's version, checked on `Attach`. Bumped whenever a request, an
+/// event or anything either carries changes shape — the framing included.
+/// A pushed shape is the one that makes it mandatory: a request an old
+/// server cannot read is refused on the one `Attach` a client sends, but a
+/// client decoding a `Session` or a `PaneDamage` an unbumped old server
+/// keeps pushing fails on every frame, and its read thread ends silently.
+/// [`crate::attach`] replaces a server of another build before connecting;
+/// this is what a client that connects without it — a `uze` nested in a
+/// pane, a test — still meets.
 pub const PROTOCOL_VERSION: u16 = 13;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain

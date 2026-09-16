@@ -50,11 +50,12 @@ breaks `relaunch_command_for_process`'s reading of what runs, and
 survives nowhere the command does not; and a server-side probe of the
 running process's environment, rejected below. `CreateTab` gains
 `env: Vec<(String, String)>`; the runtime applies it after stripping the
-inherited identity variables, persists it in `PersistedTab.env` beside
-`command`, respawns with it, and reports it on `Tab.env`. `spawn_env`
-follows `spawn_command` line for line, so a tab respawned as a shell
-carries and reports nothing — the existing lifecycle already says "this
-pane stopped being an agent" and the environment rides on it.
+inherited identity variables, persists it with the command as one
+`Launch::Program { argv, env }`, respawns with it, and reports it on
+`Tab.env`. A shell is `Launch::Shell`, which has no environment to carry,
+so a tab respawned as a shell carries and reports nothing — the existing
+lifecycle already says "this pane stopped being an agent" and the
+environment rides on it.
 
 **The client binds a pane to its agent by the session's echo, never by
 probing the process.** The echo is the server's own record of what it
@@ -88,9 +89,9 @@ echoes and the directory the tab was launched in, never the probed
 refuses an environment without a command, bounds its entries and size for
 the persisted file's sake (the wire carries the full `Session` only on
 attach, create and select), and refuses a name that is empty or contains
-`=`. `PersistedTab.env` reads absent as empty with `#[serde(default)]`,
-which is the file's own convention (`agent` already does), not a
-compatibility path.
+`=`. The persisted file has no defaults: one written before a launch
+carried an environment reads as nothing persisted, not as a launch with
+none.
 
 **An identity has an owner, and the shim decides ownership.** The owner is
 the process whose pid `UZE_SHIM_PID` names, stamped by the shim at

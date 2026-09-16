@@ -1928,12 +1928,7 @@ impl PaneRuntime {
                 .map(|(index, (new, _))| cell_coordinates(index, current.columns, new.clone()))
                 .collect()
         } else {
-            current
-                .cells
-                .iter()
-                .enumerate()
-                .map(|(index, cell)| cell_coordinates(index, current.columns, cell.clone()))
-                .collect()
+            whole_pane(current.clone()).changed
         };
         let damage = PaneDamage {
             pane: self.id,

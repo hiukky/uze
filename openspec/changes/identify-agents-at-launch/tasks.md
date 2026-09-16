@@ -1,8 +1,8 @@
 ## 1. The terminal carries an environment per tab
 
-- [ ] 1.1 `CreateTab` gains `env: Vec<(String, String)>`; `Tab` reports `env`; `PersistedTab` persists it beside `command` with `#[serde(default)]`, the file's own convention; `PROTOCOL_VERSION` bumps.
+- [ ] 1.1 `CreateTab` gains `env: Vec<(String, String)>`; `Tab` reports `env`; the persisted tab keeps it with its command as one launch, with no default for a file written before; `PROTOCOL_VERSION` bumps.
 - [ ] 1.2 `CreateTab` refuses an environment without a command, an environment over the documented bound on entries and total size, and a variable name that is empty or contains `=`.
-- [ ] 1.3 `PaneRuntime` keeps `spawn_env` beside `spawn_command`, applies it after stripping the inherited launch variables, and clears both when a pane is respawned as a plain shell (`spawn_pane(pane, None)`).
+- [ ] 1.3 `PaneRuntime` keeps its `Launch` (the command and its environment), applies the environment after stripping the inherited launch variables, and carries none when a pane is respawned as a plain shell (`spawn_pane(pane, Launch::Shell)`).
 - [ ] 1.4 The server's restore path zips `env` with `command` and applies it on respawn; the fallback to a shell carries nothing.
 - [ ] 1.5 `uze_terminal::launch` owns the vocabulary of launch-stamped variables: `AGENT_IDENTITY_VARIABLE` beside `UZE_PANE`, and the strip list is built from it. The server never reads the value.
 - [ ] 1.6 Runtime tests: the environment reaches the first process; it survives a restart; a shell respawn carries none; a shell request with an environment is refused; an oversized environment is refused; a server started with the identity variable set spawns a clean shell.
