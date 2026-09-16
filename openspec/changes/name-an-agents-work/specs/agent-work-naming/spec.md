@@ -9,31 +9,35 @@ overwrites a name a person chose.
 
 ### Requirement: The work is named through a surface any harness can reach
 The system SHALL provide a command an agent runs to name the work it is
-doing, resolved from the working directory alone. It SHALL NOT depend on a
-harness event, a launch prompt, or a vendor-specific capability, because a
-name every harness can supply is the only name always available.
+doing, resolved from the identity the agent's launch carried (see the
+`agent-identity` capability) and verified against the directory the
+command runs in. It SHALL NOT depend on a harness event, a launch prompt,
+or a vendor-specific capability, because a name every harness can supply
+is the only name always available.
 
-#### Scenario: The task is resolved from the checkout the command runs in
+#### Scenario: The task is resolved from the agent's identity
 - **WHEN** an agent runs the naming command from anywhere inside its
   isolated checkout, including a nested directory
-- **THEN** the task that owns that checkout is the one named
+- **THEN** the task its launch carried is the one named
 
 #### Scenario: A slot reused by successive tasks names its current owner
 - **WHEN** the naming command runs in a checkout that earlier tasks also
   used
-- **THEN** the task named is the one that owns the slot now, never a task
-  that used to
+- **THEN** the task named is the one whose identity the running agent
+  carries, never a task that used to own the slot
 
 #### Scenario: There is no task to name
-- **WHEN** the command runs in the primary checkout, or outside any
-  repository
+- **WHEN** the command runs in a process that carries no agent identity,
+  or whose identity the project's records do not name, or whose record
+  gives it no directory of its own
 - **THEN** it fails saying so, and names nothing
 
 #### Scenario: A task cannot be named from outside itself
 - **WHEN** the command is invoked with the intent of naming a task other
-  than the one owning the working directory
-- **THEN** there is no argument that expresses it: one agent can never
-  rename another's branch
+  than the one whose identity the process carries, including by altering
+  the identity in the process's own environment
+- **THEN** the task named is still only the one whose record the process's
+  directory agrees with: one agent can never rename another's branch
 
 ### Requirement: The name is asked for as the agent's first action
 The projected instruction SHALL ask an agent to name its work as its first
