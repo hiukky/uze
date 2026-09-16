@@ -1,7 +1,7 @@
 //! TUI — mouse hit-testing: mapping a clicked screen coordinate back to the
 //! on-screen target it landed on.
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 
 use super::model::{Focus, Overlay, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
@@ -87,12 +87,7 @@ impl TuiModel {
     pub(crate) fn hit_at(&self, column: u16, row: u16) -> Option<&Hit> {
         self.hits
             .iter()
-            .find(|(rect, _)| {
-                rect.x <= column
-                    && column < rect.x + rect.width
-                    && rect.y <= row
-                    && row < rect.y + rect.height
-            })
+            .find(|(rect, _)| rect.contains(Position::new(column, row)))
             .map(|(_, hit)| hit)
     }
 

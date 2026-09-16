@@ -290,12 +290,7 @@ pub(crate) fn render_action_index(
         .max(4);
     let width = area.width.saturating_sub(8).clamp(30, 72);
     let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
-    let rect = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let rect = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, rect);
     frame.render_widget(
         modal_block(" Everything you can do ", theme::color(Token::Accent)),
@@ -488,12 +483,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     // (still bounded by the real terminal width on anything narrower).
     let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4).min(area.width);
     let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
@@ -626,12 +616,7 @@ pub(crate) fn render_confirm_install(
 pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
     let width = 60.min(area.width.saturating_sub(4));
     let height = 7.min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
     let block = modal_block(" Add marketplace ", theme::color(Token::Accent));
     let inner = block.inner(popup);
@@ -704,12 +689,7 @@ pub(crate) fn render_theme_picker(
 ) {
     let width = 46.min(area.width.saturating_sub(4));
     let height = (themes.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
     let block = modal_block(" Theme ", theme::color(Token::Accent));
     let inner = block.inner(popup);
@@ -760,12 +740,7 @@ pub(crate) fn render_theme_picker(
 pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
     let width = 60.min(area.width.saturating_sub(4));
     let height = 7.min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
     let block = modal_block(" New profile ", theme::color(Token::Accent));
     let inner = block.inner(popup);
@@ -965,12 +940,7 @@ fn render_dialog(
     lines.push(Line::default());
 
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)

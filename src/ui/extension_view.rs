@@ -142,15 +142,10 @@ pub(crate) fn scroll_target(
     row: u16,
 ) -> Option<ScrollTarget> {
     let (navigator, content, _) = content_columns(frame_area, navigator_width_override);
-    let inside = |rect: Rect| {
-        rect.x <= column
-            && column < rect.x + rect.width
-            && rect.y <= row
-            && row < rect.y + rect.height
-    };
-    if inside(navigator) {
+    let pointer = ratatui::layout::Position::new(column, row);
+    if navigator.contains(pointer) {
         Some(ScrollTarget::Navigator)
-    } else if inside(content) {
+    } else if content.contains(pointer) {
         Some(ScrollTarget::Content)
     } else {
         None
