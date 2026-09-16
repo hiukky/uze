@@ -38,11 +38,12 @@ mod workspace_tests {
         CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
         FileResolution, Flow, GitAnswer, GitBadge, GitResolution, MutationResolution, NOTICE_TTL,
         OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
-        ScrollDirection, SupportResolution, TabDragGroup, TaskResolution, TaskStateView, TaskView,
-        UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
-        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
-        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
-        next_shell_label, open_commit_detail, pane_relative, pending_tab_drop,
+        RootProfileResolution, ScrollDirection, SupportResolution, TabDragGroup, TaskResolution,
+        TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels,
+        agent_activity_frame, agent_identity_for_tab, answered_or, blank_pane,
+        can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key, forward_paste,
+        forward_scroll, next_agent_label, next_shell_label, open_commit_detail, pane_relative,
+        pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -1732,6 +1733,493 @@ mod workspace_tests {
         assert!(
             !name_row.contains(&delivered),
             "a new agent delivered nothing: {name_row}"
+        );
+    }
+
+    /// A workspace space with two agents, one per harness: `agent 1` running
+    /// `claude` (the space's context agent, selected) and `agent 2` running
+    /// `codex`, both in the space's own root.
+    fn workspace_space_session() -> WorkspaceModel {
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/repo".into(),
+            uze_terminal::SpaceKind::Workspace,
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        let first = session.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
+        session.update_pane_status(first, "/repo".into(), "claude".into());
+        let second = session.add_tab(space, "agent 2".into(), None, 80, 24, "/repo".into());
+        session.update_pane_status(second, "/repo".into(), "codex".into());
+        session.workspace.spaces[0].selected_tab = TabId(3);
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        model.branches.insert(PathBuf::from("/repo"), "main".into());
+        model
+    }
+
+    /// The two harnesses the tenants above run — the flat rows name the
+    /// harness at their edge, so the sidebar is drawn among these rather
+    /// than the one-identity fixture the tree tests share.
+    fn tenant_identities() -> Vec<AgentIdentity> {
+        vec![
+            AgentIdentity {
+                binary: "claude",
+                integration: "claude-code",
+                display_name: "Claude Code",
+                launch: std::path::PathBuf::from("/uze/shims/claude"),
+                continuity_gap: None,
+            },
+            AgentIdentity {
+                binary: "codex",
+                integration: "codex",
+                display_name: "Codex",
+                launch: std::path::PathBuf::from("codex"),
+                continuity_gap: None,
+            },
+        ]
+    }
+
+    fn tenant_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
+        tenant_rows_measured(model, hits, &mut FrameMetrics::default())
+    }
+
+    fn tenant_rows_measured(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> Vec<String> {
+        buffer_rows(&sidebar_buffer_among(
+            model,
+            &tenant_identities(),
+            hits,
+            metrics,
+        ))
+    }
+
+    fn tenant_buffer(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+    ) -> ratatui::buffer::Buffer {
+        sidebar_buffer_among(
+            model,
+            &tenant_identities(),
+            hits,
+            &mut FrameMetrics::default(),
+        )
+    }
+
+    /// The rows the tree draws for a space's agents, by the row each
+    /// `SelectTab` hit was pushed for.
+    fn agent_rows(hits: &[(Rect, WorkspaceHit)]) -> Vec<u16> {
+        let mut rows: Vec<u16> = hits
+            .iter()
+            .filter(|(_, hit)| matches!(hit, WorkspaceHit::SelectTab(_)))
+            .map(|(rect, _)| rect.y)
+            .collect();
+        rows.dedup();
+        rows
+    }
+
+    #[test]
+    fn a_workspace_space_lists_its_agents_flat_with_the_branch_on_the_header() {
+        let model = workspace_space_session();
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        let header = rows
+            .iter()
+            .find(|row| row.contains("repo"))
+            .expect("the space header");
+        assert!(
+            header.contains("main"),
+            "the shared branch sits on the header: {header:?}"
+        );
+        let agents = agent_rows(&hits);
+        assert_eq!(agents.len(), 2, "one row per agent: {rows:?}");
+        assert_eq!(
+            agents[1],
+            agents[0] + 1,
+            "and nothing between them: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("agent/")),
+            "no branch row under a tenant: {rows:?}"
+        );
+        let first = &rows[agents[0] as usize];
+        assert!(
+            first.contains("agent 1") && first.contains("claude"),
+            "{first:?}"
+        );
+        let second = &rows[agents[1] as usize];
+        assert!(
+            second.contains("agent 2") && second.contains("codex"),
+            "{second:?}"
+        );
+    }
+
+    #[test]
+    fn two_tenants_of_one_harness_are_told_apart_by_their_labels() {
+        let mut model = workspace_space_session();
+        model.session.as_mut().unwrap().update_pane_status(
+            PaneId(3),
+            "/repo".into(),
+            "claude".into(),
+        );
+        let rows = tenant_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("agent 1") && row.contains("claude"))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("agent 2") && row.contains("claude"))
+        );
+    }
+
+    #[test]
+    fn the_selected_tenant_carries_the_bar_and_no_other_row_does() {
+        let model = workspace_space_session();
+        let mut hits = Vec::new();
+        let buffer = tenant_buffer(&model, &mut hits);
+        let rows = tenant_rows(&model, &mut Vec::new());
+        let bar = theme::glyph(crate::ui::theme::Symbol::BarMedium);
+        let marked: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.contains(&bar))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(marked.len(), 1, "exactly one row carries the bar: {rows:?}");
+        assert!(
+            rows[marked[0]].contains("agent 2"),
+            "the agent receiving keystrokes: {:?}",
+            rows[marked[0]]
+        );
+        let column = rows[marked[0]]
+            .chars()
+            .position(|glyph| bar.starts_with(glyph))
+            .expect("the bar's column") as u16;
+        assert_eq!(
+            buffer[(column, marked[0] as u16)].fg,
+            theme::color(crate::ui::theme::Token::Accent),
+            "in the accent hue"
+        );
+        assert!(
+            !rows[marked[0]].contains('●'),
+            "the bar replaces the selection glyph: {:?}",
+            rows[marked[0]]
+        );
+
+        // The tree keeps its own encoding: no bar anywhere in a worktree space.
+        let tree = agent_with_task(TaskStateView::Ready, 1);
+        let rows = tenant_rows(&tree, &mut Vec::new());
+        assert!(rows.iter().all(|row| !row.contains(&bar)), "{rows:?}");
+    }
+
+    #[test]
+    fn the_account_counts_tenants_and_the_kinds_alike() {
+        let mut model = workspace_space_session();
+        model.session.as_mut().unwrap().add_space(
+            "tree".into(),
+            "/tree".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
+        let session = model.session.as_mut().unwrap();
+        let tab = session.add_tab(SpaceId(2), "agent 3".into(), None, 80, 24, "/tree".into());
+        session.update_pane_status(tab, "/tree/.worktrees/x".into(), "claude".into());
+        session.workspace.selected_space = SpaceId(1);
+        let rows = tenant_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("3 agents in 2 spaces")),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_workspace_space_draws_its_root_as_a_caption() {
+        let session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/repo".into(),
+            uze_terminal::SpaceKind::Workspace,
+            80,
+            24,
+        );
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        assert!(
+            rows.iter()
+                .any(|row| row.trim_end_matches('│').trim() == "/repo"),
+            "{rows:?}"
+        );
+        assert!(
+            hits.iter()
+                .filter(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
+                .count()
+                >= 2,
+            "the caption selects the space like the header does"
+        );
+    }
+
+    #[test]
+    fn a_tenant_whose_harness_exited_is_not_an_agent_row() {
+        let mut model = workspace_space_session();
+        model.session.as_mut().unwrap().update_pane_status(
+            PaneId(3),
+            "/repo".into(),
+            "bash".into(),
+        );
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        assert_eq!(agent_rows(&hits).len(), 1, "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("1 agent in 1 space")),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_flat_space_measures_one_row_per_agent() {
+        let mut flat = workspace_space_session();
+        let mut tree = workspace_space_session();
+        tree.session.as_mut().unwrap().workspace.spaces[0].kind = uze_terminal::SpaceKind::Worktree;
+        for model in [&mut flat, &mut tree] {
+            let session = model.session.as_mut().unwrap();
+            for index in 2..9 {
+                session.add_space(
+                    format!("space {index}"),
+                    format!("/tmp/{index}").into(),
+                    session.workspace.spaces[0].kind,
+                    80,
+                    24,
+                );
+                let tab = session.add_tab(
+                    SpaceId(index as u64),
+                    "agent".into(),
+                    None,
+                    80,
+                    24,
+                    format!("/tmp/{index}").into(),
+                );
+                session.update_pane_status(tab, format!("/tmp/{index}").into(), "claude".into());
+            }
+        }
+        let mut flat_metrics = FrameMetrics::default();
+        tenant_rows_measured(&flat, &mut Vec::new(), &mut flat_metrics);
+        let mut tree_metrics = FrameMetrics::default();
+        tenant_rows_measured(&tree, &mut Vec::new(), &mut tree_metrics);
+        assert!(
+            flat_metrics.tree_overflow > 0,
+            "the flat tree still outgrows the column"
+        );
+        // Eight spaces: the first with two agents, seven with one. A tree
+        // item is two rows plus a connector between siblings (five rows
+        // for two agents, two for one); a flat item is one row — the
+        // difference is exactly the rows the flat list saves.
+        let saved_by_the_pair = 5 - 2;
+        let saved_by_each_single = 2 - 1;
+        let saved = saved_by_the_pair + 7 * saved_by_each_single;
+        assert_eq!(
+            tree_metrics.tree_overflow - flat_metrics.tree_overflow,
+            saved as u16,
+            "the scroll bound is measured by the same layout that draws"
+        );
+    }
+
+    #[test]
+    fn dragging_in_a_flat_space_marks_the_drop_row_with_a_hairline_not_a_bar() {
+        let mut model = workspace_space_session();
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        model.dragging_tab = Some(DraggingTab {
+            tab: TabId(3),
+            group: TabDragGroup::Agents(space),
+            origin: 1,
+            armed: true,
+            pending: Some(PendingDrop::Before(TabId(2))),
+        });
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        let target = agent_rows(&hits)[0] as usize;
+        let hairline = theme::glyph(crate::ui::theme::Symbol::TreeDivider).repeat(2);
+        assert!(
+            rows[target].trim_start().starts_with(&hairline),
+            "the drop row leads with the hairline: {:?}",
+            rows[target]
+        );
+        assert!(
+            !rows[target].contains('▍'),
+            "and never the tree's bar, which would read as selection"
+        );
+    }
+
+    #[test]
+    fn the_root_toggle_flips_a_flat_spaces_header_and_leaves_its_rows() {
+        let mut model = workspace_space_session();
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        model.roots_shown.insert(space);
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("/repo") && row.contains("main")),
+            "the header shows the root with the branch: {rows:?}"
+        );
+        let agents = agent_rows(&hits);
+        assert!(rows[agents[0] as usize].contains("agent 1"), "{rows:?}");
+    }
+
+    /// A tenant has no task, so its row has nothing to deliver and no state
+    /// to mark; and every row selects the agent it names.
+    #[test]
+    fn a_flat_row_selects_its_own_agent_and_offers_no_delivery() {
+        let model = workspace_space_session();
+        let mut hits = Vec::new();
+        let rows = tenant_rows(&model, &mut hits);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "no deliver button: {rows:?}"
+        );
+        let marks = [
+            theme::Symbol::PlusMinus,
+            theme::Symbol::TaskReady,
+            theme::Symbol::ArrowExternal,
+            theme::Symbol::MarkAttention,
+        ]
+        .map(theme::glyph);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| marks.iter().any(|mark| row.contains(mark.as_str()))),
+            "no task mark: {rows:?}"
+        );
+        let space = &model.session.as_ref().unwrap().workspace.spaces[0];
+        for (rect, hit) in &hits {
+            let WorkspaceHit::SelectTab(tab) = hit else {
+                continue;
+            };
+            let label = &space
+                .tabs
+                .iter()
+                .find(|candidate| candidate.id == *tab)
+                .expect("the hit names a tab of the space")
+                .label;
+            assert!(
+                rows[rect.y as usize].contains(label.as_str()),
+                "the row at {} selects {label}: {rows:?}",
+                rect.y
+            );
+        }
+    }
+
+    /// The agent chords walk a flat space's rows in the order they are
+    /// drawn, wrapping at the ends.
+    #[test]
+    fn the_agent_chords_walk_a_flat_spaces_rows() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-flat-step"));
+        let model = workspace_space_session();
+        let mut drawn = Vec::new();
+        let rows = tenant_rows(&model, &mut drawn);
+        let space = &model.session.as_ref().unwrap().workspace.spaces[0];
+        let top = space
+            .tabs
+            .iter()
+            .find(|tab| rows[agent_rows(&drawn)[0] as usize].contains(tab.label.as_str()))
+            .expect("the top row names a tab")
+            .id;
+        assert_ne!(space.selected_tab, top, "the fixture selects the last row");
+        let mut driven = driven(model, &home);
+        driven.attach.identities = tenant_identities();
+        let next = uze_keys::active()
+            .chord_for(uze_keys::Action::NextAgent, &[uze_keys::Scope::Workspace])
+            .expect("stepping agents is reachable from the keyboard");
+
+        driven.press_key(key_event(next));
+
+        assert!(
+            driven
+                .sent()
+                .iter()
+                .any(|request| matches!(request, ClientRequest::SelectTab { tab } if *tab == top)),
+            "from the last row, the next agent is the top row"
+        );
+    }
+
+    #[test]
+    fn the_first_steps_keep_the_foot_beside_a_flat_space() {
+        let mut model = workspace_space_session();
+        model.first_steps_collapsed = false;
+        let rows = tenant_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("first steps")),
+            "the foot is budgeted from the flat measure: {rows:?}"
+        );
+    }
+
+    /// The picker offers both kinds until the root's profile answers, and
+    /// what it answers decides which of them can be chosen.
+    #[test]
+    fn the_picker_offers_the_kinds_and_a_plain_directory_allows_only_a_tenancy() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-picker-kinds");
+        std::fs::create_dir_all(root.join("plain")).unwrap();
+        let mut model = agent_session_in("/repo");
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("› worktree") && row.contains("workspace")),
+            "both chips, worktree chosen by default: {rows:?}"
+        );
+        assert!(
+            hits.iter().any(|(_, hit)| matches!(
+                hit,
+                WorkspaceHit::PickSpaceKind(uze_application::PlacementKind::Tenant)
+            )),
+            "the other chip is a click away"
+        );
+
+        let landed = model
+            .root_picker
+            .as_ref()
+            .and_then(RootPicker::landed)
+            .expect("a directory is landed on");
+        model.root_picker.as_mut().unwrap().absorb_profile(
+            landed,
+            uze_application::RootProfile {
+                repository: false,
+                has_commit: false,
+            },
+        );
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("› workspace")),
+            "a directory that is no repository lands on the tenancy: {rows:?}"
+        );
+        assert!(
+            !hits.iter().any(|(_, hit)| matches!(
+                hit,
+                WorkspaceHit::PickSpaceKind(uze_application::PlacementKind::Slot)
+            )),
+            "and the slot kind is not offered there"
+        );
+        assert_eq!(
+            model
+                .root_picker
+                .as_ref()
+                .and_then(RootPicker::chosen)
+                .map(|(_, kind)| kind),
+            Some(uze_application::PlacementKind::Tenant)
         );
     }
 
@@ -4158,7 +4646,10 @@ mod workspace_tests {
         hits: &mut Vec<(Rect, WorkspaceHit)>,
         metrics: &mut FrameMetrics,
     ) -> Vec<String> {
-        let buffer = sidebar_buffer_measured(model, hits, metrics);
+        buffer_rows(&sidebar_buffer_measured(model, hits, metrics))
+    }
+
+    fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
         (0..buffer.area.height)
             .map(|row| {
                 (0..buffer.area.width)
@@ -4180,18 +4671,18 @@ mod workspace_tests {
         hits: &mut Vec<(Rect, WorkspaceHit)>,
         metrics: &mut FrameMetrics,
     ) -> ratatui::buffer::Buffer {
+        sidebar_buffer_among(model, &identities_fixture(), hits, metrics)
+    }
+
+    fn sidebar_buffer_among(
+        model: &WorkspaceModel,
+        identities: &[AgentIdentity],
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         terminal
-            .draw(|frame| {
-                render_sidebar(
-                    frame,
-                    frame.area(),
-                    model,
-                    &identities_fixture(),
-                    hits,
-                    metrics,
-                )
-            })
+            .draw(|frame| render_sidebar(frame, frame.area(), model, identities, hits, metrics))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -4554,8 +5045,12 @@ mod workspace_tests {
 
         assert_eq!(prompt_row, header_row, "{rows:?}");
         assert!(
-            rows[prompt_row + 1].contains("engine"),
-            "the listing starts right under the prompt: {rows:?}"
+            rows[prompt_row + 1].contains("worktree") && rows[prompt_row + 1].contains("workspace"),
+            "the kind chips sit right under the prompt: {rows:?}"
+        );
+        assert!(
+            rows[prompt_row + 2].contains("engine"),
+            "and the listing starts under them: {rows:?}"
         );
     }
 
@@ -5470,6 +5965,7 @@ mod workspace_tests {
         code_files: std::sync::mpsc::Receiver<FileResolution>,
         occupancy: std::sync::mpsc::Receiver<OccupancyResolution>,
         placements: std::sync::mpsc::Receiver<PlacementResolution>,
+        root_profiles: std::sync::mpsc::Receiver<RootProfileResolution>,
     }
 
     impl Driven<'_> {
@@ -5528,6 +6024,7 @@ mod workspace_tests {
                 code_files: &self.code_files,
                 occupancy: &self.occupancy,
                 placements: &self.placements,
+                root_profiles: &self.root_profiles,
             };
             self.attach.pump(&inbox)
         }
@@ -5594,6 +6091,7 @@ mod workspace_tests {
         let (code_files, code_files_rx) = std::sync::mpsc::channel();
         let (occupancy, occupancy_rx) = std::sync::mpsc::channel();
         let (placements, placements_rx) = std::sync::mpsc::channel();
+        let (root_profiles, root_profiles_rx) = std::sync::mpsc::channel();
         let (events, events_rx) = std::sync::mpsc::channel();
         Driven {
             attach: Attach {
@@ -5612,6 +6110,7 @@ mod workspace_tests {
                     code_files,
                     occupancy,
                     placements,
+                    root_profiles,
                 },
                 spinner: indicatif::ProgressBar::hidden(),
                 next_tick: Instant::now(),
@@ -5637,6 +6136,7 @@ mod workspace_tests {
             code_files: code_files_rx,
             occupancy: occupancy_rx,
             placements: placements_rx,
+            root_profiles: root_profiles_rx,
         }
     }
 
@@ -5889,24 +6389,16 @@ mod workspace_tests {
         assert_eq!(shape.sidebar.width, dragged);
     }
 
-    /// An agent that could not be given a checkout of its own starts in
-    /// the operator's tree instead. The reason was computed and then
-    /// dropped: the launch looked like every other one, and the only clue
-    /// was the branch under the new row.
+    /// An agent that could not be placed as the space asked is not started
+    /// anywhere else: the reason is said, and no tab is opened.
     #[test]
-    fn an_agent_that_could_not_be_isolated_says_why() {
-        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-unisolated"));
+    fn an_agent_that_could_not_be_placed_says_why_and_opens_nothing() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-refused"));
         let mut driven = driven(agent_session_in("/repo"), &home);
         driven.placements_answered(PlacementResolution {
             label: "agent 2".to_owned(),
             command: vec!["claude".to_owned()],
-            placement: Ok(uze_application::AgentPlacement {
-                cwd: PathBuf::from("/repo"),
-                isolation: uze_application::Isolation::Unisolated {
-                    reason: "no commit to branch from".to_owned(),
-                },
-                warnings: Vec::new(),
-            }),
+            placement: Err("could not place the agent: no commit to branch from".to_owned()),
             replacing: None,
         });
         let notice = driven
@@ -5914,11 +6406,18 @@ mod workspace_tests {
             .model
             .notice
             .as_ref()
-            .expect("the fallback is said");
+            .expect("the refusal is said");
         assert!(
             notice.text.contains("agent 2") && notice.text.contains("no commit to branch from"),
             "{}",
             notice.text
+        );
+        assert!(
+            !driven
+                .sent()
+                .iter()
+                .any(|request| matches!(request, ClientRequest::CreateTab { .. })),
+            "nothing was opened in the operator's tree"
         );
     }
 
@@ -5932,11 +6431,16 @@ mod workspace_tests {
         let root = repository.root().to_path_buf();
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-resume-home"));
         let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
-        let placement = app.workspace().place_new_agent(&root, &[]);
-        let task_id = match &placement.isolation {
-            uze_application::Isolation::Slot { task, .. } => task.as_str().to_owned(),
-            uze_application::Isolation::Unisolated { reason } => panic!("{reason}"),
-        };
+        let placement = app
+            .workspace()
+            .place_new_agent(
+                &root,
+                uze_application::PlacementKind::Slot,
+                "claude-code",
+                &[],
+            )
+            .unwrap();
+        let task_id = placement.placement.agent().as_str().to_owned();
         std::fs::write(placement.cwd.join("kept.rs"), b"fn kept() {}").unwrap();
         repository.git_in(&placement.cwd, &["add", "."]);
         repository.git_in(&placement.cwd, &["commit", "-qm", "kept"]);
@@ -5970,12 +6474,12 @@ mod workspace_tests {
             .expect("the task lands somewhere");
         assert!(
             matches!(
-                &placed.isolation,
-                uze_application::Isolation::Slot { task, branch, .. }
+                &placed.placement,
+                uze_application::Placement::Slot { task, branch, .. }
                     if task.as_str() == task_id && *branch == format!("agent/{task_id}")
             ),
             "the same task, on its own branch: {:?}",
-            placed.isolation
+            placed.placement
         );
         let slot = placed.cwd.clone();
         assert!(

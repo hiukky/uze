@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use uze_application::{PlacementKind, RootProfile};
+
 /// One directory the prompt can land on.
 pub(super) struct Candidate {
     pub(super) name: String,
@@ -33,6 +35,14 @@ pub(super) struct RootPicker {
     /// match first.
     matched: Vec<usize>,
     selected: usize,
+    /// The kind the space is created as: what the operator chose, or the
+    /// default the root's profile lands on when they chose nothing.
+    kind: PlacementKind,
+    chosen_kind: bool,
+    /// The profile of the root that would be chosen right now, once a
+    /// worker answered it — asked off the frame, because it asks Git, and
+    /// the picker never waits on a repository.
+    profile: Option<(PathBuf, RootProfile)>,
 }
 
 impl RootPicker {
@@ -47,9 +57,67 @@ impl RootPicker {
             listing: Vec::new(),
             matched: Vec::new(),
             selected: 0,
+            kind: PlacementKind::Slot,
+            chosen_kind: false,
+            profile: None,
         };
         picker.refresh();
         picker
+    }
+
+    /// The kind the space would be created as right now.
+    pub(super) fn kind(&self) -> PlacementKind {
+        self.kind
+    }
+
+    /// Whether the slot kind is available for the root that would be
+    /// chosen: unknown until the profile answers, which the chips show as
+    /// both available.
+    pub(super) fn slots_available(&self) -> bool {
+        match &self.profile {
+            Some((root, profile)) if Some(root) == self.landed().as_ref() => profile.allows_slots(),
+            _ => true,
+        }
+    }
+
+    /// Chooses a kind. A choice the root cannot honour — slots where there
+    /// is no repository — is refused, and the chips say so by drawing it
+    /// unavailable.
+    pub(super) fn choose_kind(&mut self, kind: PlacementKind) {
+        if kind == PlacementKind::Slot && !self.slots_available() {
+            return;
+        }
+        self.kind = kind;
+        self.chosen_kind = true;
+    }
+
+    pub(super) fn toggle_kind(&mut self) {
+        let other = match self.kind {
+            PlacementKind::Slot => PlacementKind::Tenant,
+            PlacementKind::Tenant => PlacementKind::Slot,
+        };
+        self.choose_kind(other);
+    }
+
+    /// The root a worker should profile: the one `chosen` would answer
+    /// with, when there is one.
+    pub(super) fn landed(&self) -> Option<PathBuf> {
+        self.landed_root()
+    }
+
+    /// Takes a worker's answer about `root`. Nothing the operator chose is
+    /// overridden — except a choice the root turns out not to allow, which
+    /// lands on the only kind it does.
+    pub(super) fn absorb_profile(&mut self, root: PathBuf, profile: RootProfile) {
+        if Some(&root) != self.landed().as_ref() {
+            return;
+        }
+        if !self.chosen_kind {
+            self.kind = profile.default_placement();
+        } else if self.kind == PlacementKind::Slot && !profile.allows_slots() {
+            self.kind = PlacementKind::Tenant;
+        }
+        self.profile = Some((root, profile));
     }
 
     pub(super) fn input(&self) -> &str {
@@ -136,7 +204,19 @@ impl RootPicker {
     /// asked with the mouse, and answering it differently is what put a
     /// `.worktrees/<id>` space in the sidebar beside the space whose agent
     /// was working in it.
-    pub(super) fn chosen(&self) -> Option<PathBuf> {
+    pub(super) fn chosen(&self) -> Option<(PathBuf, PlacementKind)> {
+        let root = self.landed_root()?;
+        // A kind the root cannot honour never leaves the picker: an answer
+        // still in flight lands on the only kind every directory allows.
+        let kind = if self.kind == PlacementKind::Slot && !self.slots_available() {
+            PlacementKind::Tenant
+        } else {
+            self.kind
+        };
+        Some((root, kind))
+    }
+
+    fn landed_root(&self) -> Option<PathBuf> {
         let landed = match self.candidate(self.selected) {
             Some(candidate) => candidate.path.clone(),
             None => {

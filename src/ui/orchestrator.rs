@@ -30,7 +30,7 @@ use std::{
 use uze_application::AgentIdentity;
 use uze_application::{
     CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
-    UpstreamSync,
+    TenantView, UpstreamSync,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -387,7 +387,7 @@ fn spawn_task_evaluation(
         // key, and the directory is then never evaluated again.
         let answered = answered_or(
             || {
-                tui_application(home).ok().and_then(|app| {
+                tui_application(home).ok().map(|app| {
                     let workspace = app.workspace();
                     // Every question here is about the *repository*, and `cwd` is
                     // only how the caller happened to name it — usually a pane's
@@ -400,10 +400,15 @@ fn spawn_task_evaluation(
                     // before this thread started and already what every other
                     // lookup below asks with; the three that took `cwd` now take
                     // the repository too.
-                    let primary = workspace.primary_of(&cwd).or_else(|| {
-                        uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
-                    })?;
-                    Some(EvaluationAnswer {
+                    // A directory that is no repository still answers: it
+                    // has no tasks, but it may well have tenants.
+                    let primary = workspace
+                        .primary_of(&cwd)
+                        .or_else(|| {
+                            uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
+                        })
+                        .unwrap_or_else(|| key.clone());
+                    EvaluationAnswer {
                         branch: workspace.current_branch(&key),
                         target: workspace
                             .delivery_policy(&key)
@@ -411,7 +416,7 @@ fn spawn_task_evaluation(
                         sync: workspace.target_upstream_sync(&key),
                         evaluation: workspace.evaluate_tasks(&primary, &occupied),
                         primary,
-                    })
+                    }
                 })
             },
             None,
@@ -685,11 +690,20 @@ struct PlacementResolution {
     replacing: Option<TabId>,
 }
 
-/// What a placement is asked for: a slot for a brand-new task, or the
-/// slot a preserved task lost — its branch checked out again as it stands.
+/// What a placement is asked for: a record for a brand-new agent — a slot
+/// for a task, or a tenancy of the space's directory, as the space's kind
+/// says — or the slot a preserved task lost, its branch checked out again
+/// as it stands.
 enum PlacementRequest {
-    New { from: PathBuf },
-    Resume { primary: PathBuf, task: String },
+    New {
+        from: PathBuf,
+        kind: uze_application::PlacementKind,
+        harness: String,
+    },
+    Resume {
+        primary: PathBuf,
+        task: String,
+    },
 }
 
 /// Asks the application where an agent should start, off the frame:
@@ -717,18 +731,20 @@ fn spawn_agent_placement(
         // create another agent for the rest of the session.
         let placement = answered_or(
             || match request {
-                // A placement that cannot isolate still answers, with the
-                // directory it fell back to and the reason — the launch
-                // happens either way.
-                PlacementRequest::New { from } => Ok(tui_application(home)
-                    .map(|app| app.workspace().place_new_agent(&from, &occupied))
-                    .unwrap_or_else(|error| uze_application::AgentPlacement {
-                        cwd: from,
-                        isolation: uze_application::Isolation::Unisolated {
-                            reason: error.to_string(),
-                        },
-                        warnings: vec![error.to_string()],
-                    })),
+                // A placement that cannot do what the space's kind asks
+                // answers with the reason and opens nothing: the operator
+                // chose the kind, and an agent landing anywhere else is
+                // the one outcome a notice could not undo.
+                PlacementRequest::New {
+                    from,
+                    kind,
+                    harness,
+                } => tui_application(home)
+                    .and_then(|app| {
+                        app.workspace()
+                            .place_new_agent(&from, kind, &harness, &occupied)
+                    })
+                    .map_err(|error| error.to_string()),
                 PlacementRequest::Resume { primary, task } => tui_application(home)
                     .and_then(|app| app.workspace().resume_task(&primary, &task, &occupied))
                     .map_err(|error| error.to_string()),
@@ -853,6 +869,30 @@ fn spawn_changes_refresh(
     });
 }
 
+/// What a root's profile answered, tagged with the root it was asked for.
+struct RootProfileResolution {
+    root: PathBuf,
+    profile: uze_application::RootProfile,
+}
+
+/// Profiles a root off the frame: whether slots are possible there is a
+/// Git question, and the picker that asks it runs on the render path.
+fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.root_profile").entered();
+        let profile = answered_or(
+            || uze_application::root_profile(&root),
+            uze_application::RootProfile {
+                repository: false,
+                has_commit: false,
+            },
+        );
+        let _ = sender.send(RootProfileResolution { root, profile });
+    });
+}
+
 /// Whether this attach asks the server for a space rooted at the launch
 /// directory.
 ///
@@ -886,10 +926,18 @@ fn active_palette() -> uze_terminal::Palette {
     }
 }
 
+/// The space the directory `uze` was started in resolves to: its root and
+/// the kind it is created as when this client is the one to create it.
+/// Decided before the attach, once per run of the loop — one Git read on
+/// the way in, never inside it.
+pub(crate) struct LaunchSpace {
+    pub(crate) root: PathBuf,
+    pub(crate) kind: uze_terminal::SpaceKind,
+}
+
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
-    root: &Path,
-    kind: uze_terminal::SpaceKind,
+    launch: &LaunchSpace,
     layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
@@ -917,6 +965,8 @@ pub(crate) fn attach_workspace(
     // `Landing`). Resolving the workspace root *before* attaching is what
     // makes a repository and a subdirectory of it the same space rather
     // than two.
+    let LaunchSpace { root, kind } = launch;
+    let kind = *kind;
     let workspace_root = uze_application::space_root(root);
     let mut stream = attach(&workspace_root, kind, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
@@ -1044,6 +1094,8 @@ pub(crate) fn attach_workspace(
     let occupancy_sender = memory.occupancy.sender.clone();
     let occupancy_receiver = &memory.occupancy.receiver;
     let placement_sender = memory.placements.sender.clone();
+    let root_profile_sender = memory.root_profiles.sender.clone();
+    let root_profile_receiver = &memory.root_profiles.receiver;
     let placement_receiver = &memory.placements.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
@@ -1094,6 +1146,7 @@ pub(crate) fn attach_workspace(
             code_files: files_sender,
             occupancy: occupancy_sender,
             placements: placement_sender,
+            root_profiles: root_profile_sender,
         },
         spinner: activity_spinner,
         next_tick: next_activity_tick,
@@ -1113,6 +1166,7 @@ pub(crate) fn attach_workspace(
         code_files: files_receiver,
         occupancy: occupancy_receiver,
         placements: placement_receiver,
+        root_profiles: root_profile_receiver,
     };
     // Every way out of the loop — a quit, a runtime gone, an error — must
     // hand the model's memory back, so the loop runs inside one call whose
@@ -1235,6 +1289,8 @@ pub(super) enum WorkspaceHit {
     /// — same pattern [`WorkspaceHit::PickAgent`] uses for the agent
     /// picker.
     PickSpaceRoot(usize),
+    /// One of the two kind chips under the picker's directory line.
+    PickSpaceKind(uze_application::PlacementKind),
     /// The tab strip's right-corner button — opens the Git extension's
     /// changes of the active tab's checkout — the code surface
     /// (`WorkspaceModel::code`), opened on its diff.
@@ -1488,6 +1544,9 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 /// to do.
 struct AgentOption {
     display_name: String,
+    /// The integration the harness belongs to — what a tenant is recorded
+    /// as running.
+    integration: String,
     command: Vec<String>,
     /// Said on the tab when the agent starts a conversation it will not be
     /// able to continue.
@@ -1582,6 +1641,7 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
         .into_iter()
         .map(|identity| AgentOption {
             display_name: identity.display_name.to_owned(),
+            integration: identity.integration.to_owned(),
             command: vec![identity.launch.to_string_lossy().into_owned()],
             continuity_gap: identity.continuity_gap,
         })
@@ -1901,6 +1961,7 @@ pub(crate) struct WorkspaceMemory {
     code_files: Answers<FileResolution>,
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
+    root_profiles: Answers<RootProfileResolution>,
 }
 
 /// The fields of [`WorkspaceModel`] that outlive one attach — each is
@@ -1918,6 +1979,7 @@ struct Remembered {
     git_pending: Option<PathBuf>,
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
     branches: BTreeMap<PathBuf, String>,
     targets: BTreeMap<PathBuf, String>,
     upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
@@ -1954,6 +2016,7 @@ impl WorkspaceModel {
             git_pending,
             prompt_buffers,
             tasks,
+            tenants,
             branches,
             targets,
             upstream_syncs,
@@ -1981,6 +2044,7 @@ impl WorkspaceModel {
             git_pending,
             prompt_buffers,
             tasks,
+            tenants,
             branches,
             targets,
             upstream_syncs,
@@ -2013,6 +2077,7 @@ impl WorkspaceModel {
             git_pending: self.git_pending,
             prompt_buffers: self.prompt_buffers,
             tasks: self.tasks,
+            tenants: self.tenants,
             branches: self.branches,
             targets: self.targets,
             upstream_syncs: self.upstream_syncs,
@@ -2181,6 +2246,9 @@ struct WorkspaceModel {
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    /// The live tenants of each space root, from the same evaluation that
+    /// lists a repository's tasks.
+    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
     /// The branch checked out at each evaluation key (see
     /// [`evaluation_key`]) — the primary's for every slot of a repository,
     /// a directory's own outside any slot. Read for an agent outside any
@@ -2232,6 +2300,11 @@ struct WorkspaceModel {
     /// answers is slot occupancy; which agent a pane is for is what the
     /// session's tab says (see [`launched_agent_id`]).
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    /// What each root the picker landed on allows, once a worker answered:
+    /// asked once per root and kept for the attach, so walking back over a
+    /// directory never asks Git again.
+    root_profiles: BTreeMap<PathBuf, uze_application::RootProfile>,
+    root_profile_pending: BTreeSet<PathBuf>,
     /// The slot directories a pane still holds. A checkout that leaves this
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,

@@ -1,0 +1,132 @@
+journey: a tenant that comes back after a restart comes back to its own conversation
+tags: [gate, tui, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  A tenant has no checkout of its own: it works in the project directory,
+  beside the operator, and the directory it stands in says nothing about
+  which agent it is. What ties its relaunch to its conversation is the
+  identity its launch carried — stamped into the pane's environment when
+  the tab was created, persisted with the tab by the terminal runtime, and
+  read back by UZE's launcher when the runtime respawns the tab with no
+  client in the room.
+
+  Read off the machine, the claim is the same two facts the task's own
+  restart journey reads: the identifier the second launch was given is
+  the one the first launch created, and there is still exactly one
+  conversation for the project — a second transcript is what starting over
+  leaves behind.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+
+scenes:
+  - scene: a tenant placed through UZE's own launcher names the conversation it starts
+    when:
+      - shell: "{uze} setup"
+        say: the operator provisions their harnesses, which is what installs the launcher
+        check: false
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: '\+ new'
+        say: open the picker for a new space
+        in: sidebar
+        expect: ' at '
+      - click: workspace
+        say: choose the workspace kind
+        in: sidebar
+        expect: '› workspace'
+      - key: BSpace
+        say: pick the project directory itself
+      - key: Enter
+        say: create the space
+      - wait: screen
+        until: 'demo-app 2'
+        in: sidebar
+        timeout: 20
+        say: the workspace space appears
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: place a Claude agent as a tenant
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 2.0
+    then:
+      - link: "{uze_home}/shims/claude"
+        resolves_to: uze
+        about: the launcher exists and is UZE's own binary
+      - tenants: { count: 1, live: 1 }
+        about: one tenant, recorded for the project directory
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: and no checkout, because a tenant has none
+      - file: "{world}/bin/.invocations/claude.log"
+        contains: "--session-id"
+        about: the harness was told which conversation to open
+      - file: "{home}/.claude/projects/*/*.jsonl"
+        count: 1
+        about: and it wrote exactly one conversation
+
+  - scene: the process holding the panes dies, and the tenant comes back into its conversation
+    when:
+      - shell: |
+          for pid in $(pgrep -f '{uze}'); do
+            [ "$pid" = "$$" ] && continue
+            if [ -r "/proc/$pid/environ" ]; then
+              inherited=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)
+            else
+              inherited=$(ps -Ewwo command= -p "$pid" 2>/dev/null | tr ' ' '\n')
+            fi
+            printf '%s\n' "$inherited" | grep -qx 'HOME={home}' && kill -9 "$pid"
+          done
+        say: kill everything holding this workspace, the way a reboot does it
+        check: false
+      - wait: shell
+        until: "! pgrep -f 'terminal [s]erve --root {project}' > /dev/null"
+        timeout: 20
+        say: nothing is holding the panes any more
+      - open: "{uze}"
+        say: open the workspace again, which starts a server and restores what it held
+        expect: demo-app
+        expect_timeout: 25
+        pause: 3.0
+      - click: agent 1
+        say: walk into the tenant that came back
+        in: sidebar
+        expect: Claude Code v
+        expect_timeout: 30
+        pause: 1.5
+    then:
+      - process: { matching: claude, cwd: "{project}", alive: true }
+        about: the tenant came back into the project directory
+      - tenants: { count: 1, live: 1 }
+        about: and it is still the one tenant, not a second one standing in for it
+      - file: "{world}/bin/.invocations/claude.log"
+        contains: "--resume"
+        about: the relaunch asked to continue a conversation rather than open one
+      - cmd:
+          run: >
+            log={world}/bin/.invocations/claude.log;
+            started=$(sed -n 's/^--session-id //p' "$log" | head -1);
+            resumed=$(sed -n 's/^--resume //p' "$log" | tail -1);
+            test -n "$started" && test "$started" = "$resumed"
+        about: |
+          and the identifier it resumed is the one the first launch created
+          — the same conversation, found by the identity the launch carried
+          rather than by a directory it shares with the operator
+      - file: "{home}/.claude/projects/*/*.jsonl"
+        count: 1
+        about: still one conversation, not a second one beside it

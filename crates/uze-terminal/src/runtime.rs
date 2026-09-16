@@ -1487,8 +1487,7 @@ impl Server {
             spawnable_pane_bounds(pane.columns),
             spawnable_pane_bounds(pane.rows),
             self.damage.clone(),
-            command,
-            env,
+            PaneLaunch { command, env },
             Arc::clone(&self.palette),
         )?;
         {
@@ -1845,6 +1844,15 @@ fn spawn_endpoint_watch(server: Arc<Server>) {
     });
 }
 
+/// What a pane's first process is launched as: the program, or the default
+/// shell when there is none, and the environment the launch carries
+/// beyond the pane's own — which only a program ever does.
+#[derive(Clone, Copy)]
+struct PaneLaunch<'a> {
+    command: Option<&'a [String]>,
+    env: &'a [(String, String)],
+}
+
 struct PaneRuntime {
     id: PaneId,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
@@ -1926,10 +1934,10 @@ impl PaneRuntime {
         columns: u16,
         rows: u16,
         damage: mpsc::Sender<PaneId>,
-        command: Option<&[String]>,
-        env: &[(String, String)],
+        launch: PaneLaunch<'_>,
         palette: Arc<Mutex<Palette>>,
     ) -> Result<Self, RuntimeError> {
+        let PaneLaunch { command, env } = launch;
         let spawn_command = command
             .filter(|command| !command.is_empty())
             .map(<[String]>::to_vec);
@@ -2498,13 +2506,14 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compatibility, Endpoint, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneRuntime,
-        PersistedSpace, PersistedTab, PersistedWorkspace, Probe, ReplySink, RuntimeError,
-        Selection, Server, WorkspaceLock, corroborated_as_server, heal_pid_file, identity_of,
-        persisted_state_path, platform_reads_processes, probe_server, read_event, read_message,
-        recorded_compatibility, relaunch_command_for_process, replace_incompatible_server,
-        runtime_process_is_alive, send_request, server_protocol_version, snapshot, view_for,
-        workspace_lock_path, write_atomically, write_message, write_pid_file,
+        Compatibility, Endpoint, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneLaunch,
+        PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, Probe, ReplySink,
+        RuntimeError, Selection, Server, WorkspaceLock, corroborated_as_server, heal_pid_file,
+        identity_of, persisted_state_path, platform_reads_processes, probe_server, read_event,
+        read_message, recorded_compatibility, relaunch_command_for_process,
+        replace_incompatible_server, runtime_process_is_alive, send_request,
+        server_protocol_version, snapshot, view_for, workspace_lock_path, write_atomically,
+        write_message, write_pid_file,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -3021,8 +3030,10 @@ mod tests {
             80,
             24,
             damage,
-            None,
-            &[],
+            PaneLaunch {
+                command: None,
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3064,8 +3075,10 @@ mod tests {
             80,
             24,
             damage,
-            None,
-            &[],
+            PaneLaunch {
+                command: None,
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3115,8 +3128,10 @@ mod tests {
             80,
             24,
             damage,
-            None,
-            &[],
+            PaneLaunch {
+                command: None,
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3204,19 +3219,21 @@ mod tests {
             80,
             24,
             damage,
-            Some(&[
-                "/bin/sh".to_owned(),
-                "-c".to_owned(),
-                // `$$` is the shell's own pid, and `exec` keeps it — the
-                // same relationship `src/shim.rs` has to the harness it
-                // replaces itself with, which is what makes the stamp
-                // belong to the process that carries it.
-                format!(
-                    "export UZE_SHIM_NAME=claude UZE_SHIM_PID=$$; exec {} 5",
-                    versioned_binary.display()
-                ),
-            ]),
-            &[],
+            PaneLaunch {
+                command: Some(&[
+                    "/bin/sh".to_owned(),
+                    "-c".to_owned(),
+                    // `$$` is the shell's own pid, and `exec` keeps it — the
+                    // same relationship `src/shim.rs` has to the harness it
+                    // replaces itself with, which is what makes the stamp
+                    // belong to the process that carries it.
+                    format!(
+                        "export UZE_SHIM_NAME=claude UZE_SHIM_PID=$$; exec {} 5",
+                        versioned_binary.display()
+                    ),
+                ]),
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3864,8 +3881,10 @@ mod tests {
             80,
             24,
             damage,
-            None,
-            &[],
+            PaneLaunch {
+                command: None,
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3948,11 +3967,13 @@ mod tests {
             80,
             24,
             damage,
-            Some(&report_variable(
-                crate::launch::AGENT_IDENTITY_VARIABLE,
-                &report,
-            )),
-            &stamp("agent-31"),
+            PaneLaunch {
+                command: Some(&report_variable(
+                    crate::launch::AGENT_IDENTITY_VARIABLE,
+                    &report,
+                )),
+                env: &stamp("agent-31"),
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -3978,11 +3999,13 @@ mod tests {
             80,
             24,
             damage,
-            Some(&report_variable(
-                crate::launch::AGENT_IDENTITY_VARIABLE,
-                &report,
-            )),
-            &[],
+            PaneLaunch {
+                command: Some(&report_variable(
+                    crate::launch::AGENT_IDENTITY_VARIABLE,
+                    &report,
+                )),
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
@@ -4126,7 +4149,8 @@ mod tests {
             80,
             24,
             damage,
-            // `UZE_SHIM_PID=1` is the shape of an inherited pair: a name
+            PaneLaunch {
+                command: // `UZE_SHIM_PID=1` is the shape of an inherited pair: a name
             // stamped for a process that is not this one.
             Some(&[
                 "/bin/sh".to_owned(),
@@ -4136,7 +4160,8 @@ mod tests {
                     versioned_binary.display()
                 ),
             ]),
-            &[],
+                env: &[],
+            },
             Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();

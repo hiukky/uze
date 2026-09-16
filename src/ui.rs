@@ -134,14 +134,13 @@ pub fn run(home: UzeHome) -> Result<()> {
     let mut landing = orchestrator::Landing::AtLaunchDirectory;
     let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        // Asked once, here, before the attach: the kind the launch
-        // directory's space lands on if this client is the one to create
-        // it. One Git read on the way in, never in the loop.
-        let kind = space_kind_for(&uze_application::space_root(&root));
+        let launch = orchestrator::LaunchSpace {
+            kind: space_kind_for(&uze_application::space_root(&root)),
+            root,
+        };
         match orchestrator::attach_workspace(
             &mut terminal,
-            &root,
-            kind,
+            &launch,
             &mut layout,
             &mut workspace_memory,
             &home,

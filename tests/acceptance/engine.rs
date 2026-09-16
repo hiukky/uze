@@ -15,7 +15,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use uze_application::{DeliveryOutcome, Isolation, TaskStateView, UzeApplication, UzeHome};
+use uze_application::{
+    DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
+};
 use uze_terminal::{
     ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, attach, open_space,
     read_event, send_request, socket_path,
@@ -141,8 +143,12 @@ impl Engine {
     /// whose first process is the scripted agent, started in the slot.
     /// `start` is what the agent does before it goes quiet.
     fn launch(&mut self, start: &str) -> (String, PathBuf) {
-        let placement = self.app().workspace().place_new_agent(self.project(), &[]);
-        let Isolation::Slot { task, .. } = &placement.isolation else {
+        let placement = self
+            .app()
+            .workspace()
+            .place_new_agent(self.project(), PlacementKind::Slot, "claude-code", &[])
+            .expect("a slot is acquired");
+        let Placement::Slot { task, .. } = &placement.placement else {
             panic!("{placement:?}");
         };
         let slot = placement.cwd.clone();
@@ -683,7 +689,11 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
         "unfinished\n",
         "parked, with every file preserved"
     );
-    let next = engine.app().workspace().place_new_agent(&project, &[]);
+    let next = engine
+        .app()
+        .workspace()
+        .place_new_agent(&project, PlacementKind::Slot, "claude-code", &[])
+        .expect("a slot is acquired");
     assert!(
         next.cwd != project.join(".worktrees/agent-2"),
         "a parked slot is never handed to a new agent"

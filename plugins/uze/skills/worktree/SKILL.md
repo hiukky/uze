@@ -6,14 +6,16 @@ metadata:
   opencode/autoinvoke: "true"
 ---
 
-# UZE — working in an isolated checkout
+# UZE — working where UZE placed you
 
-You do not decide whether to work in isolation: UZE places every agent it
-launches in a checkout of its own under `.worktrees/<id>`, on branch
-`agent/<id>`, before you start.
-The primary checkout belongs to the operator. Read the "Concurrent work
-isolation" section of `AGENTS.md` — it states the layout and what happens
-to finished work.
+You do not decide where to work: UZE places every agent it launches before
+you start, and the space you were launched into decided how. In a
+*worktree* space you have a checkout of your own under `.worktrees/<id>`,
+on branch `agent/<id>`, and the primary checkout belongs to the operator.
+In a *workspace* space you work in the operator's own checkout, on the
+branch they are on, beside them. Read the "Concurrent work isolation"
+section of `AGENTS.md` — it states the layout and what happens to finished
+work.
 
 This skill is what no harness does for you: the part of that arrangement
 you have to carry yourself.
@@ -26,12 +28,17 @@ git branch --show-current
 git status --short
 ```
 
-If your working directory is inside `.worktrees/`, you are already isolated:
-work here, commit here, and do not switch branches. A worktree you make for
+If your working directory is inside `.worktrees/`, you are isolated: work
+here, commit here, and do not switch branches. A worktree you make for
 yourself is yours — UZE neither sees nor delivers it, so bring its work back
-onto your own branch. If you find yourself in the primary checkout, you were started by
-hand rather than by UZE; the operator's uncommitted work there is theirs —
-never stash, reset, clean, or move it.
+onto your own branch.
+
+If your working directory is not inside `.worktrees/`, you are in the
+operator's own checkout, on their branch. Commit there, as you go, and
+never switch, reset, stash, clean or move it: the operator's uncommitted
+work is theirs, and so is the branch's name. Nothing below about naming,
+delivery and rebases applies to you — there is nothing to deliver, because
+your commits already land where the operator is.
 
 ## Name the work before you do it
 

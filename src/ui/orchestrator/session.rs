@@ -54,6 +54,7 @@ pub(super) struct AttachAnswers {
     pub(super) code_files: mpsc::Sender<FileResolution>,
     pub(super) occupancy: mpsc::Sender<OccupancyResolution>,
     pub(super) placements: mpsc::Sender<PlacementResolution>,
+    pub(super) root_profiles: mpsc::Sender<RootProfileResolution>,
 }
 
 /// The frame an event is handled against.
@@ -169,6 +170,7 @@ impl Attach<'_> {
             .map(|session| crate::ui::display_project_path(&session.selected_space().root))
             .unwrap_or_else(|| "~".to_owned());
         self.model.root_picker = Some(RootPicker::opened_in(&prefill));
+        self.ask_root_profile();
         self.model.dirty = true;
     }
 
@@ -437,6 +439,7 @@ impl Attach<'_> {
             self.tell_the_code_surface(Command::Type(character));
             return;
         }
+        self.ask_root_profile();
         self.model.dirty = true;
     }
 
@@ -761,9 +764,11 @@ impl Attach<'_> {
                 }
             }
             Action::Activate => {
-                if let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
+                if let Some((root, kind)) =
+                    self.model.root_picker.as_ref().and_then(RootPicker::chosen)
+                {
                     self.model.root_picker = None;
-                    self.open_space_at(root, uze_terminal::SpaceKind::Worktree, columns, rows);
+                    self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
                 }
             }
             Action::Dismiss => self.model.root_picker = None,
@@ -772,9 +777,33 @@ impl Attach<'_> {
                     picker.backspace();
                 }
             }
+            Action::FocusNext | Action::FocusPrevious => {
+                if let Some(picker) = self.model.root_picker.as_mut() {
+                    picker.toggle_kind();
+                }
+            }
             _ => {}
         }
+        self.ask_root_profile();
         self.model.dirty = true;
+    }
+
+    /// Asks a worker what the root the picker would choose allows, unless
+    /// it already answered for that root. The chips draw both kinds until
+    /// it does; a choice the answer forbids lands on the other kind.
+    fn ask_root_profile(&mut self) {
+        let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::landed) else {
+            return;
+        };
+        if let Some(profile) = self.model.root_profiles.get(&root).copied() {
+            if let Some(picker) = self.model.root_picker.as_mut() {
+                picker.absorb_profile(root, profile);
+            }
+            return;
+        }
+        if self.model.root_profile_pending.insert(root.clone()) {
+            spawn_root_profile(root, self.answers.root_profiles.clone());
+        }
     }
 
     /// The inline rename buffer over a tab or a space label.
@@ -841,6 +870,7 @@ impl Attach<'_> {
                     self.launch_agent(
                         label,
                         command,
+                        option.integration.clone(),
                         picker.cwd.clone(),
                         picker.resume.clone(),
                         (columns, rows),
@@ -1160,6 +1190,7 @@ impl Attach<'_> {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.pasted(text.trim_end_matches(['\r', '\n']));
                 }
+                self.ask_root_profile();
                 self.model.dirty = true;
             }
             _ if self.model.renaming.is_some() => {
@@ -1273,17 +1304,19 @@ impl Attach<'_> {
             _ if self.model.root_picker.is_some() => {
                 match hit_at(&self.model, mouse.column, mouse.row) {
                     Some(WorkspaceHit::PickSpaceRoot(index)) => {
-                        if let Some(root) = self.model.root_picker.as_mut().and_then(|picker| {
-                            picker.select(index);
-                            picker.chosen()
-                        }) {
+                        if let Some((root, kind)) =
+                            self.model.root_picker.as_mut().and_then(|picker| {
+                                picker.select(index);
+                                picker.chosen()
+                            })
+                        {
                             self.model.root_picker = None;
-                            self.open_space_at(
-                                root,
-                                uze_terminal::SpaceKind::Worktree,
-                                columns,
-                                rows,
-                            );
+                            self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
+                        }
+                    }
+                    Some(WorkspaceHit::PickSpaceKind(kind)) => {
+                        if let Some(picker) = self.model.root_picker.as_mut() {
+                            picker.choose_kind(kind);
                         }
                     }
                     // Click outside the picker's own rows discards it —
@@ -1310,6 +1343,7 @@ impl Attach<'_> {
                             self.launch_agent(
                                 label,
                                 command,
+                                option.integration.clone(),
                                 picker.cwd.clone(),
                                 picker.resume.clone(),
                                 (columns, rows),
@@ -2082,6 +2116,11 @@ impl Attach<'_> {
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
             }
+            WorkspaceHit::PickSpaceKind(_) => {
+                // Only reachable while the root picker is open,
+                // which the guarded arm above already handles —
+                // same as `PickAgent` for the agent picker.
+            }
             WorkspaceHit::OpenChanges => {
                 open_code(&mut self.model, code::NavigatorMode::Changes);
             }
@@ -2200,6 +2239,7 @@ pub(super) struct AttachInbox<'a> {
     pub(super) code_files: &'a mpsc::Receiver<FileResolution>,
     pub(super) occupancy: &'a mpsc::Receiver<OccupancyResolution>,
     pub(super) placements: &'a mpsc::Receiver<PlacementResolution>,
+    pub(super) root_profiles: &'a mpsc::Receiver<RootProfileResolution>,
 }
 
 impl Attach<'_> {
@@ -2215,6 +2255,7 @@ impl Attach<'_> {
         &mut self,
         label: String,
         command: Vec<String>,
+        harness: String,
         cwd: Option<PathBuf>,
         resume: Option<ResumeTarget>,
         size: (u16, u16),
@@ -2226,11 +2267,35 @@ impl Attach<'_> {
                     primary: target.primary,
                     task: target.task,
                 },
-                None => match selected_pane_cwd(&self.model) {
-                    Some(from) => PlacementRequest::New { from },
-                    // Nothing selected to place a slot relative to — the
-                    // server's own default directory it is, same as
-                    // before slots existed.
+                // The space's kind decides what the agent is placed as. A
+                // slot is cut relative to the pane the operator is in; a
+                // tenancy is of the space's own root, whatever directory
+                // that pane has wandered into.
+                None => match self.model.session.as_ref().map(|session| {
+                    let space = session.selected_space();
+                    (crate::ui::placement_of(space.kind), space.root.clone())
+                }) {
+                    Some((kind @ uze_application::PlacementKind::Tenant, root)) => {
+                        PlacementRequest::New {
+                            from: root,
+                            kind,
+                            harness,
+                        }
+                    }
+                    Some((kind, _)) => match selected_pane_cwd(&self.model) {
+                        Some(from) => PlacementRequest::New {
+                            from,
+                            kind,
+                            harness,
+                        },
+                        // Nothing selected to place a slot relative to — the
+                        // server's own default directory it is, same as
+                        // before slots existed.
+                        None => {
+                            self.open_agent_tab_at(label, command, None, Vec::new(), size);
+                            return;
+                        }
+                    },
                     None => {
                         self.open_agent_tab_at(label, command, None, Vec::new(), size);
                         return;
@@ -2315,34 +2380,24 @@ impl Attach<'_> {
                 return;
             }
         };
-        // What the launch could not do, said once — the tab opens either
-        // way. An agent that could not be isolated is the louder of the
-        // two: it is about to write in the operator's own checkout, and
-        // the reason for that was computed and then dropped on the floor
-        // until this read it.
-        let said = match &placement.isolation {
-            uze_application::Isolation::Unisolated { reason } => {
-                Some(format!("no checkout — {reason}"))
-            }
-            uze_application::Isolation::Slot { .. } => placement.warnings.first().cloned(),
-        };
-        match said {
+        // What preparing the checkout could not do, said once — the tab
+        // opens either way. A placement that could not do what was asked
+        // never reaches here: it answered `Err` above and opened nothing.
+        match placement.warnings.first().cloned() {
             Some(text) => self.model.set_notice(format!("{label}: {text}")),
             None => {
                 self.model.notice = None;
                 self.model.dirty = true;
             }
         }
-        // The launch carries the agent's identity: what the shim resumes
-        // the conversation by, and what this client reads back from the
-        // session to know which task the tab is for.
-        let env = match &placement.isolation {
-            uze_application::Isolation::Slot { task, .. } => vec![(
-                uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
-                task.as_str().to_owned(),
-            )],
-            uze_application::Isolation::Unisolated { .. } => Vec::new(),
-        };
+        // The launch carries the agent's identity, whichever kind of record
+        // it is: what the shim resumes the conversation by, and what this
+        // client reads back from the session to know which agent the tab
+        // is for.
+        let env = vec![(
+            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+            placement.placement.agent().as_str().to_owned(),
+        )];
         self.model
             .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
         // The size the last frame actually drew — the same value the
@@ -2470,7 +2525,10 @@ impl Attach<'_> {
                 None => self.model.targets.remove(&resolution.key),
             };
             match sync {
-                Some(sync) => self.model.upstream_syncs.insert(resolution.key, sync),
+                Some(sync) => self
+                    .model
+                    .upstream_syncs
+                    .insert(resolution.key.clone(), sync),
                 None => self.model.upstream_syncs.remove(&resolution.key),
             };
             // A store that could not be read is not a repository without
@@ -2485,6 +2543,9 @@ impl Attach<'_> {
                 continue;
             }
             self.model.tasks.insert(primary, evaluation.tasks);
+            self.model
+                .tenants
+                .insert(resolution.key.clone(), evaluation.tenants);
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
@@ -2632,6 +2693,14 @@ impl Attach<'_> {
         }
         while let Ok(resolution) = inbox.code_files.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
+        }
+        while let Ok(RootProfileResolution { root, profile }) = inbox.root_profiles.try_recv() {
+            self.model.root_profile_pending.remove(&root);
+            self.model.root_profiles.insert(root.clone(), profile);
+            if let Some(picker) = self.model.root_picker.as_mut() {
+                picker.absorb_profile(root, profile);
+            }
+            self.model.dirty = true;
         }
         self.model.schedule_git_read(&self.answers.git);
         self.model

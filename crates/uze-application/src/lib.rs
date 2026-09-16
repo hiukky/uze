@@ -7,7 +7,7 @@ pub use application::StaleProjection;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, NamedTask, PlacementKind, Reconciliation, ReleasedTask,
+    DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind, Reconciliation, ReleasedTask,
     RootProfile, TaskStateView, TaskView, TenantView, UpstreamSync, root_profile,
 };
 

@@ -376,6 +376,10 @@ fn default_bindings() -> Vec<Binding> {
         // Tab walks into the highlighted directory, so a root several
         // levels down is reached by narrowing rather than by typing.
         bind(Scope::RootPicker, "tab", Action::Expand),
+        // The kind chips under the directory: two choices side by side, so
+        // the keys that walk sideways walk them.
+        bind(Scope::RootPicker, "left", Action::FocusPrevious),
+        bind(Scope::RootPicker, "right", Action::FocusNext),
         bind(Scope::RootPicker, "enter", Action::Activate),
         bind(Scope::RootPicker, "esc", Action::Dismiss),
         bind(Scope::RootPicker, "backspace", Action::EraseBack),

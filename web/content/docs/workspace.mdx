@@ -1,14 +1,16 @@
 ---
 title: The agent workspace
-description: Run several agents at once in one terminal — each in its own checkout, with readiness and delivery observed from Git
+description: Run several agents at once in one terminal — each in its own checkout, or together in yours, with readiness and delivery observed from Git
 ---
 
 # The agent workspace
 
 Running `uze` with no arguments opens the **workspace**: a persistent terminal
-that hosts your agent sessions. Every agent gets an isolated checkout of the
-repository, so two of them can work at the same time without touching each
-other's files — or yours.
+that hosts your agent sessions. A space decides how its agents work: in a
+**worktree** space every agent gets an isolated checkout of the repository, so
+two of them can work at the same time without touching each other's files — or
+yours; in a **workspace** space the agents work in the space's own directory,
+on the branch you are on, beside you.
 
 <Callout type="info">
   The workspace is **experimental** (ADR-038). The runtime, its protocol, and the
@@ -21,7 +23,7 @@ Three levels, and no more:
 
 | Level | What it is |
 | --- | --- |
-| **Space** | One project directory. The sidebar lists them; `+ new` opens a picker to add one. |
+| **Space** | One project directory, of one of two kinds — see [Two kinds of space](#two-kinds-of-space). The sidebar lists them; `+ new` (or `Alt+S`) opens a picker to add one. |
 | **Tab** | One session inside a space — a plain shell, or an agent. |
 | **Pane** | The live terminal a tab draws. Owned by the runtime server, not by the client. |
 
@@ -84,19 +86,38 @@ has the per-harness column.
 Everything else typed goes to the pane. Tabs and spaces can be renamed inline
 and reordered by dragging; right-click gives the same actions as a menu.
 
-## Every agent gets its own checkout
+## Two kinds of space
 
-In any Git repository with at least one commit, uze places an agent in an
-isolated checkout **before its harness starts** — no question asked, and nothing
-required of the harness. The primary checkout stays yours.
+A space is created as one of two kinds, chosen in the picker and kept for the
+space's life. The same directory can be the root of one space of each kind.
+
+| Kind | Where an agent works | What uze does with its work |
+| --- | --- | --- |
+| **worktree** | A checkout of its own under `.worktrees/<id>`, on branch `agent/<id>` | Readiness, delivery and naming, as described below |
+| **workspace** | The space's own directory, on whatever branch it is on | Nothing: the commits are already on your branch |
+
+The worktree kind is the default for a repository and the only kind that
+isolates; a directory that is not a Git repository can only be a workspace
+space. In a workspace space the sidebar lists the agents flat, one row each,
+with the harness running in each and the branch — shared by all of them — on the
+space's header. Two agents there share one tree, the way two people in a shell
+would; uze keeps their conversations apart, and nothing else.
+
+## An agent of a worktree space gets its own checkout
+
+In any Git repository with at least one commit, uze places an agent of a worktree
+space in an isolated checkout **before its harness starts** — no question asked,
+and nothing required of the harness. The primary checkout stays yours.
 
 - The checkout is a **slot**: `.worktrees/<id>`, on branch `agent/<id>`.
 - A new agent takes a **free slot** — new branch from the base, tracked and
   untracked files reset, ignored artifacts (a `target/`, a `node_modules/`) left
   in place — and a new directory is created only when no slot is free. The number
   of checkouts is bounded by peak concurrency, not by how many tasks you run.
-- Where isolation is impossible (not a repository, no commits yet), the agent
-  starts in place and its tab says so.
+- Where a slot cannot be acquired (no commit yet, the slot cap reached, Git
+  refusing), no agent starts and the reason is said — an agent you asked to
+  isolate never lands in your own tree. A directory with no repository is
+  offered the workspace kind only.
 
 Because the slot is reused, the second agent in a Rust project doesn't pay for a
 cold build the way a fresh `git worktree` would.

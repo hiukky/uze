@@ -151,7 +151,10 @@ fn the_chosen_root_is_the_selected_directory() {
 
     picker.move_selection(1);
 
-    assert_eq!(picker.chosen(), Some(root.join("beta")));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.join("beta"))
+    );
 }
 
 #[test]
@@ -159,10 +162,16 @@ fn the_selection_cannot_run_off_either_end_of_the_matches() {
     let (root, mut picker) = picker_over("root-picker-bounds", &["alpha", "beta"]);
 
     picker.move_selection(-1);
-    assert_eq!(picker.chosen(), Some(root.join("alpha")));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.join("alpha"))
+    );
 
     picker.move_selection(9);
-    assert_eq!(picker.chosen(), Some(root.join("beta")));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.join("beta"))
+    );
 }
 
 #[test]
@@ -171,7 +180,10 @@ fn an_empty_directory_still_offers_itself_as_the_root() {
     let picker = RootPicker::opened_in(&root.path().display().to_string());
 
     assert_eq!(picker.match_count(), 0);
-    assert_eq!(picker.chosen(), Some(root.path().to_path_buf()));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.path().to_path_buf())
+    );
 }
 
 #[test]
@@ -207,7 +219,10 @@ fn backspacing_the_separator_selects_the_listed_directory_itself() {
 
     picker.backspace();
 
-    assert_eq!(picker.chosen(), Some(root.join("checkout")));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.join("checkout"))
+    );
 }
 
 /// A slot is a checkout of the project, not a project of its own — so
@@ -222,11 +237,14 @@ fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
     let picker = RootPicker::opened_in(&repository.join(".worktrees").display().to_string());
     assert_eq!(names(&picker), ["4j03rn"]);
 
-    assert_eq!(picker.chosen(), Some(repository.clone()));
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(repository.clone())
+    );
 
     // …and the same answer for a slot typed out rather than landed on:
     // an empty listing falls back to the typed directory itself.
     let typed = RootPicker::opened_in(&repository.join(".worktrees/4j03rn").display().to_string());
     assert_eq!(typed.match_count(), 0);
-    assert_eq!(typed.chosen(), Some(repository));
+    assert_eq!(typed.chosen().map(|(root, _)| root), Some(repository));
 }
