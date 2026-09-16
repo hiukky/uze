@@ -29,8 +29,6 @@ use crate::{
 /// The themes UZE carries with it. Their bytes are the worked examples for
 /// the format — the same loader reads them and reads yours.
 const BUILTIN_DEFAULT: &str = include_str!("../themes/default.json");
-const BUILTIN_ASCII: &str = include_str!("../themes/ascii.json");
-const BUILTIN_NERD: &str = include_str!("../themes/nerd.json");
 
 /// The third-party palettes UZE carries, by id. Each is a partial theme over
 /// the built-in default — the same shape as a file someone writes, which is
@@ -49,12 +47,18 @@ const BUNDLED_PALETTES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The glyph sets UZE carries beyond the default's own glyphs, by id — each
+/// a layer of symbols only (see [`glyph_sets`]).
+const BUNDLED_GLYPH_SETS: &[(&str, &str)] = &[
+    ("ascii", include_str!("../themes/ascii.json")),
+    ("nerd", include_str!("../themes/nerd.json")),
+];
+
 /// The syntax themes a theme file may name.
 ///
 /// These are syntect's bundled set, listed here so this crate does not have
-/// to depend on syntect to tell an author they made a typo.
-/// `uze-extensions`, which does own syntect, holds the test that this list
-/// still matches what syntect actually bundles.
+/// to depend on syntect to tell an author they made a typo; a test, which
+/// does build against syntect, holds the list to what it actually bundles.
 pub const BUNDLED_SYNTAX_THEMES: &[&str] = &[
     "InspiredGitHub",
     "Solarized (dark)",
@@ -167,13 +171,8 @@ pub struct Loaded {
 /// The built-in themes, by the id a user selects them with. `default` comes
 /// first: it is what an unset selection means.
 pub fn builtin_names() -> &'static [&'static str] {
-    &[
-        "default",
-        "dracula",
-        "catppuccin-mocha",
-        "tokyo-night",
-        "tokyo-night-light",
-    ]
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| default_then(BUNDLED_PALETTES))
 }
 
 /// A theme UZE carries, resolved. `default` is the one every other theme is
@@ -207,23 +206,35 @@ pub fn builtin(id: &str) -> Option<&'static Theme> {
 pub fn builtin_file(id: &str) -> Option<&'static ThemeFile> {
     static FILES: OnceLock<Vec<ThemeFile>> = OnceLock::new();
     let index = palette_index(id)?;
-    let files = FILES.get_or_init(|| {
-        BUNDLED_PALETTES
-            .iter()
-            .map(|(id, json)| {
-                serde_json::from_str(json).unwrap_or_else(|error| {
-                    panic!("the bundled `{id}` palette is valid JSON: {error}")
-                })
-            })
-            .collect()
-    });
-    Some(&files[index])
+    Some(&FILES.get_or_init(|| parse_bundled(BUNDLED_PALETTES))[index])
 }
 
 fn palette_index(id: &str) -> Option<usize> {
-    BUNDLED_PALETTES
+    index_in(BUNDLED_PALETTES, id)
+}
+
+fn index_in(table: &[(&str, &str)], id: &str) -> Option<usize> {
+    table.iter().position(|(candidate, _)| *candidate == id)
+}
+
+/// `default`, then every id of a bundled table in its order — the order a
+/// picker lists them in, `default` first because it is what an unset
+/// selection means.
+fn default_then(table: &[(&'static str, &str)]) -> Vec<&'static str> {
+    std::iter::once("default")
+        .chain(table.iter().map(|(id, _)| *id))
+        .collect()
+}
+
+/// Every layer of a bundled table, parsed once and in the table's order.
+fn parse_bundled(table: &[(&str, &str)]) -> Vec<ThemeFile> {
+    table
         .iter()
-        .position(|(candidate, _)| *candidate == id)
+        .map(|(id, json)| {
+            serde_json::from_str(json)
+                .unwrap_or_else(|error| panic!("the bundled `{id}` layer is valid JSON: {error}"))
+        })
+        .collect()
 }
 
 /// The glyph sets UZE carries, by the id a user selects them with.
@@ -233,7 +244,8 @@ fn palette_index(id: &str) -> Option<usize> {
 /// palette is a matter of taste this afternoon. Selecting one never touches
 /// the other.
 pub fn glyph_sets() -> &'static [&'static str] {
-    &["default", "ascii", "nerd"]
+    static SETS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    SETS.get_or_init(|| default_then(BUNDLED_GLYPH_SETS))
 }
 
 /// The layer a selected glyph set contributes, or `None` for the default.
@@ -243,17 +255,9 @@ pub fn glyph_sets() -> &'static [&'static str] {
 /// "never chose" and "chose the default" resolving through one path, so
 /// there is nothing that can drift between them.
 pub fn glyph_set_file(id: &str) -> Option<&'static ThemeFile> {
-    static ASCII: OnceLock<ThemeFile> = OnceLock::new();
-    static NERD: OnceLock<ThemeFile> = OnceLock::new();
-    match id {
-        "ascii" => Some(ASCII.get_or_init(|| {
-            serde_json::from_str(BUILTIN_ASCII).expect("the bundled ascii set is valid JSON")
-        })),
-        "nerd" => Some(NERD.get_or_init(|| {
-            serde_json::from_str(BUILTIN_NERD).expect("the bundled nerd set is valid JSON")
-        })),
-        _ => None,
-    }
+    static FILES: OnceLock<Vec<ThemeFile>> = OnceLock::new();
+    let index = index_in(BUNDLED_GLYPH_SETS, id)?;
+    Some(&FILES.get_or_init(|| parse_bundled(BUNDLED_GLYPH_SETS))[index])
 }
 
 /// The theme every partial theme is completed from, and the one UZE falls
@@ -1205,6 +1209,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every theme file this crate carries is reachable by the id it is
+    /// named after, and every id names a file: a JSON dropped into `themes/`
+    /// and left out of the tables is a palette nobody can select.
+    #[test]
+    fn the_bundled_tables_and_the_themes_directory_agree() {
+        let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/themes");
+        let mut on_disk: Vec<String> = std::fs::read_dir(directory)
+            .expect("the themes directory")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter_map(|name| name.strip_suffix(".json").map(str::to_owned))
+            .filter(|stem| stem != "theme.schema")
+            .collect();
+        on_disk.sort();
+
+        let mut bundled: Vec<String> = builtin_names()
+            .iter()
+            .chain(glyph_sets().iter().filter(|id| **id != "default"))
+            .map(|id| (*id).to_owned())
+            .collect();
+        bundled.sort();
+
+        assert_eq!(bundled, on_disk);
     }
 
     #[test]
