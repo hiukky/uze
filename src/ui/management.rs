@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 
 use uze_application::{FirstStepsLayout, ManagementLayout, UzeHome};
@@ -745,18 +745,11 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
-    let mut text = footer(model);
-    // Operation messages (install roots, marketplace paths) can exceed the
-    // hint column; clip the status line to the column instead of letting it
-    // wrap into a second row — the footer is exactly one row tall and the
-    // second virtual line would be clipped mid-word, which is worse than an
-    // ellipsis.
-    if !matches!(model.status, model::Status::Idle)
-        && let Some(line) = text.lines.first_mut()
-    {
-        clip_line(line, columns[0].width as usize);
-    }
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), columns[0]);
+    // One row: a line that does not fit is elided rather than wrapped into
+    // a second row the footer does not have.
+    let mut line = footer_line(model);
+    clip_line(&mut line, columns[0].width as usize);
+    frame.render_widget(Paragraph::new(line), columns[0]);
     frame.render_widget(
         Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
             .alignment(ratatui::layout::Alignment::Right),
@@ -813,47 +806,20 @@ fn hint_line(model: &TuiModel) -> Line<'static> {
 /// still read rather than scanned past.
 const FOOTER_HINTS: usize = 4;
 
-fn footer(model: &TuiModel) -> Text<'static> {
-    let hint = hint_line(model);
-    match &model.status {
-        model::Status::Idle => Text::from(hint),
-        model::Status::Working(value) => {
-            let frame = theme::frame(theme::Symbol::StatusWorking, model.tick);
-            Text::from(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("{frame} "),
-                        Style::default()
-                            .fg(theme::color(Token::StateWarning))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        value.clone(),
-                        Style::default()
-                            .fg(theme::color(Token::StateWarning))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                hint,
-            ])
-        }
-        model::Status::Success(value) => Text::from(vec![
-            Line::from(Span::styled(
-                value.clone(),
-                Style::default()
-                    .fg(theme::color(Token::StateSuccess))
-                    .add_modifier(Modifier::BOLD),
-            )),
-            hint,
-        ]),
-        model::Status::Error(value) => Text::from(vec![
-            Line::from(Span::styled(
-                value.clone(),
-                Style::default()
-                    .fg(theme::color(Token::StateDanger))
-                    .add_modifier(Modifier::BOLD),
-            )),
-            hint,
-        ]),
-    }
+/// What the footer says: how the last thing went while there is anything
+/// to say about it, and otherwise what can be done here.
+fn footer_line(model: &TuiModel) -> Line<'static> {
+    let (hue, text) = match &model.status {
+        model::Status::Idle => return hint_line(model),
+        model::Status::Working(value) => (
+            Token::StateWarning,
+            format!(
+                "{} {value}",
+                theme::frame(theme::Symbol::StatusWorking, model.tick)
+            ),
+        ),
+        model::Status::Success(value) => (Token::StateSuccess, value.clone()),
+        model::Status::Error(value) => (Token::StateDanger, value.clone()),
+    };
+    Line::from(Span::styled(text, theme::fg_bold(hue)))
 }
