@@ -395,11 +395,20 @@ fn render_drawer(
         Some(chord) => format!("uze ships with {chord}"),
         None => "uze ships with no key for this".to_owned(),
     };
+    let waiting = match uze_keys::active()
+        .chord_for(uze_keys::Action::Dismiss, &[uze_keys::Scope::KeyCapture])
+    {
+        Some(chord) => format!(
+            "Press the one you want {} {chord} cancels",
+            theme::glyph(Symbol::HintSeparator)
+        ),
+        None => "Press the one you want".to_owned(),
+    };
     let status = if model.keys_capture {
         DrawerStatus {
             color: theme::color(Token::StateWarning),
             headline: "Waiting for a key",
-            subtitle: "Press the one you want · esc cancels",
+            subtitle: &waiting,
         }
     } else if row.custom() {
         DrawerStatus {

@@ -383,6 +383,34 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     // least one separating space — `{:<N}` never truncates or forces a gap
     // once content already reaches N, so anything shorter than the longest
     // label here would glue straight into the detail text that follows.
+    let scopes = [
+        uze_keys::Scope::Global,
+        uze_keys::Scope::Management,
+        uze_keys::Scope::Harnesses,
+    ];
+    let keymap = uze_keys::active();
+    let key = |action| keymap.chord_for(action, &scopes);
+    let setup_note = match key(Action::SetupHarness) {
+        Some(chord) => {
+            format!("Detected, but UZE hasn't configured it — press {chord} to run setup.")
+        }
+        None => "Detected, but UZE hasn't configured it — set it up from its drawer.".to_owned(),
+    };
+    let reconcile_keys: Vec<String> = [
+        (Action::AnalyzeContext, "analyze"),
+        (Action::ApplyContextPlan, "apply"),
+    ]
+    .into_iter()
+    .filter_map(|(action, verb)| key(action).map(|chord| format!("{chord} to {verb}")))
+    .collect();
+    let reconcile_note = if reconcile_keys.is_empty() {
+        "AGENTS.md bridge needs reconciliation.".to_owned()
+    } else {
+        format!(
+            "AGENTS.md bridge needs reconciliation — {}.",
+            reconcile_keys.join(", ")
+        )
+    };
     let entry = |symbol: Symbol, label: &str, color: Color, detail: &str| {
         Line::from(vec![
             Span::styled(
@@ -412,7 +440,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             Symbol::StatusSelected,
             "Installed",
             theme::color(Token::StateWarning),
-            "Detected, but UZE hasn't configured it — press s to run setup.",
+            &setup_note,
         ),
         entry(
             Symbol::MarkOk,
@@ -438,7 +466,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             Symbol::MarkAttention,
             "Missing/Drifted",
             theme::color(Token::StateWarning),
-            "AGENTS.md bridge needs reconciliation — a to analyze, p to apply.",
+            &reconcile_note,
         ),
         entry(
             Symbol::MarkClose,
@@ -613,12 +641,21 @@ pub(crate) fn render_confirm_install(
     );
 }
 
-pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
+/// A dialog that asks for one line of text: what it is for, the field, and
+/// the keys that answer it. `confirm` is the affirmative's own word.
+pub(crate) fn render_text_prompt(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    title: &str,
+    caption: &str,
+    input: &str,
+    confirm: &str,
+) {
     let width = 60.min(area.width.saturating_sub(4));
     let height = 7.min(area.height.saturating_sub(2));
     let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
-    let block = modal_block(" Add marketplace ", theme::color(Token::Accent));
+    let block = modal_block(format!(" {title} "), theme::color(Token::Accent));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let rows = Layout::default()
@@ -632,22 +669,25 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
         .split(inner);
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "Local path or https://... source",
+            caption.to_owned(),
             theme::fg(Token::TextMuted),
         )),
         rows[0],
     );
     let field = Line::from(vec![
-        Span::raw("› "),
+        Span::raw(format!("{} ", theme::glyph(Symbol::Prompt))),
         Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
         Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
     ]);
     frame.render_widget(Paragraph::new(field), rows[1]);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "enter add · esc cancel",
-            theme::fg(Token::TextMuted),
-        )),
+        Paragraph::new(Line::from(answer_spans(
+            &[uze_keys::Scope::Global, uze_keys::Scope::TextPrompt],
+            &[
+                (uze_keys::Action::Activate, confirm),
+                (uze_keys::Action::Dismiss, "cancel"),
+            ],
+        ))),
         rows[3],
     );
 }
@@ -735,42 +775,6 @@ pub(crate) fn render_theme_picker(
         ],
     ));
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
-    let width = 60.min(area.width.saturating_sub(4));
-    let height = 7.min(area.height.saturating_sub(2));
-    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
-    frame.render_widget(Clear, popup);
-    let block = modal_block(" New profile ", theme::color(Token::Accent));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    frame.render_widget(
-        Paragraph::new(Span::styled("Profile name", theme::fg(Token::TextMuted))),
-        rows[0],
-    );
-    let field = Line::from(vec![
-        Span::raw("› "),
-        Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
-        Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
-    ]);
-    frame.render_widget(Paragraph::new(field), rows[1]);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            "enter create · esc cancel",
-            theme::fg(Token::TextMuted),
-        )),
-        rows[3],
-    );
 }
 
 pub(crate) fn render_confirm_delete_profile(
@@ -964,21 +968,37 @@ fn render_dialog(
 /// `y delete · esc cancel` — the dialog's own words for its answers, with
 /// whichever keys reach them now.
 fn dialog_hint(dialog: &Dialog<'_>) -> Line<'static> {
-    let keymap = uze_keys::active();
-    let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Confirm];
-    let answers = match dialog.confirm {
+    let confirm = dialog.confirm.map(str::to_lowercase);
+    let answers = match &confirm {
         Some(confirm) => vec![
-            (uze_keys::Action::ConfirmYes, confirm.to_lowercase()),
-            (uze_keys::Action::Dismiss, "cancel".to_owned()),
+            (uze_keys::Action::ConfirmYes, confirm.as_str()),
+            (uze_keys::Action::Dismiss, "cancel"),
         ],
-        None => vec![(uze_keys::Action::Dismiss, "close".to_owned())],
+        None => vec![(uze_keys::Action::Dismiss, "close")],
     };
     let mut spans = vec![Span::raw(" ")];
-    for (index, (action, word)) in answers.into_iter().enumerate() {
-        let Some(chord) = keymap.chord_for(action, &scopes) else {
+    spans.extend(answer_spans(
+        &[uze_keys::Scope::Global, uze_keys::Scope::Confirm],
+        &answers,
+    ));
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
+/// A dialog's answers in its own words, each after the key that reaches it
+/// in `scopes`. An answer with no key there is left out rather than
+/// printed keyless: it is still a button.
+fn answer_spans(
+    scopes: &[uze_keys::Scope],
+    answers: &[(uze_keys::Action, &str)],
+) -> Vec<Span<'static>> {
+    let keymap = uze_keys::active();
+    let mut spans = Vec::new();
+    for (action, word) in answers {
+        let Some(chord) = keymap.chord_for(*action, scopes) else {
             continue;
         };
-        if index > 0 {
+        if !spans.is_empty() {
             spans.push(Span::styled(
                 format!(" {} ", theme::glyph(Symbol::HintSeparator)),
                 theme::fg(Token::TextDim),
@@ -993,8 +1013,7 @@ fn dialog_hint(dialog: &Dialog<'_>) -> Line<'static> {
             theme::fg(Token::TextMuted),
         ));
     }
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    spans
 }
 
 /// The answers, right-aligned, as targets: the way out first, the

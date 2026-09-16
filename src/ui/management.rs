@@ -448,11 +448,20 @@ pub(crate) fn render(
             overlay::render_confirm_clear_prompt_history(frame, area, hits)
         }
         Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, area, id, hits),
-        Overlay::AddMarketplace(input) => overlay::render_add_marketplace(frame, area, input),
+        Overlay::AddMarketplace(input) => overlay::render_text_prompt(
+            frame,
+            area,
+            "Add marketplace",
+            "Local path or https://... source",
+            input,
+            "add",
+        ),
         Overlay::ThemePicker { themes, selected } => {
             overlay::render_theme_picker(frame, area, themes, *selected)
         }
-        Overlay::NewProfile(input) => overlay::render_new_profile(frame, area, input),
+        Overlay::NewProfile(input) => {
+            overlay::render_text_prompt(frame, area, "New profile", "Profile name", input, "create")
+        }
         Overlay::ConfirmDeleteProfile { id, focus } => {
             overlay::render_confirm_delete_profile(frame, area, id, *focus, hits)
         }

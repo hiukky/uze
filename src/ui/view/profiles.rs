@@ -558,7 +558,14 @@ fn render_harnesses(
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
         let mut spans = vec![
-            Span::styled(if cursor { "› " } else { "  " }, theme::fg(Token::Accent)),
+            Span::styled(
+                if cursor {
+                    format!("{} ", theme::glyph(Symbol::ChevronRight))
+                } else {
+                    " ".repeat(usize::from(theme::width(Symbol::ChevronRight)) + 1)
+                },
+                theme::fg(Token::Accent),
+            ),
             Span::styled(
                 if checked { "[x] " } else { "[ ] " },
                 Style::default().fg(if checked {
