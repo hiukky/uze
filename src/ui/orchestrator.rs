@@ -221,7 +221,7 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
 /// cleared, forked or switched inside the process is a different identifier
 /// in the harness's records, and the launch that recorded the previous one
 /// is long over.
-fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<(String, PathBuf)>) {
+fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<LaunchedAgent>) {
     if agents.is_empty() {
         return;
     }
@@ -233,10 +233,24 @@ fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<(String, PathBuf)>) {
         let Ok(app) = tui_application(home) else {
             return;
         };
-        for (integration, cwd) in agents {
-            app.workspace().refresh_conversation(&integration, &cwd);
+        for agent in agents {
+            app.workspace().refresh_conversation(
+                &agent.integration,
+                uze_application::Claim {
+                    id: &agent.id,
+                    cwd: &agent.cwd,
+                },
+            );
         }
     });
+}
+
+/// An agent UZE launched, as the session reports it: the harness running
+/// it, the identity its launch carried, and the directory it stands in.
+struct LaunchedAgent {
+    integration: String,
+    id: String,
+    cwd: PathBuf,
 }
 
 /// How often every visible repository's tasks are re-read even when no
@@ -742,14 +756,16 @@ struct OccupancyResolution {
 /// it can place its first agent is the most expensive thing an attach
 /// does, and it used to run inline in the loop.
 ///
-/// `held` is every checkout a live pane still sits in, and it travels
-/// with the request because only this client knows it. Both halves need
-/// it: a task no pane is in front of ends, and a directory a pane *is* in
-/// is never collected, whatever its record says.
+/// `held` is every checkout a live pane still sits in and `echoed` every
+/// agent a live tab was launched for; both travel with the request because
+/// only this client knows them. Both halves need them: a task no pane is
+/// in front of ends, and a directory a pane *is* in is never collected,
+/// whatever its record says.
 fn spawn_occupancy_reconcile(
     home: &UzeHome,
     look_in: Vec<PathBuf>,
     held: Vec<PathBuf>,
+    echoed: Vec<String>,
     sender: mpsc::Sender<OccupancyResolution>,
 ) {
     let home = home.clone();
@@ -767,7 +783,8 @@ fn spawn_occupancy_reconcile(
                         // gone, and the sweep is a `readdir` next to the repository
                         // work already happening here.
                         app.health().prune_runtime_projections();
-                        app.workspace().reconcile_occupancy(&look_in, &held)
+                        app.workspace()
+                            .reconcile_occupancy(&look_in, &held, &echoed)
                     })
                     .unwrap_or_default()
             },
@@ -872,6 +889,7 @@ fn active_palette() -> uze_terminal::Palette {
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
+    kind: uze_terminal::SpaceKind,
     layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
@@ -900,7 +918,7 @@ pub(crate) fn attach_workspace(
     // makes a repository and a subdirectory of it the same space rather
     // than two.
     let workspace_root = uze_application::space_root(root);
-    let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
+    let mut stream = attach(&workspace_root, kind, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
         &mut stream,
@@ -913,6 +931,7 @@ pub(crate) fn attach_workspace(
                 Landing::AtLaunchDirectory => Some(workspace_root.clone()),
                 Landing::WhereItLeftOff => None,
             },
+            kind,
         },
     )
     .map_err(runtime_error)?;
@@ -1753,7 +1772,7 @@ fn selected_agent_context(
 /// [`selected_agent_context`] resolves, for every tab rather than the
 /// selected one, since an agent nobody is looking at is exactly the one
 /// whose conversation would otherwise go unrecorded.
-fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<(String, PathBuf)> {
+fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<LaunchedAgent> {
     let Some(session) = model.session.as_ref() else {
         return Vec::new();
     };
@@ -1768,10 +1787,28 @@ fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<(
                 .iter()
                 .find(|identity| identity.binary == binary)
                 .map(|identity| identity.integration)?;
-            let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
-            Some((integration.to_owned(), cwd))
+            let id = launched_agent_id(tab)?.to_owned();
+            // The directory as it was given, not the kernel's note about
+            // what became of it: a removed checkout is still where the
+            // record says the agent is.
+            let cwd = named_checkout(&pane_in_layout(&tab.layout, tab.focus.pane)?.cwd);
+            Some(LaunchedAgent {
+                integration: integration.to_owned(),
+                id,
+                cwd,
+            })
         })
         .collect()
+}
+
+/// The agent a tab was launched for, as the server echoes the launch: the
+/// identity the client stamped when it created the tab. `None` for a
+/// shell, and for a tab whose agent exited and was respawned as one.
+fn launched_agent_id(tab: &Tab) -> Option<&str> {
+    tab.env
+        .iter()
+        .find(|(name, _)| name == uze_terminal::launch::AGENT_IDENTITY_VARIABLE)
+        .map(|(_, id)| id.as_str())
 }
 
 /// A short message on screen, and — for one about a single task — enough
@@ -1896,7 +1933,6 @@ struct Remembered {
     task_mutation_pending: BTreeSet<String>,
     notice: Option<Notice>,
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
-    pane_tasks: BTreeMap<PaneId, String>,
     occupied_checkouts: BTreeSet<PathBuf>,
     lost_checkouts: BTreeSet<PaneId>,
     slots_swept: bool,
@@ -1928,7 +1964,6 @@ impl WorkspaceModel {
             task_mutation_pending,
             notice,
             pane_checkouts,
-            pane_tasks,
             occupied_checkouts,
             lost_checkouts,
             slots_swept,
@@ -1956,7 +1991,6 @@ impl WorkspaceModel {
             task_mutation_pending,
             notice,
             pane_checkouts,
-            pane_tasks,
             occupied_checkouts,
             lost_checkouts,
             slots_swept,
@@ -1989,7 +2023,6 @@ impl WorkspaceModel {
             task_mutation_pending: self.task_mutation_pending,
             notice: self.notice,
             pane_checkouts: self.pane_checkouts,
-            pane_tasks: self.pane_tasks,
             occupied_checkouts: self.occupied_checkouts,
             lost_checkouts: self.lost_checkouts,
             slots_swept: self.slots_swept,
@@ -2195,17 +2228,10 @@ struct WorkspaceModel {
     /// mode where the keyboard mostly belongs to something else.
     action_index: Option<ActionIndexOverlay>,
     /// The checkout each open pane was first seen in — a pane's slot does
-    /// not change when it `cd`s.
+    /// not change when it `cd`s. A directory fact, and the only thing it
+    /// answers is slot occupancy; which agent a pane is for is what the
+    /// session's tab says (see [`launched_agent_id`]).
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
-    /// The task each pane was found running, bound the first time its
-    /// checkout resolved to one and kept for the life of the pane. The
-    /// checkout is how a live task is found; once its directory is gone
-    /// the reconciliation strips the task of that checkout, and this is
-    /// the only thing left that says which task the pane was in.
-    pane_tasks: BTreeMap<PaneId, String>,
-    /// The task a placement put in each slot — by primary checkout and
-    /// slot name — until an evaluation lists it. See [`Self::task_for_cwd`].
-    slot_claims: BTreeMap<(PathBuf, String), String>,
     /// The slot directories a pane still holds. A checkout that leaves this
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,
@@ -2914,96 +2940,63 @@ impl WorkspaceModel {
             .map(|space| space.root.clone())
     }
 
-    /// The task whose slot `cwd` sits in, as last evaluated. Lexical: the
-    /// slot's name is its identifier, and the primary it hangs off keys
-    /// the repository's tasks.
-    ///
-    /// A slot outlives the tasks that run in it, and a task that ended
-    /// keeps naming the slot it ran in, so more than one task can point at
-    /// the same directory. The newest is the one running there — the same
-    /// rule `checkout::slot_state` reads occupancy by. Taking the first
-    /// match instead handed a new agent the previous occupant's branch and
-    /// its status mark.
-    /// The task standing in `cwd`'s slot, matched by the slot itself.
-    ///
-    /// `checkout_id` and not the resolved `checkout` path, because the
-    /// directory is exactly what can be missing when this is asked: a task
-    /// whose checkout was removed comes back from a re-read with
-    /// `checkout: None` and its slot still named, which is what that field
-    /// is for. Matching the path meant a pane stayed bound only if it had
-    /// been bound *before* the removal — which held on Linux, where a
-    /// removed cwd is renamed by `/proc` and the change drives a pass
-    /// through agent startup, and did not where the loss is noticed on a
-    /// clock. Unbound, the row says the checkout is gone and never offers
-    /// the way back in.
-    ///
-    /// Slots are reused, so several tasks can carry the same one: the
-    /// newest is the one standing there now.
-    ///
-    /// A placement names the task it put in a slot before any evaluation
-    /// lists that task, and in that window the newest task on record is the
-    /// slot's *previous* occupant: the new agent's tab took its name and,
-    /// since a generated label is never adopted, kept it. Nothing is the
-    /// answer until the claimed task arrives.
-    fn task_for_cwd(&self, cwd: &Path) -> Option<&TaskView> {
-        let checkout = uze_application::isolated_checkout(cwd)?;
-        let tasks = self.tasks.get(checkout.primary)?;
-        let claim = (checkout.primary.to_path_buf(), checkout.name.to_owned());
-        if self
-            .slot_claims
-            .get(&claim)
-            .is_some_and(|claimed| !tasks.iter().any(|task| &task.id == claimed))
-        {
-            return None;
-        }
-        tasks
+    /// The agent a tab was launched for, by the identity the session echoes.
+    pub(super) fn tab_agent_id(&self, tab: TabId) -> Option<&str> {
+        self.session
+            .as_ref()?
+            .workspace
+            .spaces
             .iter()
-            .filter(|task| task.checkout_id.as_deref() == Some(checkout.name))
-            .max_by_key(|task| task.created_at_unix)
+            .flat_map(|space| &space.tabs)
+            .find(|candidate| candidate.id == tab)
+            .and_then(launched_agent_id)
     }
 
-    /// Records that a placement put `task` in the slot `checkout` is.
-    pub(super) fn claim_slot(&mut self, checkout: &Path, task: &str) {
-        if let Some(slot) = uze_application::isolated_checkout(checkout) {
-            self.slot_claims.insert(
-                (slot.primary.to_path_buf(), slot.name.to_owned()),
-                task.to_owned(),
-            );
-        }
+    /// The same, for the pane an agent tab's row stands for.
+    fn pane_agent_id(&self, pane: PaneId) -> Option<&str> {
+        self.session
+            .as_ref()?
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .find(|tab| {
+                panes_in_layout(&tab.layout)
+                    .iter()
+                    .any(|candidate| candidate.id == pane)
+            })
+            .and_then(launched_agent_id)
     }
 
-    /// Drops every claim whose task an evaluation has listed: from then on
-    /// the record answers for the slot.
-    pub(super) fn settle_slot_claims(&mut self) {
-        let tasks = &self.tasks;
-        self.slot_claims.retain(|(primary, _), claimed| {
-            !tasks
-                .get(primary)
-                .is_some_and(|listed| listed.iter().any(|task| &task.id == claimed))
-        });
+    /// The task listed for an identity, whichever repository listed it.
+    fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &TaskView)> {
+        self.tasks.iter().find_map(|(primary, tasks)| {
+            tasks
+                .iter()
+                .find(|task| task.id == id)
+                .map(|task| (primary, task))
+        })
     }
 
+    /// The task a tab is for: the one the launch named, once an evaluation
+    /// lists it. Nothing stands in for it before that — a slot's previous
+    /// occupant is not this agent's task, whatever the directory says.
     pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {
-        let cwd = tab_cwd(self, tab)?;
-        self.task_for_cwd(&cwd)
+        let id = self.tab_agent_id(tab)?;
+        self.task_with_id(id).map(|(_, task)| task)
     }
 
     /// The task a pane was running in a checkout that is now gone, with
-    /// the repository it belongs to — found through the slot the pane was
-    /// bound to, since the task's own directory no longer resolves. Only
+    /// the repository it belongs to — found through the identity the
+    /// pane's launch carried, since the task's own directory no longer
+    /// resolves. Only
     /// while the task is waiting for a slot: once resumed it has one, and
     /// the row that lost its own is nobody's way back in any more.
     pub(super) fn lost_task(&self, pane: PaneId) -> Option<(&PathBuf, &TaskView)> {
         if !self.lost_checkouts.contains(&pane) {
             return None;
         }
-        let task_id = self.pane_tasks.get(&pane)?;
-        let (primary, task) = self.tasks.iter().find_map(|(primary, tasks)| {
-            tasks
-                .iter()
-                .find(|task| &task.id == task_id)
-                .map(|task| (primary, task))
-        })?;
+        let (primary, task) = self.task_with_id(self.pane_agent_id(pane)?)?;
         let resumable = task.checkout.is_none()
             && !matches!(
                 task.state,
@@ -3029,25 +3022,6 @@ impl WorkspaceModel {
             return TaskStateView::Integrating;
         }
         task.state.clone()
-    }
-
-    /// Binds every pane whose checkout resolves to a task, and is not
-    /// bound yet, to that task. Called when the panes change and again
-    /// when tasks arrive — the evaluation that names a task answers off
-    /// the frame, so the first sync after a tab opens usually finds no
-    /// task to bind to. Never rebound: the task a pane was found in is
-    /// the one it keeps, even after that task loses its checkout.
-    pub(super) fn bind_pane_tasks(&mut self) {
-        let found: Vec<(PaneId, String)> = self
-            .pane_checkouts
-            .iter()
-            .filter(|(pane, _)| !self.pane_tasks.contains_key(pane))
-            .filter_map(|(pane, checkout)| {
-                self.task_for_cwd(checkout)
-                    .map(|task| (*pane, task.id.clone()))
-            })
-            .collect();
-        self.pane_tasks.extend(found);
     }
 
     /// The pane an agent tab's row stands for.
@@ -3828,6 +3802,7 @@ fn dispatch_menu_action<W: io::Write>(
                             rows,
                             cwd: tab_cwd(model, tab),
                             command: None,
+                            env: Vec::new(),
                         },
                     );
                 }
@@ -4018,11 +3993,18 @@ fn sync_slot_occupancy(
     model
         .pane_checkouts
         .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
-    model.bind_pane_tasks();
-    model
-        .pane_tasks
-        .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
     let occupied: BTreeSet<PathBuf> = model.pane_checkouts.values().cloned().collect();
+    // Which agents still have a tab: what the launch stamped, echoed back
+    // by the server, and the one fact that still names a task after its
+    // checkout is gone from under it.
+    let echoed: Vec<String> = session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| &space.tabs)
+        .filter_map(launched_agent_id)
+        .map(str::to_owned)
+        .collect();
     // Bound to a checkout that is no longer on disk, or first seen already
     // standing in one: `/proc` reports a removed directory as its old path
     // followed by ` (deleted)`, which is not a path anything resolves.
@@ -4069,6 +4051,7 @@ fn sync_slot_occupancy(
         home,
         look_in,
         occupied.into_iter().collect(),
+        echoed,
         sender.clone(),
     );
 }

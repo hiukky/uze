@@ -4,6 +4,7 @@
 //! attach, render snapshots, and forward input; this keeps a pane alive when
 //! a client leaves the workspace.
 
+pub mod launch;
 mod process_probe;
 mod protocol;
 mod runtime;
@@ -17,6 +18,6 @@ pub use runtime::{
     RuntimeError, attach, open_space, read_event, send_request, serve, socket_path, stop,
 };
 pub use state::{
-    Focus, Layout, OpenedSpace, Pane, PaneId, Session, Space, SpaceId, SpaceSeed, Tab, TabId,
-    TabSeed, Workspace, WorkspaceId,
+    Focus, Layout, OpenedSpace, Pane, PaneId, Session, Space, SpaceId, SpaceKind, SpaceSeed, Tab,
+    TabId, TabSeed, Workspace, WorkspaceId,
 };

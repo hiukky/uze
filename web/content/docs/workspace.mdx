@@ -54,6 +54,14 @@ per harness in uze's own state, never inside a checkout — so resetting or
 deleting a checkout cannot take it, and a recycled slot starts its next task
 fresh.
 
+What ties a process to its task is the launch, not the directory: an agent uze
+starts carries its identity in the pane's environment, the shim resumes by that
+identity, and it verifies it against the task's own checkout before it does. A
+harness you start by hand — in a shell tab, even inside an agent's checkout —
+carries no identity and starts exactly as it would without uze. So does a harness
+an agent starts from inside its own session: it never resumes the agent's
+conversation.
+
 Where it cannot be done — no shim, or no resume mechanism uze can drive — the
 agent still starts and the tab says why. The [harness matrix](/docs/harnesses)
 has the per-harness column.

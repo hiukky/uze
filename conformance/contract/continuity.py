@@ -11,10 +11,13 @@ harness can answer whether the conversation actually came back:
 The scene lays a managed task down by hand, the same way the isolation
 scene lays a slot down: task records are the engine's business and are
 proven against real Git in the deterministic suite, so writing one here
-keeps the run measuring the harness rather than the engine. A path this
-scene got wrong shows up as a check that fails, never as one that passes
-for the wrong reason — the harness would simply start a second conversation
-and the earlier turn would be absent.
+keeps the run measuring the harness rather than the engine. The relaunch
+carries the agent's identity the way a launch UZE composes does — a
+variable on the command, with no owner yet, which the first shim takes —
+because the shim resumes by that claim and never by the directory. A path
+this scene got wrong shows up as a check that fails, never as one that
+passes for the wrong reason — the harness would simply start a second
+conversation and the earlier turn would be absent.
 """
 
 import time
@@ -22,9 +25,17 @@ import time
 from shared.common import check, describe, provider_struct
 
 #: Where the scene's project lives inside the container, and its one slot.
+#: The task's identifier is the slot's name, so the stamp the relaunch
+#: carries and the checkout the record names agree, which is what the shim
+#: verifies before it resumes anything.
 PROJECT = "/work/project"
 SLOT_NAME = "t0lab"
 SLOT = f"{PROJECT}/.worktrees/{SLOT_NAME}"
+
+#: The variable a launch carries the agent's identity in —
+#: `uze_terminal::launch::AGENT_IDENTITY_VARIABLE`, spelled here because
+#: the scene composes the launch the way the workspace client does.
+AGENT_IDENTITY_VARIABLE = "UZE_AGENT"
 
 #: Sentinels only one turn each carries. The proof is one model request
 #: holding both: the second process's own turn, and the first process's turn
@@ -68,7 +79,8 @@ printf '/.worktrees/\\n' >> .git/info/exclude
 mkdir -p {UZE_HOME}/state/tasks {UZE_HOME}/shims
 cat > {tasks} <<'UZE_EOF'
 {{
-  "schema_version": 1,
+  "schema_version": 2,
+  "tenants": [],
   "tasks": [
     {{
       "id": "{SLOT_NAME}",
@@ -117,8 +129,13 @@ def relaunch_command(harness, args=""):
     than in each binding: the marker only means anything if every vertical
     prints the same one, and a binding is free to wrap this in whatever its
     own container needs.
+
+    The identity rides on each launch as the client stamps it. No shim pid
+    accompanies it: the shell's `$$` is not the harness's pid, and an
+    identity with no owner yet is exactly what a launch UZE composed looks
+    like to the first shim that reads it.
     """
-    run = f"{launcher(harness)} {args}".strip()
+    run = f"{AGENT_IDENTITY_VARIABLE}={SLOT_NAME} {launcher(harness)} {args}".strip()
     return f"{run}; printf '\\n{ENDED_MARKER}\\n'; {run}"
 
 

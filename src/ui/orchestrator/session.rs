@@ -159,6 +159,19 @@ impl Attach<'_> {
 
     // --- The management modal --------------------------------------------
 
+    /// Opens space creation, from the pointer or the keyboard alike: the
+    /// picker starts where the selected space is rooted.
+    fn open_root_picker(&mut self) {
+        let prefill = self
+            .model
+            .session
+            .as_ref()
+            .map(|session| crate::ui::display_project_path(&session.selected_space().root))
+            .unwrap_or_else(|| "~".to_owned());
+        self.model.root_picker = Some(RootPicker::opened_in(&prefill));
+        self.model.dirty = true;
+    }
+
     /// Opens the modal over whatever is on screen. The action index is
     /// the one surface put away first: it is how the modal is most often
     /// reached, and a list of everything you can do has no business
@@ -518,6 +531,7 @@ impl Attach<'_> {
                         rows,
                         cwd: new_shell_cwd(&self.model, &self.identities),
                         command: None,
+                        env: Vec::new(),
                     },
                 );
             }
@@ -538,6 +552,7 @@ impl Attach<'_> {
                 });
                 self.model.dirty = true;
             }
+            Action::NewSpace => self.open_root_picker(),
             Action::RenameSelection => {
                 if let Some(tab) = self.model.selected_tab() {
                     begin_rename(&mut self.model, MenuTarget::Tab(tab));
@@ -748,7 +763,7 @@ impl Attach<'_> {
             Action::Activate => {
                 if let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
                     self.model.root_picker = None;
-                    self.open_space_at(root, columns, rows);
+                    self.open_space_at(root, uze_terminal::SpaceKind::Worktree, columns, rows);
                 }
             }
             Action::Dismiss => self.model.root_picker = None,
@@ -1196,12 +1211,19 @@ impl Attach<'_> {
     /// the server numbers the repeated name rather than refusing (see
     /// `Session::create_space`), because one repository is routinely
     /// worth two spaces and the prompt is an explicit request for one.
-    fn open_space_at(&mut self, root: PathBuf, columns: u16, rows: u16) {
+    fn open_space_at(
+        &mut self,
+        root: PathBuf,
+        kind: uze_terminal::SpaceKind,
+        columns: u16,
+        rows: u16,
+    ) {
         let _ = send_request(
             &mut self.stream,
             &ClientRequest::CreateSpace {
                 label: None,
                 root,
+                kind,
                 columns,
                 rows,
             },
@@ -1256,7 +1278,12 @@ impl Attach<'_> {
                             picker.chosen()
                         }) {
                             self.model.root_picker = None;
-                            self.open_space_at(root, columns, rows);
+                            self.open_space_at(
+                                root,
+                                uze_terminal::SpaceKind::Worktree,
+                                columns,
+                                rows,
+                            );
                         }
                     }
                     // Click outside the picker's own rows discards it —
@@ -1982,6 +2009,7 @@ impl Attach<'_> {
                         rows,
                         cwd: new_shell_cwd(&self.model, &self.identities),
                         command: None,
+                        env: Vec::new(),
                     },
                 );
             }
@@ -2048,16 +2076,7 @@ impl Attach<'_> {
                 // handles — same as `PickAgent` above for the
                 // agent picker.
             }
-            WorkspaceHit::NewSpace => {
-                let prefill = self
-                    .model
-                    .session
-                    .as_ref()
-                    .map(|session| crate::ui::display_project_path(&session.selected_space().root))
-                    .unwrap_or_else(|| "~".to_owned());
-                self.model.root_picker = Some(RootPicker::opened_in(&prefill));
-                self.model.dirty = true;
-            }
+            WorkspaceHit::NewSpace => self.open_root_picker(),
             WorkspaceHit::PickSpaceRoot(_) => {
                 // Only reachable while the root picker is open,
                 // which the guarded arm above already handles —
@@ -2213,7 +2232,7 @@ impl Attach<'_> {
                     // server's own default directory it is, same as
                     // before slots existed.
                     None => {
-                        self.open_agent_tab_at(label, command, None, size);
+                        self.open_agent_tab_at(label, command, None, Vec::new(), size);
                         return;
                     }
                 },
@@ -2237,7 +2256,7 @@ impl Attach<'_> {
         };
         self.model
             .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
-        self.open_agent_tab(label, command, cwd, size);
+        self.open_agent_tab(label, command, cwd, Vec::new(), size);
     }
 
     /// The one place a `CreateTab` for an agent is sent, so the two ways
@@ -2247,9 +2266,10 @@ impl Attach<'_> {
         label: String,
         command: Vec<String>,
         cwd: PathBuf,
+        env: Vec<(String, String)>,
         size: (u16, u16),
     ) {
-        self.open_agent_tab_at(label, command, Some(cwd), size);
+        self.open_agent_tab_at(label, command, Some(cwd), env, size);
     }
 
     /// `None` leaves the directory to the server — the one case where
@@ -2259,6 +2279,7 @@ impl Attach<'_> {
         label: String,
         command: Vec<String>,
         cwd: Option<PathBuf>,
+        env: Vec<(String, String)>,
         size: (u16, u16),
     ) {
         let _ = send_request(
@@ -2270,6 +2291,7 @@ impl Attach<'_> {
                 columns: size.0,
                 rows: size.1,
                 command: Some(command),
+                env,
             },
         );
     }
@@ -2311,15 +2333,22 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
-        if let uze_application::Isolation::Slot { task, .. } = &placement.isolation {
-            self.model.claim_slot(&placement.cwd, task.as_str());
-        }
+        // The launch carries the agent's identity: what the shim resumes
+        // the conversation by, and what this client reads back from the
+        // session to know which task the tab is for.
+        let env = match &placement.isolation {
+            uze_application::Isolation::Slot { task, .. } => vec![(
+                uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+                task.as_str().to_owned(),
+            )],
+            uze_application::Isolation::Unisolated { .. } => Vec::new(),
+        };
         self.model
             .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
         // The size the last frame actually drew — the same value the
         // resize path keeps in step with the layout.
         let size = self.model.last_size;
-        self.open_agent_tab(label, command, placement.cwd, size);
+        self.open_agent_tab(label, command, placement.cwd, env, size);
         // The agent this one took over from stood in a directory that no
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
@@ -2456,8 +2485,6 @@ impl Attach<'_> {
                 continue;
             }
             self.model.tasks.insert(primary, evaluation.tasks);
-            self.model.settle_slot_claims();
-            self.model.bind_pane_tasks();
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.

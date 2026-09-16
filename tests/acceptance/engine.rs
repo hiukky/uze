@@ -168,6 +168,13 @@ impl Engine {
                 rows: 24,
                 cwd: Some(slot.clone()),
                 command: Some(vec!["agent".into()]),
+                // The launch carries the agent's identity, as the client's
+                // does: what the sweep reads back to know the task is still
+                // somebody's.
+                env: vec![(
+                    uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+                    task.as_str().to_owned(),
+                )],
             },
         )
         .unwrap();
@@ -320,7 +327,8 @@ impl Drop for Engine {
 }
 
 fn connect(project: &Path) -> (UnixStream, UnixStream) {
-    let mut stream = attach(project, 80, 24).expect("connects to the server started above");
+    let mut stream = attach(project, uze_terminal::SpaceKind::Worktree, 80, 24)
+        .expect("connects to the server started above");
     let reader = stream.try_clone().unwrap();
     send_request(
         &mut stream,
@@ -330,6 +338,7 @@ fn connect(project: &Path) -> (UnixStream, UnixStream) {
             columns: 80,
             rows: 24,
             root: Some(project.to_path_buf()),
+            kind: uze_terminal::SpaceKind::Worktree,
         },
     )
     .unwrap();
@@ -430,7 +439,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     let released = engine
         .app()
         .workspace()
-        .release_abandoned_tasks(&project, &occupied);
+        .release_abandoned_tasks(&project, &occupied, &[]);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(!released[0].parked, "the checkout held nothing");
     assert_eq!(
@@ -449,7 +458,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
         engine
             .app()
             .workspace()
-            .release_abandoned_tasks(&project, &occupied)
+            .release_abandoned_tasks(&project, &occupied, &[])
             .is_empty(),
         "an agent sitting in its slot is not abandoned"
     );
@@ -460,7 +469,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     let released = engine
         .app()
         .workspace()
-        .release_abandoned_tasks(&project, &occupied);
+        .release_abandoned_tasks(&project, &occupied, &[]);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(released[0].parked, "it holds uncommitted work");
     assert_eq!(engine.state_of(&unsaved), TaskStateView::Parked);
@@ -499,7 +508,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
     let reconciliation = engine
         .app()
         .workspace()
-        .reconcile_occupancy(&look_in, &held);
+        .reconcile_occupancy(&look_in, &held, &[]);
 
     assert_eq!(
         reconciliation.released.len(),
@@ -525,7 +534,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
     let quiet = engine
         .app()
         .workspace()
-        .reconcile_occupancy(&look_in, &engine.occupied());
+        .reconcile_occupancy(&look_in, &engine.occupied(), &[]);
     assert!(
         quiet.changed.is_empty() && quiet.released.is_empty(),
         "a second pass over the same state changes nothing: {quiet:?}"
@@ -833,7 +842,8 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     // A nested launch: what `uze` does when UZE_PANE is set.
     let nested = engine.env.root().join("nested-project");
     fs::create_dir_all(&nested).unwrap();
-    let label = open_space(&nested).expect("the running server opens a space");
+    let label = open_space(&nested, uze_terminal::SpaceKind::Worktree)
+        .expect("the running server opens a space");
     assert_eq!(label, "nested-project");
     engine.wait_for_session_where("three spaces exist", |session| {
         session.workspace.spaces.len() == 3

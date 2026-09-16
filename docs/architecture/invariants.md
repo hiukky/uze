@@ -1243,7 +1243,40 @@ task never inherits it, and a task given its checkout back finds what it
 left.
 
 > `crates/uze-core/src/project/conversation.rs::a_recycled_slots_new_task_finds_nothing_the_previous_one_left`
-> `crates/uze-core/src/project/conversation.rs::the_newest_task_naming_a_checkout_owns_it`
+> `crates/uze-core/src/project/conversation.rs::a_verified_claim_resolves_to_its_own_record_wherever_inside_its_directory`
+
+### An agent is what its launch carried, verified twice (`identify-agents-at-launch`)
+
+Which agent a process is comes from the identity its launch stamped into
+the pane's environment — persisted with the tab, respawned with it, echoed
+back to the client — and never from the directory it stands in. Every
+reader verifies the stamp twice before acting on it: the project's records
+name it, and the directory is the one the record gives that agent. An
+identifier nobody recorded, or one claimed from outside its own directory,
+is no identity at all; two records over one directory are told apart by
+the identifier alone. The name of the variable has one owner, the terminal
+runtime's launch vocabulary, and core never spells it.
+
+> `crates/uze-terminal/src/runtime.rs::a_launch_environment_reaches_the_first_process`
+> `crates/uze-terminal/src/runtime.rs::a_launch_environment_survives_a_restart`
+> `crates/uze-terminal/src/runtime.rs::a_shell_respawn_carries_no_launch_environment`
+> `crates/uze-terminal/src/runtime.rs::a_pane_does_not_inherit_the_servers_agent_identity`
+> `crates/uze-core/src/project/conversation.rs::a_claim_no_record_backs_has_no_owner`
+> `crates/uze-core/src/delivery/continuity.rs::two_agents_in_one_directory_keep_their_own_conversations`
+> `tests/acceptance/session_continuity.rs::an_identity_claimed_from_the_wrong_directory_is_launched_untouched`
+> `tests/architecture/layering.rs::architecture_rules_hold` (the identity variable has one owner)
+
+### An identity has an owner, and a launch inside a launch is ordinary
+
+The shim that first reads an identity with no owner takes it, stamping its
+own pid; a shim that finds the identity owned by another pid is running
+inside that owner's launch — a harness started by a harness — and treats
+it as absent. Two processes never share one resume. The agent's own
+commands are the owner's children and accept the inherited identity
+without applying the rule: a command is not a launch.
+
+> `tests/acceptance/session_continuity.rs::a_launch_nested_inside_an_agents_launch_is_ordinary`
+> `tests/acceptance/agent_surface.rs::an_agent_names_its_work_through_the_real_binary`
 
 ### A relaunch resumes; the decision is made where every relaunch passes
 
@@ -1258,12 +1291,14 @@ next one continues it.
 ### Continuity never rewrites an invocation and never blocks a launch
 
 An invocation carrying anything of the operator's own is launched exactly as
-typed, a directory no task owns is untouched, and every failure — a
-conversation the harness no longer holds, unreadable state, a harness that
-declares no mechanism — starts the agent anyway.
+typed, a launch carrying no identity is untouched wherever it is made — a
+managed task's checkout included, because a person typing there is not the
+launch UZE composed — and every failure — a conversation the harness no
+longer holds, unreadable state, a harness that declares no mechanism —
+starts the agent anyway.
 
 > `tests/acceptance/session_continuity.rs::an_invocation_the_operator_composed_is_launched_exactly_as_typed`
-> `tests/acceptance/session_continuity.rs::a_directory_no_task_owns_launches_the_harness_untouched`
+> `tests/acceptance/session_continuity.rs::a_launch_carrying_no_identity_is_launched_untouched_even_inside_a_slot`
 > `crates/uze-core/src/delivery/continuity.rs::a_conversation_the_harness_no_longer_holds_starts_a_new_one_and_says_so`
 > `crates/uze-core/src/delivery/continuity.rs::unreadable_state_still_launches_the_agent`
 

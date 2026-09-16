@@ -42,7 +42,14 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 ///
 /// Bumped again for `ReorderTab`, a new request moving a tab within its
 /// own space's `tabs` order.
-pub const PROTOCOL_VERSION: u16 = 11;
+///
+/// Bumped again for a launch environment: `CreateTab` carries the
+/// variables its command starts with and `Tab` reports them back, which
+/// changes a request shape and the pushed `Session`.
+///
+/// Bumped again for a space's kind: `Attach` and `CreateSpace` name it and
+/// `Space` reports it.
+pub const PROTOCOL_VERSION: u16 = 13;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
 /// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
@@ -109,6 +116,8 @@ pub enum ClientRequest {
         /// exists and selects it for this client. `None` keeps the
         /// server's default selection.
         root: Option<std::path::PathBuf>,
+        /// The kind of the space to make sure of, with `root`.
+        kind: crate::SpaceKind,
     },
     Detach,
     Input {
@@ -143,6 +152,12 @@ pub enum ClientRequest {
         /// tab running a specific program directly instead of a shell the
         /// user would otherwise have to type the program into themselves.
         command: Option<Vec<String>>,
+        /// What the command's process starts with beyond the pane's own
+        /// environment — an agent's identity, stamped by the client. Empty
+        /// for a shell, and refused with anything else (see
+        /// `launch::validate`); persisted with the tab and reported back
+        /// on it, never read by the server.
+        env: crate::launch::Environment,
     },
     SelectTab {
         tab: TabId,
@@ -168,6 +183,7 @@ pub enum ClientRequest {
         /// `None` derives the label from the root.
         label: Option<String>,
         root: std::path::PathBuf,
+        kind: crate::SpaceKind,
         columns: u16,
         rows: u16,
     },
@@ -330,6 +346,7 @@ mod tests {
             columns: 80,
             rows: 24,
             root: Some(std::path::PathBuf::from("/tmp/w")),
+            kind: crate::SpaceKind::Worktree,
         };
         assert_eq!(
             serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
@@ -357,6 +374,7 @@ mod tests {
             ClientRequest::CreateSpace {
                 label: Some("frontend".into()),
                 root: std::path::PathBuf::from("/tmp/frontend"),
+                kind: crate::SpaceKind::Workspace,
                 columns: 80,
                 rows: 24,
             },

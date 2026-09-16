@@ -79,7 +79,13 @@ mod workspace_tests {
     /// to the fixture identity, matched on the tab label the way a tab created
     /// before generic agent labels is.
     fn agent_session() -> WorkspaceModel {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
         WorkspaceModel {
             session: Some(session),
@@ -149,9 +155,21 @@ mod workspace_tests {
         // would resume, not where the user is. Drawing the dot from that
         // alone gave the sidebar one "this is the agent you are talking to"
         // per open space.
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
-        session.add_space("second".into(), "/tmp/second".into(), 80, 24);
+        session.add_space(
+            "second".into(),
+            "/tmp/second".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         session.workspace.spaces[1].tabs[0].label = "Agent".into();
         let model = WorkspaceModel {
             session: Some(session),
@@ -211,6 +229,7 @@ mod workspace_tests {
     /// in `state`.
     fn agent_with_task(state: TaskStateView, ahead: usize) -> WorkspaceModel {
         let mut model = agent_session_in("/repo/.worktrees/ai");
+        stamp_first_tab(&mut model, "t1");
         model.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
@@ -272,7 +291,13 @@ mod workspace_tests {
     /// the shell the space was born with. Returns the model and the two
     /// agent tabs, in creation order.
     fn two_agents_with_shells() -> (WorkspaceModel, TabId, TabId) {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/repo".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let space = session.workspace.selected_space;
         let agent = |session: &mut Session, label: &str, cwd: &str| {
             let pane = session.add_tab(space, label.into(), None, 80, 24, cwd.into());
@@ -721,7 +746,13 @@ mod workspace_tests {
     /// back where it was".
     #[test]
     fn dragging_the_first_agent_onto_the_seconds_own_label_row_reorders_it() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/repo".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let space = session.workspace.selected_space;
         let mut agent_ids = Vec::new();
         for (label, cwd) in [
@@ -1662,6 +1693,7 @@ mod workspace_tests {
     #[test]
     fn a_reused_slot_reads_the_task_in_it_now_not_the_one_before() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
+        stamp_first_tab(&mut model, "now");
         let before = TaskView {
             id: "before".into(),
             branch: "agent/before".into(),
@@ -1705,11 +1737,13 @@ mod workspace_tests {
 
     /// The window between a placement and the evaluation that lists its
     /// task: the only task on record in the slot is the one before, and
-    /// reading it there named the new agent's tab after it for good.
+    /// reading it by directory named the new agent's tab after it for good.
+    /// The tab is for the agent its launch named, and nothing else.
     #[test]
     fn a_new_agent_never_takes_the_name_of_the_task_before_it_in_the_slot() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
+        stamp_first_tab(&mut model, "now");
         let before = TaskView {
             id: "before".into(),
             ..task_in(
@@ -1720,7 +1754,6 @@ mod workspace_tests {
             )
         };
         model.tasks.insert(PathBuf::from("/repo"), vec![before]);
-        model.claim_slot(Path::new("/repo/.worktrees/ai"), "now");
 
         assert!(
             model.tab_task(tab).is_none(),
@@ -1733,14 +1766,9 @@ mod workspace_tests {
             ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
         };
         model.tasks.get_mut(Path::new("/repo")).unwrap().push(now);
-        model.settle_slot_claims();
         assert_eq!(
             model.tab_task(tab).map(|task| task.id.as_str()),
             Some("now")
-        );
-        assert!(
-            model.slot_claims.is_empty(),
-            "the record answers from here on"
         );
     }
 
@@ -1993,31 +2021,32 @@ mod workspace_tests {
         assert!(row.contains("/repo") && !row.contains(&label), "{row}");
     }
 
-    /// The pane-to-task binding the resume rests on is made by the same
-    /// sync that binds a pane to its checkout, on the first tick the task
-    /// is known, and survives the task losing that checkout afterwards.
+    /// The pane-to-task binding the resume rests on is the identity the
+    /// launch carried, echoed by the session; it survives the task losing
+    /// its checkout because it never depended on the checkout.
     #[test]
-    fn a_pane_is_bound_to_the_task_it_was_found_in_and_keeps_it_after_the_checkout_goes() {
+    fn a_pane_is_bound_to_the_task_it_was_launched_for_and_keeps_it_after_the_checkout_goes() {
         let mut model = agent_with_task(TaskStateView::Running, 0);
+        stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
             .focus
             .pane;
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
         let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-pane-task-home"));
         let (sender, _receiver) = std::sync::mpsc::channel();
         let (evaluations, _answers) = std::sync::mpsc::channel();
         model.occupancy_stale = true;
         sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
-        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
 
         let mut orphaned = model.tasks[Path::new("/repo")][0].clone();
         orphaned.checkout = None;
         orphaned.checkout_id = None;
         orphaned.state = TaskStateView::Parked;
         model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
-        model.occupancy_stale = true;
-        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        model.lost_checkouts.insert(pane);
         assert_eq!(
-            model.pane_tasks.get(&pane).map(String::as_str),
+            model.tab_task(tab).map(|task| task.id.as_str()),
             Some("t1"),
             "the binding outlives the checkout"
         );
@@ -2058,14 +2087,16 @@ mod workspace_tests {
 
     /// A client that attaches after the removal never watched the
     /// checkout go: the first thing it learns about that pane is the
-    /// kernel's ` (deleted)` spelling of the directory. Binding *that* to
-    /// a task matches nothing, and the row it draws offers no way back.
+    /// kernel's ` (deleted)` spelling of the directory. The binding does
+    /// not read the directory at all, so the row still offers the way back.
     #[test]
     fn a_pane_first_seen_in_a_removed_checkout_is_still_bound_to_its_task() {
         let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
+        stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
             .focus
             .pane;
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
         model.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
@@ -2081,34 +2112,25 @@ mod workspace_tests {
         model.occupancy_stale = true;
         sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
 
-        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
         assert!(
             model.lost_checkouts.contains(&pane),
             "and the row still says the checkout is gone"
         );
     }
 
-    /// The pane is bound to its task through the *slot* the task was given,
-    /// not through the directory that slot names — because by the time
-    /// anybody asks, the directory can be gone.
-    ///
-    /// A task whose checkout was removed comes back from a re-read with
-    /// `checkout: None` and its `checkout_id` intact, which is what that
-    /// field is for. Matching on the resolved path instead meant a pane
-    /// only stayed bound if it had been bound *before* the removal — true
-    /// on Linux, where `/proc` renames a removed cwd and the resulting
-    /// change drives a pass on every keystroke of agent startup, and not
-    /// true where the loss is noticed on a clock. Unbound, the row says
-    /// `checkout removed` and never offers the way back in.
+    /// The pane is bound to its task through the identity its launch
+    /// carried, not through the directory — because by the time anybody
+    /// asks, the directory can be gone, and a task that lost its checkout
+    /// comes back from a re-read with `checkout: None`.
     #[test]
-    fn a_pane_binds_to_its_task_through_the_slot_even_after_the_directory_is_gone() {
+    fn a_pane_binds_to_its_task_through_its_identity_even_after_the_directory_is_gone() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
+        stamp_first_tab(&mut model, "t1");
         let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
             .focus
             .pane;
-        model
-            .pane_checkouts
-            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
 
         // What a re-read answers once the directory is gone: the slot is
         // still named, the path no longer resolves.
@@ -2116,11 +2138,10 @@ mod workspace_tests {
         orphaned.checkout = None;
         model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
 
-        model.bind_pane_tasks();
         assert_eq!(
-            model.pane_tasks.get(&pane).map(String::as_str),
+            model.tab_task(tab).map(|task| task.id.as_str()),
             Some("t1"),
-            "the slot the task was given is what ties the pane to it"
+            "the identity the launch carried is what ties the pane to it"
         );
 
         model.lost_checkouts.insert(pane);
@@ -2130,19 +2151,14 @@ mod workspace_tests {
         );
     }
 
-    /// The task is usually not known on the tick the pane appears; it is
-    /// bound when the evaluation that names it lands.
+    /// The task is usually not known on the tick the pane appears; the tab
+    /// answers for it the moment the evaluation that lists it lands.
     #[test]
-    fn a_pane_is_bound_to_its_task_when_the_task_arrives_after_the_checkout() {
+    fn a_pane_is_bound_to_its_task_when_the_task_arrives_after_the_launch() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .focus
-            .pane;
-        model
-            .pane_checkouts
-            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
-        model.bind_pane_tasks();
-        assert!(model.pane_tasks.is_empty(), "nothing to bind to yet");
+        stamp_first_tab(&mut model, "t1");
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
+        assert!(model.tab_task(tab).is_none(), "nothing to bind to yet");
 
         model.tasks.insert(
             PathBuf::from("/repo"),
@@ -2153,8 +2169,30 @@ mod workspace_tests {
                 0,
             )],
         );
-        model.bind_pane_tasks();
-        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
+    }
+
+    /// A shell opened beside an agent carries no identity and is bound to
+    /// nothing, however much its directory says.
+    #[test]
+    fn a_shell_beside_an_agent_binds_to_nothing() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        model.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![task_in(
+                "/repo/.worktrees/ai",
+                "fix-auth-redirect",
+                TaskStateView::Running,
+                0,
+            )],
+        );
+        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
+        assert!(
+            model.tab_task(tab).is_none(),
+            "a tab launched for nobody is nobody's, whatever slot it stands in"
+        );
+        stamp_first_tab(&mut model, "t1");
+        assert!(model.tab_task(tab).is_some());
     }
 
     /// A worktree removed by hand leaves the agent standing in a directory
@@ -2186,7 +2224,7 @@ mod workspace_tests {
         model
             .pane_checkouts
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
-        model.pane_tasks.insert(pane, "t1".to_owned());
+        stamp_first_tab(&mut model, "t1");
         model.lost_checkouts.insert(pane);
         let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Parked, 2);
         parked.checkout = None;
@@ -2587,8 +2625,24 @@ mod workspace_tests {
     }
 
     /// A one-agent session whose only tab runs in `cwd`.
+    /// Marks the first tab as launched for `id`: what the server echoes
+    /// back for a tab the client created with that identity stamped.
+    fn stamp_first_tab(model: &mut WorkspaceModel, id: &str) {
+        let tab = &mut model.session.as_mut().unwrap().workspace.spaces[0].tabs[0];
+        tab.env = vec![(
+            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+            id.to_owned(),
+        )];
+    }
+
     fn agent_session_in(cwd: &str) -> WorkspaceModel {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/repo".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let tab = &mut session.workspace.spaces[0].tabs[0];
         tab.label = "Agent".into();
         if let Layout::Pane(pane) = &mut tab.layout {
@@ -2634,6 +2688,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 root.to_path_buf(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -3506,6 +3561,32 @@ mod workspace_tests {
             .route
     }
 
+    /// Creating a space is reachable from the keyboard, and the chord opens
+    /// exactly what the pointer's `+ new` opens: the picker, rooted where
+    /// the selected space is.
+    #[test]
+    fn the_new_space_chord_opens_the_picker_the_pointer_opens() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-new-space-chord"));
+        let mut driven = driven(agent_session_in("/repo"), &home);
+        let chord = uze_keys::active()
+            .chord_for(uze_keys::Action::NewSpace, &[uze_keys::Scope::Workspace])
+            .expect("space creation is reachable from the keyboard");
+
+        driven.press_key(key_event(chord));
+
+        let picker = driven
+            .attach
+            .model
+            .root_picker
+            .as_ref()
+            .expect("the picker opened");
+        assert_eq!(
+            picker.input(),
+            format!("{}/", crate::ui::display_project_path(Path::new("/repo"))),
+            "rooted where the selected space is, as the pointer's control roots it"
+        );
+    }
+
     /// The management surface is a modal over the workspace, not a mode
     /// beside it: the action that opens it closes it again, the frame
     /// draws it over everything, and the client behind it stays attached.
@@ -3997,12 +4078,19 @@ mod workspace_tests {
     /// merely out of view.
     #[test]
     fn the_space_tree_scrolls_to_what_the_column_cannot_show() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
         for index in 1..8 {
             session.add_space(
                 format!("space {index}"),
                 format!("/tmp/{index}").into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             );
@@ -4809,6 +4897,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 "/tmp".into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -4821,7 +4910,13 @@ mod workspace_tests {
 
     #[test]
     fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -4856,7 +4951,13 @@ mod workspace_tests {
         // switch, a restored selection — the check has to go once they are
         // looking at it. Clearing it only at the call sites that happened to
         // know about it is what made "done" survive on a tab already open.
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -4890,7 +4991,13 @@ mod workspace_tests {
 
     #[test]
     fn a_closed_tab_leaves_no_status_behind_for_the_next_pane() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -5041,6 +5148,7 @@ mod workspace_tests {
             id: TabId(1),
             label: label.to_owned(),
             agent: None,
+            env: Vec::new(),
             layout: Layout::Pane(pane),
             focus: Focus { pane: PaneId(1) },
         }
@@ -5057,7 +5165,13 @@ mod workspace_tests {
 
     #[test]
     fn new_agent_labels_are_numbered_independently_of_harnesses() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let model = WorkspaceModel {
             session: Some(session.clone()),
             ..WorkspaceModel::default()
@@ -5081,7 +5195,13 @@ mod workspace_tests {
 
     #[test]
     fn a_lone_agent_can_close_when_it_is_replaced_by_a_shell() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         session.workspace.spaces[0].tabs[0].label = "Claude Code".into();
         let tab = session.workspace.spaces[0].selected_tab;
         let model = WorkspaceModel {
@@ -5095,7 +5215,13 @@ mod workspace_tests {
 
     #[test]
     fn a_lone_plain_shell_stays_non_closable() {
-        let session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         let tab = session.workspace.spaces[0].selected_tab;
         let model = WorkspaceModel {
             session: Some(session),
@@ -5114,7 +5240,13 @@ mod workspace_tests {
 
     #[test]
     fn new_tabs_use_the_selected_panes_live_directory() {
-        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp/root".into(), 80, 24);
+        let mut session = Session::new(
+            WorkspaceId("workspace".into()),
+            "/tmp/root".into(),
+            uze_terminal::SpaceKind::Worktree,
+            80,
+            24,
+        );
         assert!(session.update_pane_status(PaneId(1), "/tmp/project/src".into(), "zsh".into()));
         let model = WorkspaceModel {
             session: Some(session),
@@ -5179,6 +5311,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 "/tmp".into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -5195,6 +5328,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 "/tmp".into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -5217,6 +5351,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 "/tmp".into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -5239,6 +5374,7 @@ mod workspace_tests {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
                 "/tmp".into(),
+                uze_terminal::SpaceKind::Worktree,
                 80,
                 24,
             )),
@@ -5619,7 +5755,7 @@ mod workspace_tests {
             }
         }
         model.pane_checkouts.insert(pane, checkout.to_path_buf());
-        model.pane_tasks.insert(pane, task.id.clone());
+        stamp_first_tab(&mut model, &task.id);
         model.lost_checkouts.insert(pane);
         model.tasks.insert(primary.to_path_buf(), vec![task]);
         model
@@ -5805,7 +5941,7 @@ mod workspace_tests {
         repository.git_in(&placement.cwd, &["add", "."]);
         repository.git_in(&placement.cwd, &["commit", "-qm", "kept"]);
         std::fs::remove_dir_all(&placement.cwd).unwrap();
-        app.workspace().release_abandoned_tasks(&root, &[]);
+        app.workspace().release_abandoned_tasks(&root, &[], &[]);
 
         let primary = root.canonicalize().unwrap();
         let task = app

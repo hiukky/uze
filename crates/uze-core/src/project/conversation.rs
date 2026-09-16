@@ -44,11 +44,10 @@ use crate::{
     harness_runtime::project_id_for,
     home::UzeHome,
     persistence::write_atomic,
-    task::{self, TaskId},
-    worktree,
+    task::{self, AgentId},
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A conversation as its harness names it. Opaque here on purpose: the
 /// only code entitled to read it is the integration that resumes with it.
@@ -148,17 +147,17 @@ pub struct HarnessConversation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ConversationRecord {
     pub schema_version: u32,
-    pub task: TaskId,
+    pub agent: AgentId,
     /// Keyed by integration id, so a fifth harness adds a key rather than a
     /// shape.
     pub harnesses: BTreeMap<String, HarnessConversation>,
 }
 
 impl ConversationRecord {
-    pub fn new(task: TaskId) -> Self {
+    pub fn new(agent: AgentId) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
-            task,
+            agent,
             harnesses: BTreeMap::new(),
         }
     }
@@ -226,17 +225,17 @@ fn now_unix() -> u64 {
         .unwrap_or_default()
 }
 
-/// The document for one task of `project_root`.
-pub fn store_path(home: &UzeHome, project_root: &Path, task: &TaskId) -> PathBuf {
+/// The document for one agent of `project_root`.
+pub fn store_path(home: &UzeHome, project_root: &Path, agent: &AgentId) -> PathBuf {
     let canonical = project_root
         .canonicalize()
         .unwrap_or_else(|_| project_root.to_path_buf());
-    home.conversation_path(&project_id_for(&canonical), task.as_str())
+    home.conversation_path(&project_id_for(&canonical), agent.as_str())
 }
 
 /// What was recorded for `task`, or an empty record. Never fails: see the
 /// module's note on why continuity state is advisory.
-pub fn load(home: &UzeHome, project_root: &Path, task: &TaskId) -> ConversationRecord {
+pub fn load(home: &UzeHome, project_root: &Path, task: &AgentId) -> ConversationRecord {
     let path = store_path(home, project_root, task);
     let empty = || ConversationRecord::new(task.clone());
     let Ok(bytes) = fs::read(&path) else {
@@ -252,51 +251,61 @@ pub fn load(home: &UzeHome, project_root: &Path, task: &TaskId) -> ConversationR
 pub fn save(home: &UzeHome, project_root: &Path, record: &ConversationRecord) -> Result<()> {
     let payload =
         serde_json::to_vec_pretty(record).expect("conversation record serialization is infallible");
-    write_atomic(&store_path(home, project_root, &record.task), &payload)
+    write_atomic(&store_path(home, project_root, &record.agent), &payload)
 }
 
 /// Forgets a task's conversations. Best-effort by construction: a record
 /// that is already gone is the outcome asked for.
-pub fn forget(home: &UzeHome, project_root: &Path, task: &TaskId) {
+pub fn forget(home: &UzeHome, project_root: &Path, task: &AgentId) {
     let _ = fs::remove_file(store_path(home, project_root, task));
 }
 
-/// The task a directory belongs to, and the checkout it stands in.
+/// The agent a verified claim resolved to, and the project root every
+/// record for it is keyed on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Owner {
-    /// The primary checkout the isolated one belongs to — the project root
-    /// every record for this task is keyed on.
     pub primary: PathBuf,
-    pub task: TaskId,
+    pub agent: AgentId,
 }
 
-/// Whose task is this directory?
+/// What a process says about itself: the identifier its launch carried,
+/// and the directory it stands in. The two are verified together — the
+/// identifier says *which* agent, the directory says *where* it should be,
+/// and a claim the record contradicts is no claim at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Claim<'a> {
+    pub id: &'a str,
+    pub cwd: &'a Path,
+}
+
+/// Whose agent is this process?
 ///
-/// Lexical against the isolation layout plus one small read of the task
-/// store: no subprocess, nothing that scales with the Store, because a
-/// harness launch waits on this. `None` for a directory no managed task
-/// owns — the operator's own checkout, or anywhere else on the machine —
-/// which is what keeps an ordinary invocation ordinary.
-///
-/// The newest task naming the checkout is its owner, the same rule slot
-/// occupancy is decided by: a recycled slot's previous tenants keep naming
-/// it in their own records forever, and only the last one holds it.
-pub fn owner_of(home: &UzeHome, cwd: &Path) -> Option<Owner> {
-    let checkout = worktree::isolated_checkout(cwd)?;
-    let primary = checkout.primary.to_path_buf();
-    let store = task::load(home, &primary).ok()?;
-    let task = store
-        .tasks
-        .iter()
-        .filter(|task| {
-            task.checkout
-                .as_ref()
-                .is_some_and(|id| id.as_str() == checkout.name)
+/// Ancestors of the claimed directory, nearest first, are asked whether a
+/// store keyed on them names the identifier; the first that does answers,
+/// provided the record's own directory contains the claimed one. A few
+/// `stat`s and one small read: no subprocess, nothing that scales with the
+/// Store, because a harness launch waits on this. `None` for a claim no
+/// record backs — an identifier nobody recorded, a directory the record
+/// does not allow — which is what keeps an ordinary invocation ordinary
+/// and keeps a process that edits its own environment inside the directory
+/// its record already gave it.
+pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
+    let cwd = claim
+        .cwd
+        .canonicalize()
+        .unwrap_or_else(|_| claim.cwd.to_path_buf());
+    cwd.ancestors().find_map(|root| {
+        if !task::store_path(home, root).exists() {
+            return None;
+        }
+        let store = task::load(home, root).ok()?;
+        let record = store.agent(claim.id)?;
+        let own = record.own_directory(root)?;
+        let own = own.canonicalize().unwrap_or(own);
+        cwd.starts_with(&own).then(|| Owner {
+            primary: root.to_path_buf(),
+            agent: record.id().clone(),
         })
-        .max_by_key(|task| task.created_at_unix)?;
-    Some(Owner {
-        primary,
-        task: task.id.clone(),
     })
 }
 
@@ -345,7 +354,7 @@ mod tests {
     fn a_record_round_trips_through_the_document() {
         let home = home("conversation-round-trip");
         let root = project("conversation-round-trip-project");
-        let task = TaskId::generate();
+        let task = AgentId::generate();
 
         let mut record = ConversationRecord::new(task.clone());
         record.launched(
@@ -367,7 +376,7 @@ mod tests {
     fn an_unreadable_document_reads_as_no_record_rather_than_as_an_error() {
         let home = home("conversation-unreadable");
         let root = project("conversation-unreadable-project");
-        let task = TaskId::generate();
+        let task = AgentId::generate();
         let path = store_path(&home, &root, &task);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"{ not json").unwrap();
@@ -379,17 +388,21 @@ mod tests {
     fn a_document_from_a_schema_this_build_does_not_know_is_ignored_not_refused() {
         let home = home("conversation-unknown-schema");
         let root = project("conversation-unknown-schema-project");
-        let task = TaskId::generate();
+        let task = AgentId::generate();
         let path = store_path(&home, &root, &task);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, br#"{"schema_version":99,"task":"x","harnesses":{}}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"schema_version":99,"agent":"x","harnesses":{}}"#,
+        )
+        .unwrap();
 
         assert!(load(&home, &root, &task).harnesses.is_empty());
     }
 
     #[test]
     fn each_harness_keeps_its_own_conversation() {
-        let mut record = ConversationRecord::new(TaskId::generate());
+        let mut record = ConversationRecord::new(AgentId::generate());
         record.launched(
             "claude-code",
             ConversationOrigin::Assigned,
@@ -407,7 +420,7 @@ mod tests {
 
     #[test]
     fn an_answer_to_a_replaced_launch_is_dropped() {
-        let mut record = ConversationRecord::new(TaskId::generate());
+        let mut record = ConversationRecord::new(AgentId::generate());
         record.launched("codex", ConversationOrigin::Observed, None, None);
         let stale = record.get("codex").unwrap().launched_at_unix;
 
@@ -425,34 +438,90 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_outside_the_isolation_layout_owns_no_task() {
+    fn a_claim_no_record_backs_has_no_owner() {
         let home = home("conversation-no-owner");
+        let primary = project("conversation-no-owner-project");
+        let slot = primary.join(".worktrees").join("slot-1");
+        fs::create_dir_all(&slot).unwrap();
+        let mut store = TaskStore::default();
+        let task = task_named("slot-1");
+        let id = task.id.as_str().to_owned();
+        store.upsert(task);
+        task::save(&home, &primary, &store).unwrap();
+
         assert_eq!(
-            owner_of(&home, &project("conversation-no-owner-project")),
-            None
+            owner_of(
+                &home,
+                Claim {
+                    id: "unrecorded",
+                    cwd: &slot
+                }
+            ),
+            None,
+            "an identifier nobody recorded"
+        );
+        assert_eq!(
+            owner_of(
+                &home,
+                Claim {
+                    id: &id,
+                    cwd: &primary
+                }
+            ),
+            None,
+            "the operator's own checkout is not the task's directory"
+        );
+        let elsewhere = project("conversation-no-owner-elsewhere");
+        assert_eq!(
+            owner_of(
+                &home,
+                Claim {
+                    id: &id,
+                    cwd: &elsewhere
+                }
+            ),
+            None,
+            "a directory outside the project"
         );
     }
 
     #[test]
-    fn the_newest_task_naming_a_checkout_owns_it() {
+    fn a_verified_claim_resolves_to_its_own_record_wherever_inside_its_directory() {
         let home = home("conversation-owner");
         let primary = project("conversation-owner-project");
         let slot = primary.join(".worktrees").join("slot-1");
-        fs::create_dir_all(&slot).unwrap();
+        let nested = slot.join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
 
         let mut store = TaskStore::default();
-        let mut previous = task_named("slot-1");
-        previous.created_at_unix = 10;
-        let mut current = task_named("slot-1");
-        current.created_at_unix = 20;
-        let expected = current.id.clone();
+        let previous = task_named("slot-1");
+        let current = task_named("slot-1");
+        let previous_id = previous.id.clone();
+        let current_id = current.id.clone();
         store.upsert(previous);
         store.upsert(current);
         task::save(&home, &primary, &store).unwrap();
 
-        let owner = owner_of(&home, &slot).expect("the slot has an owner");
-        assert_eq!(owner.task, expected);
-        assert_eq!(owner.primary, primary);
+        let owner = owner_of(
+            &home,
+            Claim {
+                id: current_id.as_str(),
+                cwd: &nested,
+            },
+        )
+        .expect("the claim is backed by its record");
+        assert_eq!(owner.agent, current_id);
+        assert_eq!(owner.primary, primary.canonicalize().unwrap());
+        // Two records over one slot are told apart by the identifier alone.
+        let previous_owner = owner_of(
+            &home,
+            Claim {
+                id: previous_id.as_str(),
+                cwd: &slot,
+            },
+        )
+        .expect("the earlier tenant of the slot still resolves by its own id");
+        assert_eq!(previous_owner.agent, previous_id);
     }
 
     #[test]
@@ -460,7 +529,7 @@ mod tests {
         let home = home("conversation-recycled");
         let root = project("conversation-recycled-project");
 
-        let previous = TaskId::generate();
+        let previous = AgentId::generate();
         let mut record = ConversationRecord::new(previous.clone());
         record.launched(
             "claude-code",
@@ -470,7 +539,7 @@ mod tests {
         );
         save(&home, &root, &record).unwrap();
 
-        let recycled = TaskId::generate();
+        let recycled = AgentId::generate();
         assert!(load(&home, &root, &recycled).harnesses.is_empty());
         // And the previous task's own record is untouched by that.
         assert!(load(&home, &root, &previous).get("claude-code").is_some());
@@ -480,7 +549,7 @@ mod tests {
     fn forgetting_a_task_takes_its_record_with_it() {
         let home = home("conversation-forget");
         let root = project("conversation-forget-project");
-        let task = TaskId::generate();
+        let task = AgentId::generate();
         let mut record = ConversationRecord::new(task.clone());
         record.launched("codex", ConversationOrigin::Observed, None, None);
         save(&home, &root, &record).unwrap();

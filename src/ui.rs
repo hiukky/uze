@@ -134,9 +134,14 @@ pub fn run(home: UzeHome) -> Result<()> {
     let mut landing = orchestrator::Landing::AtLaunchDirectory;
     let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // Asked once, here, before the attach: the kind the launch
+        // directory's space lands on if this client is the one to create
+        // it. One Git read on the way in, never in the loop.
+        let kind = space_kind_for(&uze_application::space_root(&root));
         match orchestrator::attach_workspace(
             &mut terminal,
             &root,
+            kind,
             &mut layout,
             &mut workspace_memory,
             &home,
@@ -381,6 +386,29 @@ pub(crate) fn small_caps(s: &str) -> String {
 
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
+/// The kind a space over `root` is created as when nobody chose: the
+/// placement the root's profile lands on, spelled for the wire. The one
+/// place the two vocabularies meet outside the picker.
+pub fn space_kind_for(root: &std::path::Path) -> uze_terminal::SpaceKind {
+    space_kind_of(uze_application::root_profile(root).default_placement())
+}
+
+/// The wire's spelling of a placement.
+pub(crate) fn space_kind_of(placement: uze_application::PlacementKind) -> uze_terminal::SpaceKind {
+    match placement {
+        uze_application::PlacementKind::Slot => uze_terminal::SpaceKind::Worktree,
+        uze_application::PlacementKind::Tenant => uze_terminal::SpaceKind::Workspace,
+    }
+}
+
+/// The placement a wire kind names.
+pub(crate) fn placement_of(kind: uze_terminal::SpaceKind) -> uze_application::PlacementKind {
+    match kind {
+        uze_terminal::SpaceKind::Worktree => uze_application::PlacementKind::Slot,
+        uze_terminal::SpaceKind::Workspace => uze_application::PlacementKind::Tenant,
+    }
+}
+
 pub(crate) fn display_project_path(root: &std::path::Path) -> String {
     if let Some(home) = std::env::var_os("HOME")
         && let Ok(relative) = root.strip_prefix(&home)

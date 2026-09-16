@@ -7,8 +7,8 @@ pub use application::StaleProjection;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, NamedTask, Reconciliation, ReleasedTask, TaskStateView,
-    TaskView, UpstreamSync,
+    DeliveryReport, Evaluation, Isolation, NamedTask, PlacementKind, Reconciliation, ReleasedTask,
+    RootProfile, TaskStateView, TaskView, TenantView, UpstreamSync, root_profile,
 };
 
 /// Types the read models above are made of. Presentation consumes these
@@ -23,6 +23,7 @@ pub use uze_core::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
     },
     context::PlannedAction,
+    conversation::Claim,
     integration::{AttachmentState, PublicationStatus},
     naming::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,

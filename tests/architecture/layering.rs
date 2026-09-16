@@ -47,7 +47,9 @@ const RULES: &[Rule] = &[
                 "src/shim.rs",
                 "a separate binary entry point, not presentation: the runtime \
                  shim resolves a harness's real executable and must name the \
-                 runtime contract to do it",
+                 runtime contract to do it; it is the launch boundary, and reads \
+                 the launch vocabulary from the terminal runtime, which owns the \
+                 variables a launch stamps",
             ),
             (
                 "src/bin/uze-harness-matrix.rs",
@@ -78,6 +80,48 @@ const RULES: &[Rule] = &[
                 "tooling, likewise named in AGENTS.md as a registry consumer",
             ),
         ],
+        budget: &[],
+    },
+    Rule {
+        name: "the agent identity variable has one owner: the terminal's launch vocabulary",
+        scope: "crates/uze-core/src",
+        forbidden: "UZE_AGENT",
+        reason: "the name of the variable a launch stamps is transport, not domain: \
+                 the terminal runtime owns the set of variables a launch carries and \
+                 a pane never inherits, and the shim and the agent's own commands read \
+                 the name from there. Core receives a verified claim and never learns \
+                 how it travelled; a second spelling here is a second owner, and two \
+                 owners of one name drift apart.",
+        remedy: "take a `conversation::Claim`. The reader that has the environment \
+                 builds it from `uze_terminal::launch::AGENT_IDENTITY_VARIABLE`.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "the application never spells the agent identity variable either",
+        scope: "crates/uze-application/src",
+        forbidden: "UZE_AGENT",
+        reason: "same owner, same reason: the application re-exports the claim's \
+                 vocabulary and never the transport's.",
+        remedy: "take a `Claim`; the client and the shim build it from the terminal's \
+                 launch vocabulary.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "the terminal runtime keeps a space's kind and never reads it",
+        scope: "crates/uze-terminal/src",
+        forbidden: "SpaceKind::",
+        reason: "what a space's kind means — how its agents are placed, how it is \
+                 drawn — is the client's business at placement and at drawing. The \
+                 server persists and reports the kind the way it does a label; a \
+                 server that branched on it would be a second owner of the meaning, \
+                 and the runtime would stop being the domain-free thing a pane's \
+                 survival rests on.",
+        remedy: "carry `SpaceKind` through as data; the type defines its own \
+                 spellings with `Self::`. Naming a variant anywhere else in the \
+                 runtime is the tell that a decision moved into the server.",
+        sanctioned: &[],
         budget: &[],
     },
     Rule {

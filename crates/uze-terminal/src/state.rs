@@ -41,14 +41,50 @@ pub struct Workspace {
     pub selected_space: SpaceId,
 }
 
+/// What the operator chose a space to be when they created it: whether the
+/// agents born in it work in isolated checkouts of their own, or in the
+/// space's directory on whatever branch it is on. Part of the space's
+/// identity — one root may carry one of each — and kept here the way the
+/// label is: persisted, restored, reported, and never read by the server,
+/// which spawns panes the same way whichever it is. What a kind *means* is
+/// the client's business at placement and at drawing.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SpaceKind {
+    /// Every agent in a slot of its own — what every space was before
+    /// kinds existed, and what an absent kind reads back as.
+    #[default]
+    Worktree,
+    /// Every agent in the space's own directory.
+    Workspace,
+}
+
+impl SpaceKind {
+    /// The kind on a command line — how the server is told which kind its
+    /// bootstrap space is.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Worktree => "worktree",
+            Self::Workspace => "workspace",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "worktree" => Some(Self::Worktree),
+            "workspace" => Some(Self::Workspace),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Space {
     pub id: SpaceId,
     pub label: String,
     /// Where this space's work lives, chosen when it was created: an agent
-    /// created here starts from it, a shell opens in it, and whether it is
-    /// a Git repository decides whether agents get slots.
+    /// created here starts from it, and a shell opens in it.
     pub root: PathBuf,
+    pub kind: SpaceKind,
     pub tabs: Vec<Tab>,
     pub selected_tab: TabId,
 }
@@ -77,6 +113,12 @@ pub struct Tab {
     /// selected, and every agent tab (an agent *is* a context; it does not
     /// sit inside one).
     pub agent: Option<TabId>,
+    /// What the tab's launch put into its first process's environment
+    /// beyond the pane's own — the server's record of the launch it made,
+    /// which a client reads back to know which agent a tab is for. Empty
+    /// for a shell, and emptied again when a finished agent's pane is
+    /// respawned as one.
+    pub env: crate::launch::Environment,
     pub layout: Layout,
     pub focus: Focus,
 }
@@ -137,6 +179,7 @@ pub enum OpenedSpace {
 pub struct SpaceSeed {
     pub label: String,
     pub root: PathBuf,
+    pub kind: SpaceKind,
     pub tabs: Vec<TabSeed>,
 }
 
@@ -148,10 +191,13 @@ pub struct TabSeed {
     /// mints fresh ones. Out of range, or pointing at itself, restores as
     /// `None`.
     pub agent: Option<usize>,
+    /// The launch environment the tab is respawned with, beside its
+    /// command.
+    pub env: crate::launch::Environment,
 }
 
 impl Session {
-    pub fn new(id: WorkspaceId, root: PathBuf, columns: u16, rows: u16) -> Self {
+    pub fn new(id: WorkspaceId, root: PathBuf, kind: SpaceKind, columns: u16, rows: u16) -> Self {
         let pane = Pane {
             id: PaneId(1),
             cwd: root.clone(),
@@ -163,6 +209,7 @@ impl Session {
             id: TabId(1),
             label: "shell".to_owned(),
             agent: None,
+            env: Vec::new(),
             layout: Layout::Pane(pane),
             focus: Focus { pane: PaneId(1) },
         };
@@ -170,6 +217,7 @@ impl Session {
             id: SpaceId(1),
             label: space_label(&root),
             root,
+            kind,
             tabs: vec![tab],
             selected_tab: TabId(1),
         };
@@ -195,6 +243,7 @@ impl Session {
     pub fn restore(
         id: WorkspaceId,
         root: PathBuf,
+        kind: SpaceKind,
         columns: u16,
         rows: u16,
         seeds: Vec<SpaceSeed>,
@@ -227,6 +276,7 @@ impl Session {
                         .agent
                         .filter(|agent| *agent != index && *agent < seeded)
                         .map(|agent| TabId(first_tab_id + agent as u64)),
+                    env: tab_seed.env,
                     layout: Layout::Pane(Pane {
                         id: pane_id,
                         cwd: tab_seed.cwd,
@@ -242,12 +292,13 @@ impl Session {
                 id: space_id,
                 label: seed.label,
                 root: seed.root,
+                kind: seed.kind,
                 tabs,
                 selected_tab,
             });
         }
         let Some(selected_space) = spaces.first().map(|space| space.id) else {
-            return Self::new(id, root, columns, rows);
+            return Self::new(id, root, kind, columns, rows);
         };
         Self {
             workspace: Workspace {
@@ -279,17 +330,22 @@ impl Session {
     }
 
     /// The space whose root is `root`, compared as the filesystem sees it.
-    pub fn space_for_root(&self, root: &Path) -> Option<SpaceId> {
+    /// The space rooted at `root` of `kind`, when one is open. Root and
+    /// kind together: a worktree space and a workspace space over one
+    /// directory are two spaces, and asking for either never answers the
+    /// other.
+    pub fn space_for(&self, root: &Path, kind: SpaceKind) -> Option<SpaceId> {
         let wanted = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         self.workspace
             .spaces
             .iter()
             .find(|space| {
-                space
-                    .root
-                    .canonicalize()
-                    .unwrap_or_else(|_| space.root.clone())
-                    == wanted
+                space.kind == kind
+                    && space
+                        .root
+                        .canonicalize()
+                        .unwrap_or_else(|_| space.root.clone())
+                        == wanted
             })
             .map(|space| space.id)
     }
@@ -311,14 +367,15 @@ impl Session {
         &mut self,
         label: Option<String>,
         root: PathBuf,
+        kind: SpaceKind,
         columns: u16,
         rows: u16,
     ) -> OpenedSpace {
-        if let Some(space) = self.space_for_root(&root) {
+        if let Some(space) = self.space_for(&root, kind) {
             return OpenedSpace::Existing(space);
         }
         let label = label.unwrap_or_else(|| space_label(&root));
-        let pane = self.add_space(label, root, columns, rows);
+        let pane = self.add_space(label, root, kind, columns, rows);
         OpenedSpace::Created {
             space: self.workspace.selected_space,
             pane,
@@ -336,11 +393,12 @@ impl Session {
         &mut self,
         label: Option<String>,
         root: PathBuf,
+        kind: SpaceKind,
         columns: u16,
         rows: u16,
     ) -> PaneId {
         let label = label.unwrap_or_else(|| self.unrepeated_label(&root));
-        self.add_space(label, root, columns, rows)
+        self.add_space(label, root, kind, columns, rows)
     }
 
     /// `space_label`'s answer for `root`, numbered from 2 while a space on
@@ -368,7 +426,14 @@ impl Session {
     /// [`Session::add_tab`]'s result. [`Session::create_space`] is the
     /// entry point that names it; [`Session::open_space`] the one that
     /// first looks for a space already there.
-    pub fn add_space(&mut self, label: String, root: PathBuf, columns: u16, rows: u16) -> PaneId {
+    pub fn add_space(
+        &mut self,
+        label: String,
+        root: PathBuf,
+        kind: SpaceKind,
+        columns: u16,
+        rows: u16,
+    ) -> PaneId {
         let space_id = SpaceId(self.next_space_id);
         let tab_id = TabId(self.next_tab_id);
         let pane_id = PaneId(self.next_pane_id);
@@ -382,6 +447,7 @@ impl Session {
                 id: tab_id,
                 label: "shell".to_owned(),
                 agent: None,
+                env: Vec::new(),
                 layout: Layout::Pane(Pane {
                     id: pane_id,
                     cwd: root.clone(),
@@ -392,6 +458,7 @@ impl Session {
                 focus: Focus { pane: pane_id },
             }],
             root,
+            kind,
             selected_tab: tab_id,
         });
         self.workspace.selected_space = space_id;
@@ -485,6 +552,7 @@ impl Session {
             id: tab_id,
             label,
             agent,
+            env: Vec::new(),
             layout: Layout::Pane(Pane {
                 id: pane_id,
                 cwd,
@@ -616,6 +684,26 @@ impl Session {
     /// searching every space's tabs), and reports whether anything actually
     /// changed — so the caller only broadcasts a `SessionUpdated` when the
     /// sidebar tree would show something new, not on every probe tick.
+    /// Records what `pane`'s tab was launched with: the environment the
+    /// spawn applied, or none when the pane came up as a plain shell. The
+    /// server is the only writer, at the moment it spawns, so what a tab
+    /// reports is the server's own record of the launch it made and never
+    /// something a pane's processes can rewrite.
+    pub fn record_launch(&mut self, pane: PaneId, env: crate::launch::Environment) -> bool {
+        for space in &mut self.workspace.spaces {
+            for tab in &mut space.tabs {
+                if panes_in_layout(&tab.layout).contains(&pane) {
+                    if tab.env == env {
+                        return false;
+                    }
+                    tab.env = env;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn update_pane_status(&mut self, pane: PaneId, cwd: PathBuf, process: String) -> bool {
         for space in &mut self.workspace.spaces {
             for tab in &mut space.tabs {
@@ -669,6 +757,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -698,6 +787,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -724,6 +814,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -750,10 +841,107 @@ mod tests {
     }
 
     #[test]
+    fn a_root_carries_one_space_per_kind() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
+        let root = PathBuf::from("/tmp/frontend");
+        let first = session.open_space(None, root.clone(), SpaceKind::Worktree, 80, 24);
+        let OpenedSpace::Created {
+            space: worktree, ..
+        } = first
+        else {
+            panic!("the first open creates");
+        };
+        assert_eq!(
+            session.open_space(None, root.clone(), SpaceKind::Worktree, 80, 24),
+            OpenedSpace::Existing(worktree),
+            "the same root and the same kind is the same space"
+        );
+        let other = session.open_space(None, root.clone(), SpaceKind::Workspace, 80, 24);
+        let OpenedSpace::Created {
+            space: workspace, ..
+        } = other
+        else {
+            panic!("the other kind over the same root creates a second space");
+        };
+        assert_ne!(worktree, workspace);
+        assert_eq!(
+            session.space_for(&root, SpaceKind::Workspace),
+            Some(workspace)
+        );
+        assert_eq!(
+            session.space_for(&root, SpaceKind::Worktree),
+            Some(worktree)
+        );
+    }
+
+    #[test]
+    fn the_kind_is_restored_with_the_space() {
+        let session = Session::restore(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
+            80,
+            24,
+            vec![SpaceSeed {
+                label: "shared".into(),
+                root: PathBuf::from("/tmp/shared"),
+                kind: SpaceKind::Workspace,
+                tabs: vec![TabSeed {
+                    label: "shell".into(),
+                    cwd: PathBuf::from("/tmp/shared"),
+                    agent: None,
+                    env: Vec::new(),
+                }],
+            }],
+        );
+        assert_eq!(session.workspace.spaces[0].kind, SpaceKind::Workspace);
+    }
+
+    #[test]
+    fn a_launch_is_recorded_on_the_tab_owning_the_pane_and_cleared_by_a_shell() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        let pane = session.add_tab(
+            space,
+            "agent 1".into(),
+            None,
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        let stamp = vec![("UZE_AGENT".to_owned(), "abc".to_owned())];
+        assert!(session.record_launch(pane, stamp.clone()));
+        assert_eq!(session.selected_tab().env, stamp);
+        assert!(
+            !session.record_launch(pane, stamp),
+            "recording the same launch changes nothing"
+        );
+        assert!(session.record_launch(pane, Vec::new()));
+        assert!(session.selected_tab().env.is_empty());
+        assert!(
+            !session.record_launch(PaneId(99), Vec::new()),
+            "an unknown pane records nothing"
+        );
+    }
+
+    #[test]
     fn update_pane_status_reports_change_only_when_something_actually_moved() {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -773,6 +961,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -792,14 +981,27 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
 
-        session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        session.create_space(
+            None,
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         assert_eq!(session.selected_space().label, "frontend");
 
-        let pane = session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        let pane = session.create_space(
+            None,
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         assert_eq!(session.workspace.spaces.len(), 3);
         assert_eq!(session.selected_space().label, "frontend 2");
         assert_eq!(
@@ -808,13 +1010,20 @@ mod tests {
         );
         assert_eq!(session.selected_tab().focus.pane, pane);
 
-        session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        session.create_space(
+            None,
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         assert_eq!(session.selected_space().label, "frontend 3");
 
         // A name the caller gives is its own business, repeated or not.
         session.create_space(
             Some("frontend".into()),
             PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -826,10 +1035,17 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
-        let pane = session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        let pane = session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.selected_space().label, "frontend");
         assert_eq!(session.selected_space().tabs.len(), 1);
@@ -845,11 +1061,18 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
 
-        let first = session.open_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        let first = session.open_space(
+            None,
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         let OpenedSpace::Created { space, pane } = first else {
             panic!("the first open creates: {first:?}");
         };
@@ -860,6 +1083,7 @@ mod tests {
         let again = session.open_space(
             Some("a second name".into()),
             PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -877,13 +1101,20 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
         let first_space = session.workspace.selected_space;
         assert_eq!(session.remove_space(first_space), None);
 
-        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         let second_space = session.workspace.selected_space;
         session.add_tab(
             session.workspace.selected_space,
@@ -908,6 +1139,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -924,11 +1156,18 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
         let first_space = session.workspace.selected_space;
-        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         let second_space = session.workspace.selected_space;
 
         assert!(!session.select_space(second_space), "already selected");
@@ -946,6 +1185,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -961,7 +1201,13 @@ mod tests {
         );
         assert_eq!(session.selected_tab().agent, Some(agent));
 
-        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         let elsewhere = session.workspace.selected_space;
         session.add_tab(
             elsewhere,
@@ -986,6 +1232,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -1021,12 +1268,19 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
         let original_tab = session.selected_tab().id;
         let original_pane = session.selected_tab().focus.pane;
-        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         // The newly added space is now selected; `original_tab` lives in
         // the *other*, non-selected space.
         assert_ne!(session.selected_tab().id, original_tab);
@@ -1057,26 +1311,31 @@ mod tests {
         let session = Session::restore(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
             vec![SpaceSeed {
                 label: "frontend".into(),
                 root: PathBuf::from("/tmp/seed"),
+                kind: SpaceKind::Worktree,
                 tabs: vec![
                     TabSeed {
                         label: "claude".into(),
                         cwd: PathBuf::from("/tmp/a/web"),
                         agent: None,
+                        env: Vec::new(),
                     },
                     TabSeed {
                         label: "shell".into(),
                         cwd: PathBuf::from("/tmp/a/web"),
                         agent: Some(0),
+                        env: Vec::new(),
                     },
                     TabSeed {
                         label: "loose".into(),
                         cwd: PathBuf::from("/tmp/a"),
                         agent: Some(7),
+                        env: Vec::new(),
                     },
                 ],
             }],
@@ -1093,32 +1352,38 @@ mod tests {
         let session = Session::restore(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
             vec![
                 SpaceSeed {
                     label: "frontend".into(),
                     root: PathBuf::from("/tmp/seed"),
+                    kind: SpaceKind::Worktree,
                     tabs: vec![
                         TabSeed {
                             label: "claude".into(),
                             cwd: PathBuf::from("/tmp/a/web"),
                             agent: None,
+                            env: Vec::new(),
                         },
                         TabSeed {
                             label: "shell".into(),
                             cwd: PathBuf::from("/tmp/a"),
                             agent: None,
+                            env: Vec::new(),
                         },
                     ],
                 },
                 SpaceSeed {
                     label: "backend".into(),
                     root: PathBuf::from("/tmp/seed"),
+                    kind: SpaceKind::Worktree,
                     tabs: vec![TabSeed {
                         label: "codex".into(),
                         cwd: PathBuf::from("/tmp/a/api"),
                         agent: None,
+                        env: Vec::new(),
                     }],
                 },
             ],
@@ -1162,6 +1427,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -1194,6 +1460,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -1237,6 +1504,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -1262,11 +1530,18 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
         let first_space_tab = session.selected_tab().id;
-        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        session.add_space(
+            "frontend".into(),
+            PathBuf::from("/tmp/frontend"),
+            SpaceKind::Worktree,
+            80,
+            24,
+        );
         let other_space_tab = session.selected_tab().id;
         assert_ne!(first_space_tab, other_space_tab);
 
@@ -1281,6 +1556,7 @@ mod tests {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );
@@ -1306,17 +1582,20 @@ mod tests {
         let restored = Session::restore(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
             vec![SpaceSeed {
                 label: "empty".into(),
                 root: PathBuf::from("/tmp/seed"),
+                kind: SpaceKind::Worktree,
                 tabs: vec![],
             }],
         );
         let fresh = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
+            SpaceKind::Worktree,
             80,
             24,
         );

@@ -309,6 +309,9 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
         bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
+        // The container of agents, beside the agent's own chord: `s` for
+        // space, on the same modifier.
+        bind(Scope::Workspace, "alt+s", Action::NewSpace),
         bind(Scope::Workspace, "f2", Action::RenameSelection),
         // The sidebar is vertical and holds spaces; the strip is
         // horizontal and holds tabs. Ctrl walks the container, Alt walks
@@ -426,8 +429,7 @@ mod tests {
                 "reset-key",
                 "install-project-environment",
                 "open-glossary",
-                "apply-profile",
-                "new-space"
+                "apply-profile"
             ],
             "an action gained or lost a chord; say so here on purpose"
         );

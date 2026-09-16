@@ -29,7 +29,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    task::{Base, Task, TaskId, TaskState, TaskStore},
+    task::{self, AgentId, Base, Task, TaskState, TaskStore},
     worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY, label_of},
 };
 
@@ -69,7 +69,7 @@ pub enum SlotState {
     /// An agent is here: its task is live, or a pane still sits in the
     /// directory after the task ended — a delivered task whose agent has
     /// not left is still somebody's checkout.
-    Occupied { task: TaskId },
+    Occupied { task: AgentId },
     /// Clean, and everything on its branch is in the target or was
     /// declared done: the next agent may take it.
     Free,
@@ -352,12 +352,12 @@ fn symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reconciliation {
     /// Tasks created for checkouts nobody had recorded.
-    pub adopted: Vec<TaskId>,
+    pub adopted: Vec<AgentId>,
     /// Tasks whose checkout is gone, now marked from where their branch stands.
-    pub orphaned: Vec<TaskId>,
+    pub orphaned: Vec<AgentId>,
     /// Delivered tasks whose agent kept working: their branch carries
     /// commits the target does not, in a checkout still registered.
-    pub revived: Vec<TaskId>,
+    pub revived: Vec<AgentId>,
 }
 
 /// Brings `store` in line with the isolation directory: adopts checkouts
@@ -415,7 +415,9 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             target.to_owned(),
         );
         task.label = label;
-        task.branch = branch.clone().unwrap_or_else(|| task.id.branch());
+        task.branch = branch
+            .clone()
+            .unwrap_or_else(|| task::generated_branch(&task.id));
         task.checkout = Some(id);
         // Nobody recorded this checkout, so nobody recorded a delivery
         // from it either: empty means it ended with nothing, not that its
@@ -479,7 +481,7 @@ fn end_without_checkout(primary: &Path, target: &str, task: &mut Task) {
 
 /// The task standing in each slot: the newest to have been given it, the
 /// same rule `slot_state` reads occupancy by.
-fn newest_per_slot(store: &TaskStore) -> BTreeMap<String, TaskId> {
+fn newest_per_slot(store: &TaskStore) -> BTreeMap<String, AgentId> {
     let mut newest: BTreeMap<String, &Task> = BTreeMap::new();
     for task in &store.tasks {
         let Some(checkout) = &task.checkout else {
@@ -1066,7 +1068,7 @@ mod tests {
         (task, acquired)
     }
 
-    fn set_state(store: &mut TaskStore, id: &TaskId, state: TaskState) {
+    fn set_state(store: &mut TaskStore, id: &AgentId, state: TaskState) {
         store.get_mut(id).unwrap().state = state;
     }
 

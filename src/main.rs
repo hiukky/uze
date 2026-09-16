@@ -156,6 +156,10 @@ enum TerminalAction {
     Serve {
         #[arg(long)]
         root: PathBuf,
+        /// The kind of the bootstrap space over `root`, as the client that
+        /// started the server decided it.
+        #[arg(long, default_value = "worktree")]
+        kind: String,
     },
 }
 
@@ -709,7 +713,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         if std::env::var_os("UZE_PANE").is_some() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
-            let label = uze_terminal::open_space(&root)
+            let label = uze_terminal::open_space(&root, uze::ui::space_kind_for(&root))
                 .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))?;
             println!(
                 "opened space `{label}` at {} in the running uze",
@@ -750,8 +754,15 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 uze_terminal::stop(&uze_application::workspace_root_or_self(&root))
                     .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
             }
-            TerminalAction::Serve { root } => uze_terminal::serve(root)
-                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string())),
+            TerminalAction::Serve { root, kind } => {
+                let kind = uze_terminal::SpaceKind::from_name(&kind).ok_or_else(|| {
+                    uze_application::UzeError::TerminalRuntime(format!(
+                        "`{kind}` is not a kind of space"
+                    ))
+                })?;
+                uze_terminal::serve(root, kind)
+                    .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
+            }
         };
     }
     // Ahead of the application: a check running detached from the command
@@ -2366,7 +2377,21 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
                     path: PathBuf::from("."),
                     source,
                 })?;
-            let named = app.workspace().name_task(&cwd, &name)?;
+            // The identity the agent's launch carried, inherited by every
+            // process the harness starts — this one included. Without it
+            // there is no agent to name: a person's shell, or a harness
+            // started by hand, is not an agent UZE launched.
+            let id = std::env::var(uze_terminal::launch::AGENT_IDENTITY_VARIABLE)
+                .ok()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    uze_application::UzeError::TaskNaming(
+                        "this process is not an agent UZE launched".to_owned(),
+                    )
+                })?;
+            let named = app
+                .workspace()
+                .name_task(uze_application::Claim { id: &id, cwd: &cwd }, &name)?;
             match format {
                 OutputFormat::Text => println!(
                     "{} named `{}` on branch `{}`",

@@ -261,10 +261,17 @@ fn status_meets_the_budget() {
 fn the_agent_surface_meets_the_budget() {
     let world = World::build("budget-agent-surface");
     world.within_budget("agent task name", |app| {
-        // Refused (this is the primary checkout, which owns no task), which
-        // is the same read path a successful naming takes before its one
-        // ref rename.
-        app.workspace().name_task(&world.project, "fix/budget").ok()
+        // Refused (no record names this claim), which is the same read
+        // path a successful naming takes before its one ref rename.
+        app.workspace()
+            .name_task(
+                uze_core::conversation::Claim {
+                    id: "budget",
+                    cwd: &world.project,
+                },
+                "fix/budget",
+            )
+            .ok()
     });
 }
 

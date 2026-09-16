@@ -3,6 +3,11 @@
 
 use std::path::Path;
 
+use uze_core::{
+    UzeHome,
+    checkout::CheckoutId,
+    task::{self, Base, Task, TaskStore},
+};
 use uze_testkit::temp::TestEnvironment;
 
 use crate::util::uze_bin;
@@ -51,10 +56,6 @@ fn an_agent_names_its_work_through_the_real_binary() {
     let env = TestEnvironment::isolated();
     let root = project_with_a_checkout(&env);
 
-    // Place an agent the way the client does, then name from its checkout.
-    let placed = env.run_ok(uze_bin(), &["status", "--format", "json"]);
-    assert!(placed.status.success());
-
     let slot = root.join(".worktrees/manual");
     git(
         &root,
@@ -68,11 +69,38 @@ fn an_agent_names_its_work_through_the_real_binary() {
         ],
     );
 
-    // A checkout Git registers but UZE has never recorded is adopted, so
-    // there is a task to name.
+    // The task the checkout belongs to, recorded the way a placement
+    // records one: this tier asserts against the machine, so the record is
+    // laid down as data rather than through the surface under test. Its
+    // identifier is what the agent's launch carries.
+    let mut recorded = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
+    recorded.checkout = Some(CheckoutId::adopted("manual"));
+    recorded.branch = "agent/zulqgq".to_owned();
+    let identity = recorded.id.as_str().to_owned();
+    let mut store = TaskStore::default();
+    store.upsert(recorded);
+    task::save(&UzeHome::at(&env.uze_home), &root, &store).unwrap();
+
+    // A process that carries no identity is not an agent UZE launched,
+    // whatever checkout it stands in.
+    let refused = env
+        .command(uze_bin())
+        .current_dir(&slot)
+        .env_remove(uze_terminal::launch::AGENT_IDENTITY_VARIABLE)
+        .args(["agent", "task", "name", "fix/branch-naming"])
+        .output()
+        .expect("uze must run");
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("not an agent UZE launched"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
     let output = env
         .command(uze_bin())
         .current_dir(&slot)
+        .env(uze_terminal::launch::AGENT_IDENTITY_VARIABLE, &identity)
         .args(["agent", "task", "name", "fix/branch-naming"])
         .output()
         .expect("uze must run");
