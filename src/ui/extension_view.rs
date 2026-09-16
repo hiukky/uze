@@ -20,7 +20,7 @@ use ratatui::{
 };
 use uze_extensions::view::{
     Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
-    ScrollTarget, Section, Size, Span, View, ViewHit,
+    RowMark, ScrollTarget, Section, Size, Span, View, ViewHit,
 };
 
 use crate::ui::scrollbar::Scrollbar;
@@ -667,6 +667,20 @@ fn icon_symbol(icon: RowIcon) -> Option<Symbol> {
     })
 }
 
+/// The glyph a section row's mark is drawn as, with the cells it takes.
+fn row_mark(mark: RowMark) -> (String, u16) {
+    let symbol = match mark {
+        RowMark::Head => Symbol::CommitHead,
+        RowMark::Commit => Symbol::Commit,
+        RowMark::Step { .. } => Symbol::MarkDone,
+    };
+    let width = theme::width(symbol);
+    match mark {
+        RowMark::Step { done: false } => (" ".repeat(width as usize), width),
+        _ => (theme::glyph(symbol), width),
+    }
+}
+
 /// The mark a navigator row carries before its name.
 ///
 /// The one place a [`RowIcon`] becomes a glyph: the extension said what
@@ -1037,7 +1051,8 @@ pub(crate) fn render_section(
         let Some(rect) = rows.next(1) else {
             break;
         };
-        let marker_width = row.marker.text.chars().count() as u16 + 1;
+        let (mark, mark_width) = row_mark(row.mark);
+        let marker_width = mark_width + 1;
         let trailing_width = row.trailing.text.chars().count() as u16;
         // The name gives way before the trailing value, and one column is
         // reserved for the gap `push_trailing` always leaves between them.
@@ -1046,8 +1061,8 @@ pub(crate) fn render_section(
             .saturating_sub(marker_width + 1 + trailing_width + crate::ui::TRAILING_PAD);
         let mut spans = vec![
             TextSpan::styled(
-                format!("{} ", row.marker.text),
-                Style::default().fg(color(row.marker.role)),
+                format!("{mark} "),
+                Style::default().fg(color(row.mark_role)),
             ),
             TextSpan::styled(
                 crate::ui::elide_tail(&row.name.text, name_width as usize),

@@ -20,7 +20,7 @@ use super::{
 use crate::{
     DirEntry,
     code::highlight::FALLBACK_SYNTAX_THEME,
-    view::{Command, Content, LineTone, NavigatorRow, Role, Size},
+    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size},
 };
 
 fn space() -> Size {
@@ -403,10 +403,10 @@ fn the_timeline_section_names_meaning_rather_than_colour() {
     assert_eq!(section.caption.text, "agent/x");
     assert!(section.resizable);
     // HEAD is ringed; standing is the hue, and the hue is a role.
-    assert_eq!(section.rows[0].marker.text, "\u{25c9}");
-    assert_eq!(section.rows[0].marker.role, Role::Info);
-    assert_eq!(section.rows[1].marker.text, "\u{25cf}");
-    assert_eq!(section.rows[1].marker.role, Role::Warning);
+    assert_eq!(section.rows[0].mark, RowMark::Head);
+    assert_eq!(section.rows[0].mark_role, Role::Info);
+    assert_eq!(section.rows[1].mark, RowMark::Commit);
+    assert_eq!(section.rows[1].mark_role, Role::Warning);
     assert_eq!(section.rows[0].trailing.text, "3h");
 
     let folded = timeline_section(&timeline, true, 0);

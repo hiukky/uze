@@ -725,7 +725,7 @@ pub(crate) struct FirstSteps<'a> {
 impl FirstSteps<'_> {
     /// The heading, in the section vocabulary the timeline already speaks.
     pub(crate) fn section(&self) -> uze_extensions::view::Section {
-        use uze_extensions::view::{Role, SectionRow, Span as ViewSpan};
+        use uze_extensions::view::{Role, RowMark, SectionRow, Span as ViewSpan};
 
         let keymap = uze_keys::active();
         uze_extensions::view::Section {
@@ -741,14 +741,10 @@ impl FirstSteps<'_> {
                 .steps
                 .iter()
                 .map(|action| SectionRow {
-                    marker: ViewSpan::new(
-                        if self.is_taken(*action) {
-                            theme::glyph(Symbol::MarkDone)
-                        } else {
-                            " ".repeat(theme::width(Symbol::MarkDone) as usize)
-                        },
-                        Role::Success,
-                    ),
+                    mark: RowMark::Step {
+                        done: self.is_taken(*action),
+                    },
+                    mark_role: Role::Success,
                     name: ViewSpan::new(
                         action.label(),
                         if self.is_taken(*action) {

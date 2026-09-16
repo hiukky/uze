@@ -12,7 +12,7 @@ use std::{collections::BTreeSet, path::Path};
 use super::{changes::parse_numstat, current_branch};
 use crate::{
     Host,
-    view::{Role, Section, SectionRow, Span},
+    view::{Role, RowMark, Section, SectionRow, Span},
 };
 
 /// One commit of a checkout's [`Timeline`], newest first in the list it
@@ -126,14 +126,12 @@ pub fn timeline_section(timeline: &Timeline, collapsed: bool, scroll: usize) -> 
                     // the base — what a delivery or a push would move —
                     // and the target's own warning hue for what has
                     // landed in it.
-                    marker: Span::new(
-                        if head { "\u{25c9}" } else { "\u{25cf}" },
-                        if commit.ahead {
-                            Role::Info
-                        } else {
-                            Role::Warning
-                        },
-                    ),
+                    mark: if head { RowMark::Head } else { RowMark::Commit },
+                    mark_role: if commit.ahead {
+                        Role::Info
+                    } else {
+                        Role::Warning
+                    },
                     name: Span::new(
                         commit.subject.clone(),
                         if head { Role::Inactive } else { Role::Dim },

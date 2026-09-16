@@ -1970,12 +1970,25 @@ fn sync_caption(model: &WorkspaceModel, key: &Path) -> Vec<(String, Color)> {
         return Vec::new();
     };
     [
-        ('\u{21e3}', sync.pull, theme::color(Token::StateDanger)),
-        ('\u{21e1}', sync.push, theme::color(Token::StateSuccess)),
+        (
+            Symbol::SyncBehind,
+            sync.pull,
+            theme::color(Token::StateDanger),
+        ),
+        (
+            Symbol::SyncAhead,
+            sync.push,
+            theme::color(Token::StateSuccess),
+        ),
     ]
     .into_iter()
     .filter(|(_, count, _)| *count > 0)
-    .map(|(arrow, count, hue)| (format!("{arrow}{}", crate::ui::small_digits(count)), hue))
+    .map(|(arrow, count, hue)| {
+        (
+            format!("{}{}", theme::glyph(arrow), crate::ui::small_digits(count)),
+            hue,
+        )
+    })
     .collect()
 }
 
