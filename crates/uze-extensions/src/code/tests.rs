@@ -57,7 +57,7 @@ fn surface(root: &Path, files: Vec<ChangedFile>, selected: usize) -> CodeView {
         ..CodeView::opening(
             root.to_path_buf(),
             root.display().to_string(),
-            NavigatorMode::Changes,
+            ContentMode::Diff,
         )
     }
 }
@@ -189,7 +189,7 @@ fn a_checkout_that_is_no_repository_still_has_a_tree() {
     let mut view = CodeView::opening(
         PathBuf::from("/nope"),
         "/nope".to_owned(),
-        NavigatorMode::Changes,
+        ContentMode::Diff,
     );
     view.changes.error = Some("not a git repository".to_owned());
     view.changes.diff_pending = false;
@@ -507,7 +507,7 @@ fn settle(view: &mut CodeView, machine: &FakeMachine) {
 }
 
 fn files_at(root: &str) -> CodeView {
-    CodeView::opening(PathBuf::from(root), root.to_owned(), NavigatorMode::Files)
+    CodeView::opening(PathBuf::from(root), root.to_owned(), ContentMode::Contents)
 }
 
 #[test]
@@ -795,7 +795,7 @@ fn a_read_that_arrives_late_does_not_replace_a_different_file() {
 #[test]
 fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
     let machine = FakeMachine::default().with_file("/w/a.rs", "one\ntwo\nthree\nfour\n");
-    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
     view.selected = Some(PathBuf::from("/w/a.rs"));
     view.changes.files = vec![ChangedFile {
         status: FileStatus::Modified,
@@ -821,7 +821,7 @@ fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
     );
     assert_eq!(view.content, ContentMode::Contents);
     assert_eq!(
-        view.navigator,
+        view.navigator(),
         NavigatorMode::Files,
         "the navigator follows the content"
     );
@@ -834,7 +834,7 @@ fn switching_from_a_diff_to_the_contents_keeps_the_file_and_the_line() {
 #[test]
 fn a_multi_line_replacement_carries_the_line_both_ways() {
     let machine = FakeMachine::default().with_file("/w/a.rs", "one\nc\nd\nfour\n");
-    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
     view.selected = Some(PathBuf::from("/w/a.rs"));
     view.changes.files = vec![ChangedFile {
         status: FileStatus::Modified,
@@ -872,7 +872,7 @@ fn a_multi_line_replacement_carries_the_line_both_ways() {
     assert_eq!(open.lines[open.caret.line], "d");
 
     press(&mut view, Command::Close);
-    show(&mut view, ContentMode::Diff);
+    view.show(ContentMode::Diff);
     assert_eq!(
         view.scroll, 4,
         "back on `+d`, not on `-b` which shares its number"
@@ -887,7 +887,7 @@ fn switching_to_a_file_the_tree_has_not_listed_opens_its_ancestors() {
         .with_directory("/w/src")
         .with_directory("/w/src/ui")
         .with_file("/w/src/ui/deep.rs", "fn deep() {}\n");
-    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), NavigatorMode::Changes);
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
     view.selected = Some(PathBuf::from("/w/src/ui/deep.rs"));
 
     press(&mut view, Command::Edit);
@@ -907,17 +907,17 @@ fn the_doors_switch_modes_once_the_surface_is_open() {
     let mut view = fixture();
     assert_eq!(view.content, ContentMode::Diff);
 
-    show(&mut view, ContentMode::Contents);
+    view.show(ContentMode::Contents);
     assert_eq!(view.content, ContentMode::Contents);
     assert_eq!(
-        view.navigator,
+        view.navigator(),
         NavigatorMode::Files,
         "the navigator follows the content"
     );
 
-    show(&mut view, ContentMode::Diff);
+    view.show(ContentMode::Diff);
     assert_eq!(view.content, ContentMode::Diff);
-    assert_eq!(view.navigator, NavigatorMode::Changes);
+    assert_eq!(view.navigator(), NavigatorMode::Changes);
 }
 
 /// A title is three things at once, and one run of text gives them all

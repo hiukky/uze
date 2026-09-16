@@ -4303,7 +4303,7 @@ fn open_commit_detail(
 /// Asked for, not read: the reads are `schedule_changes_refresh`'s and
 /// `schedule_file_request`'s, on threads. Formatting the path is not a
 /// read, so the surface opens already knowing which checkout it is about.
-fn open_code(model: &mut WorkspaceModel, mode: code::NavigatorMode) {
+fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let Some(session) = model.session.as_ref() else {
         return;
     };

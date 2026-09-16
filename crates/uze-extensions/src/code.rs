@@ -102,20 +102,20 @@ pub enum CodeOutcome {
     Close,
 }
 
-/// Which list the navigator is showing. Also which door was used: the
-/// mode a person arrives in is the one they chose before pressing
-/// anything, which is why there are two entry points rather than one that
-/// asks again.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum NavigatorMode {
+/// Which list the navigator is showing — always the one the content mode
+/// reads from, which is why it is derived rather than kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NavigatorMode {
     /// The files `git status` reports, compacted into a tree.
-    #[default]
     Changes,
     /// The checkout's own tree, listed as it is opened.
     Files,
 }
 
-/// Which half answers for the selection.
+/// Which half answers for the selection. Also which door was used: the
+/// mode a person arrives in is the one they chose before pressing
+/// anything, which is why there are two entry points rather than one that
+/// asks again.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ContentMode {
     #[default]
@@ -150,7 +150,6 @@ pub struct CodeView {
     /// The file every mode is about. The one piece of state both halves
     /// share, and the reason this is one extension.
     selected: Option<PathBuf>,
-    navigator: NavigatorMode,
     content: ContentMode,
     focus: Focus,
     scroll: u16,
@@ -191,17 +190,13 @@ impl CodeView {
     ///
     /// `mode` is the door: the changes chip and `Ctrl+G` open on the
     /// diff, the code chip and `Ctrl+E` on the tree.
-    pub fn opening(cwd: PathBuf, display_root: String, mode: NavigatorMode) -> Self {
+    pub fn opening(cwd: PathBuf, display_root: String, mode: ContentMode) -> Self {
         let mut view = Self {
             root: cwd,
             display_root,
             branch: String::new(),
             selected: None,
-            navigator: mode,
-            content: match mode {
-                NavigatorMode::Changes => ContentMode::Diff,
-                NavigatorMode::Files => ContentMode::Contents,
-            },
+            content: mode,
             focus: Focus::Navigator,
             scroll: 0,
             changes: Changes {
@@ -216,10 +211,24 @@ impl CodeView {
             confirming_delete: None,
             confirming_discard: false,
         };
-        if mode == NavigatorMode::Files {
+        if view.navigator() == NavigatorMode::Files {
             view.expand(view.root.clone());
         }
         view
+    }
+
+    /// The list that goes with what the content is showing.
+    fn navigator(&self) -> NavigatorMode {
+        match self.content {
+            ContentMode::Diff => NavigatorMode::Changes,
+            ContentMode::Contents | ContentMode::Preview => NavigatorMode::Files,
+        }
+    }
+
+    /// Which mode the surface is on, so a door pressed twice can tell that
+    /// it is the one already open and close instead of doing nothing.
+    pub fn showing(&self) -> ContentMode {
+        self.content
     }
 
     /// The checkout this is scoped to, so the host can say which
@@ -424,14 +433,15 @@ impl CodeView {
     }
 
     /// Shows `mode` for whatever is selected, bringing the selection with
-    /// it — the switch this whole surface exists for.
+    /// it — the switch this whole surface exists for, and what the two
+    /// doors mean once the surface is already open.
     ///
     /// The line comes too where it is known: a diff row carries the line
     /// number it has on the new side, so a reader who was looking at line
     /// 42 of a diff lands on line 42 of the file. Carrying only the file
     /// would leave them at the top of something they were reading the
     /// middle of, which is most of the trip they were trying to avoid.
-    fn show(&mut self, mode: ContentMode) {
+    pub fn show(&mut self, mode: ContentMode) {
         if self.content == mode {
             return;
         }
@@ -439,12 +449,10 @@ impl CodeView {
         self.content = mode;
         match mode {
             ContentMode::Contents | ContentMode::Preview => {
-                self.navigator = NavigatorMode::Files;
                 self.reveal_selection();
                 self.load_selection(line);
             }
             ContentMode::Diff => {
-                self.navigator = NavigatorMode::Changes;
                 self.scroll = line
                     .and_then(|line| self.diff_row_of(line))
                     .unwrap_or(self.scroll);
@@ -532,7 +540,7 @@ impl CodeView {
 
     /// Moves the selection one row in whichever list is showing.
     fn step(&mut self, direction: ScrollDirection) {
-        match self.navigator {
+        match self.navigator() {
             NavigatorMode::Changes => {
                 let Some(from) = self.selected_change() else {
                     if let Some(first) = self.changes.files.first().map(|file| file.path.clone()) {
@@ -724,7 +732,7 @@ pub fn handle_command(view: &mut CodeView, command: Command, space: Size) -> Cod
             Focus::Navigator => view.step(ScrollDirection::Down),
             Focus::Content => view.scroll = view.scroll.saturating_add(1),
         },
-        Command::Collapse if view.focus == Focus::Navigator => match view.navigator {
+        Command::Collapse if view.focus == Focus::Navigator => match view.navigator() {
             NavigatorMode::Changes => {
                 if let Some(selected) = view.selected_change() {
                     view.changes.fold(&view.root, selected);
@@ -732,7 +740,7 @@ pub fn handle_command(view: &mut CodeView, command: Command, space: Size) -> Cod
             }
             NavigatorMode::Files => fold_tree_row(view),
         },
-        Command::Expand if view.focus == Focus::Navigator => match view.navigator {
+        Command::Expand if view.focus == Focus::Navigator => match view.navigator() {
             NavigatorMode::Changes => {
                 if let Some(selected) = view.selected_change() {
                     view.changes.unfold(&view.root, selected);
@@ -789,18 +797,6 @@ pub fn handle_command(view: &mut CodeView, command: Command, space: Size) -> Cod
     CodeOutcome::Stay
 }
 
-/// Shows the other mode, bringing the selection with it — what the two
-/// doors mean once the surface is already open.
-pub fn show(view: &mut CodeView, mode: ContentMode) {
-    view.show(mode);
-}
-
-/// Which mode the surface is on, so a door pressed twice can tell that it
-/// is the one already open and close instead of doing nothing.
-pub fn showing(view: &CodeView) -> ContentMode {
-    view.content
-}
-
 /// A command while the buffer is being typed into.
 fn edit_command(view: &mut CodeView, command: Command) -> CodeOutcome {
     if command == Command::Save {
@@ -851,7 +847,7 @@ fn fold_tree_row(view: &mut CodeView) {
 /// Activate on a navigator row: a directory folds or unfolds, a file
 /// becomes the selection and the content follows.
 fn activate_selection(view: &mut CodeView) {
-    match view.navigator {
+    match view.navigator() {
         NavigatorMode::Changes => {
             if view.selected.is_some() {
                 view.focus = Focus::Content;
@@ -882,7 +878,7 @@ fn activate_selection(view: &mut CodeView) {
 
 pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>) -> CodeOutcome {
     match hit {
-        Some(ViewHit::SelectItem(index)) => match view.navigator {
+        Some(ViewHit::SelectItem(index)) => match view.navigator() {
             NavigatorMode::Changes => {
                 if let Some(file) = view.changes.files.get(index) {
                     let path = file.path.clone();
@@ -898,7 +894,7 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>) -> CodeOutcome {
                 }
             }
         },
-        Some(ViewHit::ToggleGroup(row)) => match view.navigator {
+        Some(ViewHit::ToggleGroup(row)) => match view.navigator() {
             NavigatorMode::Changes => {
                 // The id handed back is the row's place in the tree this
                 // view last described — rebuilt here from the same state,

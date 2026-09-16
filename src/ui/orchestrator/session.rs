@@ -562,8 +562,8 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            Action::ToggleChanges => open_code(&mut self.model, code::NavigatorMode::Changes),
-            Action::ToggleFiles => open_code(&mut self.model, code::NavigatorMode::Files),
+            Action::ToggleChanges => open_code(&mut self.model, code::ContentMode::Diff),
+            Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
             Action::NextSpace => self.step_space(1, columns, rows),
             Action::PreviousSpace => self.step_space(-1, columns, rows),
             Action::NextAgent => self.step_agent(1, columns, rows),
@@ -1087,12 +1087,12 @@ impl Attach<'_> {
                     Action::ToggleChanges => code::ContentMode::Diff,
                     _ => code::ContentMode::Contents,
                 };
-                let showing = self.model.code.as_ref().map(code::showing);
+                let showing = self.model.code.as_ref().map(code::CodeView::showing);
                 match code_door(showing, wanted) {
                     CodeDoor::Close => self.model.code = None,
                     CodeDoor::Switch => {
                         if let Some(view) = self.model.code.as_mut() {
-                            code::show(view, wanted);
+                            view.show(wanted);
                         }
                     }
                     CodeDoor::Nothing => {}
@@ -2115,10 +2115,10 @@ impl Attach<'_> {
                 // same as `PickAgent` for the agent picker.
             }
             WorkspaceHit::OpenChanges => {
-                open_code(&mut self.model, code::NavigatorMode::Changes);
+                open_code(&mut self.model, code::ContentMode::Diff);
             }
             WorkspaceHit::OpenFiles => {
-                open_code(&mut self.model, code::NavigatorMode::Files);
+                open_code(&mut self.model, code::ContentMode::Contents);
             }
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);

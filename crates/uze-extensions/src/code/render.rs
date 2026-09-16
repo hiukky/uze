@@ -46,7 +46,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
 
     View {
         title,
-        navigator: Some(match code.navigator {
+        navigator: Some(match code.navigator() {
             NavigatorMode::Changes => changes_navigator(code),
             NavigatorMode::Files => files_navigator(code),
         }),
