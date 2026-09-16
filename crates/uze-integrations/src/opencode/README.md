@@ -25,7 +25,7 @@ discovery directory and the global `mcp` object in `opencode.json`.
 Store plugin
    │
    ├── Skill → managed symlink in ~/.agents/skills/<name>   (route: Native, once `uze setup` ran)
-   │           └── pre-setup fallback: FilesystemProjection into the caller's cwd (route: Adaptable)
+   │           └── before `uze setup`: Unsupported, naming `uze setup`
    │
    └── MCP   → direct write into opencode.json's `mcp.<name>` object (route: Adaptable)
    ↓
@@ -46,11 +46,8 @@ are consumed. Package coverage
 
 ## Fallbacks
 
-- **Skill**, pre-`uze setup`: `ExposureMechanism::FilesystemProjection` —
-  session/workspace-scoped, not persistent, same conformance-probe category
-  as the other harnesses' fallbacks (ADR-005).
-- **MCP**, pre-`uze setup`: no fallback at all — `Unsupported` (matches
-  every other harness's MCP behavior; ADR-007's stated gap).
+- **Skill and MCP**, pre-`uze setup`: no fallback — `Unsupported`, with a
+  rationale naming `uze setup` (ADR-006, ADR-007).
 
 ## Runtime
 

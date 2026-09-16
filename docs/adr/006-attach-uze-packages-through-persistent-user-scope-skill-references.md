@@ -196,6 +196,14 @@ stray `bridge`-worded rationale strings in `ClaudeIntegration::exposure_plan`
 that predated the managed-attachment path (and had become misleading once
 that path existed) were reworded to "attachment."
 
+Note (2026-09): the conformance-probe mechanisms themselves are gone.
+`RuntimeBridge`, `FilesystemProjection`, `DirectNative` and the
+`ExposurePlan::prepare`/`PreparedExposure` machinery behind them (with the
+`runtime/sessions` tree) were only ever reached by tests: attachment sent
+them nowhere. Before `uze setup`, a Skill's plan is now `Unsupported` with a
+rationale telling the operator to run `uze setup` — the same posture MCP
+always had.
+
 **Confidence distinction, preserved for `uze doctor` and conformance
 evidence, deliberately not modeled as an enum yet:** Codex's user-scope
 Skills discovery and its symlink-following are both stated in Codex's own

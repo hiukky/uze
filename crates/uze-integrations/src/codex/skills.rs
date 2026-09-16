@@ -200,28 +200,13 @@ impl CodexIntegration {
                 evidence,
             };
         }
-        let skill_directory = resource
-            .capability
-            .path
-            .parent()
-            .expect("SKILL.md has a parent");
-        let label = codex_skill_exposure_name_candidates(&self.uze_home, resource)
-            .first()
-            .cloned()
-            .unwrap_or_else(|| {
-                skill_directory
-                    .file_name()
-                    .expect("skill directory has a name")
-                    .to_string_lossy()
-                    .into_owned()
-            });
         ExposurePlan {
-            route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::FilesystemProjection {
-                source: skill_directory.to_path_buf(),
-                target_relative: PathBuf::from(".agents/skills").join(label),
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "Codex has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "Codex has not completed `uze setup`; falling back to the per-session managed projection in the caller workspace rather than a persistent user-scope attachment."
+            evidence: "Skills reach Codex through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }

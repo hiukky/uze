@@ -69,26 +69,13 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     let resource = environment.resources.first().unwrap();
     assert!(resource.package_root().is_some());
 
-    let claude_skill = claude.exposure_plan(resource);
-    assert_eq!(claude_skill.route, CompatibilityRoute::Adaptable);
-    assert!(matches!(
-        claude_skill.mechanism,
-        ExposureMechanism::RuntimeBridge { .. }
-    ));
-
-    let codex_skill = codex.exposure_plan(resource);
-    assert_eq!(codex_skill.route, CompatibilityRoute::Adaptable);
-    assert!(matches!(
-        codex_skill.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
-
-    let opencode_skill = opencode.exposure_plan(resource);
-    assert_eq!(opencode_skill.route, CompatibilityRoute::Adaptable);
-    assert!(matches!(
-        opencode_skill.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
+    for (id, plan) in [
+        ("claude", claude.exposure_plan(resource)),
+        ("codex", codex.exposure_plan(resource)),
+        ("opencode", opencode.exposure_plan(resource)),
+    ] {
+        assert_setup_required(id, &plan);
+    }
 
     fs::remove_dir_all(home_root).unwrap();
 }
@@ -113,12 +100,27 @@ impl IntegrationPort for FakeIntegration {
     fn exposure_plan(&self, resource: &uze_core::Resource) -> ExposurePlan {
         ExposurePlan {
             route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::DirectNative {
-                resource_path: resource.capability.path.clone(),
+            mechanism: ExposureMechanism::ManagedUserScopeReference {
+                discovery_root: PathBuf::from("/fake-harness/skills"),
+                entry_name: "uze-e2e".to_owned(),
+                source: resource.capability.path.parent().unwrap().to_path_buf(),
             },
-            evidence: "fake direct exposure".to_owned(),
+            evidence: "fake managed exposure".to_owned(),
         }
     }
+}
+
+/// Before `uze setup` a Skill has no managed attachment to reach, and a
+/// plan says so rather than inventing a per-session fallback.
+fn assert_setup_required(id: &str, plan: &ExposurePlan) {
+    assert_eq!(plan.route, CompatibilityRoute::Unsupported, "{id}");
+    let ExposureMechanism::Unsupported { rationale } = &plan.mechanism else {
+        panic!(
+            "{id}: expected an Unsupported plan, got {:?}",
+            plan.mechanism
+        );
+    };
+    assert!(rationale.contains("uze setup"), "{id}: {rationale}");
 }
 
 #[test]
@@ -139,7 +141,7 @@ fn a_new_peer_integration_needs_no_core_change() {
     assert_eq!(skill.route, CompatibilityRoute::Native);
     assert!(matches!(
         skill.mechanism,
-        ExposureMechanism::DirectNative { .. }
+        ExposureMechanism::ManagedUserScopeReference { .. }
     ));
 
     fs::remove_dir_all(home_root).unwrap();
@@ -172,11 +174,7 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
     let claude = ClaudeIntegration::new(claude_home.clone(), uze_home.clone());
     let resource = environment.resources.first().unwrap();
 
-    // Before setup: the existing --plugin-dir conformance fallback.
-    assert!(matches!(
-        claude.exposure_plan(resource).mechanism,
-        ExposureMechanism::RuntimeBridge { .. }
-    ));
+    assert_setup_required("claude", &claude.exposure_plan(resource));
     assert!(claude.attach(resource).unwrap().is_none());
 
     // Simulate what `uze setup` records, without spawning a real `claude`
@@ -228,10 +226,7 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
     let codex = CodexIntegration::new(agents_home.clone(), uze_home.clone());
     let resource = environment.resources.first().unwrap();
 
-    assert!(matches!(
-        codex.exposure_plan(resource).mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
+    assert_setup_required("codex", &codex.exposure_plan(resource));
 
     uze_core::state::record(
         &uze_home,
@@ -282,8 +277,8 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
 /// Deterministic MCP routing: exercises `exposure_plan` only (no `attach`,
 /// no real `claude`/`codex` process — see `tests/cli.rs` for the
 /// attach-exercising fake-harness suite). MCP has no per-session
-/// conformance-probe fallback (unlike Skills' `--plugin-dir`), so
-/// pre-setup routing must be `Unsupported`, not a fabricated mechanism.
+/// fallback any more than Skills do, so pre-setup routing must be
+/// `Unsupported`, not a fabricated mechanism.
 #[test]
 fn mcp_resource_is_unsupported_before_setup_for_both_harnesses() {
     let (home_root, environment) = mcp_stored_environment("mcp-unsupported-before-setup");

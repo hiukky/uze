@@ -33,8 +33,8 @@ SHALL NOT duplicate the server as a second permanent installation.
   server executable
 
 ### Requirement: MCP attachment requires completed setup, with no fallback probe
-Because no per-session MCP conformance mechanism exists (unlike the
-`--plugin-dir` fallback for Agent Skills), the system SHALL only attach an
+Because no per-session MCP conformance mechanism exists (Agent Skills have
+none either), the system SHALL only attach an
 MCP resource to a harness whose `uze setup` has completed. Attempting to
 attach before setup SHALL report the resource as unsupported for that
 harness rather than fabricate a mechanism.

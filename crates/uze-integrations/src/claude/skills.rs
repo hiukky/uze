@@ -77,19 +77,12 @@ impl ClaudeIntegration {
             };
         }
         ExposurePlan {
-            route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::RuntimeBridge {
-                bridge: "Claude Code --plugin-dir".to_owned(),
-                arguments: vec![
-                    "--plugin-dir".to_owned(),
-                    resource
-                        .package_root()
-                        .expect("guarded above")
-                        .display()
-                        .to_string(),
-                ],
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "Claude Code has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "Claude Code has not completed `uze setup`; falling back to the per-session --plugin-dir conformance probe rather than a managed attachment."
+            evidence: "Skills reach Claude Code through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }

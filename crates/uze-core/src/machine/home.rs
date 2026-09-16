@@ -174,12 +174,9 @@ impl UzeHome {
         self.cache_dir().join("marketplaces")
     }
 
-    /// The runtime tree, whose two tenants have opposite lifetimes and are
-    /// therefore kept in named siblings rather than interleaved by
-    /// integration: `projects/` outlives every invocation and dies with the
-    /// project root, `sessions/` dies with the invocation that made it.
-    /// A sweep that had to tell them apart by guessing at a name would be
-    /// one rename away from deleting the wrong one.
+    /// The runtime tree. Its one tenant, `projects/`, outlives every
+    /// invocation and dies with the project root; anything else beneath it
+    /// is swept.
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.join("runtime")
     }
@@ -188,14 +185,6 @@ impl UzeHome {
     /// which is also the whole input to `harness_runtime::prune_projections`.
     pub fn runtime_projects_dir(&self) -> PathBuf {
         self.runtime_dir().join("projects")
-    }
-
-    pub fn runtime_sessions_dir(&self) -> PathBuf {
-        self.runtime_dir().join("sessions")
-    }
-
-    pub fn runtime_session_dir(&self, integration: &str, session: &str) -> PathBuf {
-        self.runtime_sessions_dir().join(integration).join(session)
     }
 
     /// Where the PATH shim (`claude`, `codex`, `opencode`, `antigravity`,
@@ -219,9 +208,8 @@ impl UzeHome {
         self.runtime_projects_dir().join(project_id)
     }
 
-    /// Where a project-scoped runtime projection lives for one integration.
-    /// Distinct from `runtime_session_dir`: a runtime projection is a
-    /// derived, rebuildable cache meant to persist and be safely shared by
+    /// Where a project-scoped runtime projection lives for one integration:
+    /// a derived, rebuildable cache meant to persist and be safely shared by
     /// concurrent sessions on the same project — never torn down at session
     /// end.
     pub fn runtime_projection_dir(&self, integration: &str, project_id: &str) -> PathBuf {

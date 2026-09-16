@@ -21,7 +21,7 @@ impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                "Claude Code has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
+                "Claude Code has not completed `uze setup`; run `uze setup` so UZE can attach this MCP server (see ADR-007).",
             );
         }
         let Some(entry_name) = resource

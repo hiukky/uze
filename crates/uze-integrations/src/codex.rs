@@ -1,8 +1,8 @@
 //! Codex peer integration. Its transparent-attachment strategy is a
 //! UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
 //! Codex documents a cwd-independent USER-scope Agent Skill directory that
-//! explicitly follows symlinks. Until `uze setup` has completed, exposure
-//! falls back to the per-session managed projection from ADR-005.
+//! explicitly follows symlinks. Until `uze setup` has completed, a Skill is
+//! reported Unsupported with that instruction.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir reference), [`plugin`] (the native
@@ -63,8 +63,8 @@ use skills::codex_skill_exposure_name_candidates;
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
 /// Codex documents a cwd-independent USER-scope Agent Skill directory that
-/// explicitly follows symlinks. Until `uze setup` has completed, exposure
-/// falls back to the per-session managed projection from ADR-005.
+/// explicitly follows symlinks. Until `uze setup` has completed, a Skill is
+/// reported Unsupported with that instruction.
 #[derive(Clone)]
 pub struct CodexIntegration {
     skills_dir: PathBuf,

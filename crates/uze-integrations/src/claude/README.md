@@ -151,12 +151,8 @@ canonical skill directory still referenced. The invalid policy
 
 ## Fallbacks
 
-- **Skill, setup incomplete:** `ExposureMechanism::RuntimeBridge` — the
-  original ADR-005 `--plugin-dir` conformance probe. Still live code
-  (`skill_exposure_plan`'s `else` branch), not dead: it's the correct
-  behavior before `uze setup claude` has run.
-- **MCP, setup incomplete:** no fallback exists by design — reports
-  `Unsupported` (ADR-007: MCP has no per-session probe the way Skills do).
+- **Skill or MCP, setup incomplete:** no fallback — reports `Unsupported`
+  with a rationale telling the operator to run `uze setup` (ADR-006, ADR-007).
 
 ## Runtime
 

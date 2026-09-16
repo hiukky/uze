@@ -2,8 +2,8 @@
 //! UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 //! (see ADR-006): Claude auto-loads any directory there containing
 //! `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-//! with no per-session flag. Until `uze setup` has completed, exposure falls
-//! back to the `--plugin-dir` conformance probe from ADR-005.
+//! with no per-session flag. Until `uze setup` has completed, a Skill is
+//! reported Unsupported with that instruction.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir shim), [`plugin`] (the native
@@ -74,8 +74,8 @@ const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
 /// UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 /// (see ADR-006): Claude auto-loads any directory there containing
 /// `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-/// with no per-session flag. Until `uze setup` has completed, exposure falls
-/// back to the `--plugin-dir` conformance probe from ADR-005.
+/// with no per-session flag. Until `uze setup` has completed, a Skill is
+/// reported Unsupported with that instruction.
 #[derive(Clone)]
 pub struct ClaudeIntegration {
     skills_dir: std::path::PathBuf,

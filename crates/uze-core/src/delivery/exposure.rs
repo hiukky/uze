@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Result, UzeError},
-    home::UzeHome,
     hook::HookEvent,
     router::CompatibilityRoute,
 };
@@ -27,29 +26,14 @@ pub struct McpEnvironmentReference {
     pub name: String,
 }
 
-/// How an integration makes a resource available. This is deliberately
-/// separate from `representation`: a STANDARD resource does not imply that a
-/// harness can discover it from a UZE store path.
+/// How an integration makes a resource available.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExposureMechanism {
-    DirectNative {
-        resource_path: PathBuf,
-    },
-    RuntimeBridge {
-        bridge: String,
-        arguments: Vec<String>,
-    },
-    FilesystemProjection {
-        source: PathBuf,
-        target_relative: PathBuf,
-    },
     /// A persistent, UZE-owned reference placed once in a harness's
     /// user-scope discovery directory (e.g. `~/.claude/skills`,
-    /// `~/.agents/skills`), pointing at content inside the UZE store. Unlike
-    /// `FilesystemProjection`, it is not tied to any one project workspace
-    /// or session and is expected to outlive a single harness invocation.
-    /// See ADR-006.
+    /// `~/.agents/skills`), pointing at content inside the UZE store. It is
+    /// tied to no project or session. See ADR-006.
     ManagedUserScopeReference {
         discovery_root: PathBuf,
         entry_name: String,
@@ -195,34 +179,6 @@ impl ExposureMechanism {
         crate::text_region::attach(target_file, region_identity, expected_content)?;
         Ok(target_file.clone())
     }
-
-    /// Removes only the UZE-owned reference this mechanism describes, and
-    /// only if it still points at `source`. Never removes an entry it did
-    /// not create, and never removes the shared discovery directory itself.
-    pub fn detach(&self) -> Result<()> {
-        let Self::ManagedUserScopeReference {
-            discovery_root,
-            entry_name,
-            source,
-        } = self
-        else {
-            return Ok(());
-        };
-        let target = discovery_root.join(entry_name);
-        let Ok(metadata) = fs::symlink_metadata(&target) else {
-            return Ok(());
-        };
-        if !metadata.file_type().is_symlink() {
-            return Ok(());
-        }
-        if fs::read_link(&target).ok().as_deref() != Some(source.as_path()) {
-            return Ok(());
-        }
-        fs::remove_file(&target).map_err(|source_error| UzeError::Write {
-            path: target,
-            source: source_error,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -256,233 +212,6 @@ impl PackageExposurePlan {
         self.provided_resource_identities
             .contains(&resource.identity())
     }
-}
-
-#[derive(Debug)]
-pub struct PreparedExposure {
-    pub working_directory: PathBuf,
-    pub arguments: Vec<String>,
-    pub runtime_directory: Option<PathBuf>,
-    managed: Option<ManagedExposureArtifact>,
-}
-
-#[derive(Debug)]
-struct ManagedExposureArtifact {
-    target: PathBuf,
-    runtime_directory: PathBuf,
-    created_directories: Vec<PathBuf>,
-}
-
-impl PreparedExposure {
-    /// Removes only the artifact UZE created, plus empty parent directories it
-    /// created for that artifact. It never removes project-owned content.
-    pub fn cleanup(&mut self) -> Result<()> {
-        let Some(managed) = self.managed.take() else {
-            return Ok(());
-        };
-        remove_managed_artifact(&managed)
-    }
-}
-
-impl Drop for PreparedExposure {
-    fn drop(&mut self) {
-        if let Some(managed) = self.managed.take() {
-            let _ = remove_managed_artifact(&managed);
-        }
-    }
-}
-
-impl ExposurePlan {
-    pub fn prepare(
-        &self,
-        home: &UzeHome,
-        integration: &str,
-        session: &str,
-        workspace: &Path,
-    ) -> Result<PreparedExposure> {
-        match &self.mechanism {
-            ExposureMechanism::DirectNative { .. } => Ok(PreparedExposure {
-                working_directory: workspace.to_path_buf(),
-                arguments: Vec::new(),
-                runtime_directory: None,
-                managed: None,
-            }),
-            ExposureMechanism::RuntimeBridge { arguments, .. } => Ok(PreparedExposure {
-                working_directory: workspace.to_path_buf(),
-                arguments: arguments.clone(),
-                runtime_directory: None,
-                managed: None,
-            }),
-            ExposureMechanism::FilesystemProjection {
-                source,
-                target_relative,
-            } => prepare_filesystem_projection(
-                home,
-                integration,
-                session,
-                workspace,
-                source,
-                target_relative,
-            ),
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
-                // A persistent, user-scope reference is not a session-scoped
-                // managed artifact: it is created/refreshed once via
-                // `ExposureMechanism::attach`, not per invocation, and must
-                // not be torn down when a `PreparedExposure` is dropped.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedVendorConfig { .. } => {
-                // Same rationale as `ManagedUserScopeReference` above: the
-                // real attachment path for generated vendor config is each
-                // integration's own `attach()`, called once at `uze add`
-                // time, not `prepare()`.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedTextRegion { .. } => {
-                // Same rationale again: a managed text region is a
-                // persistent, package-lifecycle artifact created once via
-                // `attach_text_region`/`IntegrationPort::attach`, not a
-                // per-session projection this type prepares or tears down.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedHookConfig { .. } => {
-                // A managed hook entry is a persistent, package-lifecycle
-                // artifact merged once into the harness's shared hook
-                // configuration via `IntegrationPort::attach` — never a
-                // per-session projection (ADR-033).
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedHookFile { .. } => {
-                // A whole derived hook file is a persistent,
-                // package-lifecycle artifact written once via
-                // `IntegrationPort::attach` — never a per-session
-                // projection (ADR-033).
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::Unsupported { rationale } => {
-                Err(UzeError::ExposureUnavailable(rationale.clone()))
-            }
-        }
-    }
-}
-
-fn prepare_filesystem_projection(
-    home: &UzeHome,
-    integration: &str,
-    session: &str,
-    workspace: &Path,
-    source: &Path,
-    target_relative: &Path,
-) -> Result<PreparedExposure> {
-    let runtime = home.runtime_session_dir(integration, session);
-    let target = workspace.join(target_relative);
-    if target.exists() || target.is_symlink() {
-        return Err(UzeError::RuntimePathExists(target));
-    }
-    let parent = target.parent().expect("projection target has a parent");
-    let created_directories = create_missing_directories(parent)?;
-    fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
-        path: parent.to_path_buf(),
-        source: source_error,
-    })?;
-    create_symlink(source, &target)?;
-    fs::create_dir_all(&runtime).map_err(|source_error| UzeError::Write {
-        path: runtime.clone(),
-        source: source_error,
-    })?;
-    let metadata = serde_json::json!({
-        "managed_by": "uze",
-        "integration": integration,
-        "session": session,
-        "workspace": workspace,
-        "target": target,
-        "source": source,
-    });
-    fs::write(
-        runtime.join("managed-exposure.json"),
-        serde_json::to_vec_pretty(&metadata).expect("metadata serialization is infallible"),
-    )
-    .map_err(|source_error| UzeError::Write {
-        path: runtime.join("managed-exposure.json"),
-        source: source_error,
-    })?;
-    Ok(PreparedExposure {
-        working_directory: workspace.to_path_buf(),
-        arguments: Vec::new(),
-        runtime_directory: Some(runtime),
-        managed: Some(ManagedExposureArtifact {
-            target,
-            runtime_directory: home.runtime_session_dir(integration, session),
-            created_directories,
-        }),
-    })
-}
-
-fn create_missing_directories(parent: &Path) -> Result<Vec<PathBuf>> {
-    let mut missing = Vec::new();
-    let mut cursor = parent;
-    while !cursor.exists() {
-        missing.push(cursor.to_path_buf());
-        cursor = cursor
-            .parent()
-            .ok_or_else(|| UzeError::RuntimePathExists(parent.to_path_buf()))?;
-    }
-    missing.reverse();
-    Ok(missing)
-}
-
-fn remove_managed_artifact(managed: &ManagedExposureArtifact) -> Result<()> {
-    if managed.target.is_symlink() || managed.target.is_file() {
-        fs::remove_file(&managed.target).map_err(|source| UzeError::Write {
-            path: managed.target.clone(),
-            source,
-        })?;
-    }
-    for directory in managed.created_directories.iter().rev() {
-        match fs::remove_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-            Err(source) => {
-                return Err(UzeError::Write {
-                    path: directory.clone(),
-                    source,
-                });
-            }
-        }
-    }
-    if managed.runtime_directory.exists() {
-        fs::remove_dir_all(&managed.runtime_directory).map_err(|source| UzeError::Write {
-            path: managed.runtime_directory.clone(),
-            source,
-        })?;
-    }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -542,53 +271,6 @@ mod tests {
         let mechanism = managed_reference(&discovery_root, &source);
         let error = mechanism.attach().unwrap_err();
         assert!(matches!(error, UzeError::ManagedEntryConflict(_)));
-
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn detach_removes_only_the_reference_it_owns() {
-        let root = uze_testkit::temp::scratch("detach");
-        let discovery_root = root.join("skills");
-        let source = root.join("store-entry");
-        fs::create_dir_all(&source).unwrap();
-
-        let mechanism = managed_reference(&discovery_root, &source);
-        let target = mechanism.attach().unwrap();
-        assert!(target.exists());
-
-        mechanism.detach().unwrap();
-        assert!(!target.exists());
-        assert!(
-            discovery_root.exists(),
-            "discovery root itself is preserved"
-        );
-
-        // Detaching again is a no-op, not an error.
-        mechanism.detach().unwrap();
-
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn detach_does_not_remove_an_entry_repointed_elsewhere() {
-        let root = uze_testkit::temp::scratch("repointed");
-        let discovery_root = root.join("skills");
-        let source = root.join("store-entry");
-        let other = root.join("unrelated-entry");
-        fs::create_dir_all(&source).unwrap();
-        fs::create_dir_all(&other).unwrap();
-
-        let mechanism = managed_reference(&discovery_root, &source);
-        let target = mechanism.attach().unwrap();
-        fs::remove_file(&target).unwrap();
-        create_symlink(&other, &target).unwrap();
-
-        mechanism.detach().unwrap();
-        assert!(
-            target.exists(),
-            "entry no longer pointing at source is left alone"
-        );
 
         fs::remove_dir_all(&root).unwrap();
     }

@@ -216,12 +216,6 @@ impl OpenCodeIntegration {
         else {
             return unsupported("Resource has no derivable attachment entry name.");
         };
-        let canonical_source = resource
-            .capability
-            .path
-            .parent()
-            .expect("SKILL.md has a parent")
-            .to_path_buf();
         let source = resource
             .resolved_artifact_target
             .as_ref()
@@ -259,26 +253,12 @@ impl OpenCodeIntegration {
             };
         }
         ExposurePlan {
-            route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::FilesystemProjection {
-                source: canonical_source,
-                target_relative: PathBuf::from(".agents/skills").join(
-                    self.exposure_name_candidates(resource)
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            resource
-                                .capability
-                                .path
-                                .parent()
-                                .and_then(Path::file_name)
-                                .expect("skill dir name")
-                                .to_string_lossy()
-                                .into_owned()
-                        }),
-                ),
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "OpenCode has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "OpenCode setup has not completed; the existing project-scope projection remains a conformance fallback."
+            evidence: "Skills reach OpenCode through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }

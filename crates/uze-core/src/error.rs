@@ -205,8 +205,6 @@ pub enum UzeError {
         "`{plugin}` is not used by this project; run `uze plugin remove {plugin}` to remove it from this machine"
     )]
     PluginNotUsedByProject { plugin: String },
-    #[error("runtime projection target already exists: {0}")]
-    RuntimePathExists(PathBuf),
     #[error("runtime filesystem projection is unavailable on this platform: {0}")]
     UnsupportedRuntimeProjection(PathBuf),
     #[error("no exposure route is available: {0}")]
