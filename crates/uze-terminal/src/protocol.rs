@@ -111,13 +111,10 @@ pub enum ClientRequest {
         /// space and leaves, never drawing).
         columns: u16,
         rows: u16,
-        /// The directory this client was started in, resolved to its
-        /// workspace root: the server makes sure a space rooted there
-        /// exists and selects it for this client. `None` keeps the
-        /// server's default selection.
-        root: Option<std::path::PathBuf>,
-        /// The kind of the space to make sure of, with `root`.
-        kind: crate::SpaceKind,
+        /// Where this client was started, resolved to its workspace root:
+        /// the server makes sure a space sits there and selects it for this
+        /// client. `None` keeps the server's default selection.
+        seat: Option<crate::SpaceSeat>,
     },
     Detach,
     Input {
@@ -182,8 +179,7 @@ pub enum ClientRequest {
     CreateSpace {
         /// `None` derives the label from the root.
         label: Option<String>,
-        root: std::path::PathBuf,
-        kind: crate::SpaceKind,
+        seat: crate::SpaceSeat,
         columns: u16,
         rows: u16,
     },
@@ -196,6 +192,9 @@ pub enum ClientRequest {
         /// last: the client decides where a workspace with nothing left
         /// lands, as it decides every other space's root and kind.
         replacement: crate::SpaceSeat,
+        /// The size the replacement's first pane is drawn at.
+        columns: u16,
+        rows: u16,
     },
     RenameSpace {
         space: SpaceId,
@@ -347,8 +346,10 @@ mod tests {
             version: PROTOCOL_VERSION,
             columns: 80,
             rows: 24,
-            root: Some(std::path::PathBuf::from("/tmp/w")),
-            kind: crate::SpaceKind::Worktree,
+            seat: Some(crate::SpaceSeat {
+                root: std::path::PathBuf::from("/tmp/w"),
+                kind: crate::SpaceKind::Worktree,
+            }),
         };
         assert_eq!(
             serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
@@ -375,8 +376,10 @@ mod tests {
         let requests = [
             ClientRequest::CreateSpace {
                 label: Some("frontend".into()),
-                root: std::path::PathBuf::from("/tmp/frontend"),
-                kind: crate::SpaceKind::Workspace,
+                seat: crate::SpaceSeat {
+                    root: std::path::PathBuf::from("/tmp/frontend"),
+                    kind: crate::SpaceKind::Workspace,
+                },
                 columns: 80,
                 rows: 24,
             },
@@ -387,6 +390,8 @@ mod tests {
                     root: std::path::PathBuf::from("/home/someone"),
                     kind: crate::SpaceKind::Workspace,
                 },
+                columns: 80,
+                rows: 24,
             },
             ClientRequest::RenameSpace {
                 space: SpaceId(1),

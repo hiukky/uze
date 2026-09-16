@@ -713,8 +713,12 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         if std::env::var_os("UZE_PANE").is_some() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
-            let label = uze_terminal::open_space(&root, uze::ui::space_kind_for(&root))
-                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))?;
+            let kind = uze::ui::space_kind_for(&root);
+            let label = uze_terminal::open_space(uze_terminal::SpaceSeat {
+                root: root.clone(),
+                kind,
+            })
+            .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))?;
             println!(
                 "opened space `{label}` at {} in the running uze",
                 root.display()
@@ -751,7 +755,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                         "`{kind}` is not a kind of space"
                     ))
                 })?;
-                uze_terminal::serve(root, kind)
+                uze_terminal::serve(uze_terminal::SpaceSeat { root, kind })
                     .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
             }
         };

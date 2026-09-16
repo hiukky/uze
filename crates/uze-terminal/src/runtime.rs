@@ -23,11 +23,12 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::{
-    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
-    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, TabId, TerminalColor,
+    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, NewSpace, PROTOCOL_VERSION,
+    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeat, TabId,
+    TerminalColor,
     launch::Launch,
     process_probe,
-    state::{PLACEHOLDER_PANE_SIZE, SpaceSeed, TabSeed},
+    state::{OpenedSpace, PLACEHOLDER_PANE_SIZE, SpaceSeed, TabSeed},
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -43,11 +44,11 @@ pub enum RuntimeError {
 }
 
 /// Connects to the user's one server, starting it when none answers —
-/// rooted at `root`, which only matters for a server that has nothing
-/// persisted yet. The caller then sends `Attach` naming the root it wants a
+/// with its first space at `seat`, which only matters for a server that has
+/// nothing persisted yet. The caller then sends `Attach` naming the seat it wants a
 /// space for.
-pub fn attach(root: &Path, kind: crate::SpaceKind) -> Result<UnixStream, RuntimeError> {
-    let _span = tracing::info_span!("terminal.attach", root = %root.display()).entered();
+pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
+    let _span = tracing::info_span!("terminal.attach", root = %seat.root.display()).entered();
     let endpoint = Endpoint::global()?;
     // A server left running from a previous build (e.g. a `cargo install
     // --force` while it was still up) is *alive*, so the connect below
@@ -89,7 +90,7 @@ pub fn attach(root: &Path, kind: crate::SpaceKind) -> Result<UnixStream, Runtime
                 || error.kind() == io::ErrorKind::ConnectionRefused =>
         {
             recover_stale_endpoint(&endpoint)?;
-            start_server(root, kind, &endpoint)?;
+            start_server(seat, &endpoint)?;
             connect_waiting(&endpoint.socket)
         }
         Err(error) => Err(error.into()),
@@ -104,13 +105,13 @@ pub fn socket_path() -> Result<PathBuf, RuntimeError> {
     Ok(Endpoint::global()?.socket)
 }
 
-/// Asks the running server for a space rooted at `root` — created when
+/// Asks the running server for a space at `seat` — created when
 /// none is — and answers with its label. For a `uze` started inside one of
 /// the server's own panes: it must not open a client inside a client, so
 /// it opens a space in the one it is already in and leaves. An error when
 /// no server is running.
-pub fn open_space(root: &Path, kind: crate::SpaceKind) -> Result<String, RuntimeError> {
-    let _span = tracing::info_span!("terminal.open_space", root = %root.display()).entered();
+pub fn open_space(seat: SpaceSeat) -> Result<String, RuntimeError> {
+    let _span = tracing::info_span!("terminal.open_space", root = %seat.root.display()).entered();
     let endpoint = Endpoint::global()?;
     let mut stream = UnixStream::connect(&endpoint.socket)
         .map_err(|_| RuntimeError::Protocol("no running uze to open a space in".into()))?;
@@ -120,8 +121,7 @@ pub fn open_space(root: &Path, kind: crate::SpaceKind) -> Result<String, Runtime
             version: PROTOCOL_VERSION,
             columns: 0,
             rows: 0,
-            root: Some(root.to_path_buf()),
-            kind,
+            seat: Some(seat),
         },
     )?;
     let label = loop {
@@ -171,17 +171,17 @@ pub fn stop() -> Result<(), RuntimeError> {
     }
 }
 
-/// Serves the user's one workspace. `root` roots the first space when
-/// nothing is persisted yet, and is otherwise ignored.
-pub fn serve(root: PathBuf, kind: crate::SpaceKind) -> Result<(), RuntimeError> {
-    let _span = tracing::info_span!("terminal.serve", root = %root.display()).entered();
+/// Serves the user's one workspace. `seat` is the first space when nothing
+/// is persisted yet, and is otherwise ignored.
+pub fn serve(seat: SpaceSeat) -> Result<(), RuntimeError> {
+    let _span = tracing::info_span!("terminal.serve", root = %seat.root.display()).entered();
     let endpoint = Endpoint::global()?;
     // The workspace is claimed before the endpoint is: `Server::new` takes
     // the lock that makes this the one server restoring these spaces, so by
     // the time the socket is bound no other live server can own it — which
     // is what lets [`spawn_endpoint_watch`] treat a socket that is no longer
     // the one bound here as something to reclaim rather than a peer's.
-    let (server, damage) = Server::new(root, kind, endpoint.clone())?;
+    let (server, damage) = Server::new(seat, endpoint.clone())?;
     let state = Arc::new(server);
     recover_stale_endpoint(&endpoint)?;
     let listener = bind_endpoint(&endpoint)?;
@@ -548,18 +548,14 @@ fn relaunch_command_for_process(process: &str) -> Option<Vec<String>> {
     Some(vec![trimmed.to_owned()])
 }
 
-fn start_server(
-    root: &Path,
-    kind: crate::SpaceKind,
-    endpoint: &Endpoint,
-) -> Result<(), RuntimeError> {
+fn start_server(seat: &SpaceSeat, endpoint: &Endpoint) -> Result<(), RuntimeError> {
     use std::os::unix::process::CommandExt;
 
     let executable = env::current_exe()?;
     let child = std::process::Command::new(executable)
         .args(["terminal", "serve", "--root"])
-        .arg(root)
-        .args(["--kind", kind.name()])
+        .arg(&seat.root)
+        .args(["--kind", seat.kind.name()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -883,8 +879,7 @@ struct Server {
 
 impl Server {
     fn new(
-        root: PathBuf,
-        kind: crate::SpaceKind,
+        seat: SpaceSeat,
         endpoint: Endpoint,
     ) -> Result<(Self, mpsc::Receiver<PaneId>), RuntimeError> {
         // Taken before anything is read: restoring a workspace a live
@@ -898,7 +893,7 @@ impl Server {
             .and_then(|persisted| Session::restore(persisted.spaces))
             .unwrap_or_else(|| {
                 let (columns, rows) = PLACEHOLDER_PANE_SIZE;
-                let session = Session::new(root, kind, columns, rows);
+                let session = Session::new(seat, columns, rows);
                 let bootstrap = session.selected_tab().pane.id;
                 (session, vec![(bootstrap, Launch::Shell)])
             });
@@ -1048,22 +1043,27 @@ impl Server {
                 version,
                 columns,
                 rows,
-                root,
-                kind,
-                ..
+                seat,
             })) if version == PROTOCOL_VERSION => {
                 let client = self
                     .next_client
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let drawn = (columns > 0 && rows > 0)
+                    .then(|| (within_pane_bounds(columns), within_pane_bounds(rows)));
                 let mut selection = Selection::default();
-                if let Some(root) = root {
-                    match self.ensure_space(&root, kind) {
-                        Ok(space) => selection.space = Some(space),
+                let mut sized_at_creation = false;
+                if let Some(seat) = seat {
+                    match self.ensure_space(&seat, drawn.unwrap_or(PLACEHOLDER_PANE_SIZE)) {
+                        Ok(OpenedSpace::Existing(space)) => selection.space = Some(space),
+                        Ok(OpenedSpace::Created(NewSpace { space, .. })) => {
+                            selection.space = Some(space);
+                            sized_at_creation = true;
+                        }
                         Err(error) => {
                             let _ = events.send(ClientEvent::Error {
                                 message: format!(
                                     "could not open a space at {}: {error}",
-                                    root.display()
+                                    seat.root.display()
                                 ),
                             });
                         }
@@ -1074,12 +1074,10 @@ impl Server {
                     events: events.clone(),
                     selection,
                 });
-                if columns > 0 && rows > 0 {
-                    self.resize_pane(
-                        self.selected_pane_of(client),
-                        within_pane_bounds(columns),
-                        within_pane_bounds(rows),
-                    );
+                if let Some((columns, rows)) = drawn
+                    && !sized_at_creation
+                {
+                    self.resize_pane(self.selected_pane_of(client), columns, rows);
                 }
                 self.broadcast_snapshot();
                 Some(client)
@@ -1205,13 +1203,7 @@ impl Server {
                         .remove_tab(tab);
                     match removed {
                         Some(panes) => {
-                            let mut runtimes = self.panes.lock().expect("panes poisoned");
-                            for pane in panes {
-                                if let Some(runtime) = runtimes.remove(&pane) {
-                                    runtime.stop();
-                                }
-                            }
-                            drop(runtimes);
+                            self.stop_runtimes(&panes);
                             self.broadcast_session();
                         }
                         None => {
@@ -1243,8 +1235,7 @@ impl Server {
                 }
                 ClientRequest::CreateSpace {
                     label,
-                    root,
-                    kind,
+                    seat,
                     columns,
                     rows,
                 } => {
@@ -1253,23 +1244,13 @@ impl Server {
                     // the prompt asked for a space, and one repository is
                     // routinely worth two — one per branch, one per thing
                     // being tried. `ensure_space` is the other question.
-                    let (space, pane) = {
-                        let mut session = self.session.lock().expect("session poisoned");
-                        let pane = session.create_space(
-                            label,
-                            root,
-                            kind,
-                            within_pane_bounds(columns),
-                            within_pane_bounds(rows),
-                        );
-                        (session.workspace.selected_space, pane)
-                    };
-                    if self.spawn_pane(pane, Launch::Shell).is_err() {
-                        let _ = events.send(ClientEvent::Error {
-                            message: "could not create terminal pane".into(),
-                        });
-                    }
-                    self.update_selection(client, |selection| selection.space = Some(space));
+                    let created = self.session.lock().expect("session poisoned").create_space(
+                        label,
+                        seat,
+                        within_pane_bounds(columns),
+                        within_pane_bounds(rows),
+                    );
+                    self.spawn_new_space(client, created, &events);
                     self.broadcast_session();
                 }
                 ClientRequest::SelectSpace { space } => {
@@ -1283,38 +1264,24 @@ impl Server {
                         self.broadcast_session();
                     }
                 }
-                ClientRequest::CloseSpace { space, replacement } => {
+                ClientRequest::CloseSpace {
+                    space,
+                    replacement,
+                    columns,
+                    rows,
+                } => {
                     let removed = self.session.lock().expect("session poisoned").remove_space(
                         space,
                         replacement,
-                        80,
-                        24,
+                        within_pane_bounds(columns),
+                        within_pane_bounds(rows),
                     );
                     let Some(removed) = removed else {
                         continue;
                     };
-                    let mut runtimes = self.panes.lock().expect("panes poisoned");
-                    for pane in removed.panes {
-                        if let Some(runtime) = runtimes.remove(&pane) {
-                            runtime.stop();
-                        }
-                    }
-                    drop(runtimes);
-                    if let Some(pane) = removed.replacement {
-                        if self.spawn_pane(pane, Launch::Shell).is_err() {
-                            let _ = events.send(ClientEvent::Error {
-                                message: "could not create terminal pane".into(),
-                            });
-                        }
-                        let selected = self
-                            .session
-                            .lock()
-                            .expect("session poisoned")
-                            .workspace
-                            .selected_space;
-                        self.update_selection(client, |selection| {
-                            selection.space = Some(selected);
-                        });
+                    self.stop_runtimes(&removed.panes);
+                    if let Some(created) = removed.replacement {
+                        self.spawn_new_space(client, created, &events);
                     }
                     self.broadcast_session();
                 }
@@ -1342,18 +1309,40 @@ impl Server {
             .retain(|attached| attached.id != client);
     }
 
-    /// The space rooted at `root`, created — with its first shell pane —
-    /// when none is.
-    fn ensure_space(&self, root: &Path, kind: crate::SpaceKind) -> Result<SpaceId, RuntimeError> {
-        let opened = {
-            let mut session = self.session.lock().expect("session poisoned");
-            session.open_space(None, root.to_path_buf(), kind, 80, 24)
-        };
-        match opened {
-            OpenedSpace::Existing(space) => Ok(space),
-            OpenedSpace::Created { space, pane } => {
-                self.spawn_pane(pane, Launch::Shell)?;
-                Ok(space)
+    /// The space at `seat`, created — with its first shell pane, spawned at
+    /// `size` — when none is.
+    fn ensure_space(
+        &self,
+        seat: &SpaceSeat,
+        (columns, rows): (u16, u16),
+    ) -> Result<OpenedSpace, RuntimeError> {
+        let opened =
+            self.session
+                .lock()
+                .expect("session poisoned")
+                .open_space(seat.clone(), columns, rows);
+        if let OpenedSpace::Created(NewSpace { pane, .. }) = opened {
+            self.spawn_pane(pane, Launch::Shell)?;
+        }
+        Ok(opened)
+    }
+
+    /// Starts a space a client just brought into being and puts that client
+    /// in it.
+    fn spawn_new_space(&self, client: u64, created: NewSpace, events: &mpsc::Sender<ClientEvent>) {
+        if self.spawn_pane(created.pane, Launch::Shell).is_err() {
+            let _ = events.send(ClientEvent::Error {
+                message: "could not create terminal pane".into(),
+            });
+        }
+        self.update_selection(client, |selection| selection.space = Some(created.space));
+    }
+
+    fn stop_runtimes(&self, panes: &[PaneId]) {
+        let mut runtimes = self.panes.lock().expect("panes poisoned");
+        for pane in panes {
+            if let Some(runtime) = runtimes.remove(pane) {
+                runtime.stop();
             }
         }
     }
@@ -2420,7 +2409,7 @@ mod tests {
     fn reply_sink(sender: std::sync::mpsc::Sender<Vec<u8>>) -> ReplySink {
         ReplySink::new(sender, Arc::new(Mutex::new(Palette::default())))
     }
-    use crate::state::{SpaceSeed, TabSeed};
+    use crate::state::{PLACEHOLDER_PANE_SIZE, SpaceSeed, TabSeed};
     use crate::{MouseMode, PaneId, TerminalColor};
     use crate::{Session, SpaceId, TabId};
     use alacritty_terminal::{
@@ -2441,12 +2430,14 @@ mod tests {
     /// it does not — the rule that lets two terminals look at two agents.
     #[test]
     fn a_clients_view_overlays_its_own_selection_and_heals_a_stale_one() {
-        let mut session = Session::new("/tmp/a".into(), crate::SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(worktree_seat(Path::new("/tmp/a")), 80, 24);
         let first_space = session.workspace.selected_space;
-        session.add_space(
-            "b".into(),
-            "/tmp/b".into(),
-            crate::SpaceKind::Worktree,
+        session.create_space(
+            Some("b".into()),
+            crate::SpaceSeat {
+                root: "/tmp/b".into(),
+                kind: crate::SpaceKind::Worktree,
+            },
             80,
             24,
         );
@@ -3160,23 +3151,29 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
         let server = Arc::new(server);
         // A second space, so closing the launch space leaves a survivor
         // rather than opening a replacement.
-        let pane = server.session.lock().expect("session poisoned").add_space(
-            "other".into(),
-            other.clone(),
-            crate::SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let pane = server
+            .session
+            .lock()
+            .expect("session poisoned")
+            .create_space(
+                Some("other".into()),
+                crate::SpaceSeat {
+                    root: other.clone(),
+                    kind: crate::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            )
+            .pane;
         server.spawn_pane(pane, Launch::Shell).unwrap();
         let launch = {
             let mut session = server.session.lock().expect("session poisoned");
             let launch = session
-                .space_for(&project, crate::SpaceKind::Worktree)
+                .space_for(&worktree_seat(&project))
                 .expect("the bootstrap space is rooted at the launch directory");
             let seat = crate::SpaceSeat {
                 root: other.clone(),
@@ -3202,8 +3199,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 80,
                 rows: 24,
-                root: None,
-                kind: crate::SpaceKind::Worktree,
+                seat: None,
             },
         )
         .unwrap();
@@ -3215,7 +3211,7 @@ mod tests {
             }
         };
         assert_eq!(
-            attached.space_for(&project, crate::SpaceKind::Worktree),
+            attached.space_for(&worktree_seat(&project)),
             None,
             "a rootless attach left the closed space closed"
         );
@@ -3256,19 +3252,21 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (first, _damage) = Server::new(
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            endpoint.clone(),
-        )
-        .unwrap();
-        let agent_pane = first.session.lock().expect("session poisoned").add_space(
-            "frontend".into(),
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let (first, _damage) = Server::new(worktree_seat(&project), endpoint.clone()).unwrap();
+        let agent_pane = first
+            .session
+            .lock()
+            .expect("session poisoned")
+            .create_space(
+                Some("frontend".into()),
+                crate::SpaceSeat {
+                    root: project.clone(),
+                    kind: crate::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            )
+            .pane;
         first.spawn_pane(agent_pane, sleep_five()).unwrap();
         // `CreateSpace`'s real dispatch (`runtime.rs`'s `handle_client`)
         // calls `broadcast_session`, which persists — replicated here
@@ -3281,8 +3279,7 @@ mod tests {
         // lock is there to refuse.
         drop(first);
 
-        let (second, _damage2) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (second, _damage2) = Server::new(worktree_seat(&project), endpoint).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             assert_eq!(session.workspace.spaces.len(), 2, "both spaces restored");
@@ -3323,15 +3320,21 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
-        let pane = server.session.lock().expect("session poisoned").add_space(
-            "agent".into(),
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let pane = server
+            .session
+            .lock()
+            .expect("session poisoned")
+            .create_space(
+                Some("agent".into()),
+                crate::SpaceSeat {
+                    root: project.clone(),
+                    kind: crate::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            )
+            .pane;
         server.spawn_pane(pane, exits_at_once(Vec::new())).unwrap();
 
         for _ in 0..40 {
@@ -3396,12 +3399,7 @@ mod tests {
         env.set("UZE_HOME", &uze_home);
 
         let endpoint = Endpoint::global().unwrap();
-        let (first, _damage) = Server::new(
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            endpoint.clone(),
-        )
-        .unwrap();
+        let (first, _damage) = Server::new(worktree_seat(&project), endpoint.clone()).unwrap();
         let pane_id = first
             .session
             .lock()
@@ -3418,8 +3416,7 @@ mod tests {
         first.stop_panes();
         drop(first);
 
-        let (second, _damage2) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (second, _damage2) = Server::new(worktree_seat(&project), endpoint).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             let tab = session.selected_tab();
@@ -3460,8 +3457,7 @@ mod tests {
         env.set("UZE_HOME", &uze_home);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).expect("server");
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).expect("server");
         {
             let mut session = server.session.lock().expect("session poisoned");
             let space = session.workspace.selected_space;
@@ -3514,7 +3510,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&stale).unwrap()).unwrap();
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) = Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint)
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint)
             .expect("a stale persisted command must not fail server startup");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -3659,8 +3655,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
         let server = Arc::new(server);
         let pane = server
             .session
@@ -3688,8 +3683,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 0,
                 rows: 0,
-                root: None,
-                kind: crate::SpaceKind::Worktree,
+                seat: None,
             },
         )
         .unwrap();
@@ -3816,6 +3810,13 @@ mod tests {
         ]
     }
 
+    fn worktree_seat(root: &Path) -> crate::SpaceSeat {
+        crate::SpaceSeat {
+            root: root.to_path_buf(),
+            kind: crate::SpaceKind::Worktree,
+        }
+    }
+
     fn sleep_five() -> Launch {
         Launch::Program {
             argv: vec!["sleep".to_owned(), "5".to_owned()],
@@ -3925,8 +3926,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
         assert_eq!(read_when_written(&report), "agent-restarted");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -3954,15 +3954,21 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
-        let pane = server.session.lock().expect("session poisoned").add_space(
-            "agent".into(),
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let (server, _damage) = Server::new(worktree_seat(&project), endpoint).unwrap();
+        let pane = server
+            .session
+            .lock()
+            .expect("session poisoned")
+            .create_space(
+                Some("agent".into()),
+                crate::SpaceSeat {
+                    root: project.clone(),
+                    kind: crate::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            )
+            .pane;
         server
             .spawn_pane(pane, exits_at_once(stamp("agent-done")))
             .unwrap();
@@ -4206,18 +4212,14 @@ mod tests {
         );
 
         let first = ClaimHolder::spawn(&uze_home);
-        let second = Server::new(
-            project.clone(),
-            crate::SpaceKind::Worktree,
-            endpoint.clone(),
-        );
+        let second = Server::new(worktree_seat(&project), endpoint.clone());
         assert!(
             matches!(second, Err(RuntimeError::Protocol(_))),
             "a workspace a live server holds must not be restored a second time"
         );
 
         first.release();
-        let (third, _damage3) = Server::new(project, crate::SpaceKind::Worktree, endpoint)
+        let (third, _damage3) = Server::new(worktree_seat(&project), endpoint)
             .expect("the claim is released with its holder");
         third.stop_panes();
 
@@ -4435,12 +4437,11 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::global().unwrap();
-        let (server, _damage) =
-            Server::new(roots[0].clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
+        let (server, _damage) = Server::new(worktree_seat(&roots[0]), endpoint).unwrap();
         let server = Arc::new(server);
         for root in &roots[1..] {
             server
-                .ensure_space(root, crate::SpaceKind::Worktree)
+                .ensure_space(&worktree_seat(root), PLACEHOLDER_PANE_SIZE)
                 .expect("a space per root");
         }
 
@@ -4495,8 +4496,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 0,
                 rows: 0,
-                root: None,
-                kind: crate::SpaceKind::Worktree,
+                seat: None,
             },
         )
         .unwrap();
@@ -4597,7 +4597,7 @@ mod tests {
         let (served, serving) = std::sync::mpsc::channel();
         let serve_root = project.clone();
         std::thread::spawn(move || {
-            let _ = served.send(super::serve(serve_root, crate::SpaceKind::Worktree));
+            let _ = served.send(super::serve(worktree_seat(&serve_root)));
         });
 
         let mut ready = false;
@@ -4806,8 +4806,7 @@ mod tests {
             version: crate::PROTOCOL_VERSION,
             columns: 200,
             rows: 50,
-            root: Some(PathBuf::from("/some/ordinary/project/path")),
-            kind: crate::SpaceKind::Worktree,
+            seat: Some(worktree_seat(Path::new("/some/ordinary/project/path"))),
         })
         .unwrap();
         assert!(

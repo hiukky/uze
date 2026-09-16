@@ -108,9 +108,16 @@ pub struct SpaceSeat {
 /// What [`Session::remove_space`] leaves the caller to do: stop `panes`,
 /// and spawn `replacement` when the removed space was the last one.
 #[derive(Debug, Eq, PartialEq)]
-pub struct RemovedSpace {
-    pub panes: Vec<PaneId>,
-    pub replacement: Option<PaneId>,
+pub(crate) struct RemovedSpace {
+    pub(crate) panes: Vec<PaneId>,
+    pub(crate) replacement: Option<NewSpace>,
+}
+
+/// A space just created, whose first pane is not running yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NewSpace {
+    pub space: SpaceId,
+    pub pane: PaneId,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -150,11 +157,10 @@ pub struct Pane {
 /// What [`Session::open_space`] found or did — the caller only has a pane
 /// to spawn when a space was actually created.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenedSpace {
-    /// A space for that root was already open, and is the answer.
+pub(crate) enum OpenedSpace {
+    /// A space for that seat was already open, and is the answer.
     Existing(SpaceId),
-    /// A new space, whose bootstrap pane is not running yet.
-    Created { space: SpaceId, pane: PaneId },
+    Created(NewSpace),
 }
 
 /// The size a pane is spawned at before any client has said how large it
@@ -187,9 +193,9 @@ pub(crate) struct TabSeed {
 }
 
 impl Session {
-    pub fn new(root: PathBuf, kind: SpaceKind, columns: u16, rows: u16) -> Self {
+    pub fn new(seat: SpaceSeat, columns: u16, rows: u16) -> Self {
         let mut session = Self::empty();
-        session.add_space(space_label(&root), root, kind, columns, rows);
+        session.add_space(space_label(&seat.root), seat, columns, rows);
         session
     }
 
@@ -229,7 +235,11 @@ impl Session {
                 launches.push((minted.pane.id, tab.launch));
                 tabs.push(minted);
             }
-            session.push_space(seed.label, seed.root, seed.kind, tabs);
+            let seat = SpaceSeat {
+                root: seed.root,
+                kind: seed.kind,
+            };
+            session.push_space(seed.label, seat, tabs);
         }
         session.workspace.selected_space = session.workspace.spaces.first()?.id;
         Some((session, launches))
@@ -252,24 +262,17 @@ impl Session {
             .expect("space selected tab is always present")
     }
 
-    /// The space whose root is `root`, compared as the filesystem sees it.
-    /// The space rooted at `root` of `kind`, when one is open. Root and
-    /// kind together: a worktree space and a workspace space over one
-    /// directory are two spaces, and asking for either never answers the
-    /// other.
-    pub fn space_for(&self, root: &Path, kind: SpaceKind) -> Option<SpaceId> {
-        let wanted = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    /// The space open at `seat`, its root compared as the filesystem sees
+    /// it. Root and kind together: a worktree space and a workspace space
+    /// over one directory are two spaces, and asking for either never
+    /// answers the other.
+    pub fn space_for(&self, seat: &SpaceSeat) -> Option<SpaceId> {
+        let canonical = |root: &Path| root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let wanted = canonical(&seat.root);
         self.workspace
             .spaces
             .iter()
-            .find(|space| {
-                space.kind == kind
-                    && space
-                        .root
-                        .canonicalize()
-                        .unwrap_or_else(|_| space.root.clone())
-                        == wanted
-            })
+            .find(|space| space.kind == seat.kind && canonical(&space.root) == wanted)
             .map(|space| space.id)
     }
 
@@ -277,35 +280,23 @@ impl Session {
         self.workspace.spaces.iter().find(|s| s.id == space)
     }
 
-    /// Goes to the space rooted at `root`: the one already open for it
-    /// when there is one, a new one otherwise (labelled `label`, or after
-    /// the directory itself).
+    /// Goes to the space at `seat`: the one already open there when there
+    /// is one, a new one named after its directory otherwise.
     ///
     /// This is "take me to this directory" — what `uze` run inside a pane
     /// asks — and landing on the space that already has it is the whole
     /// answer. Asking for a *new* space over a directory is a different
     /// question, and [`Session::create_space`] answers it by creating one
     /// whatever is already open there.
-    pub fn open_space(
-        &mut self,
-        label: Option<String>,
-        root: PathBuf,
-        kind: SpaceKind,
-        columns: u16,
-        rows: u16,
-    ) -> OpenedSpace {
-        if let Some(space) = self.space_for(&root, kind) {
+    pub(crate) fn open_space(&mut self, seat: SpaceSeat, columns: u16, rows: u16) -> OpenedSpace {
+        if let Some(space) = self.space_for(&seat) {
             return OpenedSpace::Existing(space);
         }
-        let label = label.unwrap_or_else(|| space_label(&root));
-        let pane = self.add_space(label, root, kind, columns, rows);
-        OpenedSpace::Created {
-            space: self.workspace.selected_space,
-            pane,
-        }
+        let label = space_label(&seat.root);
+        OpenedSpace::Created(self.add_space(label, seat, columns, rows))
     }
 
-    /// Opens a new space at `root`, whatever is already open there.
+    /// Opens a new space at `seat`, whatever is already open there.
     ///
     /// Two spaces over one directory is a normal way to work — one per
     /// branch, one per thing being tried — and the "+ new" prompt is an
@@ -315,13 +306,12 @@ impl Session {
     pub fn create_space(
         &mut self,
         label: Option<String>,
-        root: PathBuf,
-        kind: SpaceKind,
+        seat: SpaceSeat,
         columns: u16,
         rows: u16,
-    ) -> PaneId {
-        let label = label.unwrap_or_else(|| self.unrepeated_label(&root));
-        self.add_space(label, root, kind, columns, rows)
+    ) -> NewSpace {
+        let label = label.unwrap_or_else(|| self.unrepeated_label(&seat.root));
+        self.add_space(label, seat, columns, rows)
     }
 
     /// `space_label`'s answer for `root`, numbered from 2 while a space on
@@ -343,31 +333,20 @@ impl Session {
             .expect("an unused ordinal always exists")
     }
 
-    /// Creates a space rooted at `root` with one default tab (mirroring
-    /// [`Session::new`]'s own bootstrap tab), selects it, and returns the
-    /// new tab's pane so the caller can spawn it exactly like
-    /// [`Session::add_tab`]'s result. [`Session::create_space`] is the
-    /// entry point that names it; [`Session::open_space`] the one that
-    /// first looks for a space already there.
-    pub fn add_space(
-        &mut self,
-        label: String,
-        root: PathBuf,
-        kind: SpaceKind,
-        columns: u16,
-        rows: u16,
-    ) -> PaneId {
-        let tab = self.mint_tab("shell".to_owned(), None, root.clone(), columns, rows);
+    /// A selected space at `seat` holding one shell tab.
+    fn add_space(&mut self, label: String, seat: SpaceSeat, columns: u16, rows: u16) -> NewSpace {
+        let tab = self.mint_tab("shell".to_owned(), None, seat.root.clone(), columns, rows);
         let pane = tab.pane.id;
-        self.push_space(label, root, kind, vec![tab]);
-        pane
+        let space = self.push_space(label, seat, vec![tab]);
+        NewSpace { space, pane }
     }
 
     /// Adds a space holding `tabs`, the first of them selected, and selects
     /// it.
-    fn push_space(&mut self, label: String, root: PathBuf, kind: SpaceKind, tabs: Vec<Tab>) {
+    fn push_space(&mut self, label: String, seat: SpaceSeat, tabs: Vec<Tab>) -> SpaceId {
         let id = SpaceId(self.next_space_id);
         self.next_space_id += 1;
+        let SpaceSeat { root, kind } = seat;
         self.workspace.spaces.push(Space {
             id,
             label,
@@ -377,6 +356,7 @@ impl Session {
             tabs,
         });
         self.workspace.selected_space = id;
+        id
     }
 
     /// A tab with a fresh id, holding a pane with a fresh id that has not
@@ -413,7 +393,7 @@ impl Session {
     /// opens `replacement` in its place — a workspace always has somewhere
     /// to focus, the same invariant [`Session::remove_tab`] holds for tabs —
     /// and reports that space's first pane for the caller to spawn.
-    pub fn remove_space(
+    pub(crate) fn remove_space(
         &mut self,
         space: SpaceId,
         replacement: SpaceSeat,
@@ -424,11 +404,9 @@ impl Session {
         let removed = self.workspace.spaces.remove(index);
         let panes = removed.tabs.iter().map(|tab| tab.pane.id).collect();
         if self.workspace.spaces.is_empty() {
-            let SpaceSeat { root, kind } = replacement;
-            let pane = self.create_space(None, root, kind, columns, rows);
             return Some(RemovedSpace {
                 panes,
-                replacement: Some(pane),
+                replacement: Some(self.create_space(None, replacement, columns, rows)),
             });
         }
         if self.workspace.selected_space == space {
@@ -686,7 +664,7 @@ mod tests {
 
     #[test]
     fn state_round_trips_and_allocates_stable_identifiers() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         assert_eq!(session.selected_tab().pane.id, PaneId(1));
         assert_eq!(
             session.add_tab(
@@ -708,7 +686,7 @@ mod tests {
 
     #[test]
     fn remove_tab_refuses_the_last_tab_but_allows_the_rest() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         assert_eq!(session.remove_tab(TabId(1)), None);
 
         let second_pane = session.add_tab(
@@ -729,7 +707,7 @@ mod tests {
 
     #[test]
     fn remove_tab_reselects_a_neighbor_when_the_active_tab_closes() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         session.add_tab(
             session.workspace.selected_space,
             "two".into(),
@@ -754,34 +732,61 @@ mod tests {
 
     #[test]
     fn a_root_carries_one_space_per_kind() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let root = PathBuf::from("/tmp/frontend");
-        let first = session.open_space(None, root.clone(), SpaceKind::Worktree, 80, 24);
-        let OpenedSpace::Created {
+        let first = session.open_space(
+            SpaceSeat {
+                root: root.clone(),
+                kind: SpaceKind::Worktree,
+            },
+            80,
+            24,
+        );
+        let OpenedSpace::Created(NewSpace {
             space: worktree, ..
-        } = first
+        }) = first
         else {
             panic!("the first open creates");
         };
         assert_eq!(
-            session.open_space(None, root.clone(), SpaceKind::Worktree, 80, 24),
+            session.open_space(
+                SpaceSeat {
+                    root: root.clone(),
+                    kind: SpaceKind::Worktree
+                },
+                80,
+                24
+            ),
             OpenedSpace::Existing(worktree),
             "the same root and the same kind is the same space"
         );
-        let other = session.open_space(None, root.clone(), SpaceKind::Workspace, 80, 24);
-        let OpenedSpace::Created {
+        let other = session.open_space(
+            SpaceSeat {
+                root: root.clone(),
+                kind: SpaceKind::Workspace,
+            },
+            80,
+            24,
+        );
+        let OpenedSpace::Created(NewSpace {
             space: workspace, ..
-        } = other
+        }) = other
         else {
             panic!("the other kind over the same root creates a second space");
         };
         assert_ne!(worktree, workspace);
         assert_eq!(
-            session.space_for(&root, SpaceKind::Workspace),
+            session.space_for(&SpaceSeat {
+                root: root.clone(),
+                kind: SpaceKind::Workspace
+            }),
             Some(workspace)
         );
         assert_eq!(
-            session.space_for(&root, SpaceKind::Worktree),
+            session.space_for(&SpaceSeat {
+                root: root.clone(),
+                kind: SpaceKind::Worktree
+            }),
             Some(worktree)
         );
     }
@@ -805,7 +810,7 @@ mod tests {
 
     #[test]
     fn a_launch_is_recorded_on_the_tab_owning_the_pane_and_cleared_by_a_shell() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         let pane = session.add_tab(
             space,
@@ -832,7 +837,7 @@ mod tests {
 
     #[test]
     fn update_pane_status_reports_change_only_when_something_actually_moved() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         assert!(!session.update_pane_status(PaneId(1), PathBuf::from("/tmp/a"), "shell".into()));
         assert!(session.update_pane_status(PaneId(1), PathBuf::from("/tmp/b"), "vim".into()));
         assert_eq!(session.selected_tab().pane.id, PaneId(1));
@@ -844,7 +849,7 @@ mod tests {
 
     #[test]
     fn rename_tab_trims_refuses_blank_and_reports_real_changes_only() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         assert!(session.rename_tab(TabId(1), "  agent  ".into()));
         assert_eq!(session.selected_tab().label, "agent");
         assert!(!session.rename_tab(TabId(1), "agent".into()));
@@ -858,24 +863,13 @@ mod tests {
     /// name is numbered so the two rows are tellable apart.
     #[test]
     fn a_second_space_over_one_directory_opens_under_a_numbered_name() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
 
-        session.create_space(
-            None,
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
-            80,
-            24,
-        );
+        session.create_space(None, seat("/tmp/frontend", SpaceKind::Worktree), 80, 24);
         assert_eq!(session.selected_space().label, "frontend");
 
-        let pane = session.create_space(
-            None,
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let NewSpace { pane, .. } =
+            session.create_space(None, seat("/tmp/frontend", SpaceKind::Worktree), 80, 24);
         assert_eq!(session.workspace.spaces.len(), 3);
         assert_eq!(session.selected_space().label, "frontend 2");
         assert_eq!(
@@ -884,20 +878,13 @@ mod tests {
         );
         assert_eq!(session.selected_tab().pane.id, pane);
 
-        session.create_space(
-            None,
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
-            80,
-            24,
-        );
+        session.create_space(None, seat("/tmp/frontend", SpaceKind::Worktree), 80, 24);
         assert_eq!(session.selected_space().label, "frontend 3");
 
         // A name the caller gives is its own business, repeated or not.
         session.create_space(
             Some("frontend".into()),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -906,11 +893,10 @@ mod tests {
 
     #[test]
     fn add_space_creates_a_selected_space_with_its_own_bootstrap_tab() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
-        let pane = session.add_space(
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
+        let NewSpace { pane, .. } = session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -926,29 +912,17 @@ mod tests {
     /// Asking for a space outright is `create_space`, below.
     #[test]
     fn going_to_a_root_twice_lands_on_the_same_space() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
 
-        let first = session.open_space(
-            None,
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
-            80,
-            24,
-        );
-        let OpenedSpace::Created { space, pane } = first else {
+        let first = session.open_space(seat("/tmp/frontend", SpaceKind::Worktree), 80, 24);
+        let OpenedSpace::Created(NewSpace { space, pane }) = first else {
             panic!("the first open creates: {first:?}");
         };
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.selected_space().label, "frontend");
         assert_eq!(session.selected_tab().pane.id, pane);
 
-        let again = session.open_space(
-            Some("a second name".into()),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
-            80,
-            24,
-        );
+        let again = session.open_space(seat("/tmp/frontend", SpaceKind::Worktree), 80, 24);
         assert_eq!(again, OpenedSpace::Existing(space));
         assert_eq!(session.workspace.spaces.len(), 2, "no second row");
         assert_eq!(
@@ -960,12 +934,11 @@ mod tests {
 
     #[test]
     fn remove_space_returns_every_pane_and_keeps_the_selection_on_a_survivor() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let first_space = session.workspace.selected_space;
         session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -994,8 +967,7 @@ mod tests {
     /// place — even when it is the very directory just closed.
     #[test]
     fn removing_the_last_space_opens_the_replacement_in_its_place() {
-        let mut session =
-            Session::new(PathBuf::from("/home/someone"), SpaceKind::Workspace, 80, 24);
+        let mut session = Session::new(seat("/home/someone", SpaceKind::Workspace), 80, 24);
         let only = session.workspace.selected_space;
 
         let removed = session
@@ -1007,9 +979,17 @@ mod tests {
         assert_eq!(session.workspace.spaces.len(), 1);
         let space = session.selected_space();
         assert_ne!(space.id, only, "a new space, not the closed one kept");
+        assert_eq!(space.id, replacement.space);
         assert_eq!(space.root, PathBuf::from("/home/someone"));
         assert_eq!(space.kind, SpaceKind::Workspace);
-        assert_eq!(session.selected_tab().pane.id, replacement);
+        assert_eq!(session.selected_tab().pane.id, replacement.pane);
+    }
+
+    fn seat(root: &str, kind: SpaceKind) -> SpaceSeat {
+        SpaceSeat {
+            root: PathBuf::from(root),
+            kind,
+        }
     }
 
     fn home_seat() -> SpaceSeat {
@@ -1021,7 +1001,7 @@ mod tests {
 
     #[test]
     fn rename_space_trims_refuses_blank_and_reports_real_changes_only() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         assert!(session.rename_space(space, "  frontend  ".into()));
         assert_eq!(session.selected_space().label, "frontend");
@@ -1032,12 +1012,11 @@ mod tests {
 
     #[test]
     fn select_space_moves_selection_only_when_the_target_exists_and_differs() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let first_space = session.workspace.selected_space;
         session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -1055,7 +1034,7 @@ mod tests {
     /// the new one belonging to the space itself rather than dangling.
     #[test]
     fn a_tab_belongs_only_with_an_agent_of_its_own_space() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let first_space = session.workspace.selected_space;
         let agent = session.selected_tab().id;
         session.add_tab(
@@ -1070,8 +1049,7 @@ mod tests {
 
         session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -1096,7 +1074,7 @@ mod tests {
     /// than leaving it pointing at a tab that is gone.
     #[test]
     fn closing_an_agent_hands_its_shells_back_to_the_space() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         session.add_tab(space, "agent".into(), None, 80, 24, PathBuf::from("/tmp/a"));
         let agent = session.selected_tab().id;
@@ -1126,13 +1104,12 @@ mod tests {
     /// selected space's own list.
     #[test]
     fn tab_operations_reach_a_tab_in_a_non_selected_space() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let original_tab = session.selected_tab().id;
         let original_pane = session.selected_tab().pane.id;
         session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -1261,7 +1238,7 @@ mod tests {
 
     #[test]
     fn reorder_tab_moves_among_agent_tabs_and_ignores_a_no_op_move() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         // The bootstrap tab (id 1) plus two agent tabs: [1, 2, 3].
         session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
@@ -1288,7 +1265,7 @@ mod tests {
 
     #[test]
     fn reorder_tab_moves_among_one_agents_shell_tabs() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         let agent = session.selected_tab().id;
         session.add_tab(
@@ -1326,7 +1303,7 @@ mod tests {
 
     #[test]
     fn reorder_tab_moves_to_the_end_when_before_is_none() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
         session.add_tab(space, "c".into(), None, 80, 24, PathBuf::from("/tmp/a"));
@@ -1346,12 +1323,11 @@ mod tests {
 
     #[test]
     fn reorder_tab_rejects_a_target_from_a_different_space() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let first_space_tab = session.selected_tab().id;
         session.add_space(
             "frontend".into(),
-            PathBuf::from("/tmp/frontend"),
-            SpaceKind::Worktree,
+            seat("/tmp/frontend", SpaceKind::Worktree),
             80,
             24,
         );
@@ -1366,7 +1342,7 @@ mod tests {
 
     #[test]
     fn reorder_tab_rejects_missing_tabs_and_self_targeting() {
-        let mut session = Session::new(PathBuf::from("/tmp/a"), SpaceKind::Worktree, 80, 24);
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
         let space = session.workspace.selected_space;
         session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
 

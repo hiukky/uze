@@ -335,8 +335,10 @@ fn connect(project: &Path) -> (UnixStream, UnixStream) {
             version: PROTOCOL_VERSION,
             columns: 80,
             rows: 24,
-            root: Some(project.to_path_buf()),
-            kind: uze_terminal::SpaceKind::Worktree,
+            seat: Some(uze_terminal::SpaceSeat {
+                root: project.to_path_buf(),
+                kind: uze_terminal::SpaceKind::Worktree,
+            }),
         },
     )
     .unwrap();
@@ -844,8 +846,11 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     // A nested launch: what `uze` does when UZE_PANE is set.
     let nested = engine.env.root().join("nested-project");
     fs::create_dir_all(&nested).unwrap();
-    let label = open_space(&nested, uze_terminal::SpaceKind::Worktree)
-        .expect("the running server opens a space");
+    let label = open_space(uze_terminal::SpaceSeat {
+        root: nested.clone(),
+        kind: uze_terminal::SpaceKind::Worktree,
+    })
+    .expect("the running server opens a space");
     assert_eq!(label, "nested-project");
     engine.wait_for_session_where("three spaces exist", |session| {
         session.workspace.spaces.len() == 3

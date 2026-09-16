@@ -926,18 +926,13 @@ fn active_palette() -> uze_terminal::Palette {
     }
 }
 
-/// The space the directory `uze` was started in resolves to: its root and
-/// the kind it is created as when this client is the one to create it.
-/// Decided before the attach, once per run of the loop — one Git read on
-/// the way in, never inside it.
-pub(crate) struct LaunchSpace {
-    pub(crate) root: PathBuf,
-    pub(crate) kind: uze_terminal::SpaceKind,
-}
-
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
-    launch: &LaunchSpace,
+    // The directory `uze` was started in and the kind its space is created
+    // as when this client is the one to create it — decided before the
+    // attach, once per run of the loop: one Git read on the way in, never
+    // inside it.
+    launch: &uze_terminal::SpaceSeat,
     layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
@@ -965,10 +960,11 @@ pub(crate) fn attach_workspace(
     // `Landing`). Resolving the workspace root *before* attaching is what
     // makes a repository and a subdirectory of it the same space rather
     // than two.
-    let LaunchSpace { root, kind } = launch;
-    let kind = *kind;
-    let workspace_root = uze_application::space_root(root);
-    let mut stream = attach(&workspace_root, kind).map_err(runtime_error)?;
+    let seat = uze_terminal::SpaceSeat {
+        root: uze_application::space_root(&launch.root),
+        kind: launch.kind,
+    };
+    let mut stream = attach(&seat).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
         &mut stream,
@@ -976,11 +972,10 @@ pub(crate) fn attach_workspace(
             version: PROTOCOL_VERSION,
             columns,
             rows,
-            root: match landing {
-                Landing::AtLaunchDirectory => Some(workspace_root.clone()),
+            seat: match landing {
+                Landing::AtLaunchDirectory => Some(seat),
                 Landing::WhereItLeftOff => None,
             },
-            kind,
         },
     )
     .map_err(runtime_error)?;
@@ -3851,6 +3846,8 @@ fn dispatch_menu_action<W: io::Write>(
                     &ClientRequest::CloseSpace {
                         space,
                         replacement: home_seat(),
+                        columns: model.last_size.0,
+                        rows: model.last_size.1,
                     },
                 );
             }
