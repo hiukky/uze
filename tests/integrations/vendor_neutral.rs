@@ -15,7 +15,7 @@ use uze_core::{
     integration::{
         AttachmentReceipt, HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
     },
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     store::StoredPackage,
 };
 
@@ -99,11 +99,9 @@ impl IntegrationPort for PublishingIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "fake integration exposes nothing individually".to_owned(),
             },
@@ -159,11 +157,9 @@ impl IntegrationPort for QuietIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "quiet".to_owned(),
             },
@@ -383,7 +379,6 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
     let plan = PackageExposurePlan {
         package_id: package.id.clone(),
         route: CompatibilityRoute::Native,
-        verification: VerificationStatus::Unverified,
         provided_resource_identities: resources
             .iter()
             .map(|resource| resource.identity())

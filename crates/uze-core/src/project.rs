@@ -38,7 +38,7 @@ use std::{
 };
 
 use crate::{
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{Capability, CapabilityKind},
     error::{Result, UzeError},
     skill::{SkillInvocationPolicy, parse_skill_invocation},
     store::PackageId,
@@ -315,7 +315,6 @@ fn discover_mcp(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
             })?;
             items.push(Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload,
             });
@@ -336,7 +335,6 @@ fn discover_hooks(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
     crate::hook::parse_manifest(&path, &payload)?;
     items.push(Capability {
         kind: CapabilityKind::Hook,
-        representation: Representation::Standard,
         path,
         payload,
     });
@@ -450,7 +448,6 @@ pub(crate) fn push_file(
 ) -> Result<()> {
     items.push(Capability {
         kind,
-        representation: Representation::Standard,
         payload: read_file(&path)?,
         path,
     });
@@ -465,7 +462,6 @@ mod tests {
     fn skill_capability(path: &str) -> Capability {
         Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path: PathBuf::from(path),
             payload: Vec::new(),
         }
@@ -505,7 +501,6 @@ mod tests {
             PathBuf::from("/uze-home/store/packages/demo-package"),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path: PathBuf::from("/uze-home/store/packages/demo-package/mcp.json"),
                 payload: Vec::new(),
             },
@@ -525,7 +520,6 @@ mod tests {
             PathBuf::from("/uze-home/store/packages/demo-package"),
             Capability {
                 kind: CapabilityKind::Agent,
-                representation: Representation::Standard,
                 path: PathBuf::from("/uze-home/store/packages/demo-package/agents/reviewer.md"),
                 payload: Vec::new(),
             },
@@ -541,7 +535,6 @@ mod tests {
         let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
         let capability = Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path: PathBuf::from("/uze-home/store/packages/demo-package/skills/demo-skill/SKILL.md"),
             payload: b"---\ninvoke:\n  model: false\n  user: true\n---\nbody\n".to_vec(),
         };
@@ -565,7 +558,6 @@ mod tests {
         let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
         let capability = Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path: PathBuf::from("/uze-home/store/packages/demo-package/skills/demo-skill/SKILL.md"),
             payload: b"---\nname: demo-skill\n---\nbody\n".to_vec(),
         };
@@ -590,7 +582,6 @@ mod tests {
             PathBuf::from("/uze-home/store/packages/demo-package"),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path: PathBuf::from("/uze-home/store/packages/demo-package/mcp.json"),
                 payload: Vec::new(),
             },

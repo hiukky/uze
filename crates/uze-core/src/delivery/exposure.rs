@@ -11,11 +11,10 @@ use crate::{project::Resource, store::PackageId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    capability::Representation,
     error::{Result, UzeError},
     home::UzeHome,
     hook::HookEvent,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
 };
 
 /// Secret-free declaration of a process environment value UZE may pass
@@ -228,11 +227,7 @@ impl ExposureMechanism {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExposurePlan {
-    pub representation: Representation,
     pub route: CompatibilityRoute,
-    /// Result of a previous real conformance attempt, if any. Plans begin
-    /// `UNVERIFIED`; strategy selection does not fabricate execution evidence.
-    pub verification: VerificationStatus,
     pub mechanism: ExposureMechanism,
     pub evidence: String,
 }
@@ -252,7 +247,6 @@ pub struct ExposurePlan {
 pub struct PackageExposurePlan {
     pub package_id: PackageId,
     pub route: CompatibilityRoute,
-    pub verification: VerificationStatus,
     pub provided_resource_identities: BTreeSet<String>,
     pub evidence: String,
 }

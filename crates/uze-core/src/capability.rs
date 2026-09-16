@@ -1,4 +1,4 @@
-//! Canonical capability identities and preserved representations.
+//! Canonical capability identities.
 //!
 //! # What lives under `capability/`
 //!
@@ -37,17 +37,9 @@ pub enum CapabilityKind {
     Policy,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Representation {
-    Standard,
-    Foreign,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Capability {
     pub kind: CapabilityKind,
-    pub representation: Representation,
     pub path: PathBuf,
     pub payload: Vec<u8>,
 }

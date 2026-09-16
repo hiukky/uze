@@ -157,10 +157,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{
-        capability::{Capability, Representation},
-        store::PackageId,
-    };
+    use crate::{capability::Capability, store::PackageId};
 
     fn mcp_resource(name: &str, command: &str, args: &[&str]) -> Resource {
         let payload = serde_json::to_vec(&serde_json::json!({
@@ -173,7 +170,6 @@ mod tests {
             PathBuf::from("/store/demo"),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path: PathBuf::from("/store/demo/mcp.json"),
                 payload,
             },
@@ -187,7 +183,6 @@ mod tests {
             PathBuf::from("/store/demo"),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from("/store/demo/skills/a/SKILL.md"),
                 payload: b"body".to_vec(),
             },
@@ -221,7 +216,6 @@ mod tests {
             PathBuf::from("/store/demo"),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: PathBuf::from("/store/demo/hooks.json"),
                 payload: serde_json::to_vec(&crate::hook::PortableHook {
                     id: "protect-env".to_owned(),

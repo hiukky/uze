@@ -21,7 +21,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::{AttachmentReceipt, ContextDelivery, HarnessDetection, ManagedArtifact},
     project::Resource,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
 };
 
 /// `setup` probes `$SHELL` (`shell_path::detect_shell_rc`) to decide
@@ -52,11 +52,9 @@ impl IntegrationPort for SymlinkIntegration {
     fn capabilities(&self) -> uze_core::router::HarnessCapabilities {
         HarnessCapabilities::default()
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -94,11 +92,9 @@ impl IntegrationPort for AllResourceSymlinkIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test attachment is implemented directly".to_owned(),
             },
@@ -160,11 +156,9 @@ impl IntegrationPort for PartialIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test attachment is implemented directly".to_owned(),
             },
@@ -212,11 +206,9 @@ impl IntegrationPort for AbsentIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "an absent integration must not attach".to_owned(),
             },
@@ -618,11 +610,9 @@ impl IntegrationPort for PreparationRefusedOnce {
         Ok(())
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -784,11 +774,9 @@ impl IntegrationPort for NamedIntegration {
     fn capabilities(&self) -> uze_core::router::HarnessCapabilities {
         HarnessCapabilities::default()
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -1261,11 +1249,9 @@ impl IntegrationPort for FakeIntegration {
         self.detection.clone()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -1460,11 +1446,9 @@ impl IntegrationPort for HealthySymlinkIntegration {
             version: Some("9.9.9".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "healthy test does not use exposure_plan".to_owned(),
             },
@@ -1526,11 +1510,9 @@ impl IntegrationPort for ForeignFailingIntegration {
             version: Some("1.1.19".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "foreign test".to_owned(),
             },
@@ -1601,11 +1583,9 @@ impl IntegrationPort for ShimConflictingIntegration {
             version: Some("1.0.0".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "shim test".to_owned(),
             },
@@ -1929,11 +1909,9 @@ impl IntegrationPort for DeclaringIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },

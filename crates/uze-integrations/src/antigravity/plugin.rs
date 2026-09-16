@@ -441,7 +441,7 @@ mod plugin_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::{AttachmentState, IntegrationPort};
     use uze_core::project::Resource;
@@ -488,7 +488,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -509,7 +508,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: payload.as_bytes().to_vec(),
             },
@@ -523,7 +521,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },

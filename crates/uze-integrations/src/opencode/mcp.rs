@@ -14,7 +14,7 @@ use uze_core::{
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -36,7 +36,6 @@ impl OpenCodeIntegration {
     pub(super) fn mcp_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
                 "OpenCode has not completed `uze setup`; its managed global MCP config is not yet enabled.",
             );
         }
@@ -45,24 +44,18 @@ impl OpenCodeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `opencode mcp add`, not a name; refusing to attach.",
             );
         }
         let Some((command, args)) = parse_mcp(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "mcp.json server entry is missing a usable `command` field.",
-            );
+            return unsupported("mcp.json server entry is missing a usable `command` field.");
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedVendorConfig {
                 entry_name,
                 transport: "stdio".to_owned(),

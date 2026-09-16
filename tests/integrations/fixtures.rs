@@ -17,7 +17,7 @@ use std::{
 
 use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
@@ -76,7 +76,6 @@ pub(crate) fn skill_resource(package: &StoredPackage, dir: &str, name: &str) -> 
         package.root.clone(),
         Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path,
             payload: Vec::new(),
         },
@@ -94,7 +93,6 @@ pub(crate) fn mcp_resource(package: &StoredPackage, name: &str, payload: &str) -
         package.root.clone(),
         Capability {
             kind: CapabilityKind::Mcp,
-            representation: Representation::Standard,
             path,
             payload: payload.as_bytes().to_vec(),
         },

@@ -2,10 +2,10 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use uze_core::{
     UzeEngine, UzeHome, UzeStore,
-    capability::{CapabilityKind, Representation},
+    capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus, route},
+    router::{CompatibilityRoute, HarnessCapabilities},
 };
 
 use uze_integrations::{
@@ -67,12 +67,10 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     );
 
     let resource = environment.resources.first().unwrap();
-    assert_eq!(resource.capability.representation, Representation::Standard);
     assert!(resource.package_root().is_some());
 
     let claude_skill = claude.exposure_plan(resource);
     assert_eq!(claude_skill.route, CompatibilityRoute::Adaptable);
-    assert_eq!(claude_skill.verification, VerificationStatus::Unverified);
     assert!(matches!(
         claude_skill.mechanism,
         ExposureMechanism::RuntimeBridge { .. }
@@ -80,7 +78,6 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
 
     let codex_skill = codex.exposure_plan(resource);
     assert_eq!(codex_skill.route, CompatibilityRoute::Adaptable);
-    assert_eq!(codex_skill.verification, VerificationStatus::Unverified);
     assert!(matches!(
         codex_skill.mechanism,
         ExposureMechanism::FilesystemProjection { .. }
@@ -107,7 +104,7 @@ impl IntegrationPort for FakeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: BTreeSet::from([CapabilityKind::AgentSkill]),
+            native: BTreeSet::from([CapabilityKind::AgentSkill]),
             evidence: "fake contract evidence".to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -115,9 +112,7 @@ impl IntegrationPort for FakeIntegration {
 
     fn exposure_plan(&self, resource: &uze_core::Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::DirectNative {
                 resource_path: resource.capability.path.clone(),
             },
@@ -132,11 +127,12 @@ fn a_new_peer_integration_needs_no_core_change() {
     let cursor = FakeIntegration { id: "cursor" };
     let resource = environment.resources.first().unwrap();
 
-    // The Core routes an integration it has never heard of from what that
-    // integration declares, and nothing else.
-    let decision = route(&resource.capability, &cursor.capabilities());
-    assert_eq!(decision.route, CompatibilityRoute::Native);
-    assert_eq!(decision.evidence, "fake contract evidence");
+    assert!(
+        cursor
+            .capabilities()
+            .native
+            .contains(&resource.capability.kind)
+    );
     assert_eq!(cursor.id(), "cursor");
 
     let skill = cursor.exposure_plan(resource);

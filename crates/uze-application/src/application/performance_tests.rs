@@ -24,7 +24,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::HarnessDetection,
     project::Resource,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     trust::AlwaysTrust,
 };
 
@@ -63,11 +63,9 @@ impl IntegrationPort for SlowProbeIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "the budget harness delivers nothing".to_owned(),
             },

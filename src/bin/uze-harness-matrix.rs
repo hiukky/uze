@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use uze_core::{
     PackageId, UzeHome,
     acquisition::{PackageSource, Provenance, ResolvedSource},
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{Capability, CapabilityKind},
     integration::{ContextDelivery, IntegrationPort, SessionContinuity},
     project::Resource,
     router::CompatibilityRoute,
@@ -106,7 +106,6 @@ fn skill(payload: &str, name: &str) -> Resource {
         root.clone(),
         Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path: root.join(format!("skills/{name}/SKILL.md")),
             payload: payload.as_bytes().to_vec(),
         },
@@ -120,7 +119,6 @@ fn mcp() -> Resource {
         root.clone(),
         Capability {
             kind: CapabilityKind::Mcp,
-            representation: Representation::Standard,
             path: root.join("mcp.json"),
             payload: br#"{"command":"fixture","args":[]}"#.to_vec(),
         },
@@ -143,7 +141,6 @@ fn hook() -> Resource {
         root,
         Capability {
             kind: CapabilityKind::Hook,
-            representation: Representation::Standard,
             path: manifest,
             payload: serde_json::to_vec(&group).expect("portable hook serializes"),
         },
@@ -158,7 +155,6 @@ fn capability_resource(kind: CapabilityKind, path: &str) -> Resource {
         root.clone(),
         Capability {
             kind,
-            representation: Representation::Standard,
             path: PathBuf::from(path),
             payload: Vec::new(),
         },

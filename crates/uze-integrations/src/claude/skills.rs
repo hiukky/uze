@@ -11,7 +11,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     skill::SkillInvocationPolicy,
     state,
 };
@@ -40,7 +40,7 @@ impl ClaudeIntegration {
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return unsupported_invalid_policy(resource);
+            return unsupported_invalid_policy();
         }
         if state::is_installed(&self.uze_home, self.id())
             && let Some(entry_name) = resource
@@ -67,9 +67,7 @@ impl ClaudeIntegration {
                 );
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: route_for_policy(policy),
-                verification: VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::ManagedUserScopeReference {
                     discovery_root: self.skills_dir.clone(),
                     entry_name,
@@ -79,9 +77,7 @@ impl ClaudeIntegration {
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::RuntimeBridge {
                 bridge: "Claude Code --plugin-dir".to_owned(),
                 arguments: vec![
@@ -112,11 +108,9 @@ pub(super) fn route_for_policy(policy: SkillInvocationPolicy) -> CompatibilityRo
     CompatibilityRoute::Adaptable
 }
 
-fn unsupported_invalid_policy(resource: &Resource) -> ExposurePlan {
+fn unsupported_invalid_policy() -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
         },

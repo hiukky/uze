@@ -576,7 +576,7 @@ mod generated_native_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
     use uze_core::project::Resource;
@@ -638,7 +638,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -652,7 +651,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -896,7 +894,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("extra/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -991,7 +988,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/deploy/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -1046,7 +1042,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg_root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },
@@ -1077,7 +1072,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg.root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },

@@ -9,7 +9,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -21,7 +21,6 @@ impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
                 "Claude Code has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
             );
         }
@@ -30,24 +29,18 @@ impl ClaudeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `claude mcp add`, not a name; refusing to attach.",
             );
         }
         let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "mcp.json server entry is missing a usable `command` field.",
-            );
+            return unsupported("mcp.json server entry is missing a usable `command` field.");
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedVendorConfig {
                 entry_name,
                 transport: "stdio".to_owned(),

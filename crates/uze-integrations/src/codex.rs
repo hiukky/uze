@@ -29,7 +29,7 @@ use uze_core::{
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
 };
@@ -358,7 +358,6 @@ impl IntegrationPort for CodexIntegration {
             ]
                 .into_iter()
                 .collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -442,10 +441,7 @@ impl IntegrationPort for CodexIntegration {
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if resource.package_root().is_none() {
-            return unsupported(
-                resource,
-                "Codex attachment needs a UZE-stored Agent Plugin package.",
-            );
+            return unsupported("Codex attachment needs a UZE-stored Agent Plugin package.");
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
@@ -453,7 +449,6 @@ impl IntegrationPort for CodexIntegration {
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
-                resource,
                 "Codex attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -481,7 +476,6 @@ impl IntegrationPort for CodexIntegration {
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
                 evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.".to_owned(),
             });
@@ -497,7 +491,6 @@ impl IntegrationPort for CodexIntegration {
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
             evidence: "No .codex-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Codex marketplace.".to_owned(),
         })
@@ -739,9 +732,7 @@ impl CodexIntegration {
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedUserScopeReference {
                 discovery_root: self.agents_dir.clone(),
                 entry_name: format!("{entry_name}.toml"),
@@ -820,11 +811,9 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings are JSON serializable")
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

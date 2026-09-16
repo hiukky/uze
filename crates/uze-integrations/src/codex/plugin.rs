@@ -378,7 +378,7 @@ mod codex_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
     use uze_core::project::Resource;
@@ -449,7 +449,6 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -466,7 +465,6 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload,
             },

@@ -32,7 +32,7 @@ use uze_core::{
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
 };
@@ -291,7 +291,6 @@ impl IntegrationPort for ClaudeIntegration {
             ]
                 .into_iter()
                 .collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -404,7 +403,6 @@ impl IntegrationPort for ClaudeIntegration {
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if resource.package_root().is_none() {
             return unsupported(
-                resource,
                 "Claude Code needs a UZE-stored Agent Plugin package for this attachment.",
             );
         }
@@ -414,7 +412,6 @@ impl IntegrationPort for ClaudeIntegration {
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
-                resource,
                 "Claude Code attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -450,7 +447,6 @@ impl IntegrationPort for ClaudeIntegration {
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
                 evidence: "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time."
                     .to_owned(),
@@ -469,7 +465,6 @@ impl IntegrationPort for ClaudeIntegration {
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
             evidence: "No .claude-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Claude marketplace."
                 .to_owned(),
@@ -724,9 +719,7 @@ impl ClaudeIntegration {
             .or_else(|| resource.logical_capability_name())
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedUserScopeReference {
                 discovery_root: self.agents_dir.clone(),
                 entry_name: format!("{entry_name}.md"),
@@ -780,11 +773,9 @@ impl PreferencePort for ClaudeIntegration {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

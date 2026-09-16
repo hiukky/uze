@@ -380,9 +380,7 @@ mod tests {
         }
         fn exposure_plan(&self, _resource: &uze_core::project::Resource) -> ExposurePlan {
             ExposurePlan {
-                representation: uze_core::capability::Representation::Standard,
                 route: uze_core::router::CompatibilityRoute::Unsupported,
-                verification: uze_core::router::VerificationStatus::Unverified,
                 mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
                     rationale: "test does not attach".to_owned(),
                 },

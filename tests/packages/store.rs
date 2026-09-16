@@ -1,9 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use uze_core::{
-    ResourceOrigin, UzeEngine, UzeHome, UzeStore,
-    capability::{CapabilityKind, Representation},
-};
+use uze_core::{ResourceOrigin, UzeEngine, UzeHome, UzeStore, capability::CapabilityKind};
 
 /// The acquisition pipeline every install now goes through: a source is
 /// acquired into a materialized package, and only then does the Store ingest
@@ -197,7 +194,6 @@ fn engine_composes_a_standard_resource_from_the_store() {
     assert_eq!(environment.resources.len(), 1);
     let resource = &environment.resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::AgentSkill);
-    assert_eq!(resource.capability.representation, Representation::Standard);
     assert!(matches!(
         resource.origin,
         ResourceOrigin::Package { ref id, .. } if id == &package.id
@@ -255,7 +251,6 @@ fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
     assert_eq!(environment.resources.len(), 1);
     let resource = &environment.resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
-    assert_eq!(resource.capability.representation, Representation::Standard);
     assert_eq!(resource.capability.path, package.root.join("mcp.json"));
 
     let config: serde_json::Value = serde_json::from_slice(&resource.capability.payload).unwrap();

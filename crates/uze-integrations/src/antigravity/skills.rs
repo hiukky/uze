@@ -39,7 +39,7 @@ use uze_core::{
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -151,9 +151,7 @@ impl AntigravityIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -190,9 +188,7 @@ impl AntigravityIntegration {
                 )
             };
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::ManagedUserScopeReference {
                     discovery_root: self.skills_dir.clone(),
                     entry_name,
@@ -202,9 +198,7 @@ impl AntigravityIntegration {
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "Antigravity setup has not completed, so there is no global skills root for the Skill delivery yet."
                     .to_owned(),
@@ -218,7 +212,7 @@ impl AntigravityIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::store::PackageId;
 
     fn skill_resource(package_id: &str, path_string: &str, payload: &[u8]) -> Resource {
@@ -228,7 +222,6 @@ mod tests {
             PathBuf::from("/store/packages").join(package_id),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from(path_string),
                 payload: payload.to_vec(),
             },

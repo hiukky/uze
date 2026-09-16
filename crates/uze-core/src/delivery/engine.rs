@@ -1,6 +1,6 @@
 // ADR-005: the Core Engine composes peer-harness inputs without named harness rules.
 use crate::{
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{Capability, CapabilityKind},
     error::{Result, UzeError},
     project::{EffectiveEnvironment, Resource, resolve_project_resources},
     store::{PackageId, UzeStore},
@@ -78,7 +78,6 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
                 root.to_path_buf(),
                 Capability {
                     kind: CapabilityKind::AgentSkill,
-                    representation: Representation::Standard,
                     path,
                     payload,
                 },
@@ -113,7 +112,6 @@ fn hook_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<
                 package_root.to_path_buf(),
                 Capability {
                     kind: CapabilityKind::Hook,
-                    representation: Representation::Standard,
                     path: manifest_path.clone(),
                     payload,
                 },
@@ -140,7 +138,6 @@ fn agent_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec
                 package_root.to_path_buf(),
                 Capability {
                     kind: CapabilityKind::Agent,
-                    representation: Representation::Standard,
                     path,
                     payload,
                 },
@@ -166,7 +163,6 @@ fn instruction_resources(id: &PackageId, package_root: &std::path::Path) -> Resu
         package_root.to_path_buf(),
         Capability {
             kind: CapabilityKind::Instruction,
-            representation: Representation::Standard,
             path,
             payload,
         },
@@ -211,7 +207,6 @@ fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<R
                 package_root.to_path_buf(),
                 Capability {
                     kind: CapabilityKind::Mcp,
-                    representation: Representation::Standard,
                     path: manifest_path.clone(),
                     payload,
                 },

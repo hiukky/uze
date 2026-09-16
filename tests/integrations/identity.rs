@@ -46,7 +46,7 @@ use std::{
 
 use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
@@ -161,8 +161,7 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
     }
     let capabilities = integration.capabilities();
     assert!(
-        !(capabilities.direct_standard.is_empty()
-            && capabilities.native.is_empty()
+        !(capabilities.native.is_empty()
             && capabilities.adaptable.is_empty()
             && capabilities.degraded.is_empty()),
         "{}: capabilities() must declare at least one representable capability kind",
@@ -202,15 +201,13 @@ fn assert_native_skill_and_mcp(integration: &dyn IntegrationPort) {
 
 /// OpenCode V2 is standard (`opencode`, legacy `opencode2` alias kept):
 /// Skills are consumed natively from the shared `~/.agents/skills` root
-/// (direct standard), MCP is now native via `opencode mcp add <name> --`
+/// (native), MCP is now native via `opencode mcp add <name> --`
 /// into `mcp.servers` (no `remove` verb, so detach stays file rewrite).
 fn assert_opencode_native_skill_adapted_mcp(integration: &dyn IntegrationPort) {
     let capabilities = integration.capabilities();
     assert!(
-        capabilities
-            .direct_standard
-            .contains(&CapabilityKind::AgentSkill),
-        "opencode: AgentSkill must be declared direct_standard (native shared-root discovery)"
+        capabilities.native.contains(&CapabilityKind::AgentSkill),
+        "opencode: AgentSkill must be declared native (shared-root discovery)"
     );
     assert!(
         capabilities.native.contains(&CapabilityKind::Mcp),
@@ -284,7 +281,6 @@ fn antigravity_reports_stable_identity_and_capabilities() {
         package.root.clone(),
         Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path: package.root.join("skills/review/SKILL.md"),
             payload: b"---\nname: review\ninvoke:\n  model: false\n  user: true\n---\n\nBody.\n"
                 .to_vec(),

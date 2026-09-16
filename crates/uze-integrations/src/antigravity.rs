@@ -74,7 +74,7 @@ use uze_core::{
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
 };
@@ -283,7 +283,6 @@ impl IntegrationPort for AntigravityIntegration {
             // the non-default half degrades here. This is declared through
             // the per-resource exposure plan, kept honest per policy — a
             // default model+user Skill is fully Native.
-            verification: VerificationStatus::Unverified,
             evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json and/or canonical hooks.json gets a deterministically synthesized plugin carrying a translated mcp_config.json and a named-entry hooks.json respectively, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall; the hook projection itself is deterministic emission, real-binary verification pending in the conformance lab). Non-default invocation policies are ADAPTED (no explicit-invocation-only mechanism exists; Skills stay model-discoverable and slash-invocable — verified against 1.1.19). MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -394,10 +393,7 @@ impl IntegrationPort for AntigravityIntegration {
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if resource.package_root().is_none() {
-            return unsupported(
-                resource,
-                "Antigravity attachment needs a UZE-stored Agent Plugin package.",
-            );
+            return unsupported("Antigravity attachment needs a UZE-stored Agent Plugin package.");
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
@@ -405,7 +401,6 @@ impl IntegrationPort for AntigravityIntegration {
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
-                resource,
                 "Antigravity attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -448,7 +443,6 @@ impl IntegrationPort for AntigravityIntegration {
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
                 evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json, which the plugin system does not read. UZE synthesizes a deterministic plugin (plugin.json + translated mcp_config.json + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store. Hooks are not part of a plugin: the harness never reads a plugin's hooks.json, so they are merged into the shared ~/.gemini/config/hooks.json as receipt-owned named entries."
                     .to_owned(),
@@ -458,7 +452,6 @@ impl IntegrationPort for AntigravityIntegration {
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
             evidence: "The canonical plugin.json is a valid Antigravity plugin manifest, so the package is installed whole, straight from the UZE store, through `agy plugin install`; its conventional skills/ plus any author-shipped mcp_config.json are what it declares (default-policy Skills only — a non-default invoke policy degrades and is delivered capability-level, reported honestly). Undeclared resources fall back to individual attachment."
                 .to_owned(),
@@ -676,11 +669,9 @@ fn blocked(reason: String) -> AttachmentInspection {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::Unverified,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },
@@ -694,9 +685,7 @@ impl AntigravityIntegration {
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedUserScopeReference {
                 discovery_root: self.agents_dir.clone(),
                 entry_name: format!("{entry_name}.md"),

@@ -51,7 +51,7 @@ use uze_core::{
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -202,9 +202,7 @@ impl OpenCodeIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -216,7 +214,7 @@ impl OpenCodeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         let canonical_source = resource
             .capability
@@ -251,9 +249,7 @@ impl OpenCodeIntegration {
                 );
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::ManagedUserScopeReference {
                     discovery_root: self.skills_dir.clone(),
                     entry_name,
@@ -263,9 +259,7 @@ impl OpenCodeIntegration {
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::FilesystemProjection {
                 source: canonical_source,
                 target_relative: PathBuf::from(".agents/skills").join(

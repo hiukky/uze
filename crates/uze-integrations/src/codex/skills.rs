@@ -40,7 +40,7 @@ use uze_core::{
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -156,9 +156,7 @@ impl CodexIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -193,9 +191,7 @@ impl CodexIntegration {
                 evidence.push_str(" Codex has no documented way to disable explicit `$skill` invocation, so the canonical invoke.user=false cannot be enforced — DEGRADED, reported honestly rather than invented.");
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::ManagedUserScopeReference {
                     discovery_root: self.skills_dir.clone(),
                     entry_name,
@@ -220,9 +216,7 @@ impl CodexIntegration {
                     .into_owned()
             });
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::FilesystemProjection {
                 source: skill_directory.to_path_buf(),
                 target_relative: PathBuf::from(".agents/skills").join(label),
@@ -237,7 +231,7 @@ impl CodexIntegration {
 mod tests {
     use super::*;
     use std::fs;
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::store::PackageId;
 
     fn skill_resource(package_id: &str, path_string: &str, payload: &[u8]) -> Resource {
@@ -247,7 +241,6 @@ mod tests {
             PathBuf::from("/store/packages").join(package_id),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from(path_string),
                 payload: payload.to_vec(),
             },

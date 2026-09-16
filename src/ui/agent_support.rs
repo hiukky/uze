@@ -310,7 +310,7 @@ impl CapabilityState {
 
 fn capability_state(support: &AgentSupport, kind: CapabilityKind) -> CapabilityState {
     let capabilities = &support.capabilities;
-    if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
+    if capabilities.native.contains(&kind) {
         CapabilityState::Supported
     } else if capabilities.adaptable.contains(&kind) || capabilities.degraded.contains(&kind) {
         CapabilityState::Limited

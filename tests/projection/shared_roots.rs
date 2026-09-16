@@ -457,7 +457,6 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
             fixture_root.clone(),
             uze_core::capability::Capability {
                 kind: uze_core::capability::CapabilityKind::AgentSkill,
-                representation: uze_core::capability::Representation::Standard,
                 path: fixture_root.join("skills/legacy/SKILL.md"),
                 payload: Vec::new(),
             },

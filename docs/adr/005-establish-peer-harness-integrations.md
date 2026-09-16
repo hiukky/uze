@@ -68,6 +68,12 @@ the `ForeignImporter` trait and the `ImportedBundle` it produced were built
 by `Store::ingest` and then discarded unread, so the one thing they did —
 reading `plugin.json` and refusing a reference outside the package — is now
 `store::read_plugin_manifest`, shared by ingest and capability inspection.
+The type-level echoes of "three facts" went too: `Representation` was always
+`Standard`, plans carried a `VerificationStatus` nothing read or ever set past
+`Unverified`/`NotExposed`, and `router::route` ran only in tests. Probe
+verdicts live in the conformance Lab's evidence, not in plan types, and an
+integration declaring a kind `native` is the whole route claim
+(`direct_standard` folded into it).
 
 Alternatives rejected: retaining the named-harness core matrix; treating
 Claude import as a canonical source pipeline; and requiring filesystem

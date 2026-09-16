@@ -38,7 +38,7 @@ use uze_core::{
     },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::PackageId,
 };
@@ -154,13 +154,13 @@ impl IntegrationPort for OpenCodeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Agent].into_iter().collect(),
-            native: [CapabilityKind::Mcp].into_iter().collect(),
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Agent, CapabilityKind::Mcp]
+                .into_iter()
+                .collect(),
             // Hooks reach OpenCode through UZE's generated bridge — an
             // explicit adapter, never a native hook file (OpenCode exposes
             // no declarative hook surface; ADR-033).
             adaptable: [CapabilityKind::Hook].into_iter().collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive. Portable Hooks are delivered as one owned, regenerable `plugins/hooks-<package>.ts` plugin the harness auto-discovers: it is the same wrapper the other harnesses get as a shell script — handlers run sequentially against the portable HOOK_* contract, first-deny-wins, per-handler timeouts, fail-closed by effect — with this package's groups as data and no author TypeScript toolchain (ADR-033)."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -269,7 +269,7 @@ impl IntegrationPort for OpenCodeIntegration {
     }
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if resource.package_root().is_none() {
-            return unsupported(resource, "OpenCode attachment needs a UZE-stored package.");
+            return unsupported("OpenCode attachment needs a UZE-stored package.");
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
@@ -277,7 +277,6 @@ impl IntegrationPort for OpenCodeIntegration {
             CapabilityKind::Agent => self.agent_plan(resource),
             CapabilityKind::Hook => self.hook_plan(resource),
             _ => unsupported(
-                resource,
                 "OpenCode portability is implemented only for Agent Skills, Agents, MCP, and portable Hooks in this slice.",
             ),
         }
@@ -482,9 +481,7 @@ impl OpenCodeIntegration {
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedUserScopeReference {
                 discovery_root: self.agents_dir.clone(),
                 entry_name: format!("{entry_name}.md"),
@@ -502,10 +499,7 @@ impl OpenCodeIntegration {
     /// entry to duplicate (verified against the real harness).
     fn hook_plan(&self, resource: &Resource) -> ExposurePlan {
         let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "hook resource payload is not a valid portable hook group",
-            );
+            return unsupported("hook resource payload is not a valid portable hook group");
         };
         let compatibility = uze_core::hook::assess(&hook, &self.hook_capabilities(), true);
         let mechanism = match compatibility.route {
@@ -522,7 +516,6 @@ impl OpenCodeIntegration {
                     uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
                     uze_core::project::ResourceOrigin::Project { .. } => {
                         return unsupported(
-                            resource,
                             "OpenCode hooks need a UZE-stored package for their owned bridge.",
                         );
                     }
@@ -538,9 +531,7 @@ impl OpenCodeIntegration {
             None => base.to_owned(),
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: compatibility.route,
-            verification: VerificationStatus::Unverified,
             mechanism,
             evidence,
         }
@@ -730,11 +721,9 @@ impl OpenCodeIntegration {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },
