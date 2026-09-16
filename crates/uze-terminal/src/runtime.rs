@@ -2425,13 +2425,7 @@ mod tests {
         );
 
         // The shape a cleaner leaves: the file is there, the server is not.
-        let listener =
-            std::os::unix::net::UnixListener::bind(&socket).expect("the endpoint path binds");
-        drop(listener);
-        assert!(
-            socket.exists(),
-            "dropping the listener leaves the socket file behind, which is the case under test"
-        );
+        leave_a_stale_socket(&socket);
         assert!(
             super::stop().is_ok(),
             "a socket nobody answers is nothing to stop either"
@@ -2480,8 +2474,7 @@ mod tests {
         let scratch = uze_testkit::temp::socket_scratch("nobody");
         std::fs::create_dir_all(&scratch).unwrap();
         let socket = scratch.join("test.sock");
-        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
-        assert!(socket.exists());
+        leave_a_stale_socket(&socket);
 
         assert_eq!(listener_at(&socket), Listener::Nobody);
 
@@ -2496,7 +2489,7 @@ mod tests {
         let scratch = uze_testkit::temp::socket_scratch("reclaim");
         std::fs::create_dir_all(&scratch).unwrap();
         let socket = scratch.join("test.sock");
-        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        leave_a_stale_socket(&socket);
         assert!(std::os::unix::net::UnixStream::connect(&socket).is_err());
 
         let listener = bind_endpoint(&socket).expect("a stale socket is bound over");
@@ -4060,6 +4053,40 @@ mod tests {
 
         holder.release();
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Where the process [`leave_a_stale_socket`] runs binds its socket.
+    const STALE_SOCKET: &str = "UZE_TERMINAL_TEST_STALE_SOCKET";
+
+    /// The process side of [`leave_a_stale_socket`]. Ignored so the suite
+    /// never runs it on its own, and guarded by [`STALE_SOCKET`] so
+    /// `--include-ignored` binds nothing.
+    #[test]
+    #[ignore = "binds a socket and exits, run by leave_a_stale_socket in a process of its own"]
+    fn binds_a_socket_and_exits() {
+        if let Some(path) = std::env::var_os(STALE_SOCKET) {
+            std::os::unix::net::UnixListener::bind(path).expect("the socket path binds");
+        }
+    }
+
+    /// A socket file nobody listens on — the shape a crashed server leaves.
+    ///
+    /// Bound by a process of its own that has exited before this returns:
+    /// a listener this process bound and dropped is copied into every child
+    /// a sibling test forks until that child's `exec`, and answers a
+    /// connect for as long.
+    fn leave_a_stale_socket(path: &Path) {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "runtime::tests::binds_a_socket_and_exits",
+            ])
+            .env(STALE_SOCKET, path)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("this test binary runs itself");
+        assert!(status.success() && path.exists(), "{status}");
     }
 
     /// Set on the process that plays the other server in the claim tests.
