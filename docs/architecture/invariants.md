@@ -231,12 +231,12 @@ Provenance reaches the Store as an opaque value it stores and compares through
 
 `packages.json` is a ledger of independent registrations, so an entry this
 UZE cannot read — a key that is not a valid qualified id, or a value whose
-fields an older UZE spelled differently — is quarantined, never fatal. The
+fields it does not know — is quarantined, never fatal. The
 readable entries stay listable, resolvable and removable; the quarantined one
 answers to nothing and the next save drops it. `doctor` reports it as a named
 state carrying its remedy, not as the serde error that produced it.
 
-> `crates/uze-core/src/package/store.rs::tests::an_entry_written_by_an_older_uze_is_quarantined_and_named`
+> `crates/uze-core/src/package/store.rs::tests::an_entry_with_unreadable_fields_is_quarantined_and_named`
 > `crates/uze-core/src/package/store.rs::tests::load_registry_quarantines_a_tampered_entry_without_losing_valid_ones`
 > `crates/uze-application/src/application/doctor.rs::tests::doctor_names_an_unreadable_registration_and_its_remedy`
 

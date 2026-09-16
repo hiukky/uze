@@ -142,9 +142,6 @@ pub(super) fn render(
     lines.push(Line::default());
     lines.push(section_header("CAPABILITIES"));
 
-    // Policy is a known `CapabilityKind` but no integration populates it yet
-    // (see `crates/uze-integrations`) — showing it here would always read
-    // "unavailable" regardless of the harness, which isn't real data.
     for capability in [
         CapabilityKind::AgentSkill,
         CapabilityKind::Mcp,
@@ -335,7 +332,6 @@ pub(crate) fn capability_label(kind: CapabilityKind) -> &'static str {
         CapabilityKind::Mcp => "MCP",
         CapabilityKind::Agent => "Agents",
         CapabilityKind::Hook => "Hooks",
-        CapabilityKind::Policy => "Policies",
     }
 }
 

@@ -34,7 +34,6 @@ pub enum CapabilityKind {
     Mcp,
     Agent,
     Hook,
-    Policy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

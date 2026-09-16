@@ -248,13 +248,10 @@ pub struct QuarantinedRegistration {
 }
 
 impl QuarantinedRegistration {
-    /// What to do about it. The one shape this has been seen in is an entry
-    /// written by an older UZE whose field names have since changed, and the
-    /// way out of that is the same for every other shape: the registry is
-    /// rebuilt from what is installed, so losing an entry costs a re-register
-    /// and nothing else.
-    pub const REMEDY: &'static str =
-        "written by an older UZE; remove it and run `uze install` to re-register";
+    /// What to do about it, whatever made the entry unreadable: the registry
+    /// is rebuilt from what is installed, so losing an entry costs a
+    /// re-register and nothing else.
+    pub const REMEDY: &'static str = "remove it and run `uze install` to re-register";
 }
 
 /// One registry entry.
@@ -473,13 +470,8 @@ impl UzeStore {
     }
 
     /// Removes registry entries whose backing directory is gone — a
-    /// registration that survives whatever stopped writing its bytes
-    /// (an interrupted install, manual cleanup, or an id-format change
-    /// leaving an old entry's directory unreachable under the current
-    /// `plugin_dir` formula — the exact fallout of this project's own
-    /// marketplace-qualification, which computes `plugin_dir` from
-    /// `id.marketplace()`/`id.plugin_name()` and left every
-    /// pre-qualification id's directory unreachable under it).
+    /// registration that survived whatever stopped writing its bytes (an
+    /// interrupted install, manual cleanup).
     ///
     /// A registry entry is the Store's sole claim that a package is
     /// installed; once its directory is gone, that claim is simply false,
@@ -959,15 +951,13 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// The published alpha spelled `provenance` as `"source"`. One such
-    /// entry used to fail the whole file, so `status`, `plugin list`,
-    /// `plugin remove` and `install` all died on a machine that had ever
-    /// installed one — with no way out, since the commands that would clear
-    /// it were the ones that could not run. The entry is now quarantined
-    /// like an unreadable key, and named with what to do about it.
+    /// An entry whose fields this UZE cannot read must not fail the whole
+    /// file: the commands that would clear it are the ones that would stop
+    /// running. It is quarantined like an unreadable key, and named with
+    /// what to do about it.
     #[test]
-    fn an_entry_written_by_an_older_uze_is_quarantined_and_named() {
-        let root = uze_testkit::temp::scratch("registry-older-uze");
+    fn an_entry_with_unreadable_fields_is_quarantined_and_named() {
+        let root = uze_testkit::temp::scratch("registry-unreadable-fields");
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         home.ensure_layout().unwrap();
@@ -992,7 +982,7 @@ mod tests {
 
         let ids = store
             .package_ids()
-            .expect("an entry an older UZE wrote must not fail the whole registry load");
+            .expect("an unreadable entry must not fail the whole registry load");
         assert_eq!(
             ids.iter().map(PackageId::as_str).collect::<Vec<_>>(),
             vec!["flow@local"],
