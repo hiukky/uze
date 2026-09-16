@@ -67,12 +67,22 @@ pub fn attach(
         // settled by asking the socket who is behind it, which is the one
         // answer nothing can forge and the one that can also rescue a live
         // server of this build whose pid file a cleaner took away.
-        match recorded_compatibility(&endpoint.pid) {
-            Compatibility::Known if pid_file_names_a_server(&endpoint.pid) => {}
-            _ => match probe_server(&endpoint) {
-                Probe::Speaks { pid } => heal_pid_file(&endpoint, pid),
-                Probe::Foreign { peer } => replace_incompatible_server(&endpoint, peer)?,
-            },
+        //
+        // A server whose workspace nobody holds is serving one that is gone:
+        // it claims the workspace before it binds (see [`serve`]), so a
+        // listener with the lock free holds a lock on a file that was
+        // deleted under it — `$UZE_HOME` removed while it ran. Attaching to
+        // it would show spaces from a world that no longer exists.
+        if workspace_is_unclaimed() {
+            replace_incompatible_server(&endpoint, listening_peer(&endpoint.socket))?;
+        } else {
+            match recorded_compatibility(&endpoint.pid) {
+                Compatibility::Known if pid_file_names_this_build(&endpoint.pid) => {}
+                _ => match probe_server(&endpoint) {
+                    Probe::Speaks { pid } => heal_pid_file(&endpoint, pid),
+                    Probe::Foreign { peer } => replace_incompatible_server(&endpoint, peer)?,
+                },
+            }
         }
     }
     match UnixStream::connect(&endpoint.socket) {
@@ -701,8 +711,22 @@ fn corroborated_as_server(pid: libc::pid_t) -> bool {
 /// process table to ask — reading "cannot say" as "not a server" would send
 /// every attach down the replace path and unlink the endpoint of a server
 /// that is alive and serving.
-fn pid_file_names_a_server(pid_path: &Path) -> bool {
-    read_pid(pid_path).is_some_and(|pid| !platform_reads_processes() || runs_uze(pid))
+///
+/// Where it can answer, the server must run this very executable, not
+/// merely a `uze`: `PROTOCOL_VERSION` is bumped by hand, so two builds can
+/// record the same number and still disagree about a request's shape — and
+/// a `make install` over a running server is exactly that.
+fn pid_file_names_this_build(pid_path: &Path) -> bool {
+    read_pid(pid_path)
+        .is_some_and(|pid| !platform_reads_processes() || runs_this_executable(pid as u32))
+}
+
+/// Whether no live server holds the workspace lock — asked by taking it
+/// and letting it go. A filesystem that cannot lock answers "claimed":
+/// the lock proves nothing there, and replacing a server on no evidence
+/// would end a live session.
+fn workspace_is_unclaimed() -> bool {
+    WorkspaceLock::acquire().is_ok()
 }
 
 /// A pid file's first line — see [`write_pid_file`] — and only where it
@@ -2523,8 +2547,8 @@ mod tests {
         identity_of, persisted_state_path, platform_reads_processes, probe_server, read_event,
         read_message, recorded_compatibility, relaunch_command_for_process,
         replace_incompatible_server, runtime_process_is_alive, send_request,
-        server_protocol_version, snapshot, view_for, workspace_lock_path, write_atomically,
-        write_message, write_pid_file,
+        server_protocol_version, snapshot, view_for, workspace_is_unclaimed, workspace_lock_path,
+        write_atomically, write_message, write_pid_file,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -4392,6 +4416,69 @@ mod tests {
         holder.release();
         WorkspaceLock::acquire().expect("released with its holder");
 
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Two builds can record the same hand-bumped `PROTOCOL_VERSION`, so a
+    /// pid file only skips the probe for a server running this very
+    /// executable — a binary installed over a live server does not.
+    #[test]
+    fn a_pid_file_skips_the_probe_only_for_this_build() {
+        if !platform_reads_processes() {
+            return;
+        }
+        let scratch = uze_testkit::temp::scratch("terminal-pid-build");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let pid_path = scratch.join("uze.pid");
+
+        std::fs::write(
+            &pid_path,
+            format!("{}\n{}", std::process::id(), super::PROTOCOL_VERSION),
+        )
+        .unwrap();
+        assert!(super::pid_file_names_this_build(&pid_path));
+
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(
+            &pid_path,
+            format!("{}\n{}", other.id(), super::PROTOCOL_VERSION),
+        )
+        .unwrap();
+        let named = super::pid_file_names_this_build(&pid_path);
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(
+            !named,
+            "another executable with the same version is another build"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A server whose `$UZE_HOME` was deleted while it ran still holds its
+    /// lock — on a file that no longer exists. What attach reads is the
+    /// workspace as it is now: nobody holds it, so the listener is serving
+    /// a world that is gone and is replaced rather than attached to.
+    #[test]
+    fn a_workspace_deleted_under_its_server_reads_as_unclaimed() {
+        let scratch = uze_testkit::temp::scratch("terminal-workspace-orphaned");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &scratch);
+
+        let holder = ClaimHolder::spawn(&scratch);
+        assert!(!workspace_is_unclaimed(), "a live claim is a claim");
+
+        std::fs::remove_dir_all(scratch.join("state")).unwrap();
+        assert!(
+            workspace_is_unclaimed(),
+            "a claim on a deleted file holds nothing anybody can reach"
+        );
+
+        holder.release();
         let _ = std::fs::remove_dir_all(&scratch);
     }
 

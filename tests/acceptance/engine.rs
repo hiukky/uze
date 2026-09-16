@@ -19,7 +19,7 @@ use uze_application::{
     DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
 };
 use uze_terminal::{
-    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, attach, open_space,
+    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, open_space,
     read_event, send_request, socket_path,
 };
 use uze_testkit::{env::ProcessEnvGuard, fake_harness::FakeHarness, temp::TestEnvironment};
@@ -333,7 +333,9 @@ impl Drop for Engine {
 }
 
 fn connect(project: &Path) -> (UnixStream, UnixStream) {
-    let mut stream = attach(project, uze_terminal::SpaceKind::Worktree, 80, 24)
+    // Straight to the socket: `attach` would replace a server that is not
+    // this executable, and the one started above is the real binary.
+    let mut stream = UnixStream::connect(socket_path(project).unwrap())
         .expect("connects to the server started above");
     let reader = stream.try_clone().unwrap();
     send_request(
