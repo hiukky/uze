@@ -48,8 +48,9 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Remove a plugin from this project (never touches the machine Store —
-    /// see `uze plugin remove` for that)
+    /// Remove a plugin from this project
+    ///
+    /// Never touches the machine Store — see `uze plugin remove` for that.
     Remove {
         plugin: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -164,6 +165,8 @@ enum TerminalAction {
 
 #[derive(Debug, Subcommand)]
 enum ContextAction {
+    /// Read the current context without writing.
+    ///
     /// Read-only: what does this project's context currently look like?
     /// Never writes anything, in any state.
     Inspect {
@@ -172,6 +175,8 @@ enum ContextAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Preview reconciliation without writing.
+    ///
     /// Read-only: exactly what would `reconcile` change here? Never writes
     /// anything.
     Plan {
@@ -179,6 +184,8 @@ enum ContextAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Apply the project context plan.
+    ///
     /// Writes: composes every installed package's contribution into this
     /// project's AGENTS.md, and reconciles the harness bridges it implies.
     Reconcile {
@@ -199,8 +206,10 @@ enum MarketAction {
     },
     /// Remove a marketplace (blocked while plugins from it are installed).
     Remove { name: String },
-    /// Inspect one marketplace's own source and plugin count — distinct
-    /// from inspecting one plugin within a marketplace (`plugin inspect`).
+    /// Inspect one marketplace's own source and plugin count.
+    ///
+    /// Distinct from inspecting one plugin within a marketplace
+    /// (`plugin inspect`).
     Inspect {
         name: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -236,11 +245,12 @@ enum ThemeAction {
 
 #[derive(Debug, Subcommand)]
 enum PluginAction {
-    /// Install a plugin on this machine from a marketplace that must have
-    /// been added first (`uze market add <market>`), as `name@marketplace`.
-    /// A direct path or Git URL is never accepted — never touches the
-    /// current project's `agents.lock` (use `uze <plugin>@<market>` for
-    /// that).
+    /// Install a plugin on this machine, as `name@marketplace`.
+    ///
+    /// Its marketplace must have been added first (`uze market add
+    /// <market>`); a direct path or Git URL is never accepted. Never
+    /// touches the current project's `agents.lock` (use
+    /// `uze <plugin>@<market>` for that).
     Install {
         plugin: String,
         #[arg(long)]
@@ -269,8 +279,10 @@ enum PluginAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Remove a plugin from this machine (subject to ADR-009 lifecycle/
-    /// drift safety) — never implied by `uze remove`.
+    /// Remove a plugin from this machine.
+    ///
+    /// Subject to ADR-009 lifecycle/drift safety, and never implied by
+    /// `uze remove`.
     Remove {
         plugin: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -389,18 +401,16 @@ fn argv_lossy() -> Vec<String> {
         .collect()
 }
 
-#[derive(Clone, Copy)]
 enum HelpTopic {
     Root,
-    Install,
-    Remove,
-    Status,
-    Context,
-    Market,
-    Plugin,
     Setup,
-    Doctor,
+    /// A command's own page, drawn from its clap definition.
+    Command(Box<clap::Command>),
 }
+
+/// The commands the root help lists under "Project:" — the project-scoped
+/// half of ADR-019's grammar. Every other visible command is the machine's.
+const PROJECT_COMMANDS: &[&str] = &["install", "remove", "status", "context"];
 
 /// Whether clap reads `arguments` as a command to run — which makes a
 /// `help` among them one of its values rather than a request for a page.
@@ -431,80 +441,67 @@ fn help_topic(arguments: &[String]) -> Option<HelpTopic> {
     }
     match path {
         [] => Some(HelpTopic::Root),
-        [command, ..] if command == "install" => Some(HelpTopic::Install),
-        [command, ..] if command == "remove" => Some(HelpTopic::Remove),
-        [command, ..] if command == "status" => Some(HelpTopic::Status),
-        [command, ..] if command == "context" => Some(HelpTopic::Context),
-        [command, ..] if command == "market" => Some(HelpTopic::Market),
-        [command, ..] if command == "plugin" => Some(HelpTopic::Plugin),
         [command, ..] if command == "setup" => Some(HelpTopic::Setup),
-        [command, ..] if command == "doctor" => Some(HelpTopic::Doctor),
-        _ => None,
+        [command, ..] => visible_subcommands(&Cli::command())
+            .find(|candidate| {
+                candidate.get_name() == command
+                    || candidate
+                        .get_visible_aliases()
+                        .any(|alias| alias == command)
+            })
+            .map(|command| HelpTopic::Command(Box::new(command))),
     }
 }
 
 fn print_help(topic: HelpTopic) {
     match topic {
         HelpTopic::Root => print_root_help(),
-        HelpTopic::Install => print_command_help(
-            "UZE install",
-            "Resolve agents.yaml into agents.lock, then install what it records.",
-            "uze install [path] [--trust]",
-            &[],
-        ),
-        HelpTopic::Remove => print_command_help(
-            "UZE remove",
-            "Remove a plugin from this project without touching the machine store.",
-            "uze remove <plugin>",
-            &[],
-        ),
-        HelpTopic::Status => print_command_help(
-            "UZE status",
-            "Show this project's environment readiness.",
-            "uze status [path]",
-            &[],
-        ),
-        HelpTopic::Context => print_command_help(
-            "UZE context",
-            "Inspect and reconcile this project's AGENTS.md context.",
-            "uze context <command>",
-            &[
-                ("inspect", "Read the current context without writing"),
-                ("plan", "Preview reconciliation without writing"),
-                ("reconcile", "Apply the project context plan"),
-            ],
-        ),
-        HelpTopic::Market => print_command_help(
-            "UZE market",
-            "Manage marketplace sources installed on this machine.",
-            "uze market <command>",
-            &[
-                ("add <source>", "Register a marketplace source"),
-                ("list", "List registered marketplaces"),
-                ("inspect <name>", "Show a marketplace's details"),
-                ("remove <name>", "Remove a marketplace source"),
-            ],
-        ),
-        HelpTopic::Plugin => print_command_help(
-            "UZE plugin",
-            "Manage plugins installed on this machine.",
-            "uze plugin <command>",
-            &[
-                ("install <name@market>", "Install a plugin"),
-                ("list", "List installed plugins"),
-                ("inspect <name>", "Show plugin delivery details"),
-                ("update <name>", "Update an installed plugin"),
-                ("remove <name>", "Remove a plugin from this machine"),
-            ],
-        ),
         HelpTopic::Setup => print_setup_help(),
-        HelpTopic::Doctor => print_command_help(
-            "UZE doctor",
-            "Run machine diagnostics for the UZE store and integrations.",
-            "uze doctor",
-            &[],
-        ),
+        HelpTopic::Command(command) => print_command_help(&command),
     }
+}
+
+/// The subcommands a help page lists: every one clap would show.
+fn visible_subcommands(command: &clap::Command) -> impl Iterator<Item = clap::Command> + '_ {
+    command
+        .get_subcommands()
+        .filter(|subcommand| !subcommand.is_hide_set())
+        .cloned()
+}
+
+/// A command's summary as one row has room for: its doc comment's first
+/// sentence.
+fn summary(command: &clap::Command) -> String {
+    let about = command
+        .get_about()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let sentence = about.split(". ").next().unwrap_or_default();
+    sentence.trim_end_matches('.').to_owned()
+}
+
+/// `name <arg> [arg]` — how a command is spelled with its positional
+/// arguments, and `<command>` where it only groups others.
+fn spelling(command: &clap::Command) -> String {
+    let mut spelled = command.get_name().to_owned();
+    for argument in command.get_positionals() {
+        let name = argument.get_id().as_str();
+        if argument.is_required_set() {
+            spelled.push_str(&format!(" <{name}>"));
+        } else {
+            spelled.push_str(&format!(" [{name}]"));
+        }
+    }
+    if command.has_subcommands() {
+        spelled.push_str(" <command>");
+    }
+    spelled
+}
+
+fn command_rows(commands: impl Iterator<Item = clap::Command>) -> Vec<Vec<String>> {
+    commands
+        .map(|command| vec![progress::accent(spelling(&command)), summary(&command)])
+        .collect()
 }
 
 fn print_root_help() {
@@ -529,46 +526,22 @@ fn print_root_help() {
     println!("  uze <plugin>@<market>");
     println!("  uze <command> [options]");
     println!();
+    let cli = Cli::command();
+    let (project, machine): (Vec<_>, Vec<_>) = visible_subcommands(&cli)
+        .partition(|command| PROJECT_COMMANDS.contains(&command.get_name()));
+    let name_rows = |commands: Vec<clap::Command>| {
+        commands
+            .iter()
+            .map(|command| vec![progress::accent(command.get_name()), summary(command)])
+            .collect::<Vec<_>>()
+    };
     // One shared table across both groups: they're both plain command
     // lists, so they must land in the same gutter even though they're
     // printed under separate headings.
-    let [project_rows, machine_rows] = progress::aligned_groups(vec![
-        vec![
-            vec![
-                progress::accent("install"),
-                "Install this project's environment from agents.yaml".to_owned(),
-            ],
-            vec![
-                progress::accent("remove"),
-                "Remove a plugin from this project".to_owned(),
-            ],
-            vec![
-                progress::accent("status"),
-                "Show this project's environment status".to_owned(),
-            ],
-            vec![
-                progress::accent("context"),
-                "Manage this project's AGENTS.md context".to_owned(),
-            ],
-        ],
-        vec![
-            vec![
-                progress::accent("market"),
-                "Manage marketplace sources".to_owned(),
-            ],
-            vec![
-                progress::accent("plugin"),
-                "Manage plugins installed on this machine".to_owned(),
-            ],
-            vec![
-                progress::accent("setup"),
-                "Provision or inspect harness integrations".to_owned(),
-            ],
-            vec![progress::accent("doctor"), "Run diagnostics".to_owned()],
-        ],
-    ])
-    .try_into()
-    .expect("aligned_groups preserves the number of groups passed in");
+    let [project_rows, machine_rows] =
+        progress::aligned_groups(vec![name_rows(project), name_rows(machine)])
+            .try_into()
+            .expect("aligned_groups preserves the number of groups passed in");
     println!("{}", progress::section("Project:"));
     println!("{project_rows}");
     println!();
@@ -591,26 +564,18 @@ fn print_root_help() {
     );
 }
 
-fn print_command_help(title: &str, description: &str, usage: &str, commands: &[(&str, &str)]) {
-    println!("{}", progress::title(title));
-    println!("{}", progress::label(description));
+fn print_command_help(command: &clap::Command) {
+    println!("{}", progress::title(format!("UZE {}", command.get_name())));
+    println!("{}", progress::label(format!("{}.", summary(command))));
     println!();
     println!("{}", progress::section("Usage"));
-    println!("  {usage}");
-    if !commands.is_empty() {
+    println!("  uze {}", spelling(command));
+    if command.has_subcommands() {
         println!();
         println!("{}", progress::section("Commands"));
         println!(
             "{}",
-            progress::aligned_rows(
-                commands
-                    .iter()
-                    .map(|(command, description)| vec![
-                        progress::accent(command),
-                        description.to_string()
-                    ])
-                    .collect()
-            )
+            progress::aligned_rows(command_rows(visible_subcommands(command)))
         );
     }
     println!();
