@@ -611,28 +611,12 @@ pub(super) fn render_sidebar(
     };
 
     // The account and the creation action share the row under the
-    // divider: what there is on the left, while the right-aligned action —
-    // with the key that reaches it when one is bound — remains the
-    // primary affordance.
+    // divider: what there is on the left, the right-aligned action on the
+    // right. The action's key stays in the action index rather than here.
     if let Some(rect) = rows.next(1) {
         let account = sidebar_account(model, identities);
-        let account_width = account.width() as u16;
         frame.render_widget(Paragraph::new(account), rect);
-        let mut line = crate::ui::hint_for(FIRST_STEP_SCOPES, &[Action::NewSpace]);
-        line.spans
-            .insert(0, Span::styled("+ new", theme::fg_bold(Token::Accent)));
-        if line.spans.len() > 1 {
-            line.spans.insert(1, Span::raw(" "));
-            // The hint names the action; the label already did.
-            line.spans.truncate(3);
-        }
-        // The account is the row's information and the label its control;
-        // the key is a convenience, and the first thing to go when the
-        // column cannot hold all three — it stays reachable, and the index
-        // still says what it is.
-        if account_width + 1 + line.width() as u16 > rect.width {
-            line.spans.truncate(1);
-        }
+        let line = Line::from(Span::styled("+ new", theme::fg_bold(Token::Accent)));
         let width = line.width() as u16;
         let label_x = rect.x + rect.width.saturating_sub(width);
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), rect);

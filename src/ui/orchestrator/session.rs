@@ -1682,18 +1682,11 @@ impl Attach<'_> {
                 let anchor = Rect::new(mouse.column, mouse.row, 1, 1);
                 // `rename` is always offered. A tab can close with a
                 // sibling as usual, and a lone agent can close because
-                // the action replaces it with a plain shell. Renaming a
-                // lone space or shell remains the only available action.
+                // the action replaces it with a plain shell. A space can
+                // always close: the last one is replaced by a space at
+                // home. Renaming a lone shell remains its only action.
                 if let Some(WorkspaceHit::SelectSpace(space)) = hit {
-                    let mut items = vec![Action::RenameSelection];
-                    if self
-                        .model
-                        .session
-                        .as_ref()
-                        .is_some_and(|session| session.workspace.spaces.len() > 1)
-                    {
-                        items.push(Action::CloseTab);
-                    }
+                    let items = vec![Action::RenameSelection, Action::CloseTab];
                     self.model.context_menu = Some(ContextMenu {
                         target: MenuTarget::Space(space),
                         items,

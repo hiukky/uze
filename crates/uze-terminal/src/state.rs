@@ -102,6 +102,22 @@ pub fn space_label(root: &Path) -> String {
         .unwrap_or_else(|| "root".to_owned())
 }
 
+/// Where a space sits: its directory and its kind — what a request names
+/// for a space the server may have to open on the client's behalf.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpaceSeat {
+    pub root: PathBuf,
+    pub kind: SpaceKind,
+}
+
+/// What [`Session::remove_space`] leaves the caller to do: stop `panes`,
+/// and spawn `replacement` when the removed space was the last one.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RemovedSpace {
+    pub panes: Vec<PaneId>,
+    pub replacement: Option<PaneId>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Tab {
     pub id: TabId,
@@ -466,26 +482,40 @@ impl Session {
     }
 
     /// Removes `space` and returns every pane across every tab it owned, so
-    /// the caller can stop them all. Refuses to remove the workspace's only
-    /// remaining space — same "always somewhere to focus" invariant
-    /// [`Session::remove_tab`] holds for tabs.
-    pub fn remove_space(&mut self, space: SpaceId) -> Option<Vec<PaneId>> {
-        if self.workspace.spaces.len() <= 1 {
-            return None;
-        }
+    /// the caller can stop them all. Removing the workspace's last space
+    /// opens `replacement` in its place — a workspace always has somewhere
+    /// to focus, the same invariant [`Session::remove_tab`] holds for tabs —
+    /// and reports that space's first pane for the caller to spawn.
+    pub fn remove_space(
+        &mut self,
+        space: SpaceId,
+        replacement: SpaceSeat,
+        columns: u16,
+        rows: u16,
+    ) -> Option<RemovedSpace> {
         let index = self.workspace.spaces.iter().position(|s| s.id == space)?;
         let removed = self.workspace.spaces.remove(index);
+        let panes = removed
+            .tabs
+            .iter()
+            .flat_map(|tab| panes_in_layout(&tab.layout))
+            .collect();
+        if self.workspace.spaces.is_empty() {
+            let SpaceSeat { root, kind } = replacement;
+            let pane = self.create_space(None, root, kind, columns, rows);
+            return Some(RemovedSpace {
+                panes,
+                replacement: Some(pane),
+            });
+        }
         if self.workspace.selected_space == space {
             let next = index.min(self.workspace.spaces.len() - 1);
             self.workspace.selected_space = self.workspace.spaces[next].id;
         }
-        Some(
-            removed
-                .tabs
-                .iter()
-                .flat_map(|tab| panes_in_layout(&tab.layout))
-                .collect(),
-        )
+        Some(RemovedSpace {
+            panes,
+            replacement: None,
+        })
     }
 
     /// Renames `space`, trimming the given label. Refuses a blank label and
@@ -1097,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_space_refuses_the_last_space_but_allows_the_rest_and_returns_every_pane() {
+    fn remove_space_returns_every_pane_and_keeps_the_selection_on_a_survivor() {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),
@@ -1106,8 +1136,6 @@ mod tests {
             24,
         );
         let first_space = session.workspace.selected_space;
-        assert_eq!(session.remove_space(first_space), None);
-
         session.add_space(
             "frontend".into(),
             PathBuf::from("/tmp/frontend"),
@@ -1127,11 +1155,47 @@ mod tests {
         assert_eq!(session.selected_space().tabs.len(), 2);
 
         let removed = session
-            .remove_space(second_space)
+            .remove_space(second_space, home_seat(), 80, 24)
             .expect("second space removed");
-        assert_eq!(removed.len(), 2);
+        assert_eq!(removed.panes.len(), 2);
+        assert_eq!(removed.replacement, None, "a space still stands");
         assert_eq!(session.workspace.spaces.len(), 1);
         assert_eq!(session.workspace.selected_space, first_space);
+    }
+
+    /// The last space can be closed like any other: the workspace is never
+    /// left with nowhere to focus, so the seat the client named takes its
+    /// place — even when it is the very directory just closed.
+    #[test]
+    fn removing_the_last_space_opens_the_replacement_in_its_place() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/home/someone"),
+            SpaceKind::Workspace,
+            80,
+            24,
+        );
+        let only = session.workspace.selected_space;
+
+        let removed = session
+            .remove_space(only, home_seat(), 80, 24)
+            .expect("the last space closes");
+
+        assert_eq!(removed.panes, vec![PaneId(1)]);
+        let replacement = removed.replacement.expect("a replacement pane to spawn");
+        assert_eq!(session.workspace.spaces.len(), 1);
+        let space = session.selected_space();
+        assert_ne!(space.id, only, "a new space, not the closed one kept");
+        assert_eq!(space.root, PathBuf::from("/home/someone"));
+        assert_eq!(space.kind, SpaceKind::Workspace);
+        assert_eq!(session.selected_tab().focus.pane, replacement);
+    }
+
+    fn home_seat() -> SpaceSeat {
+        SpaceSeat {
+            root: PathBuf::from("/home/someone"),
+            kind: SpaceKind::Workspace,
+        }
     }
 
     #[test]

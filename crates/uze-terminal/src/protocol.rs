@@ -48,7 +48,8 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// changes a request shape and the pushed `Session`.
 ///
 /// Bumped again for a space's kind: `Attach` and `CreateSpace` name it and
-/// `Space` reports it.
+/// `Space` reports it, and `CloseSpace` names the space that replaces the
+/// last one.
 pub const PROTOCOL_VERSION: u16 = 13;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
@@ -192,6 +193,10 @@ pub enum ClientRequest {
     },
     CloseSpace {
         space: SpaceId,
+        /// The space opened in its place when `space` is the workspace's
+        /// last: the client decides where a workspace with nothing left
+        /// lands, as it decides every other space's root and kind.
+        replacement: crate::SpaceSeat,
     },
     RenameSpace {
         space: SpaceId,
@@ -379,7 +384,13 @@ mod tests {
                 rows: 24,
             },
             ClientRequest::SelectSpace { space: SpaceId(1) },
-            ClientRequest::CloseSpace { space: SpaceId(1) },
+            ClientRequest::CloseSpace {
+                space: SpaceId(1),
+                replacement: crate::SpaceSeat {
+                    root: std::path::PathBuf::from("/home/someone"),
+                    kind: crate::SpaceKind::Workspace,
+                },
+            },
             ClientRequest::RenameSpace {
                 space: SpaceId(1),
                 label: "backend".into(),

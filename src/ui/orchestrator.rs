@@ -3841,6 +3841,17 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
         .map(|(_, hit)| *hit)
 }
 
+/// Where the workspace lands when its last space is closed: the person's
+/// home, as a workspace space. It is fixed rather than profiled because a
+/// home directory is somewhere to start, not a repository to branch agents
+/// from — and profiling it would put a Git probe on the input path.
+fn home_seat() -> uze_terminal::SpaceSeat {
+    uze_terminal::SpaceSeat {
+        root: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
+        kind: uze_terminal::SpaceKind::Workspace,
+    }
+}
+
 /// Confirms one [`ContextMenu`] row against its `target` — sent from both
 /// the popup's own click zone and its keyboard Enter shortcut, so each
 /// action only needs writing once here as the menu grows.
@@ -3855,7 +3866,13 @@ fn dispatch_menu_action<W: io::Write>(
         Action::RenameSelection => begin_rename(model, target),
         Action::CloseTab => match target {
             MenuTarget::Space(space) => {
-                let _ = send_request(stream, &ClientRequest::CloseSpace { space });
+                let _ = send_request(
+                    stream,
+                    &ClientRequest::CloseSpace {
+                        space,
+                        replacement: home_seat(),
+                    },
+                );
             }
             MenuTarget::Tab(tab) => {
                 if tab_needs_replacement_shell(model, identities, tab) {

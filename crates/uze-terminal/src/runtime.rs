@@ -1361,29 +1361,40 @@ impl Server {
                         self.broadcast_session();
                     }
                 }
-                ClientRequest::CloseSpace { space } => {
-                    let removed = self
-                        .session
-                        .lock()
-                        .expect("session poisoned")
-                        .remove_space(space);
-                    match removed {
-                        Some(panes) => {
-                            let mut runtimes = self.panes.lock().expect("panes poisoned");
-                            for pane in panes {
-                                if let Some(runtime) = runtimes.remove(&pane) {
-                                    runtime.stop();
-                                }
-                            }
-                            drop(runtimes);
-                            self.broadcast_session();
-                        }
-                        None => {
-                            let _ = events.send(ClientEvent::Error {
-                                message: "cannot close the workspace's only space".into(),
-                            });
+                ClientRequest::CloseSpace { space, replacement } => {
+                    let removed = self.session.lock().expect("session poisoned").remove_space(
+                        space,
+                        replacement,
+                        80,
+                        24,
+                    );
+                    let Some(removed) = removed else {
+                        continue;
+                    };
+                    let mut runtimes = self.panes.lock().expect("panes poisoned");
+                    for pane in removed.panes {
+                        if let Some(runtime) = runtimes.remove(&pane) {
+                            runtime.stop();
                         }
                     }
+                    drop(runtimes);
+                    if let Some(pane) = removed.replacement {
+                        if self.spawn_pane(pane, None, &[]).is_err() {
+                            let _ = events.send(ClientEvent::Error {
+                                message: "could not create terminal pane".into(),
+                            });
+                        }
+                        let selected = self
+                            .session
+                            .lock()
+                            .expect("session poisoned")
+                            .workspace
+                            .selected_space;
+                        self.update_selection(client, |selection| {
+                            selection.space = Some(selected);
+                        });
+                    }
+                    self.broadcast_session();
                 }
                 ClientRequest::RenameSpace { space, label } => {
                     let changed = self
@@ -3292,7 +3303,8 @@ mod tests {
         let (server, _damage) =
             Server::new(project.clone(), crate::SpaceKind::Worktree, endpoint).unwrap();
         let server = Arc::new(server);
-        // A second space, because the last one standing cannot be closed.
+        // A second space, so closing the launch space leaves a survivor
+        // rather than opening a replacement.
         let pane = server.session.lock().expect("session poisoned").add_space(
             "other".into(),
             other.clone(),
@@ -3306,7 +3318,14 @@ mod tests {
             let launch = session
                 .space_for(&project, crate::SpaceKind::Worktree)
                 .expect("the bootstrap space is rooted at the launch directory");
-            assert!(session.remove_space(launch).is_some(), "space closed");
+            let seat = crate::SpaceSeat {
+                root: other.clone(),
+                kind: crate::SpaceKind::Worktree,
+            };
+            assert!(
+                session.remove_space(launch, seat, 80, 24).is_some(),
+                "space closed"
+            );
             launch
         };
 
