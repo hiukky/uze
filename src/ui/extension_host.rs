@@ -13,12 +13,7 @@
 //! machine". Both are narrow on purpose: a write replaces a file that
 //! already exists, and a delete removes a file and never a directory.
 
-use std::path::Path;
-
-/// The one Git question this host answers from memory rather than by
-/// running Git. Spelled once, so the interception below and the reason for
-/// it cannot drift apart.
-const SHOW_TOPLEVEL_ARGS: [&str; 2] = ["rev-parse", "--show-toplevel"];
+use std::path::{Path, PathBuf};
 
 /// How much of a file this host will hand an extension.
 ///
@@ -39,21 +34,16 @@ pub(crate) struct WorkspaceHost;
 impl uze_extensions::Host for WorkspaceHost {
     /// Through `uze-git`'s read path, so an overlay refreshing every few
     /// seconds cannot contend with an agent writing in a sibling checkout.
-    ///
-    /// Exit `1` is an answer rather than a failure: `git diff` uses it for
-    /// "there are differences", which is the ordinary case here.
-    fn git(&self, root: &Path, args: &[&str]) -> Result<String, String> {
-        // "Which working tree is this" cannot change under a path that is
-        // still there, and the change badge asks it on every refresh — a
-        // quarter of the Git processes a session spawns were this one
-        // question. `uze-git` remembers it; everything else is asked of Git
-        // as written, because everything else can have changed since.
-        if args == [SHOW_TOPLEVEL_ARGS[0], SHOW_TOPLEVEL_ARGS[1]] {
-            return uze_git::repository::root(root).map(|found| format!("{}\n", found.display()));
-        }
+    fn git(&self, root: &Path, args: &[&str], answers: &[i32]) -> Result<String, String> {
         uze_git::read(root, args)
             .map_err(|error| error.to_string())?
-            .or_exit(1)
+            .or_exit(answers)
+    }
+
+    /// Remembered by `uze-git`: a quarter of the Git processes a session
+    /// spawned were this one question, whose answer never differed.
+    fn repository_root(&self, path: &Path) -> Result<PathBuf, String> {
+        uze_git::repository::root(path)
     }
 
     /// Bounded, because the gesture behind it is a single click on a row

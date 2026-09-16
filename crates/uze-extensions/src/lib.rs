@@ -117,10 +117,20 @@ impl PartialOrd for DirEntry {
 pub trait Host {
     /// Runs a read-only Git command in `root`, returning its stdout.
     ///
-    /// Exit `1` counts as an answer rather than a failure — `git diff`
-    /// uses it for "there are differences", which is the ordinary case for
-    /// a view whose whole job is showing them.
-    fn git(&self, root: &std::path::Path, args: &[&str]) -> Result<String, String>;
+    /// Exit `0` is always an answer. `answers` names the other exit codes
+    /// that are one for this command rather than a failure — only the
+    /// caller knows which: `git diff --no-index` exits `1` for "there are
+    /// differences", `rev-parse --verify --quiet` for "no such ref".
+    fn git(&self, root: &std::path::Path, args: &[&str], answers: &[i32])
+    -> Result<String, String>;
+
+    /// The working tree `path` sits in. Doubles as the "is this inside a
+    /// Git repository" check: outside one, Git's own message is the error.
+    ///
+    /// Named rather than spelled as a `git` call because its answer cannot
+    /// change while the path is still there, so a host may remember it —
+    /// and the change badge asks it on every refresh.
+    fn repository_root(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String>;
 
     /// A file's contents, or why they cannot be shown. Unreadable is a
     /// state a view renders, never an error it propagates — but the

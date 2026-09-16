@@ -291,7 +291,7 @@ impl CodeView {
     /// the view now holds a buffer — see the module doc.
     pub fn refresh(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> RefreshedChanges {
         let branch = current_branch(host, &root);
-        let changes = match repository_root(host, &root) {
+        let changes = match host.repository_root(&root) {
             Ok(resolved) => Changes::read(host, &resolved, placement.path.as_deref()),
             Err(message) => Changes {
                 error: Some(message),
@@ -649,30 +649,15 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// `git -C <cwd> rev-parse --show-toplevel` — doubles as the "is this
-/// inside a git repository" check: a non-repository `cwd` fails this with
-/// git's own message on stderr, which becomes the changes half's error
-/// verbatim while the files half carries on.
-fn repository_root(host: &dyn Host, cwd: &Path) -> Result<PathBuf, String> {
-    host.git(cwd, &["rev-parse", "--show-toplevel"])
-        .map(|stdout| PathBuf::from(stdout.trim()))
-}
-
 /// The branch the checkout is on, for the title. Answers `detached HEAD`
 /// for a checkout with no branch, and nothing at all outside a
 /// repository.
 fn current_branch(host: &dyn Host, root: &Path) -> String {
-    match run_git(host, root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+    match host.git(root, &["rev-parse", "--abbrev-ref", "HEAD"], &[]) {
         Ok(name) if !name.trim().is_empty() && name.trim() != "HEAD" => name.trim().to_owned(),
         Ok(_) => "detached HEAD".to_owned(),
         Err(_) => String::new(),
     }
-}
-
-/// Every command this surface runs is an observation, and it reaches Git
-/// through the host rather than spawning anything itself.
-fn run_git(host: &dyn Host, root: &Path, args: &[&str]) -> Result<String, String> {
-    host.git(root, args)
 }
 
 /// One command reaching an open [`CodeView`].

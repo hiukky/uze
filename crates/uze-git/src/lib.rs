@@ -105,11 +105,12 @@ impl Output {
         }
     }
 
-    /// Stdout when Git exited with `code` or zero. For a subcommand whose
-    /// non-zero exit is an answer rather than a failure — `diff` reporting
-    /// differences, `rev-parse --verify --quiet` reporting a missing ref.
-    pub fn or_exit(self, code: i32) -> Result<String, String> {
-        if self.is_success() || self.code == Some(code) {
+    /// Stdout when Git exited zero or with one of `answers`. For a
+    /// subcommand whose non-zero exit is an answer rather than a failure —
+    /// `diff --no-index` reporting differences, `rev-parse --verify
+    /// --quiet` reporting a missing ref.
+    pub fn or_exit(self, answers: &[i32]) -> Result<String, String> {
+        if self.is_success() || self.code.is_some_and(|code| answers.contains(&code)) {
             Ok(self.stdout)
         } else {
             Err(self.stderr.trim().to_owned())
@@ -319,7 +320,8 @@ mod tests {
         let diff = read(&root, &["diff", "--quiet"]).unwrap();
         assert_eq!(diff.code, Some(1), "differences, not a failure");
         assert!(diff.clone().successful().is_err());
-        assert!(diff.or_exit(1).is_ok());
+        assert!(diff.clone().or_exit(&[1]).is_ok());
+        assert!(diff.or_exit(&[]).is_err());
 
         let missing = read(
             &root,

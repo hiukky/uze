@@ -420,6 +420,43 @@ fn the_timeline_section_names_meaning_rather_than_colour() {
 
 // --- the files half, and the switch between them -------------------------
 
+/// The same grant the workspace client makes, for the tests that drive real
+/// `git` in a scratch repository. A fake is the right tool for testing *the
+/// view*; these test what the view reads.
+pub(super) struct RepositoryHost;
+
+impl Host for RepositoryHost {
+    fn git(&self, root: &Path, args: &[&str], answers: &[i32]) -> Result<String, String> {
+        uze_git::read(root, args)
+            .map_err(|error| error.to_string())?
+            .or_exit(answers)
+    }
+
+    fn repository_root(&self, path: &Path) -> Result<PathBuf, String> {
+        uze_git::repository::root(path)
+    }
+
+    fn read_file(&self, path: &Path) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|error| error.to_string())
+    }
+
+    fn syntax_theme(&self) -> String {
+        FALLBACK_SYNTAX_THEME.to_owned()
+    }
+
+    fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, String> {
+        unreachable!("what the repository tests read, they read through `git`")
+    }
+
+    fn write_file(&self, _path: &Path, _contents: &str) -> Result<(), String> {
+        unreachable!("reading a repository writes nothing")
+    }
+
+    fn delete_file(&self, _path: &Path) -> Result<(), String> {
+        unreachable!("reading a repository deletes nothing")
+    }
+}
+
 /// A filesystem that only ever existed in memory, so these prove the
 /// surface's own behaviour rather than a temp directory's.
 #[derive(Default)]
@@ -455,7 +492,11 @@ impl FakeMachine {
 }
 
 impl Host for FakeMachine {
-    fn git(&self, _root: &Path, _args: &[&str]) -> Result<String, String> {
+    fn git(&self, _root: &Path, _args: &[&str], _answers: &[i32]) -> Result<String, String> {
+        Err("no git here".to_owned())
+    }
+
+    fn repository_root(&self, _path: &Path) -> Result<PathBuf, String> {
         Err("no git here".to_owned())
     }
 

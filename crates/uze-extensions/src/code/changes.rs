@@ -16,7 +16,6 @@ use std::{
 use super::{
     changes_tree::{FileTreeItem, tree_items},
     diff::{self, DiffCell},
-    repository_root, run_git,
 };
 use crate::{
     Host,
@@ -68,11 +67,7 @@ impl Changes {
     /// by the viewer; the same struct now holds a buffer, so a refresh
     /// that could reach it would be a refresh that eats what was typed.
     pub(super) fn read(host: &dyn Host, root: &Path, selected: Option<&Path>) -> Self {
-        let status = match run_git(
-            host,
-            root,
-            &["status", "--porcelain=v1", "--untracked-files=all"],
-        ) {
+        let status = match host.git(root, STATUS_ARGS, &[]) {
             Ok(output) => output,
             Err(message) => {
                 return Self {
@@ -107,20 +102,17 @@ impl Changes {
         };
         let path = file.path.clone();
         let status = file.status;
+        let relative = path.to_string_lossy();
         let raw = if status == FileStatus::Untracked {
-            run_git(
-                host,
+            // `--no-index` exits 1 for "the two differ", which against
+            // `/dev/null` is every time.
+            host.git(
                 root,
-                &[
-                    "diff",
-                    "--no-index",
-                    "--",
-                    "/dev/null",
-                    &path.to_string_lossy(),
-                ],
+                &["diff", "--no-index", "--", "/dev/null", &relative],
+                &[1],
             )
         } else {
-            run_git(host, root, &["diff", "HEAD", "--", &path.to_string_lossy()])
+            host.git(root, &["diff", "HEAD", "--", &relative], &[])
         };
         self.diff = match raw {
             Ok(output) => diff::read(&output, &path, &host.syntax_theme()),
@@ -236,13 +228,8 @@ pub struct ChangeSummary {
 /// changes. `None` covers a non-repository, a missing/unusable `git`, and a
 /// clean worktree alike, which lets the caller omit its badge entirely.
 pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<ChangeSummary> {
-    let root = repository_root(host, cwd).ok()?;
-    let status = run_git(
-        host,
-        &root,
-        &["status", "--porcelain=v1", "--untracked-files=all"],
-    )
-    .ok()?;
+    let root = host.repository_root(cwd).ok()?;
+    let status = host.git(&root, STATUS_ARGS, &[]).ok()?;
     let files = parse_porcelain_status(&status, &root);
     if files.is_empty() {
         return None;
@@ -252,8 +239,9 @@ pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<ChangeSummary> {
     // together: a line staged and then edited again appears in both, and
     // the sum counts it twice. A repository with no commit yet has no HEAD
     // to diff against and answers from the index alone.
-    let numstat = run_git(host, &root, &["diff", "--numstat", "HEAD"])
-        .or_else(|_| run_git(host, &root, &["diff", "--numstat", "--cached"]))
+    let numstat = host
+        .git(&root, &["diff", "--numstat", "HEAD"], &[])
+        .or_else(|_| host.git(&root, &["diff", "--numstat", "--cached"], &[]))
         .ok()?;
     let (additions, deletions) = parse_numstat(&numstat);
     let mut summary = ChangeSummary {
@@ -264,7 +252,10 @@ pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<ChangeSummary> {
         .iter()
         .filter(|file| file.status == FileStatus::Untracked)
     {
-        summary.additions += untracked_line_count(host, &file.path);
+        // `git diff` leaves untracked files out, but the overlay shows
+        // them against `/dev/null`: counting their lines keeps the badge
+        // and the overlay agreeing that they are changes.
+        summary.additions += host.count_lines(&file.path);
     }
     Some(summary)
 }
@@ -302,13 +293,17 @@ impl FileStatus {
 #[derive(Clone)]
 pub(super) struct ChangedFile {
     pub(super) status: FileStatus,
-    /// Absolute — resolved against the repository root (`GitView::root`),
+    /// Absolute — resolved against the repository root (`CodeView::root`),
     /// never the tab's `cwd` directly. `git status` reports paths relative
     /// to the repository root regardless of `-C`, which may differ from a
     /// tab whose `cwd` is a subdirectory; resolving to an absolute path
     /// once here means nothing downstream has to re-derive that.
     pub(super) path: PathBuf,
 }
+
+/// Every changed path, untracked ones listed file by file — the one status
+/// both the badge and the overlay read.
+const STATUS_ARGS: &[&str] = &["status", "--porcelain=v1", "--untracked-files=all"];
 
 /// Totals Git's tab-separated `--numstat` output. Binary entries use `-`
 /// counts and intentionally contribute zero: there is no meaningful line
@@ -323,13 +318,6 @@ pub(super) fn parse_numstat(output: &str) -> (u32, u32) {
             _ => (additions, deletions),
         }
     })
-}
-
-/// `git diff` excludes untracked files, but the overlay presents them via
-/// `--no-index`; count their visible lines as additions so the badge and the
-/// overlay agree that they are changes.
-pub(super) fn untracked_line_count(host: &dyn Host, path: &Path) -> u32 {
-    host.count_lines(path)
 }
 
 /// Parses `git status --porcelain=v1 --untracked-files=all` output.
@@ -411,39 +399,7 @@ mod tests {
 mod repository_tests {
     use super::*;
 
-    /// The same grant the workspace client makes, so these exercise the
-    /// real path rather than a stub. A fake would be the right tool for
-    /// testing *the view*; these test what the view reads.
-    struct TestHost;
-
-    impl Host for TestHost {
-        fn git(&self, root: &Path, args: &[&str]) -> Result<String, String> {
-            uze_git::read(root, args)
-                .map_err(|error| error.to_string())?
-                .or_exit(1)
-        }
-
-        fn read_file(&self, path: &Path) -> Result<String, String> {
-            std::fs::read_to_string(path).map_err(|error| error.to_string())
-        }
-
-        fn syntax_theme(&self) -> String {
-            crate::code::highlight::FALLBACK_SYNTAX_THEME.to_owned()
-        }
-
-        /// Never reached: what these read, they read through `git`.
-        fn list_dir(&self, _path: &Path) -> Result<Vec<crate::DirEntry>, String> {
-            unreachable!("the changes half lists no directory of its own")
-        }
-
-        fn write_file(&self, _path: &Path, _contents: &str) -> Result<(), String> {
-            unreachable!("reading what changed writes nothing")
-        }
-
-        fn delete_file(&self, _path: &Path) -> Result<(), String> {
-            unreachable!("reading what changed deletes nothing")
-        }
-    }
+    use crate::code::tests::RepositoryHost as TestHost;
 
     /// Drives real `git` in a scratch repository — proves the actual
     /// `git status --porcelain=v1 --untracked-files=all`/`git diff HEAD`/
@@ -585,7 +541,7 @@ mod repository_tests {
         std::fs::write(root.join("primary-only.rs"), "fn primary() {}\n").unwrap();
         std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
 
-        let agent_root = crate::code::repository_root(&TestHost, &linked).expect("a checkout");
+        let agent_root = TestHost.repository_root(&linked).expect("a checkout");
         let from_agent = Changes::read(&TestHost, &agent_root, None);
         assert!(from_agent.error.is_none(), "{:?}", from_agent.error);
         assert_eq!(
@@ -602,7 +558,7 @@ mod repository_tests {
             "an isolated agent sees its own checkout and nothing else"
         );
 
-        let primary_root = crate::code::repository_root(&TestHost, &root).expect("a checkout");
+        let primary_root = TestHost.repository_root(&root).expect("a checkout");
         let from_primary = Changes::read(&TestHost, &primary_root, None);
         assert!(from_primary.error.is_none(), "{:?}", from_primary.error);
         assert_eq!(
