@@ -447,24 +447,10 @@ pub struct InspectedPackage {
 }
 
 pub fn inspect_capabilities(package: &MaterializedPackage) -> Result<InspectedPackage> {
-    let manifest = package.root().join("plugin.json");
-    let bytes = fs::read(&manifest).map_err(|source| UzeError::Read {
-        path: manifest.clone(),
-        source,
-    })?;
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-            path: manifest.clone(),
-            source,
-        })?;
-    let package_id = parsed
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?
-        .to_owned();
-    let id = crate::store::PackageId::from_plugin_name(&package_id, &manifest)?;
+    let manifest = crate::store::read_plugin_manifest(package.root())?;
+    let id = crate::store::PackageId::from_plugin_name(&manifest.name, &manifest.path)?;
     Ok(InspectedPackage {
-        package_id,
+        package_id: manifest.name,
         resources: crate::engine::package_resources_at(&id, package.root())?,
     })
 }

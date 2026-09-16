@@ -33,11 +33,11 @@ application, CLI, or TUI changes.
 This is about *delivery*: canonical Store content projected out to each
 harness. Acquisition can, in principle, run the other direction — a
 foreign, vendor-authored artifact imported *into* canonical form — and
-that is a deliberately separate concern (`uze-core::importers`), not this
+that is a deliberately separate concern of acquisition, not this
 crate's job even in principle. It is currently unimplemented in
 production: the one foreign importer this codebase ever had
 (`ClaudePluginImporter`) was confirmed dead and removed (ADR-005). Only
-the canonical `plugin.json` importer (`AgentPluginImporter`) is live.
+the canonical `plugin.json` is read (`store::read_plugin_manifest`).
 
 Per-harness detail lives in each integration's own README:
 
@@ -63,11 +63,9 @@ Status: **PROVEN** (real-CLI behavioral evidence) · **SUPPORTED** (implemented,
 | Commands | NOT_IMPLEMENTED (Claude itself merged Commands into Skills upstream) | NOT_IMPLEMENTED | NOT_IMPLEMENTED | **ADAPTED** — routes through the vendor's official commands→Skills conversion; explicit-only property degrades (declared, never hidden) |
 | Runtime Integration | Yes — the only harness with a projection mechanism (`--add-dir`) | None (passthrough default) | None (passthrough default; see note below) | None (passthrough default; no shim) |
 
-Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps:
-`CapabilityKind::Action` is recognized only by `uze-core::importers` and
-routed to zero integrations (`grep` confirms — this variant and `Policy`,
-which is entirely unused anywhere, never appear in any
-`IntegrationPort::capabilities()`/`exposure_plan()`).
+Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps: there
+is no Command capability kind (ADR-030), so nothing routes one to any
+integration.
 `docs/capabilities/overview.md` documents the implemented posture for
 Agents (ADR-031) and Hooks (ADR-033) and the deliberate research-only
 posture for Commands.

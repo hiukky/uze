@@ -63,8 +63,11 @@ was removed along with `import_bundle()`:
 > but no foreign importer is retained in production until a real
 > acquisition or reverse-discovery flow requires it.
 
-`AgentPluginImporter` — the live importer `Store::ingest` depends on — and
-the `ForeignImporter` trait it implements are unchanged.
+Note (2026-09): the canonical importer went the same way. `AgentPluginImporter`,
+the `ForeignImporter` trait and the `ImportedBundle` it produced were built
+by `Store::ingest` and then discarded unread, so the one thing they did —
+reading `plugin.json` and refusing a reference outside the package — is now
+`store::read_plugin_manifest`, shared by ingest and capability inspection.
 
 Alternatives rejected: retaining the named-harness core matrix; treating
 Claude import as a canonical source pipeline; and requiring filesystem

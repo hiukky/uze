@@ -12,8 +12,79 @@ use crate::{
     acquisition::{MaterializedPackage, Provenance},
     error::{Result, UzeError},
     home::UzeHome,
-    importer::{AgentPluginImporter, ForeignImporter},
 };
+
+/// What UZE reads of a package's `plugin.json`: the name it declares, and
+/// where the manifest sits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginManifest {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Reads the Agent Plugins manifest at `root`, refusing one that is absent,
+/// unnamed, or that references a path outside the package — the check every
+/// acquisition passes before a byte is stored.
+pub fn read_plugin_manifest(root: &Path) -> Result<PluginManifest> {
+    let path = root.join("plugin.json");
+    if !path.is_file() {
+        return Err(UzeError::MissingManifest(root.to_path_buf()));
+    }
+    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+            path: path.clone(),
+            source,
+        })?;
+    validate_references(&value, &path)?;
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| UzeError::MissingPackageName(path.clone()))?
+        .to_owned();
+    Ok(PluginManifest { name, path })
+}
+
+fn validate_references(value: &serde_json::Value, manifest: &Path) -> Result<()> {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (key, value) in entries {
+                let key = key.to_ascii_lowercase();
+                if (key.contains("path") || key.contains("file"))
+                    && let serde_json::Value::String(reference) = value
+                {
+                    validate_reference(reference, manifest)?;
+                }
+                validate_references(value, manifest)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_references(value, manifest)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_reference(reference: &str, manifest: &Path) -> Result<()> {
+    let path = Path::new(reference);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(UzeError::UnsafePathReference {
+            path: manifest.to_path_buf(),
+            reference: reference.to_owned(),
+        });
+    }
+    Ok(())
+}
 
 /// An installed plugin identity, qualified by its marketplace.
 ///
@@ -246,25 +317,11 @@ impl UzeStore {
         active_name: Option<&str>,
     ) -> Result<StoredPackage> {
         let source = package.root();
-        let manifest = source.join("plugin.json");
-        let imported = AgentPluginImporter
-            .import(source)?
-            .ok_or_else(|| UzeError::MissingManifest(source.to_path_buf()))?;
-        let manifest_value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest).map_err(|source_error| {
-                UzeError::Read {
-                    path: manifest.clone(),
-                    source: source_error,
-                }
-            })?)
-            .map_err(|source_error| UzeError::Json {
-                path: manifest.clone(),
-                source: source_error,
-            })?;
-        let name = manifest_value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?;
+        let PluginManifest {
+            name,
+            path: manifest,
+        } = read_plugin_manifest(source)?;
+        let name = name.as_str();
         let id = PackageId::from_marketplace_plugin(marketplace, name, &manifest)?;
         let requested_active = active_name.unwrap_or(name);
         if let Some(alias) = active_name
@@ -343,10 +400,6 @@ impl UzeStore {
             source: source_error,
         })?;
 
-        // The importer has already performed external-manifest safety checks.
-        // Keeping this value live makes that boundary explicit and prevents an
-        // accidental installation of an empty, non-Agent-Plugin directory.
-        let _ = imported;
         let ingested = (|| {
             copy_tree(source, &destination)?;
             registry.packages.insert(
@@ -757,6 +810,33 @@ fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::UzeHome;
+
+    #[test]
+    fn reads_the_declared_name_of_a_plugin_manifest() {
+        let root = uze_testkit::temp::scratch("manifest-name");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("plugin.json"), "{\"name\":\"demo\"}\n").unwrap();
+        let manifest = read_plugin_manifest(&root).unwrap();
+        assert_eq!(manifest.name, "demo");
+        assert_eq!(manifest.path, root.join("plugin.json"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_parent_directory_manifest_reference() {
+        let root = uze_testkit::temp::scratch("manifest-unsafe");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("plugin.json"),
+            "{\"name\":\"demo\",\"scriptPath\":\"../outside.sh\"}",
+        )
+        .unwrap();
+        assert!(matches!(
+            read_plugin_manifest(&root),
+            Err(UzeError::UnsafePathReference { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn package_id_rejects_invalid_names() {

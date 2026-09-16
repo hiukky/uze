@@ -70,7 +70,7 @@ pub use delivery::{
     continuity, engine, exposure, integration, persistence, reconciliation, router, state,
 };
 pub use machine::{detection_cache, harness_runtime, home, provisioning, shell_path, subprocess};
-pub use package::{acquisition, bundle, importer, importers, naming, store, trust};
+pub use package::{acquisition, naming, store, trust};
 pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
     project_root, task, tenant, text_region, workspace, worktree,
