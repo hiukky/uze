@@ -95,6 +95,14 @@ pub fn success_heading(text: impl AsRef<str>) -> String {
 pub fn warning_heading(text: impl AsRef<str>) -> String {
     paint(text, warning().bold())
 }
+pub fn error_heading(text: impl AsRef<str>) -> String {
+    paint(text, danger().bold())
+}
+/// A name the reader acts on — a harness id, a command to run — in the
+/// accent, with the weight of a heading.
+pub fn accent_heading(text: impl AsRef<str>) -> String {
+    paint(text, accent_style().bold())
+}
 
 /// The same palette, handed to `clap`'s own Styles builder so a missing
 /// argument or an unrecognized subcommand renders in the same voice as
@@ -241,57 +249,6 @@ pub fn warn(msg: &str) {
 }
 pub fn error(msg: &str) {
     eprintln!("{} {}", error_icon(), msg);
-}
-
-pub trait Colorize {
-    fn green(&self) -> String;
-    fn yellow(&self) -> String;
-    fn red(&self) -> String;
-    fn cyan(&self) -> String;
-    fn dim(&self) -> String;
-    fn bold(&self) -> String;
-}
-
-impl Colorize for str {
-    fn green(&self) -> String {
-        success_text(self)
-    }
-    fn yellow(&self) -> String {
-        warning_text(self)
-    }
-    fn red(&self) -> String {
-        error_text(self)
-    }
-    fn cyan(&self) -> String {
-        accent(self)
-    }
-    fn dim(&self) -> String {
-        label(self)
-    }
-    fn bold(&self) -> String {
-        title(self)
-    }
-}
-
-impl Colorize for String {
-    fn green(&self) -> String {
-        self.as_str().green()
-    }
-    fn yellow(&self) -> String {
-        self.as_str().yellow()
-    }
-    fn red(&self) -> String {
-        self.as_str().red()
-    }
-    fn cyan(&self) -> String {
-        self.as_str().cyan()
-    }
-    fn dim(&self) -> String {
-        self.as_str().dim()
-    }
-    fn bold(&self) -> String {
-        self.as_str().bold()
-    }
 }
 
 pub fn step_header(step: usize, total: usize, harness: &str) -> String {

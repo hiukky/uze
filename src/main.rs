@@ -5,7 +5,6 @@
 #[cfg(test)]
 mod command_performance;
 mod progress;
-use crate::progress::Colorize;
 mod prompt;
 mod shim;
 
@@ -663,7 +662,7 @@ fn run(cli: Cli) -> Result<()> {
         && result.is_ok()
         && let Some(line) = uze::self_update::after_command(&home)
     {
-        eprintln!("{}", line.as_str().dim());
+        eprintln!("{}", progress::label(line.as_str()));
     }
     result
 }
@@ -1512,8 +1511,8 @@ fn run_setup(
     if is_tty {
         println!(
             "{} Provisioning {} harness(es) through official routes…",
-            "▸".cyan().bold(),
-            total.to_string().cyan().bold()
+            progress::accent_heading("▸"),
+            progress::accent_heading(total.to_string())
         );
     } else {
         println!(
@@ -1524,7 +1523,7 @@ fn run_setup(
     if !verbose {
         let msg = "(installer output is buffered per harness — see $UZE_HOME/state/logs/setup-<harness>.log; use --verbose to stream)";
         if is_tty {
-            println!("{}", msg.dim());
+            println!("{}", progress::label(msg));
         } else {
             println!("{}", msg);
         }
@@ -1580,17 +1579,10 @@ fn run_setup(
                         crate::progress::success_icon(),
                         step,
                         total,
-                        result.integration.cyan().bold(),
-                        "ready".green().bold(),
-                        format!("{:?}", result.provisioning.action)
-                            .to_lowercase()
-                            .dim(),
-                        result
-                            .detection
-                            .version
-                            .as_deref()
-                            .unwrap_or("unknown")
-                            .cyan()
+                        progress::accent_heading(&result.integration),
+                        progress::success_heading("ready"),
+                        progress::label(format!("{:?}", result.provisioning.action).to_lowercase()),
+                        progress::accent(result.detection.version.as_deref().unwrap_or("unknown"))
                     )
                 } else {
                     format!(
@@ -1607,9 +1599,15 @@ fn run_setup(
                 }
                 println!("{}", summary);
                 if let Some(shim) = &result.runtime_shim {
-                    println!("  ↳ shim: {}", shim.shim_path.display().to_string().dim());
+                    println!(
+                        "  ↳ shim: {}",
+                        progress::label(shim.shim_path.display().to_string())
+                    );
                     if let Some(rc) = &shim.rc_file_updated {
-                        println!("    added to PATH in {}", rc.display().to_string().cyan());
+                        println!(
+                            "    added to PATH in {}",
+                            progress::accent(rc.display().to_string())
+                        );
                     }
                     if let Some(hint) = &shim.path_hint {
                         shell_path_hints.push(hint.clone());
@@ -1627,18 +1625,18 @@ fn run_setup(
                         eprintln!(
                             "  {} {}: {}",
                             crate::progress::warning_icon(),
-                            id.cyan().bold(),
-                            err.yellow()
+                            progress::accent_heading(id),
+                            progress::warning_text(err)
                         );
                         eprintln!(
                             "    {} run `uze doctor` for details; fix and re-run `uze setup {}`",
-                            "→".dim(),
-                            id.cyan()
+                            progress::label("→"),
+                            progress::accent(id)
                         );
                         eprintln!(
                             "    {} log: {}",
-                            "→".dim(),
-                            log_path.display().to_string().dim()
+                            progress::label("→"),
+                            progress::label(log_path.display().to_string())
                         );
                     } else {
                         eprintln!("  warning {}: {}", id, err);
@@ -1654,13 +1652,16 @@ fn run_setup(
                         eprintln!(
                             "  {} shim {}: {}",
                             crate::progress::warning_icon(),
-                            id.cyan().bold(),
-                            err.yellow()
+                            progress::accent_heading(id),
+                            progress::warning_text(err)
                         );
                     } else {
                         eprintln!("  shim warning {}: {}", id, err);
                     }
-                    eprintln!("    log: {}", log_path.display().to_string().dim());
+                    eprintln!(
+                        "    log: {}",
+                        progress::label(log_path.display().to_string())
+                    );
                 }
                 if verbose
                     && result.attach_error.is_none()
@@ -1681,15 +1682,16 @@ fn run_setup(
                         crate::progress::error_icon(),
                         step,
                         total,
-                        result.integration.cyan().bold(),
-                        "setup".red().bold(),
+                        progress::accent_heading(&result.integration),
+                        progress::error_heading("setup"),
                         result.provisioning.status,
-                        result
-                            .provisioning
-                            .reason
-                            .as_deref()
-                            .unwrap_or("executable was not verified")
-                            .dim()
+                        progress::label(
+                            result
+                                .provisioning
+                                .reason
+                                .as_deref()
+                                .unwrap_or("executable was not verified")
+                        )
                     )
                 } else {
                     format!(
@@ -1708,24 +1710,31 @@ fn run_setup(
                 println!("{}", summary);
                 failed_harnesses.push(result.integration.clone());
                 if let Some(err) = &result.attach_error {
-                    eprintln!("  {} {}", crate::progress::warning_icon(), err.yellow());
+                    eprintln!(
+                        "  {} {}",
+                        crate::progress::warning_icon(),
+                        progress::warning_text(err)
+                    );
                 }
                 if verbose {
                     if let Ok(content) = std::fs::read_to_string(&log_path) {
                         print_log_block(&log_path, &content);
                     }
                 } else {
-                    eprintln!("  → log: {}", log_path.display().to_string().dim());
+                    eprintln!(
+                        "  → log: {}",
+                        progress::label(log_path.display().to_string())
+                    );
                 }
             }
         }
     }
     if let Some(command) = shell_path_reload_command(&shell_path_hints) {
         println!("\nShell PATH was updated. Run this in the current terminal:");
-        println!("  {}", command.cyan().bold());
+        println!("  {}", progress::accent_heading(command));
         println!("Then verify:");
         for name in &shell_path_shim_names {
-            println!("  {}", format!("which {}", name).cyan().bold());
+            println!("  {}", progress::accent_heading(format!("which {}", name)));
         }
     }
     // A harness that was not provisioned is a failed setup, not a warning:
@@ -1744,7 +1753,7 @@ fn run_setup(
             eprintln!(
                 "\n{} Setup completed with warnings — some harnesses need manual cleanup. See `{}`.",
                 crate::progress::warning_icon(),
-                "uze doctor".cyan()
+                progress::accent("uze doctor")
             );
         } else {
             eprintln!(
@@ -1755,7 +1764,7 @@ fn run_setup(
         println!(
             "\n{} Setup completed — all {} harness(es) ready.",
             crate::progress::success_icon(),
-            total.to_string().green().bold()
+            progress::success_heading(total.to_string())
         );
     } else {
         println!("\nSetup completed — all {} harness(es) ready.", total);
@@ -1791,18 +1800,25 @@ fn chrono_stamp() -> String {
 }
 
 fn print_log_block(path: &std::path::Path, content: &str) {
-    println!("  ── log {} ──", path.display().to_string().dim());
+    println!(
+        "  ── log {} ──",
+        progress::label(path.display().to_string())
+    );
     let lines: Vec<&str> = content.lines().collect();
     let to_show = if lines.len() > 80 { 80 } else { lines.len() };
     for line in lines.iter().take(to_show) {
-        println!("  {} {}", crate::progress::log_prefix(), line.dim());
+        println!(
+            "  {} {}",
+            crate::progress::log_prefix(),
+            progress::label(line)
+        );
     }
     if lines.len() > to_show {
         println!(
             "  {} … ({} more lines, see {})",
             crate::progress::log_prefix(),
             lines.len() - to_show,
-            path.display().to_string().dim()
+            progress::label(path.display().to_string())
         );
     }
     println!("  ── end log ──");
