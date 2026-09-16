@@ -287,35 +287,19 @@ impl UzeStore {
     /// arrives attached to the materialized package, is persisted verbatim,
     /// and is compared only through `Provenance::same_origin` — this module
     /// never reads a field of it or matches a source mechanism.
-    pub fn ingest(&self, package: &MaterializedPackage) -> Result<StoredPackage> {
-        let _span = tracing::info_span!("store.ingest", root = %package.root().display()).entered();
-        self.ingest_from_marketplace(package, "local")
-    }
-
-    /// Ingests a materialized plugin under the marketplace that resolved it,
-    /// active under its own bare plugin name. Fails with
-    /// `PluginNameCollision` when that name is already active under a
-    /// different marketplace-qualified identity — see
-    /// `ingest_with_active_name` for the `alias`/`replace` resolutions.
-    pub fn ingest_from_marketplace(
-        &self,
-        package: &MaterializedPackage,
-        marketplace: &str,
-    ) -> Result<StoredPackage> {
-        self.ingest_with_active_name(package, marketplace, None)
-    }
-
-    /// Ingests a materialized plugin, optionally under an explicit local
-    /// `active_name` alias rather than its own bare plugin name — the
-    /// `alias` collision resolution (ADR-038). `None` behaves exactly like
-    /// [`ingest_from_marketplace`]: the bare plugin name is both the
-    /// collision check and the name recorded.
-    pub fn ingest_with_active_name(
+    ///
+    /// The plugin is recorded under the marketplace that resolved it, active
+    /// under its own bare name unless `active_name` gives an alias — the
+    /// `alias` collision resolution (ADR-038). Fails with
+    /// `PluginNameCollision` when the name it would answer to is already
+    /// active under a different marketplace-qualified identity.
+    pub fn ingest(
         &self,
         package: &MaterializedPackage,
         marketplace: &str,
         active_name: Option<&str>,
     ) -> Result<StoredPackage> {
+        let _span = tracing::info_span!("store.ingest", root = %package.root().display()).entered();
         let source = package.root();
         let PluginManifest {
             name,
@@ -523,7 +507,7 @@ impl UzeStore {
     }
 
     /// Copies a package's stored bytes to `destination` — symlinks, modes
-    /// and all, exactly as [`ingest_with_active_name`](Self::ingest_with_active_name)
+    /// and all, exactly as [`ingest`](Self::ingest)
     /// wrote them, so the copy is itself a materialized package.
     ///
     /// What an update keeps aside while the package replacing it installs:

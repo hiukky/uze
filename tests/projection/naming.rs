@@ -244,7 +244,11 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
     let installed = store
-        .ingest(&uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap())
+        .ingest(
+            &uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap(),
+            "local",
+            None,
+        )
         .unwrap();
     let resources = uze_core::engine::package_resources(&installed).unwrap();
     resources

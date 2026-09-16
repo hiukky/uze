@@ -10,9 +10,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn package_fixture() -> PathBuf {
@@ -101,9 +103,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     let materialized =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(package_fixture())).unwrap();
 
-    let from_alpha = store
-        .ingest_from_marketplace(&materialized, "alpha")
-        .unwrap();
+    let from_alpha = store.ingest(&materialized, "alpha", None).unwrap();
     assert_eq!(from_alpha.id.as_str(), "uze-agent-skill-conformance@alpha");
     assert_eq!(from_alpha.active_name, "uze-agent-skill-conformance");
 
@@ -111,9 +111,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     // default — not because its bytes can't coexist (they can, and do, once
     // resolved), but because it would silently shadow `alpha`'s claim on
     // every harness's `/uze-agent-skill-conformance:*` invocation.
-    let collision = store
-        .ingest_from_marketplace(&materialized, "beta")
-        .unwrap_err();
+    let collision = store.ingest(&materialized, "beta", None).unwrap_err();
     assert!(matches!(
         collision,
         uze_core::UzeError::PluginNameCollision { existing, requested, .. }
@@ -126,7 +124,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     // Resolved with an explicit alias, `beta`'s copy installs and coexists —
     // its own bytes, its own registration, active under the chosen name.
     let from_beta = store
-        .ingest_with_active_name(
+        .ingest(
             &materialized,
             "beta",
             Some("uze-agent-skill-conformance-beta"),
@@ -168,7 +166,7 @@ fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
 
     assert!(
         store
-            .ingest_from_marketplace(&materialized, "not/a-marketplace")
+            .ingest(&materialized, "not/a-marketplace", None)
             .is_err()
     );
     assert!(!home.plugins_dir().join("not/a-marketplace").exists());

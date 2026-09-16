@@ -345,7 +345,9 @@ fn an_acquired_repository_ingests_into_the_store_with_both_sources_recorded() {
     let store = UzeStore::new(home.clone());
 
     let materialized = acquire(&PackageSource::git(&fixture.url)).unwrap();
-    let installed = store.ingest(&materialized).expect("ingestion succeeds");
+    let installed = store
+        .ingest(&materialized, "local", None)
+        .expect("ingestion succeeds");
 
     assert_eq!(installed.id.as_str(), "git-fixture@local");
     assert!(installed.root.join("skills/example/SKILL.md").is_file());

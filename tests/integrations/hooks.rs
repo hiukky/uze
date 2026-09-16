@@ -696,17 +696,21 @@ fn ingest_package(home: &UzeHome, pkg_root: &std::path::Path) {
         store::UzeStore,
     };
     UzeStore::new(home.clone())
-        .ingest(&MaterializedPackage::borrowed(
-            pkg_root.to_path_buf(),
-            Provenance {
-                requested: PackageSource::Local {
-                    path: pkg_root.to_path_buf(),
+        .ingest(
+            &MaterializedPackage::borrowed(
+                pkg_root.to_path_buf(),
+                Provenance {
+                    requested: PackageSource::Local {
+                        path: pkg_root.to_path_buf(),
+                    },
+                    resolved: ResolvedSource::Local {
+                        path: pkg_root.to_path_buf(),
+                    },
                 },
-                resolved: ResolvedSource::Local {
-                    path: pkg_root.to_path_buf(),
-                },
-            },
-        ))
+            ),
+            "local",
+            None,
+        )
         .expect("test package ingests into the store");
 }
 

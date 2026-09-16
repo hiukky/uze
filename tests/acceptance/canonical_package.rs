@@ -34,7 +34,7 @@ fn install(
 ) -> uze_core::Result<uze_core::StoredPackage> {
     store.ingest(&uze_core::acquisition::acquire(&uze_core::PackageSource::local(
         path,
-    ))?)
+    ))?, "local", None)
 }
 
 fn fixture() -> PathBuf {

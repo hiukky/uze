@@ -46,7 +46,7 @@ fn install(root: &Path) -> (UzeHome, uze_core::Result<uze_core::StoredPackage>) 
     let store = UzeStore::new(home.clone());
     let package = root.join("package");
     let result = uze_core::acquisition::acquire(&PackageSource::local(&package))
-        .and_then(|materialized| store.ingest(&materialized));
+        .and_then(|materialized| store.ingest(&materialized, "local", None));
     (home, result)
 }
 

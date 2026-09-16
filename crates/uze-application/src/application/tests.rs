@@ -278,6 +278,8 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     let expected = package.root.join("skills/uze-e2e");
@@ -308,6 +310,8 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     let foreign = root.join("foreign");
@@ -854,6 +858,8 @@ pub(crate) fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     assert!(matches!(

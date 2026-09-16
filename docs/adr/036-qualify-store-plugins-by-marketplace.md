@@ -69,7 +69,7 @@ independently of the Store identity as `Registration.active_name` (`None` =
 default; `Some(alias)` only once an operator has explicitly chosen one).
 Exactly one installed package may hold a given active name at a time,
 checked at the one chokepoint every install passes through
-(`UzeStore::ingest_with_active_name`): a second package requesting an
+(`UzeStore::ingest`): a second package requesting an
 already-active name is refused with `PluginNameCollision`, never silently
 shadowed. The Application layer (never the Store — a pure data layer with no
 UX) offers a `NameCollisionAuthority` the same way `TrustAuthority` offers
@@ -111,7 +111,7 @@ needed for that either.
   `plugins/`.
 - Update assertions that observe Store paths or installed IDs.
 - Do not add a legacy migration or retain `packages_dir`/`package_dir` aliases.
-- Add `UzeStore::ingest_with_active_name`/`active_name_for`/
+- Add `UzeStore::ingest`/`active_name_for`/
   `find_by_active_name`/`set_active_name` and the `naming::NameCollisionAuthority`
   boundary; thread it through `add_plugin`/`install_from_marketplace`/
   `plugin_install`'s `_resolving` variants and the CLI's `--alias`/`--replace`

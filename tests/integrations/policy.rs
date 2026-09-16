@@ -37,9 +37,11 @@ pub(crate) fn install(
     store: &UzeStore,
     path: impl Into<PathBuf>,
 ) -> uze_core::Result<StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(&PackageSource::local(
-        path,
-    ))?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
