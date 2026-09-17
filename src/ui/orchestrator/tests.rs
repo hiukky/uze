@@ -408,7 +408,7 @@ mod workspace_tests {
     #[test]
     fn the_spaces_own_shell_is_a_context_of_its_own() {
         let (mut model, _, _) = two_agents_with_shells();
-        let own = model.session.as_ref().expect("session").workspace.spaces[0].tabs[0].id;
+        let own = first_tab(&model).id;
         model.session.as_mut().expect("session").select_tab(own);
 
         let (rows, _) = tab_strip(&model);
@@ -426,7 +426,7 @@ mod workspace_tests {
 
         assert_eq!(next_shell_label(&model, &identities_fixture()), "shell 2");
 
-        let own = model.session.as_ref().expect("session").workspace.spaces[0].tabs[0].id;
+        let own = first_tab(&model).id;
         model.session.as_mut().expect("session").select_tab(own);
         assert_eq!(
             next_shell_label(&model, &identities_fixture()),
@@ -2189,7 +2189,7 @@ mod workspace_tests {
     #[test]
     fn a_new_agent_never_takes_the_name_of_the_task_before_it_in_the_slot() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
+        let tab = first_tab(&model).id;
         stamp_first_tab(&mut model, "now");
         let before = TaskView {
             id: "before".into(),
@@ -2474,41 +2474,71 @@ mod workspace_tests {
         assert!(row.contains("/repo") && !row.contains(&label), "{row}");
     }
 
-    /// The pane-to-task binding the resume rests on is the identity the
-    /// launch carried, echoed by the session; it survives the task losing
-    /// its checkout because it never depended on the checkout.
+    /// A tab is bound to the task its launch named, once an evaluation
+    /// lists it, wherever its pane stands — in the slot, in a removed
+    /// checkout the kernel spells ` (deleted)`, or anywhere else — and the
+    /// binding outlives the task's checkout, which is what offers the
+    /// resume.
     #[test]
-    fn a_pane_is_bound_to_the_task_it_was_launched_for_and_keeps_it_after_the_checkout_goes() {
-        let mut model = agent_with_task(TaskStateView::Running, 0);
-        stamp_first_tab(&mut model, "t1");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-pane-task-home"));
-        let (sender, _receiver) = std::sync::mpsc::channel();
-        let (evaluations, _answers) = std::sync::mpsc::channel();
-        model.occupancy_stale = true;
-        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
-        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
+    fn a_stamped_tab_is_bound_to_its_task_wherever_its_pane_stands() {
+        for cwd in [
+            "/repo/.worktrees/ai",
+            "/repo/.worktrees/ai (deleted)",
+            "/elsewhere",
+        ] {
+            let mut model = agent_session_in(cwd);
+            stamp_first_tab(&mut model, "t1");
+            let (tab, pane) = (first_tab(&model).id, first_tab(&model).pane.id);
+            assert!(model.tab_task(tab).is_none(), "nothing listed yet: {cwd}");
 
-        let mut orphaned = model.remembered.tasks[Path::new("/repo")][0].clone();
-        orphaned.checkout = None;
-        orphaned.state = TaskStateView::Parked;
-        model
-            .remembered
-            .tasks
-            .insert(PathBuf::from("/repo"), vec![orphaned]);
+            let mut task = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Running, 0);
+            model
+                .remembered
+                .tasks
+                .insert(PathBuf::from("/repo"), vec![task.clone()]);
+            assert_eq!(
+                model.tab_task(tab).map(|task| task.id.as_str()),
+                Some("t1"),
+                "{cwd}"
+            );
+
+            task.checkout = None;
+            task.state = TaskStateView::Parked;
+            model
+                .remembered
+                .tasks
+                .insert(PathBuf::from("/repo"), vec![task]);
+            model.remembered.lost_checkouts.insert(pane);
+            assert_eq!(
+                model.tab_task(tab).map(|task| task.id.as_str()),
+                Some("t1"),
+                "the binding outlives the checkout: {cwd}"
+            );
+            assert!(
+                model.lost_task(tab).is_some(),
+                "and offers the resume: {cwd}"
+            );
+        }
+    }
+
+    /// A tab launched for nobody is bound to nothing, however much its
+    /// directory says.
+    #[test]
+    fn an_unstamped_tab_is_bound_to_nothing() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let (tab, pane) = (first_tab(&model).id, first_tab(&model).pane.id);
+        model.remembered.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![task_in(
+                "/repo/.worktrees/ai",
+                "fix-auth",
+                TaskStateView::Running,
+                0,
+            )],
+        );
         model.remembered.lost_checkouts.insert(pane);
-        assert_eq!(
-            model.tab_task(tab).map(|task| task.id.as_str()),
-            Some("t1"),
-            "the binding outlives the checkout"
-        );
-        assert!(
-            model.lost_task(tab).is_some(),
-            "and is what offers the resume"
-        );
+        assert!(model.tab_task(tab).is_none());
+        assert!(model.lost_task(tab).is_none());
     }
 
     /// A checkout removed from under a live pane is the one change to a
@@ -2520,9 +2550,7 @@ mod workspace_tests {
     #[test]
     fn a_checkout_that_vanished_under_a_pane_asks_its_repository_again() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
+        let pane = first_tab(&model).pane.id;
         model
             .remembered
             .pane_checkouts
@@ -2542,119 +2570,6 @@ mod workspace_tests {
             "the repository is re-read: {:?}",
             model.remembered.task_eval_pending
         );
-    }
-
-    /// A client that attaches after the removal never watched the
-    /// checkout go: the first thing it learns about that pane is the
-    /// kernel's ` (deleted)` spelling of the directory. The binding does
-    /// not read the directory at all, so the row still offers the way back.
-    #[test]
-    fn a_pane_first_seen_in_a_removed_checkout_is_still_bound_to_its_task() {
-        let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
-        stamp_first_tab(&mut model, "t1");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-        model.remembered.tasks.insert(
-            PathBuf::from("/repo"),
-            vec![task_in(
-                "/repo/.worktrees/ai",
-                "fix-auth",
-                TaskStateView::Running,
-                1,
-            )],
-        );
-        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-first-seen-lost"));
-        let (sender, _receiver) = std::sync::mpsc::channel();
-        let (evaluations, _answers) = std::sync::mpsc::channel();
-        model.occupancy_stale = true;
-        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
-
-        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
-        assert!(
-            model.remembered.lost_checkouts.contains(&pane),
-            "and the row still says the checkout is gone"
-        );
-    }
-
-    /// The pane is bound to its task through the identity its launch
-    /// carried, not through the directory — because by the time anybody
-    /// asks, the directory can be gone, and a task that lost its checkout
-    /// comes back from a re-read with `checkout: None`.
-    #[test]
-    fn a_pane_binds_to_its_task_through_its_identity_even_after_the_directory_is_gone() {
-        let mut model = agent_session_in("/repo/.worktrees/ai");
-        stamp_first_tab(&mut model, "t1");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-
-        // What a re-read answers once the directory is gone: the slot is
-        // still named, the path no longer resolves.
-        let mut orphaned = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Running, 1);
-        orphaned.checkout = None;
-        model
-            .remembered
-            .tasks
-            .insert(PathBuf::from("/repo"), vec![orphaned]);
-
-        assert_eq!(
-            model.tab_task(tab).map(|task| task.id.as_str()),
-            Some("t1"),
-            "the identity the launch carried is what ties the pane to it"
-        );
-
-        model.remembered.lost_checkouts.insert(pane);
-        assert!(
-            model.lost_task(tab).is_some(),
-            "and so the row can offer the way back in"
-        );
-    }
-
-    /// The task is usually not known on the tick the pane appears; the tab
-    /// answers for it the moment the evaluation that lists it lands.
-    #[test]
-    fn a_pane_is_bound_to_its_task_when_the_task_arrives_after_the_launch() {
-        let mut model = agent_session_in("/repo/.worktrees/ai");
-        stamp_first_tab(&mut model, "t1");
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-        assert!(model.tab_task(tab).is_none(), "nothing to bind to yet");
-
-        model.remembered.tasks.insert(
-            PathBuf::from("/repo"),
-            vec![task_in(
-                "/repo/.worktrees/ai",
-                "fix-auth",
-                TaskStateView::Running,
-                0,
-            )],
-        );
-        assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
-    }
-
-    /// A shell opened beside an agent carries no identity and is bound to
-    /// nothing, however much its directory says.
-    #[test]
-    fn a_shell_beside_an_agent_binds_to_nothing() {
-        let mut model = agent_session_in("/repo/.worktrees/ai");
-        model.remembered.tasks.insert(
-            PathBuf::from("/repo"),
-            vec![task_in(
-                "/repo/.worktrees/ai",
-                "fix-auth-redirect",
-                TaskStateView::Running,
-                0,
-            )],
-        );
-        let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-        assert!(
-            model.tab_task(tab).is_none(),
-            "a tab launched for nobody is nobody's, whatever slot it stands in"
-        );
-        stamp_first_tab(&mut model, "t1");
-        assert!(model.tab_task(tab).is_some());
     }
 
     /// A worktree removed by hand leaves the agent standing in a directory
@@ -2680,9 +2595,7 @@ mod workspace_tests {
         // binding is what survives the reconciliation, which strips an
         // orphaned task of both its checkout and its checkout id.
         let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
+        let pane = first_tab(&model).pane.id;
         model
             .remembered
             .pane_checkouts
@@ -3106,11 +3019,20 @@ mod workspace_tests {
         );
     }
 
+    /// The first tab of the first space — the one tab most fixtures have.
+    fn first_tab(model: &WorkspaceModel) -> &Tab {
+        &model.session.as_ref().expect("a session").workspace.spaces[0].tabs[0]
+    }
+
+    fn first_tab_mut(model: &mut WorkspaceModel) -> &mut Tab {
+        &mut model.session.as_mut().expect("a session").workspace.spaces[0].tabs[0]
+    }
+
     /// A one-agent session whose only tab runs in `cwd`.
     /// Marks the first tab as launched for `id`: what the server echoes
     /// back for a tab the client created with that identity stamped.
     fn stamp_first_tab(model: &mut WorkspaceModel, id: &str) {
-        let tab = &mut model.session.as_mut().unwrap().workspace.spaces[0].tabs[0];
+        let tab = first_tab_mut(model);
         tab.env = vec![(
             uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
             id.to_owned(),
@@ -6074,9 +5996,7 @@ mod workspace_tests {
         task: TaskView,
     ) -> WorkspaceModel {
         let mut model = agent_session_in(&format!("{} (deleted)", checkout.display()));
-        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
-            .pane
-            .id;
+        let pane = first_tab(&model).pane.id;
         // Rows under the one that lost its checkout: what the picker
         // opens over, and what its own rows have to answer ahead of.
         if let Some(session) = model.session.as_mut() {
@@ -6332,16 +6252,7 @@ mod workspace_tests {
         // And the agent it took over from: the tab is opened first, then
         // the dead row it replaces is closed — the operator is left with
         // one agent for the task, not a corpse beside a copy.
-        let lost_tab = driven
-            .attach
-            .model
-            .session
-            .as_ref()
-            .unwrap()
-            .workspace
-            .spaces[0]
-            .tabs[0]
-            .id;
+        let lost_tab = first_tab(&driven.attach.model).id;
         driven.placements_answered(resolution);
         let sent = driven.sent();
         assert!(
