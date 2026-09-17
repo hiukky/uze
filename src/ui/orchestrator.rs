@@ -1555,11 +1555,8 @@ struct AgentPicker {
     /// The tab strip's "✦" button's own rect — the popup anchors just
     /// under it.
     anchor: Rect,
-    /// A directory the new agent must start in — a preserved task's own
-    /// slot, when resuming it. `None` lets placement acquire a slot.
-    cwd: Option<PathBuf>,
-    /// A preserved task whose slot is gone: placement gives it a slot
-    /// again, on its own branch, and the agent starts there.
+    /// A preserved task to continue: placement answers with its slot, or
+    /// gives it one again on its own branch, and the agent starts there.
     resume: Option<ResumeTarget>,
 }
 
@@ -3097,18 +3094,19 @@ impl WorkspaceModel {
             .find_map(|tab| (tab.pane.id == pane).then(|| tab.pane.cwd.clone()))
     }
 
-    /// The pane of the tab running in `checkout` — where a message for
-    /// that task's agent goes, and what makes the task "in front of
-    /// someone". Any tab counts: a shell the operator opened in a slot is
-    /// as much in front of it as the agent was.
-    fn pane_for_checkout(&self, checkout: &Path) -> Option<PaneId> {
+    /// The pane of the tab launched for agent `id` — where a message for
+    /// that agent goes, and what makes its task "in front of someone".
+    /// By the launch's stamp, never by directory: a shell standing in the
+    /// agent's slot is not the agent, and a message typed into it runs as
+    /// a command.
+    fn pane_for_agent(&self, id: &str) -> Option<PaneId> {
         let session = self.session.as_ref()?;
         session
             .workspace
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| tab.pane.cwd.starts_with(checkout).then_some(tab.pane.id))
+            .find_map(|tab| (launched_agent_id(tab) == Some(id)).then_some(tab.pane.id))
     }
 
     /// Tasks holding work that no live agent tab is in front of, with the
@@ -3124,11 +3122,7 @@ impl WorkspaceModel {
                     TaskStateView::Integrated | TaskStateView::Closed
                 )
             })
-            .filter(|(_, task)| {
-                task.checkout
-                    .as_deref()
-                    .is_none_or(|checkout| self.pane_for_checkout(checkout).is_none())
-            })
+            .filter(|(_, task)| self.pane_for_agent(&task.id).is_none())
             .map(|(primary, task)| (primary.clone(), task.clone()))
             .collect();
         preserved.sort_by_key(|(_, task)| task.created_at_unix);

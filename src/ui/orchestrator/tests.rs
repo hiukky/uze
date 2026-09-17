@@ -6544,6 +6544,122 @@ mod workspace_tests {
             .expect("the row that lost its checkout closes");
         assert!(created < closed, "the new tab opens first: {sent:?}");
     }
+
+    /// Resuming a preserved task whose checkout is still there opens the
+    /// agent in that checkout *and* names the task on the launch: a tab
+    /// without the stamp is an agent no reader can bind to its work.
+    #[test]
+    fn resuming_a_preserved_task_that_kept_its_checkout_opens_a_stamped_tab() {
+        let repository = uze_testkit::git::Repository::new("orchestrator-resume-kept");
+        let root = repository.root().to_path_buf();
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-resume-kept-home"));
+        let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
+        let placement = app
+            .workspace()
+            .place_new_agent(
+                &root,
+                uze_application::PlacementKind::Slot,
+                "claude-code",
+                &[],
+            )
+            .unwrap();
+        let task_id = placement.placement.agent().as_str().to_owned();
+        let primary = root.canonicalize().unwrap();
+        let mut model = agent_session_in("/elsewhere");
+        model
+            .tasks
+            .insert(primary.clone(), app.workspace().tasks(&primary));
+        model.preserved = Some(PreservedOverlay {
+            selected: 0,
+            confirm_discard: false,
+        });
+        let mut driven = driven(model, &home);
+
+        let keymap = uze_keys::active();
+        let resume = keymap
+            .chord_for(
+                uze_keys::Action::ResumeTask,
+                &[uze_keys::Scope::PreservedWork],
+            )
+            .expect("resume is bound here");
+        let pick = keymap
+            .chord_for(uze_keys::Action::Activate, &[uze_keys::Scope::AgentPicker])
+            .expect("picking is bound here");
+        driven.press_key(key_event(resume));
+        driven.press_key(key_event(pick));
+        let resolution = driven
+            .placements
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the placement answers");
+        driven.placements_answered(resolution);
+
+        let identity = (
+            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+            task_id,
+        );
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::CreateTab { cwd, env, .. }
+                    if cwd.as_deref() == Some(placement.cwd.as_path()) && env.contains(&identity)
+            )),
+            "the agent opens in its checkout, launched for its task: {sent:?}"
+        );
+    }
+
+    /// A message for an agent reaches the agent's own pane, never a shell
+    /// that happens to stand in the same slot: typed into the shell, it
+    /// would run as a command.
+    #[test]
+    fn a_notice_for_an_agent_skips_a_shell_standing_in_its_slot() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-notice-pane"));
+        let mut model = agent_with_task(TaskStateView::Running, 0);
+        let space = &mut model.session.as_mut().unwrap().workspace.spaces[0];
+        let mut shell = space.tabs[0].clone();
+        shell.id = TabId(2);
+        shell.label = "shell".into();
+        shell.env = Vec::new();
+        shell.pane.id = PaneId(2);
+        shell.pane.process = "zsh".into();
+        space.tabs.insert(0, shell);
+        let agent_pane = space.tabs[1].pane.id;
+        let mut driven = driven(model, &home);
+
+        driven
+            .attach
+            .answers
+            .tasks
+            .send(TaskResolution {
+                key: PathBuf::from("/repo"),
+                answered: Some(super::EvaluationAnswer {
+                    primary: PathBuf::from("/repo"),
+                    branch: None,
+                    target: None,
+                    sync: None,
+                    evaluation: uze_application::Evaluation {
+                        notices: vec![uze_application::AgentNotice {
+                            task: "t1".into(),
+                            checkout: PathBuf::from("/repo/.worktrees/ai"),
+                            message: "resolve the conflict".into(),
+                        }],
+                        ..uze_application::Evaluation::default()
+                    },
+                }),
+            })
+            .unwrap();
+        driven.pump();
+
+        let inputs: Vec<PaneId> = driven
+            .sent()
+            .into_iter()
+            .filter_map(|request| match request {
+                ClientRequest::Input { pane, .. } => Some(pane),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inputs, vec![agent_pane], "only the agent is told");
+    }
 }
 
 mod prompt_buffer_tests {

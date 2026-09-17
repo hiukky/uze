@@ -508,7 +508,7 @@ impl Attach<'_> {
             return Flow::Continue;
         }
         if self.model.agent_picker.is_some() {
-            self.agent_picker_action(action, viewport);
+            self.agent_picker_action(action);
             return Flow::Continue;
         }
         if self.model.preserved.is_some() {
@@ -550,7 +550,6 @@ impl Attach<'_> {
                     // Asked for with the keyboard, so there is no button to
                     // anchor under; the popup places itself.
                     anchor: Rect::default(),
-                    cwd: None,
                     resume: None,
                 });
                 self.model.dirty = true;
@@ -841,8 +840,7 @@ impl Attach<'_> {
     }
 
     /// The "+ new agent" popup — pick a harness, or leave.
-    fn agent_picker_action(&mut self, action: Action, viewport: &Viewport) {
-        let Viewport { columns, rows, .. } = *viewport;
+    fn agent_picker_action(&mut self, action: Action) {
         match action {
             Action::SelectPrevious => {
                 if let Some(picker) = self.model.agent_picker.as_mut() {
@@ -871,9 +869,7 @@ impl Attach<'_> {
                         label,
                         command,
                         option.integration.clone(),
-                        picker.cwd.clone(),
                         picker.resume.clone(),
-                        (columns, rows),
                     );
                 }
             }
@@ -913,31 +909,25 @@ impl Attach<'_> {
                     self.mutate_task(cwd.clone(), task, TaskMutation::Finish);
                 }
             }
-            // Into the task's own slot when it still has one; otherwise
-            // placement gives it a slot again on its own branch — a
+            // Placement answers with the task's own slot when it still has
+            // one, and otherwise gives it a slot again on its own branch — a
             // checkout removed by hand took only the uncommitted work.
+            // Either way the launch carries the task's identity.
             Action::ResumeTask => {
                 if let Some((primary, task)) = preserved.get(overlay.selected) {
-                    let (cwd, resume) = match task.checkout.clone() {
-                        Some(checkout) => (Some(checkout), None),
-                        None => (
-                            None,
-                            Some(ResumeTarget {
-                                primary: primary.clone(),
-                                task: task.id.clone(),
-                                // Asked for from the list, not from a
-                                // row: there is no dead tab behind it.
-                                replacing: None,
-                            }),
-                        ),
+                    let resume = ResumeTarget {
+                        primary: primary.clone(),
+                        task: task.id.clone(),
+                        // Asked for from the list, not from a row: there is
+                        // no dead tab behind it.
+                        replacing: None,
                     };
                     self.model.preserved = None;
                     self.model.agent_picker = Some(AgentPicker {
                         options: agent_options(self.home),
                         selected: 0,
                         anchor: Rect::default(),
-                        cwd,
-                        resume,
+                        resume: Some(resume),
                     });
                 }
             }
@@ -1343,9 +1333,7 @@ impl Attach<'_> {
                                 label,
                                 command,
                                 option.integration.clone(),
-                                picker.cwd.clone(),
                                 picker.resume.clone(),
-                                (columns, rows),
                             );
                         }
                     }
@@ -2044,7 +2032,6 @@ impl Attach<'_> {
                     options: agent_options(self.home),
                     selected: 0,
                     anchor: hit_rect,
-                    cwd: None,
                     resume: None,
                 });
                 // Unlike every other arm here, this is a purely
@@ -2147,7 +2134,6 @@ impl Attach<'_> {
                         options: agent_options(self.home),
                         selected: 0,
                         anchor: hit_rect,
-                        cwd: None,
                         resume: Some(resume),
                     });
                     self.model.dirty = true;
@@ -2235,114 +2221,77 @@ pub(super) struct AttachInbox<'a> {
 }
 
 impl Attach<'_> {
-    /// Opens a tab for a new agent.
+    /// Opens a tab for a new agent, once placement has recorded it.
     ///
-    /// A picker carrying a `cwd` is resuming a preserved task, whose slot
-    /// already exists — that tab opens at once. Anything else needs a slot
-    /// acquired for it, which is `git worktree add` plus the project's own
-    /// link materialization and `setup` command: far too much to run where
-    /// a keystroke is being handled, so it is asked for here and the tab
+    /// Every agent is placed before its tab opens — a new one as the
+    /// selected space's kind says, a resumed one into its task's slot —
+    /// because the record is what the launch's identity names. Acquiring a
+    /// slot is `git worktree add` plus the project's own link
+    /// materialization and `setup` command: far too much to run where a
+    /// keystroke is being handled, so it is asked for here and the tab
     /// opens in [`Attach::absorb_placement`] when the answer lands.
     fn launch_agent(
         &mut self,
         label: String,
         command: Vec<String>,
         harness: String,
-        cwd: Option<PathBuf>,
         resume: Option<ResumeTarget>,
-        size: (u16, u16),
     ) {
-        let Some(cwd) = cwd else {
-            let replacing = resume.as_ref().and_then(|target| target.replacing);
-            let request = match resume {
-                Some(target) => PlacementRequest::Resume {
-                    primary: target.primary,
-                    task: target.task,
-                },
-                // The space's kind decides what the agent is placed as. A
-                // slot is cut relative to the pane the operator is in; a
-                // tenancy is of the space's own root, whatever directory
-                // that pane has wandered into.
-                None => match self.model.session.as_ref().map(|session| {
-                    let space = session.selected_space();
-                    (crate::ui::placement_of(space.kind), space.root.clone())
-                }) {
-                    Some((kind @ uze_application::PlacementKind::Tenant, root)) => {
-                        PlacementRequest::New {
-                            from: root,
-                            kind,
-                            harness,
-                        }
-                    }
-                    Some((kind, _)) => match selected_pane_cwd(&self.model) {
-                        Some(from) => PlacementRequest::New {
-                            from,
-                            kind,
-                            harness,
-                        },
-                        // Nothing selected to place a slot relative to — the
-                        // server's own default directory it is, same as
-                        // before slots existed.
-                        None => {
-                            self.open_agent_tab_at(label, command, None, Vec::new(), size);
-                            return;
-                        }
-                    },
-                    None => {
-                        self.open_agent_tab_at(label, command, None, Vec::new(), size);
-                        return;
-                    }
-                },
-            };
-            if self.model.placement_pending {
-                return;
+        let replacing = resume.as_ref().and_then(|target| target.replacing);
+        let request = match resume {
+            Some(target) => PlacementRequest::Resume {
+                primary: target.primary,
+                task: target.task,
+            },
+            // Placed from the space's own root, whatever directory the
+            // selected pane has wandered into: the space is what the
+            // operator chose, and placement refuses rather than guess.
+            None => {
+                let Some(space) = self.model.session.as_ref().map(|s| s.selected_space()) else {
+                    return;
+                };
+                PlacementRequest::New {
+                    from: space.root.clone(),
+                    kind: crate::ui::placement_of(space.kind),
+                    harness,
+                }
             }
-            self.model.placement_pending = true;
-            self.model.set_busy_notice(format!("{label}: preparing"));
-            let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
-            spawn_agent_placement(
-                self.home,
-                request,
-                occupied,
-                label,
-                command,
-                replacing,
-                self.answers.placements.clone(),
-            );
-            return;
         };
-        self.model
-            .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
-        self.open_agent_tab(label, command, cwd, Vec::new(), size);
+        if self.model.placement_pending {
+            return;
+        }
+        self.model.placement_pending = true;
+        self.model.set_busy_notice(format!("{label}: preparing"));
+        let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
+        spawn_agent_placement(
+            self.home,
+            request,
+            occupied,
+            label,
+            command,
+            replacing,
+            self.answers.placements.clone(),
+        );
     }
 
-    /// The one place a `CreateTab` for an agent is sent, so the two ways
-    /// of asking for one cannot disagree about what a tab is.
+    /// The one place a `CreateTab` for an agent is sent: an agent tab
+    /// always carries the identity its placement recorded.
     fn open_agent_tab(
         &mut self,
         label: String,
         command: Vec<String>,
         cwd: PathBuf,
-        env: Vec<(String, String)>,
+        agent: &str,
         size: (u16, u16),
     ) {
-        self.open_agent_tab_at(label, command, Some(cwd), env, size);
-    }
-
-    /// `None` leaves the directory to the server — the one case where
-    /// there is no pane to place the agent relative to.
-    fn open_agent_tab_at(
-        &mut self,
-        label: String,
-        command: Vec<String>,
-        cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
-        size: (u16, u16),
-    ) {
+        let env = vec![(
+            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+            agent.to_owned(),
+        )];
         let _ = send_request(
             &mut self.stream,
             &ClientRequest::CreateTab {
-                cwd,
+                cwd: Some(cwd),
                 label,
                 agent: None,
                 columns: size.0,
@@ -2382,20 +2331,16 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
+        self.model
+            .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
         // The launch carries the agent's identity, whichever kind of record
         // it is: what the shim resumes the conversation by, and what this
         // client reads back from the session to know which agent the tab
-        // is for.
-        let env = vec![(
-            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
-            placement.placement.agent().as_str().to_owned(),
-        )];
-        self.model
-            .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
-        // The size the last frame actually drew — the same value the
-        // resize path keeps in step with the layout.
+        // is for. The size is the last frame's, the value the resize path
+        // keeps in step with the layout.
+        let agent = placement.placement.agent().as_str().to_owned();
         let size = self.model.last_size;
-        self.open_agent_tab(label, command, placement.cwd, env, size);
+        self.open_agent_tab(label, command, placement.cwd, &agent, size);
         // The agent this one took over from stood in a directory that no
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
@@ -2542,7 +2487,7 @@ impl Attach<'_> {
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
             for notice in evaluation.notices {
-                if let Some(pane) = self.model.pane_for_checkout(&notice.checkout) {
+                if let Some(pane) = self.model.pane_for_agent(&notice.task) {
                     let mut bytes = notice.message.into_bytes();
                     bytes.push(b'\r');
                     let _ = send_request(&mut self.stream, &ClientRequest::Input { pane, bytes });
@@ -2570,7 +2515,7 @@ impl Attach<'_> {
                 // same way: one submission into its pane.
                 if let DeliveryOutcome::ReturnedToAgent(notice)
                 | DeliveryOutcome::AwaitingRequest(notice) = &report.outcome
-                    && let Some(pane) = self.model.pane_for_checkout(&notice.checkout)
+                    && let Some(pane) = self.model.pane_for_agent(&notice.task)
                 {
                     let mut bytes = notice.message.clone().into_bytes();
                     bytes.push(b'\r');
