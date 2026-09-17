@@ -26,6 +26,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BTreeSet,
     fmt, fs,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -66,7 +67,7 @@ impl AgentId {
 
 /// The branch a task's work lives on while it stays local and nobody has
 /// named it: the identifier under UZE's own prefix.
-pub fn generated_branch(id: &AgentId) -> String {
+fn generated_branch(id: &AgentId) -> String {
     format!("{BRANCH_PREFIX}{}", id.as_str())
 }
 
@@ -288,7 +289,6 @@ pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
 pub struct TaskStore {
     pub schema_version: u32,
     pub tasks: Vec<Task>,
-    #[serde(default)]
     pub tenants: Vec<Tenant>,
 }
 
@@ -313,7 +313,22 @@ pub enum AgentRecord<'a> {
     Tenant(&'a Tenant),
 }
 
+/// Which kind of record an identifier named, for a reader that must treat
+/// the two differently and has no use for the record itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentKind {
+    Task,
+    Tenant,
+}
+
 impl AgentRecord<'_> {
+    pub fn kind(&self) -> AgentKind {
+        match self {
+            Self::Task(_) => AgentKind::Task,
+            Self::Tenant(_) => AgentKind::Tenant,
+        }
+    }
+
     pub fn id(&self) -> &AgentId {
         match self {
             Self::Task(task) => &task.id,
@@ -326,12 +341,11 @@ impl AgentRecord<'_> {
     /// for a task whose checkout is gone: nowhere is its own any more.
     pub fn own_directory(&self, project_root: &Path) -> Option<PathBuf> {
         match self {
-            Self::Task(task) => task.checkout.as_ref().map(|checkout| {
-                project_root
-                    .join(crate::worktree::WORKTREES_DIRECTORY)
-                    .join(checkout.as_str())
-            }),
-            Self::Tenant(_) => Some(project_root.to_path_buf()),
+            Self::Task(task) => task
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.directory(project_root)),
+            Self::Tenant(tenant) => Some(tenant.root.clone()),
         }
     }
 }
@@ -339,6 +353,27 @@ impl AgentRecord<'_> {
 impl TaskStore {
     pub fn get(&self, id: &AgentId) -> Option<&Task> {
         self.tasks.iter().find(|task| &task.id == id)
+    }
+
+    /// The task standing in `checkout` now: the newest to have been given
+    /// it. A slot outlives the tasks that ran in it and each went on naming
+    /// it; anything older is history, and answering for it would hand the
+    /// current agent's work to a task long gone.
+    pub fn slot_owner(&self, checkout: &CheckoutId) -> Option<&Task> {
+        self.tasks
+            .iter()
+            .filter(|task| task.checkout.as_ref() == Some(checkout))
+            .max_by_key(|task| task.created_at_unix)
+    }
+
+    /// Every task that is the [`slot_owner`](Self::slot_owner) of its own
+    /// checkout.
+    pub fn slot_owners(&self) -> BTreeSet<AgentId> {
+        self.tasks
+            .iter()
+            .filter_map(|task| self.slot_owner(task.checkout.as_ref()?))
+            .map(|owner| owner.id.clone())
+            .collect()
     }
 
     /// The record an identifier names, of whichever kind.
@@ -653,7 +688,11 @@ mod tests {
 
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, br#"{"schema_version": 99, "tasks": []}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"schema_version": 99, "tasks": [], "tenants": []}"#,
+        )
+        .unwrap();
         let error = load(&home, &root).unwrap_err();
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),

@@ -436,6 +436,7 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
         '\u{25b8}', // ▸ collapsed
         '\u{25be}', // ▾ expanded
         '\u{276f}', // ❯ prompt
+        '\u{203a}', // › chevron
         '\u{2261}', // ≡ menu
         '\u{21c4}', // ⇄ swap
         '\u{21e1}', // ⇡ ahead

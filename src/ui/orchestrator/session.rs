@@ -38,25 +38,6 @@ pub(super) enum Flow {
     Exit(WorkspaceExit),
 }
 
-/// The channels one attach's background reads answer on.
-///
-/// Cloned senders, not the receivers: the receivers stay with
-/// [`WorkspaceMemory`] so an answer still in flight when the user leaves
-/// for management lands when they come back.
-pub(super) struct AttachAnswers {
-    pub(super) support: mpsc::Sender<SupportResolution>,
-    pub(super) tasks: mpsc::Sender<TaskResolution>,
-    pub(super) deliveries: mpsc::Sender<DeliveryResolution>,
-    pub(super) mutations: mpsc::Sender<MutationResolution>,
-    pub(super) git: mpsc::Sender<GitResolution>,
-    pub(super) commit_details: mpsc::Sender<CommitDetailResolution>,
-    pub(super) code_changes: mpsc::Sender<ChangesResolution>,
-    pub(super) code_files: mpsc::Sender<FileResolution>,
-    pub(super) occupancy: mpsc::Sender<OccupancyResolution>,
-    pub(super) placements: mpsc::Sender<PlacementResolution>,
-    pub(super) root_profiles: mpsc::Sender<RootProfileResolution>,
-}
-
 /// The frame an event is handled against.
 ///
 /// Recomputed once per iteration, before any event is read, so a resize
@@ -78,7 +59,7 @@ pub(super) struct Attach<'a> {
     /// The registered harness set, resolved once per attach — it cannot
     /// change mid-session.
     pub(super) identities: Vec<AgentIdentity>,
-    pub(super) answers: AttachAnswers,
+    pub(super) channels: &'a Channels,
     /// Drives the agent-activity animation. Ratatui owns the alternate
     /// screen, so this one is hidden and only its position is read — see
     /// [`AGENT_ACTIVITY_FRAMES`].
@@ -443,9 +424,6 @@ impl Attach<'_> {
         self.model.dirty = true;
     }
 
-    /// Performs one action. The two that leave the screen answer first,
-    /// wherever they were asked from — which is what makes sealing a
-    /// surface safe.
     /// One action, performed, and noted if it was a first step that landed.
     ///
     /// Every action this client performs passes through here, whichever way
@@ -474,6 +452,9 @@ impl Attach<'_> {
         }
     }
 
+    /// Performs one action. The two that leave the screen answer first,
+    /// wherever they were asked from — which is what makes sealing a
+    /// surface safe.
     fn perform(&mut self, action: Action, viewport: &Viewport) -> Flow {
         let Viewport { columns, rows, .. } = *viewport;
         match action {
@@ -508,7 +489,7 @@ impl Attach<'_> {
             return Flow::Continue;
         }
         if self.model.agent_picker.is_some() {
-            self.agent_picker_action(action, viewport);
+            self.agent_picker_action(action);
             return Flow::Continue;
         }
         if self.model.preserved.is_some() {
@@ -550,7 +531,6 @@ impl Attach<'_> {
                     // Asked for with the keyboard, so there is no button to
                     // anchor under; the popup places itself.
                     anchor: Rect::default(),
-                    cwd: None,
                     resume: None,
                 });
                 self.model.dirty = true;
@@ -588,11 +568,16 @@ impl Attach<'_> {
                 }
             }
             Action::DeliverTask => {
-                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
+                deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
             Action::DeliverAllTasks => {
                 if let Some(cwd) = selected_pane_cwd(&self.model) {
-                    spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
+                    spawn_delivery(
+                        self.home,
+                        cwd,
+                        None,
+                        self.channels.deliveries.sender.clone(),
+                    );
                     self.model.set_busy_notice("delivering all".to_owned());
                 }
             }
@@ -675,10 +660,8 @@ impl Attach<'_> {
         let identities = &self.identities;
         let Some(target) = self.model.session.as_ref().and_then(|session| {
             let space = session.selected_space();
-            let agents: Vec<TabId> = space
-                .tabs
+            let agents: Vec<TabId> = agent_tabs_of(space, identities)
                 .iter()
-                .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
                 .map(|tab| tab.id)
                 .collect();
             if agents.is_empty() {
@@ -768,7 +751,7 @@ impl Attach<'_> {
                     self.model.root_picker.as_ref().and_then(RootPicker::chosen)
                 {
                     self.model.root_picker = None;
-                    self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
+                    self.open_space_at(root, kind, columns, rows);
                 }
             }
             Action::Dismiss => self.model.root_picker = None,
@@ -802,7 +785,7 @@ impl Attach<'_> {
             return;
         }
         if self.model.root_profile_pending.insert(root.clone()) {
-            spawn_root_profile(root, self.answers.root_profiles.clone());
+            spawn_root_profile(root, self.channels.root_profiles.sender.clone());
         }
     }
 
@@ -841,8 +824,7 @@ impl Attach<'_> {
     }
 
     /// The "+ new agent" popup — pick a harness, or leave.
-    fn agent_picker_action(&mut self, action: Action, viewport: &Viewport) {
-        let Viewport { columns, rows, .. } = *viewport;
+    fn agent_picker_action(&mut self, action: Action) {
         match action {
             Action::SelectPrevious => {
                 if let Some(picker) = self.model.agent_picker.as_mut() {
@@ -871,9 +853,7 @@ impl Attach<'_> {
                         label,
                         command,
                         option.integration.clone(),
-                        picker.cwd.clone(),
                         picker.resume.clone(),
-                        (columns, rows),
                     );
                 }
             }
@@ -899,12 +879,15 @@ impl Attach<'_> {
             }
             Action::DeliverTask => {
                 if let Some((cwd, task)) = preserved.get(overlay.selected) {
-                    self.model.delivery_pending.insert(task.id.clone());
+                    self.model
+                        .remembered
+                        .delivery_pending
+                        .insert(task.id.clone());
                     spawn_delivery(
                         self.home,
                         cwd.clone(),
                         Some(task.id.clone()),
-                        self.answers.deliveries.clone(),
+                        self.channels.deliveries.sender.clone(),
                     );
                 }
             }
@@ -913,31 +896,25 @@ impl Attach<'_> {
                     self.mutate_task(cwd.clone(), task, TaskMutation::Finish);
                 }
             }
-            // Into the task's own slot when it still has one; otherwise
-            // placement gives it a slot again on its own branch — a
+            // Placement answers with the task's own slot when it still has
+            // one, and otherwise gives it a slot again on its own branch — a
             // checkout removed by hand took only the uncommitted work.
+            // Either way the launch carries the task's identity.
             Action::ResumeTask => {
                 if let Some((primary, task)) = preserved.get(overlay.selected) {
-                    let (cwd, resume) = match task.checkout.clone() {
-                        Some(checkout) => (Some(checkout), None),
-                        None => (
-                            None,
-                            Some(ResumeTarget {
-                                primary: primary.clone(),
-                                task: task.id.clone(),
-                                // Asked for from the list, not from a
-                                // row: there is no dead tab behind it.
-                                replacing: None,
-                            }),
-                        ),
+                    let resume = ResumeTarget {
+                        primary: primary.clone(),
+                        task: task.id.clone(),
+                        // Asked for from the list, not from a row: there is
+                        // no dead tab behind it.
+                        replacing: None,
                     };
                     self.model.preserved = None;
                     self.model.agent_picker = Some(AgentPicker {
                         options: agent_options(self.home),
                         selected: 0,
                         anchor: Rect::default(),
-                        cwd,
-                        resume,
+                        resume: Some(resume),
                     });
                 }
             }
@@ -965,7 +942,12 @@ impl Attach<'_> {
     /// no button drawn for this, so silence would read as the key doing
     /// nothing.
     fn mutate_task(&mut self, cwd: PathBuf, task: &TaskView, mutation: TaskMutation) {
-        if !self.model.task_mutation_pending.insert(task.id.clone()) {
+        if !self
+            .model
+            .remembered
+            .task_mutation_pending
+            .insert(task.id.clone())
+        {
             return;
         }
         self.model
@@ -976,7 +958,7 @@ impl Attach<'_> {
             task.id.clone(),
             task.label.clone(),
             mutation,
-            self.answers.mutations.clone(),
+            self.channels.mutations.sender.clone(),
         );
     }
 
@@ -1102,29 +1084,8 @@ impl Attach<'_> {
             }
             _ => {}
         }
-        let command = match action {
-            Action::Dismiss => Command::Close,
-            Action::FocusNext | Action::FocusPrevious => Command::FocusNext,
-            Action::SelectNext => Command::SelectNext,
-            Action::SelectPrevious => Command::SelectPrevious,
-            Action::Collapse => Command::Collapse,
-            Action::Expand => Command::Expand,
-            Action::Activate => Command::Activate,
-            Action::ScrollPageUp => Command::ScrollPageUp,
-            Action::ScrollPageDown => Command::ScrollPageDown,
-            Action::EditFile => Command::Edit,
-            Action::TogglePreview => Command::TogglePreview,
-            Action::SaveFile => Command::Save,
-            Action::DeleteFile => Command::Delete,
-            Action::ConfirmDelete => Command::ConfirmDelete,
-            Action::CaretLeft => Command::CaretLeft,
-            Action::CaretRight => Command::CaretRight,
-            Action::CaretLineStart => Command::CaretLineStart,
-            Action::CaretLineEnd => Command::CaretLineEnd,
-            Action::InsertNewline => Command::Newline,
-            Action::EraseBack => Command::EraseBack,
-            Action::EraseForward => Command::EraseForward,
-            _ => return,
+        let Some(command) = crate::ui::extension_view::command_for(action) else {
+            return;
         };
         self.tell_the_code_surface(command);
     }
@@ -1158,12 +1119,18 @@ impl Attach<'_> {
             let submitted = bytes.as_slice() == *b"\r";
             let cancelled = bytes.as_slice() == [3u8];
             let prompt = if submitted {
-                self.model.prompt_buffers.entry(pane).or_default().submit()
+                self.model
+                    .remembered
+                    .prompt_buffers
+                    .entry(pane)
+                    .or_default()
+                    .submit()
             } else {
                 if cancelled {
-                    self.model.prompt_buffers.remove(&pane);
+                    self.model.remembered.prompt_buffers.remove(&pane);
                 } else {
                     self.model
+                        .remembered
                         .prompt_buffers
                         .entry(pane)
                         .or_default()
@@ -1202,6 +1169,7 @@ impl Attach<'_> {
             _ if self.model.no_modal_open() => {
                 let pane = self.model.focused_pane();
                 self.model
+                    .remembered
                     .prompt_buffers
                     .entry(pane)
                     .or_default()
@@ -1214,15 +1182,11 @@ impl Attach<'_> {
         Flow::Continue
     }
 
-    /// Clicks, drags and wheels. The same precedence the keyboard has,
-    /// plus the hit list the last frame left behind
-    /// (`WorkspaceModel::hits`) for everything that resolves to chrome.
-    /// Clicks, drags and wheels, routed by button and kind.
-    ///
-    /// The kinds partition the arms exactly — no guard ever tested two —
-    /// so what used to be one 26-arm match is six matches whose *name*
-    /// says which gesture they answer, and whose guards say only what is
-    /// open.
+    /// Clicks, drags and wheels, routed by button and kind: each handler's
+    /// name says which gesture it answers, and its guards say only what is
+    /// open — the same precedence the keyboard has, plus the hit list the
+    /// last frame left behind (`WorkspaceModel::hits`) for everything that
+    /// resolves to chrome.
     fn mouse(&mut self, mouse: MouseEvent, viewport: &Viewport) -> Flow {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => self.press(mouse, viewport),
@@ -1310,7 +1274,7 @@ impl Attach<'_> {
                             })
                         {
                             self.model.root_picker = None;
-                            self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
+                            self.open_space_at(root, kind, columns, rows);
                         }
                     }
                     Some(WorkspaceHit::PickSpaceKind(kind)) => {
@@ -1343,9 +1307,7 @@ impl Attach<'_> {
                                 label,
                                 command,
                                 option.integration.clone(),
-                                picker.cwd.clone(),
                                 picker.resume.clone(),
-                                (columns, rows),
                             );
                         }
                     }
@@ -2044,7 +2006,6 @@ impl Attach<'_> {
                     options: agent_options(self.home),
                     selected: 0,
                     anchor: hit_rect,
-                    cwd: None,
                     resume: None,
                 });
                 // Unlike every other arm here, this is a purely
@@ -2120,7 +2081,7 @@ impl Attach<'_> {
                 open_code(&mut self.model, code::ContentMode::Contents);
             }
             WorkspaceHit::Deliver(_) => {
-                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
+                deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
@@ -2128,8 +2089,7 @@ impl Attach<'_> {
             WorkspaceHit::ResumeLostCheckout(tab) => {
                 let resume = self
                     .model
-                    .tab_focus_pane(tab)
-                    .and_then(|pane| self.model.lost_task(pane))
+                    .lost_task(tab)
                     .map(|(primary, task)| ResumeTarget {
                         primary: primary.clone(),
                         task: task.id.clone(),
@@ -2147,7 +2107,6 @@ impl Attach<'_> {
                         options: agent_options(self.home),
                         selected: 0,
                         anchor: hit_rect,
-                        cwd: None,
                         resume: Some(resume),
                     });
                     self.model.dirty = true;
@@ -2169,11 +2128,11 @@ impl Attach<'_> {
                 // and this is the one moment the user is
                 // actually looking at the answer.
                 if let Some(dropdown) = &self.model.support_dropdown {
-                    self.model.agent_support_pending = Some(dropdown.key.clone());
+                    self.model.remembered.agent_support_pending = Some(dropdown.key.clone());
                     spawn_support_refresh(
                         self.home,
                         dropdown.key.clone(),
-                        self.answers.support.clone(),
+                        self.channels.support.sender.clone(),
                     );
                 }
                 self.model.dirty = true;
@@ -2192,7 +2151,7 @@ impl Attach<'_> {
                     &mut self.model,
                     index,
                     hit_rect,
-                    &self.answers.commit_details,
+                    &self.channels.commit_details.sender,
                 ),
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
@@ -2213,136 +2172,84 @@ impl Attach<'_> {
     }
 }
 
-/// Every receiver one attach drains, borrowed from [`WorkspaceMemory`].
-///
-/// The receivers stay in the memory rather than in [`Attach`] on purpose:
-/// an answer still in flight when the user leaves for management has to
-/// land when they come back, and a receiver dropped at the end of an
-/// attach would leave its key reserved forever.
-pub(super) struct AttachInbox<'a> {
-    pub(super) events: &'a mpsc::Receiver<ClientEvent>,
-    pub(super) support: &'a mpsc::Receiver<SupportResolution>,
-    pub(super) tasks: &'a mpsc::Receiver<TaskResolution>,
-    pub(super) deliveries: &'a mpsc::Receiver<DeliveryResolution>,
-    pub(super) mutations: &'a mpsc::Receiver<MutationResolution>,
-    pub(super) git: &'a mpsc::Receiver<GitResolution>,
-    pub(super) commit_details: &'a mpsc::Receiver<CommitDetailResolution>,
-    pub(super) code_changes: &'a mpsc::Receiver<ChangesResolution>,
-    pub(super) code_files: &'a mpsc::Receiver<FileResolution>,
-    pub(super) occupancy: &'a mpsc::Receiver<OccupancyResolution>,
-    pub(super) placements: &'a mpsc::Receiver<PlacementResolution>,
-    pub(super) root_profiles: &'a mpsc::Receiver<RootProfileResolution>,
-}
-
 impl Attach<'_> {
-    /// Opens a tab for a new agent.
+    /// Opens a tab for a new agent, once placement has recorded it.
     ///
-    /// A picker carrying a `cwd` is resuming a preserved task, whose slot
-    /// already exists — that tab opens at once. Anything else needs a slot
-    /// acquired for it, which is `git worktree add` plus the project's own
-    /// link materialization and `setup` command: far too much to run where
-    /// a keystroke is being handled, so it is asked for here and the tab
+    /// Every agent is placed before its tab opens — a new one as the
+    /// selected space's kind says, a resumed one into its task's slot —
+    /// because the record is what the launch's identity names. Acquiring a
+    /// slot is `git worktree add` plus the project's own link
+    /// materialization and `setup` command: far too much to run where a
+    /// keystroke is being handled, so it is asked for here and the tab
     /// opens in [`Attach::absorb_placement`] when the answer lands.
     fn launch_agent(
         &mut self,
         label: String,
         command: Vec<String>,
         harness: String,
-        cwd: Option<PathBuf>,
         resume: Option<ResumeTarget>,
-        size: (u16, u16),
     ) {
-        let Some(cwd) = cwd else {
-            let replacing = resume.as_ref().and_then(|target| target.replacing);
-            let request = match resume {
-                Some(target) => PlacementRequest::Resume {
-                    primary: target.primary,
-                    task: target.task,
-                },
-                // The space's kind decides what the agent is placed as. A
-                // slot is cut relative to the pane the operator is in; a
-                // tenancy is of the space's own root, whatever directory
-                // that pane has wandered into.
-                None => match self.model.session.as_ref().map(|session| {
-                    let space = session.selected_space();
-                    (crate::ui::placement_of(space.kind), space.root.clone())
-                }) {
-                    Some((kind @ uze_application::PlacementKind::Tenant, root)) => {
-                        PlacementRequest::New {
-                            from: root,
-                            kind,
-                            harness,
-                        }
-                    }
-                    Some((kind, _)) => match selected_pane_cwd(&self.model) {
-                        Some(from) => PlacementRequest::New {
-                            from,
-                            kind,
-                            harness,
-                        },
-                        // Nothing selected to place a slot relative to — the
-                        // server's own default directory it is, same as
-                        // before slots existed.
-                        None => {
-                            self.open_agent_tab_at(label, command, None, Vec::new(), size);
-                            return;
-                        }
-                    },
-                    None => {
-                        self.open_agent_tab_at(label, command, None, Vec::new(), size);
-                        return;
-                    }
-                },
-            };
-            if self.model.placement_pending {
-                return;
+        let replacing = resume.as_ref().and_then(|target| target.replacing);
+        let request = match resume {
+            Some(target) => PlacementRequest::Resume {
+                primary: target.primary,
+                task: target.task,
+            },
+            // Placed from the space's own root, whatever directory the
+            // selected pane has wandered into: the space is what the
+            // operator chose, and placement refuses rather than guess.
+            None => {
+                let Some(space) = self.model.session.as_ref().map(|s| s.selected_space()) else {
+                    return;
+                };
+                PlacementRequest::New {
+                    from: space.root.clone(),
+                    kind: space.kind,
+                    harness,
+                }
             }
-            self.model.placement_pending = true;
-            self.model.set_busy_notice(format!("{label}: preparing"));
-            let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
-            spawn_agent_placement(
-                self.home,
-                request,
-                occupied,
-                label,
-                command,
-                replacing,
-                self.answers.placements.clone(),
-            );
-            return;
         };
-        self.model
-            .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
-        self.open_agent_tab(label, command, cwd, Vec::new(), size);
+        if self.model.placement_pending {
+            return;
+        }
+        self.model.placement_pending = true;
+        self.model.set_busy_notice(format!("{label}: preparing"));
+        let occupied: Vec<PathBuf> = self
+            .model
+            .remembered
+            .occupied_checkouts
+            .iter()
+            .cloned()
+            .collect();
+        spawn_agent_placement(
+            self.home,
+            request,
+            occupied,
+            label,
+            command,
+            replacing,
+            self.channels.placements.sender.clone(),
+        );
     }
 
-    /// The one place a `CreateTab` for an agent is sent, so the two ways
-    /// of asking for one cannot disagree about what a tab is.
+    /// The one place a `CreateTab` for an agent is sent: an agent tab
+    /// always carries the identity its placement recorded.
     fn open_agent_tab(
         &mut self,
         label: String,
         command: Vec<String>,
         cwd: PathBuf,
-        env: Vec<(String, String)>,
+        agent: &str,
         size: (u16, u16),
     ) {
-        self.open_agent_tab_at(label, command, Some(cwd), env, size);
-    }
-
-    /// `None` leaves the directory to the server — the one case where
-    /// there is no pane to place the agent relative to.
-    fn open_agent_tab_at(
-        &mut self,
-        label: String,
-        command: Vec<String>,
-        cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
-        size: (u16, u16),
-    ) {
+        let env = vec![(
+            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+            agent.to_owned(),
+        )];
         let _ = send_request(
             &mut self.stream,
             &ClientRequest::CreateTab {
-                cwd,
+                cwd: Some(cwd),
                 label,
                 agent: None,
                 columns: size.0,
@@ -2378,24 +2285,23 @@ impl Attach<'_> {
         match placement.warnings.first().cloned() {
             Some(text) => self.model.set_notice(format!("{label}: {text}")),
             None => {
-                self.model.notice = None;
+                self.model.remembered.notice = None;
                 self.model.dirty = true;
             }
         }
+        self.model.schedule_evaluation(
+            self.home,
+            placement.cwd.clone(),
+            &self.channels.tasks.sender,
+        );
         // The launch carries the agent's identity, whichever kind of record
         // it is: what the shim resumes the conversation by, and what this
         // client reads back from the session to know which agent the tab
-        // is for.
-        let env = vec![(
-            uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
-            placement.placement.agent().as_str().to_owned(),
-        )];
-        self.model
-            .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
-        // The size the last frame actually drew — the same value the
-        // resize path keeps in step with the layout.
+        // is for. The size is the last frame's, the value the resize path
+        // keeps in step with the layout.
+        let agent = placement.placement.agent().as_str().to_owned();
         let size = self.model.last_size;
-        self.open_agent_tab(label, command, placement.cwd, env, size);
+        self.open_agent_tab(label, command, placement.cwd, &agent, size);
         // The agent this one took over from stood in a directory that no
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
@@ -2417,7 +2323,7 @@ impl Attach<'_> {
         }
         for cwd in reconciliation.changed {
             self.model
-                .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
     }
 
@@ -2426,20 +2332,20 @@ impl Attach<'_> {
     /// has gone stale.
     ///
     /// Nothing here blocks. Every read this schedules runs on a thread of
-    /// its own and answers through [`AttachInbox`], which is what lets
+    /// its own and answers through [`Channels`], which is what lets
     /// this be called every tick without the frame waiting on any of it.
     ///
     /// Answers with a [`Flow`] for the one thing absorbing can discover
     /// that no keystroke can: the terminal runtime having gone away
     /// underneath the client.
-    pub(super) fn pump(&mut self, inbox: &AttachInbox<'_>) -> Flow {
+    pub(super) fn pump(&mut self, events: &mpsc::Receiver<ClientEvent>) -> Flow {
         if let Some((revision, notice)) = crate::self_update::since(self.model.release_revision) {
             self.model.release = notice;
             self.model.release_revision = revision;
             self.model.dirty = true;
         }
         loop {
-            match inbox.events.try_recv() {
+            match events.try_recv() {
                 Ok(event) => self.model.apply(event, &self.identities),
                 Err(mpsc::TryRecvError::Empty) => break,
                 // The reader thread drops its sender only when the socket
@@ -2477,27 +2383,30 @@ impl Attach<'_> {
         // Absorb before scheduling, throughout: an answer sitting in the
         // channel still holds its reservation, so draining first is what
         // lets the very same tick ask the next question.
-        while let Ok(resolution) = inbox.occupancy.try_recv() {
+        while let Ok(resolution) = self.channels.occupancy.receiver.try_recv() {
             self.absorb_occupancy(resolution);
         }
         sync_slot_occupancy(
             &mut self.model,
             self.home,
-            &self.answers.occupancy,
-            &self.answers.tasks,
+            &self.channels.occupancy.sender,
+            &self.channels.tasks.sender,
         );
-        while let Ok(resolution) = inbox.placements.try_recv() {
+        while let Ok(resolution) = self.channels.placements.receiver.try_recv() {
             self.absorb_placement(resolution);
         }
-        while let Ok(resolution) = inbox.support.try_recv() {
-            if self.model.agent_support_pending.as_ref() == Some(&resolution.key) {
-                self.model.agent_support_pending = None;
+        while let Ok(resolution) = self.channels.support.receiver.try_recv() {
+            if self.model.remembered.agent_support_pending.as_ref() == Some(&resolution.key) {
+                self.model.remembered.agent_support_pending = None;
             }
-            self.model.agent_support = Some(resolution);
+            self.model.remembered.agent_support = Some(resolution);
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.tasks.try_recv() {
-            self.model.task_eval_pending.remove(&resolution.key);
+        while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
+            self.model
+                .remembered
+                .task_eval_pending
+                .remove(&resolution.key);
             let Some(EvaluationAnswer {
                 primary,
                 branch,
@@ -2509,19 +2418,28 @@ impl Attach<'_> {
                 continue;
             };
             match branch {
-                Some(branch) => self.model.branches.insert(resolution.key.clone(), branch),
-                None => self.model.branches.remove(&resolution.key),
+                Some(branch) => self
+                    .model
+                    .remembered
+                    .branches
+                    .insert(resolution.key.clone(), branch),
+                None => self.model.remembered.branches.remove(&resolution.key),
             };
             match target {
-                Some(target) => self.model.targets.insert(resolution.key.clone(), target),
-                None => self.model.targets.remove(&resolution.key),
+                Some(target) => self
+                    .model
+                    .remembered
+                    .targets
+                    .insert(resolution.key.clone(), target),
+                None => self.model.remembered.targets.remove(&resolution.key),
             };
             match sync {
                 Some(sync) => self
                     .model
+                    .remembered
                     .upstream_syncs
                     .insert(resolution.key.clone(), sync),
-                None => self.model.upstream_syncs.remove(&resolution.key),
+                None => self.model.remembered.upstream_syncs.remove(&resolution.key),
             };
             // A store that could not be read is not a repository without
             // tasks, and must never be drawn as one: replacing what the
@@ -2534,15 +2452,15 @@ impl Attach<'_> {
                     .set_notice(format!("tasks unreadable — {reason}"));
                 continue;
             }
-            self.model.tasks.insert(primary, evaluation.tasks);
             self.model
-                .tenants
-                .insert(resolution.key.clone(), evaluation.tenants);
+                .remembered
+                .tasks
+                .insert(primary, evaluation.tasks);
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
             for notice in evaluation.notices {
-                if let Some(pane) = self.model.pane_for_checkout(&notice.checkout) {
+                if let Some(pane) = self.model.pane_for_agent(&notice.task) {
                     let mut bytes = notice.message.into_bytes();
                     bytes.push(b'\r');
                     let _ = send_request(&mut self.stream, &ClientRequest::Input { pane, bytes });
@@ -2550,15 +2468,18 @@ impl Attach<'_> {
             }
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.deliveries.try_recv() {
+        while let Ok(resolution) = self.channels.deliveries.receiver.try_recv() {
             // Released before anything is read out of the answer: an
             // empty one is exactly the case that used to leave the task
             // drawn as "delivering" with no way back.
             if let Some(reserved) = &resolution.reserved {
-                self.model.delivery_pending.remove(reserved);
+                self.model.remembered.delivery_pending.remove(reserved);
             }
             for report in &resolution.reports {
-                self.model.delivery_pending.remove(&report.task.id);
+                self.model
+                    .remembered
+                    .delivery_pending
+                    .remove(&report.task.id);
                 self.model.set_task_notice(
                     &report.task.id,
                     &report.task.label,
@@ -2570,7 +2491,7 @@ impl Attach<'_> {
                 // same way: one submission into its pane.
                 if let DeliveryOutcome::ReturnedToAgent(notice)
                 | DeliveryOutcome::AwaitingRequest(notice) = &report.outcome
-                    && let Some(pane) = self.model.pane_for_checkout(&notice.checkout)
+                    && let Some(pane) = self.model.pane_for_agent(&notice.task)
                 {
                     let mut bytes = notice.message.clone().into_bytes();
                     bytes.push(b'\r');
@@ -2590,11 +2511,14 @@ impl Attach<'_> {
                 });
             }
             self.model
-                .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.mutations.try_recv() {
-            self.model.task_mutation_pending.remove(&resolution.task);
+        while let Ok(resolution) = self.channels.mutations.receiver.try_recv() {
+            self.model
+                .remembered
+                .task_mutation_pending
+                .remove(&resolution.task);
             // Both endings are said. A finish whose store write failed
             // used to say nothing at all, and the re-evaluation right
             // behind it simply redrew the task unchanged — which reads as
@@ -2604,7 +2528,7 @@ impl Attach<'_> {
                 Err(error) => error,
             });
             self.model
-                .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
             self.model.dirty = true;
         }
         // Readiness is a Git fact, read when a pane goes quiet and, less
@@ -2616,14 +2540,15 @@ impl Attach<'_> {
             .collect();
         for cwd in quiet {
             self.model
-                .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
         if self
             .model
+            .remembered
             .last_task_refresh
             .is_none_or(|last| last.elapsed() >= TASK_REFRESH)
         {
-            self.model.last_task_refresh = Some(Instant::now());
+            self.model.remembered.last_task_refresh = Some(Instant::now());
             // A checkout can be deleted with nothing to say so. Every other
             // trigger for the occupancy pass is an event the server sends,
             // and the server only speaks when a pane's cwd or process
@@ -2638,7 +2563,7 @@ impl Attach<'_> {
             self.model.occupancy_stale = true;
             if let Some(cwd) = selected_pane_cwd(&self.model) {
                 self.model
-                    .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                    .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
             }
             // On the same clock, and for every agent rather than the
             // selected one: this is also where a launch left pending by a
@@ -2651,11 +2576,12 @@ impl Attach<'_> {
         // operator watching nothing while it ran.
         if self
             .model
+            .remembered
             .notice
             .as_ref()
             .is_some_and(|notice| !notice.busy && notice.since.elapsed() >= NOTICE_TTL)
         {
-            self.model.notice = None;
+            self.model.remembered.notice = None;
             self.model.dirty = true;
         }
         // Contextual resolution: whatever the selection currently is, that
@@ -2664,29 +2590,32 @@ impl Attach<'_> {
         // agent tab selected, or the server's live probe reporting the
         // pane moved — and never repeats for an answer already held.
         if let Some(key) = selected_agent_context(&self.model, &self.identities)
-            && self.model.agent_support_pending.as_ref() != Some(&key)
+            && self.model.remembered.agent_support_pending.as_ref() != Some(&key)
             && self
                 .model
+                .remembered
                 .agent_support
                 .as_ref()
                 .is_none_or(|resolution| resolution.key != key)
         {
-            self.model.agent_support_pending = Some(key.clone());
-            spawn_support_refresh(self.home, key, self.answers.support.clone());
+            self.model.remembered.agent_support_pending = Some(key.clone());
+            spawn_support_refresh(self.home, key, self.channels.support.sender.clone());
         }
-        while let Ok(resolution) = inbox.git.try_recv() {
+        while let Ok(resolution) = self.channels.git.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_git_read(resolution);
         }
-        while let Ok(resolution) = inbox.commit_details.try_recv() {
+        while let Ok(resolution) = self.channels.commit_details.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_commit_detail(resolution);
         }
-        while let Ok(resolution) = inbox.code_changes.try_recv() {
+        while let Ok(resolution) = self.channels.code_changes.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_changes(resolution);
         }
-        while let Ok(resolution) = inbox.code_files.try_recv() {
+        while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
-        while let Ok(RootProfileResolution { root, profile }) = inbox.root_profiles.try_recv() {
+        while let Ok(RootProfileResolution { root, profile }) =
+            self.channels.root_profiles.receiver.try_recv()
+        {
             self.model.root_profile_pending.remove(&root);
             self.model.root_profiles.insert(root.clone(), profile);
             if let Some(picker) = self.model.root_picker.as_mut() {
@@ -2694,10 +2623,11 @@ impl Attach<'_> {
             }
             self.model.dirty = true;
         }
-        self.model.schedule_git_read(&self.answers.git);
+        self.model.schedule_git_read(&self.channels.git.sender);
         self.model
-            .schedule_changes_refresh(&self.answers.code_changes);
-        self.model.schedule_file_request(&self.answers.code_files);
+            .schedule_changes_refresh(&self.channels.code_changes.sender);
+        self.model
+            .schedule_file_request(&self.channels.code_files.sender);
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }
@@ -2709,7 +2639,7 @@ impl Attach<'_> {
         // every agent idle.
         if workspace_has_active_agent_operation(&self.model, &self.identities)
             || self.model.notice_is_busy()
-            || !self.model.delivery_pending.is_empty()
+            || !self.model.remembered.delivery_pending.is_empty()
         {
             let now = Instant::now();
             if now >= self.next_tick {

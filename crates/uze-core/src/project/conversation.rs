@@ -1,12 +1,13 @@
-//! The conversation an agent is in, remembered for the task it belongs to.
+//! The conversation an agent is in, remembered for the agent.
 //!
-//! # Bound to the task, never to the directory
+//! # Bound to the agent, never to the directory
 //!
-//! A slot is reused: the directory an agent stands in was somebody else's
-//! yesterday and will be somebody else's tomorrow. A conversation keyed on
-//! the directory would therefore hand the next task the previous one's
-//! history. Keyed on the task, a recycled slot simply finds nothing, and a
-//! task given its slot back finds exactly what it left.
+//! A slot is reused, and a space's root is shared by every tenant in it:
+//! the directory an agent stands in was somebody else's yesterday, or is
+//! somebody else's right now. A conversation keyed on the directory would
+//! therefore hand one agent another's history. Keyed on the agent's
+//! identity, a recycled slot simply finds nothing, and a task given its
+//! slot back finds exactly what it left.
 //!
 //! # Advisory, not authoritative
 //!
@@ -21,10 +22,10 @@
 //!
 //! # Storage
 //!
-//! One JSON document per task, under
-//! `UzeHome::state_dir()/conversations/<project id>/<task id>.json` — the
+//! One JSON document per agent, under
+//! `UzeHome::state_dir()/conversations/<project id>/<agent id>.json` — the
 //! same project key `state/tasks/<project id>.json` uses, so both are
-//! outside every checkout by construction. One file per task rather than a
+//! outside every checkout by construction. One file per agent rather than a
 //! field on the task store, because a launch writes this and launches
 //! happen in their own processes: two agents starting at once would
 //! otherwise rewrite one document and drop each other's work.
@@ -44,7 +45,7 @@ use crate::{
     harness_runtime::project_id_for,
     home::UzeHome,
     persistence::write_atomic,
-    task::{self, AgentId},
+    task::{self, AgentId, AgentKind, now_unix},
 };
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -124,7 +125,7 @@ pub enum ConversationOrigin {
     Observed,
 }
 
-/// One harness's conversation for one task.
+/// One harness's conversation for one agent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarnessConversation {
     /// `None` while a launch is still waiting to be read back — the pending
@@ -218,13 +219,6 @@ impl ConversationRecord {
     }
 }
 
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
-
 /// The document for one agent of `project_root`.
 pub fn store_path(home: &UzeHome, project_root: &Path, agent: &AgentId) -> PathBuf {
     let canonical = project_root
@@ -233,11 +227,11 @@ pub fn store_path(home: &UzeHome, project_root: &Path, agent: &AgentId) -> PathB
     home.conversation_path(&project_id_for(&canonical), agent.as_str())
 }
 
-/// What was recorded for `task`, or an empty record. Never fails: see the
+/// What was recorded for `agent`, or an empty record. Never fails: see the
 /// module's note on why continuity state is advisory.
-pub fn load(home: &UzeHome, project_root: &Path, task: &AgentId) -> ConversationRecord {
-    let path = store_path(home, project_root, task);
-    let empty = || ConversationRecord::new(task.clone());
+pub fn load(home: &UzeHome, project_root: &Path, agent: &AgentId) -> ConversationRecord {
+    let path = store_path(home, project_root, agent);
+    let empty = || ConversationRecord::new(agent.clone());
     let Ok(bytes) = fs::read(&path) else {
         return empty();
     };
@@ -254,18 +248,19 @@ pub fn save(home: &UzeHome, project_root: &Path, record: &ConversationRecord) ->
     write_atomic(&store_path(home, project_root, &record.agent), &payload)
 }
 
-/// Forgets a task's conversations. Best-effort by construction: a record
+/// Forgets an agent's conversations. Best-effort by construction: a record
 /// that is already gone is the outcome asked for.
-pub fn forget(home: &UzeHome, project_root: &Path, task: &AgentId) {
-    let _ = fs::remove_file(store_path(home, project_root, task));
+pub fn forget(home: &UzeHome, project_root: &Path, agent: &AgentId) {
+    let _ = fs::remove_file(store_path(home, project_root, agent));
 }
 
-/// The agent a verified claim resolved to, and the project root every
-/// record for it is keyed on.
+/// The agent a verified claim resolved to, which kind of record it is, and
+/// the project root every record for it is keyed on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Owner {
-    pub primary: PathBuf,
+    pub project_root: PathBuf,
     pub agent: AgentId,
+    pub kind: AgentKind,
 }
 
 /// What a process says about itself: the identifier its launch carried,
@@ -303,8 +298,9 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
         let own = record.own_directory(root)?;
         let own = own.canonicalize().unwrap_or(own);
         cwd.starts_with(&own).then(|| Owner {
-            primary: root.to_path_buf(),
+            project_root: root.to_path_buf(),
             agent: record.id().clone(),
+            kind: record.kind(),
         })
     })
 }
@@ -511,7 +507,8 @@ mod tests {
         )
         .expect("the claim is backed by its record");
         assert_eq!(owner.agent, current_id);
-        assert_eq!(owner.primary, primary.canonicalize().unwrap());
+        assert_eq!(owner.kind, AgentKind::Task);
+        assert_eq!(owner.project_root, primary.canonicalize().unwrap());
         // Two records over one slot are told apart by the identifier alone.
         let previous_owner = owner_of(
             &home,
@@ -522,6 +519,33 @@ mod tests {
         )
         .expect("the earlier tenant of the slot still resolves by its own id");
         assert_eq!(previous_owner.agent, previous_id);
+    }
+
+    #[test]
+    fn a_tenants_claim_resolves_inside_its_root_and_says_it_is_a_tenant() {
+        let home = home("conversation-tenant-owner");
+        let root = project("conversation-tenant-owner-project")
+            .canonicalize()
+            .unwrap();
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let tenant = crate::tenant::Tenant::new("claude-code", &root);
+        let id = tenant.id.clone();
+        let mut store = TaskStore::default();
+        store.upsert_tenant(tenant);
+        task::save(&home, &root, &store).unwrap();
+
+        let owner = owner_of(
+            &home,
+            Claim {
+                id: id.as_str(),
+                cwd: &nested,
+            },
+        )
+        .expect("a tenant's claim is backed by its record");
+        assert_eq!(owner.agent, id);
+        assert_eq!(owner.kind, AgentKind::Tenant);
+        assert_eq!(owner.project_root, root);
     }
 
     #[test]

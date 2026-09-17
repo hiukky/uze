@@ -383,26 +383,18 @@ pub(crate) fn small_caps(s: &str) -> String {
         .collect()
 }
 
-/// The kind a space over `root` is created as when nobody chose: the
-/// placement the root's profile lands on, spelled for the wire. The one
-/// place the two vocabularies meet outside the picker.
+/// The kind a space over `root` is created as when nobody chose.
 pub fn space_kind_for(root: &std::path::Path) -> uze_terminal::SpaceKind {
-    space_kind_of(uze_application::root_profile(root).default_placement())
+    default_space_kind(uze_application::root_profile(root))
 }
 
-/// The wire's spelling of a placement.
-pub(crate) fn space_kind_of(placement: uze_application::PlacementKind) -> uze_terminal::SpaceKind {
-    match placement {
-        uze_application::PlacementKind::Slot => uze_terminal::SpaceKind::Worktree,
-        uze_application::PlacementKind::Tenant => uze_terminal::SpaceKind::Workspace,
-    }
-}
-
-/// The placement a wire kind names.
-pub(crate) fn placement_of(kind: uze_terminal::SpaceKind) -> uze_application::PlacementKind {
-    match kind {
-        uze_terminal::SpaceKind::Worktree => uze_application::PlacementKind::Slot,
-        uze_terminal::SpaceKind::Workspace => uze_application::PlacementKind::Tenant,
+/// The kind a root with `profile` lands on: a worktree space where slots
+/// are possible, a workspace space anywhere else.
+pub(crate) fn default_space_kind(profile: uze_application::RootProfile) -> uze_terminal::SpaceKind {
+    if profile.slots_possible {
+        uze_terminal::SpaceKind::Worktree
+    } else {
+        uze_terminal::SpaceKind::Workspace
     }
 }
 

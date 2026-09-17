@@ -13,7 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
-use uze_application::{PlacementKind, RootProfile};
+use uze_application::RootProfile;
+use uze_terminal::SpaceKind;
 
 /// One directory the prompt can land on.
 pub(super) struct Candidate {
@@ -35,14 +36,16 @@ pub(super) struct RootPicker {
     /// match first.
     matched: Vec<usize>,
     selected: usize,
-    /// The kind the space is created as: what the operator chose, or the
-    /// default the root's profile lands on when they chose nothing.
-    kind: PlacementKind,
-    chosen_kind: bool,
-    /// The profile of the root that would be chosen right now, once a
-    /// worker answered it — asked off the frame, because it asks Git, and
-    /// the picker never waits on a repository.
-    profile: Option<(PathBuf, RootProfile)>,
+    /// The space's root the prompt would create right now, resolved when
+    /// the input or the selection changes rather than on every frame: it
+    /// probes the filesystem.
+    landed: Option<PathBuf>,
+    /// The kind the operator chose, if they chose one.
+    chosen: Option<SpaceKind>,
+    /// The profile of `landed`, once a worker answered it — asked off the
+    /// frame, because it asks Git, and the picker never waits on a
+    /// repository.
+    profile: Option<RootProfile>,
 }
 
 impl RootPicker {
@@ -57,67 +60,62 @@ impl RootPicker {
             listing: Vec::new(),
             matched: Vec::new(),
             selected: 0,
-            kind: PlacementKind::Slot,
-            chosen_kind: false,
+            landed: None,
+            chosen: None,
             profile: None,
         };
         picker.refresh();
         picker
     }
 
-    /// The kind the space would be created as right now.
-    pub(super) fn kind(&self) -> PlacementKind {
-        self.kind
-    }
-
-    /// Whether the slot kind is available for the root that would be
-    /// chosen: unknown until the profile answers, which the chips show as
-    /// both available.
-    pub(super) fn slots_available(&self) -> bool {
-        match &self.profile {
-            Some((root, profile)) if Some(root) == self.landed().as_ref() => profile.allows_slots(),
-            _ => true,
+    /// The kind the space would be created as right now: what the operator
+    /// chose while the root allows it, and otherwise what the root's
+    /// profile lands on — a worktree until the profile answers.
+    pub(super) fn kind(&self) -> SpaceKind {
+        match (self.chosen, self.slots_available()) {
+            (Some(SpaceKind::Worktree), false) => SpaceKind::Workspace,
+            (Some(kind), _) => kind,
+            (None, _) => self
+                .profile
+                .map_or(SpaceKind::Worktree, crate::ui::default_space_kind),
         }
     }
 
-    /// Chooses a kind. A choice the root cannot honour — slots where there
-    /// is no repository — is refused, and the chips say so by drawing it
-    /// unavailable.
-    pub(super) fn choose_kind(&mut self, kind: PlacementKind) {
-        if kind == PlacementKind::Slot && !self.slots_available() {
+    /// Whether the worktree kind is available for the landed root: unknown
+    /// until the profile answers, which the chips show as available.
+    pub(super) fn slots_available(&self) -> bool {
+        self.profile.is_none_or(|profile| profile.slots_possible)
+    }
+
+    /// Chooses a kind. A choice the root cannot honour — a worktree where
+    /// there is no repository — is refused, and the chips say so by
+    /// drawing it unavailable.
+    pub(super) fn choose_kind(&mut self, kind: SpaceKind) {
+        if kind == SpaceKind::Worktree && !self.slots_available() {
             return;
         }
-        self.kind = kind;
-        self.chosen_kind = true;
+        self.chosen = Some(kind);
     }
 
     pub(super) fn toggle_kind(&mut self) {
-        let other = match self.kind {
-            PlacementKind::Slot => PlacementKind::Tenant,
-            PlacementKind::Tenant => PlacementKind::Slot,
-        };
-        self.choose_kind(other);
+        self.choose_kind(match self.kind() {
+            SpaceKind::Worktree => SpaceKind::Workspace,
+            SpaceKind::Workspace => SpaceKind::Worktree,
+        });
     }
 
     /// The root a worker should profile: the one `chosen` would answer
     /// with, when there is one.
     pub(super) fn landed(&self) -> Option<PathBuf> {
-        self.landed_root()
+        self.landed.clone()
     }
 
-    /// Takes a worker's answer about `root`. Nothing the operator chose is
-    /// overridden — except a choice the root turns out not to allow, which
-    /// lands on the only kind it does.
+    /// Takes a worker's answer about `root`, when it is still the root
+    /// landed on.
     pub(super) fn absorb_profile(&mut self, root: PathBuf, profile: RootProfile) {
-        if Some(&root) != self.landed().as_ref() {
-            return;
+        if self.landed.as_ref() == Some(&root) {
+            self.profile = Some(profile);
         }
-        if !self.chosen_kind {
-            self.kind = profile.default_placement();
-        } else if self.kind == PlacementKind::Slot && !profile.allows_slots() {
-            self.kind = PlacementKind::Tenant;
-        }
-        self.profile = Some((root, profile));
     }
 
     pub(super) fn input(&self) -> &str {
@@ -153,12 +151,14 @@ impl RootPicker {
     pub(super) fn select(&mut self, index: usize) {
         if index < self.matched.len() {
             self.selected = index;
+            self.reland();
         }
     }
 
     pub(super) fn move_selection(&mut self, delta: isize) {
         let last = self.matched.len().saturating_sub(1);
         self.selected = self.selected.saturating_add_signed(delta).min(last);
+        self.reland();
     }
 
     pub(super) fn typed(&mut self, character: char) {
@@ -204,19 +204,11 @@ impl RootPicker {
     /// asked with the mouse, and answering it differently is what put a
     /// `.worktrees/<id>` space in the sidebar beside the space whose agent
     /// was working in it.
-    pub(super) fn chosen(&self) -> Option<(PathBuf, PlacementKind)> {
-        let root = self.landed_root()?;
-        // A kind the root cannot honour never leaves the picker: an answer
-        // still in flight lands on the only kind every directory allows.
-        let kind = if self.kind == PlacementKind::Slot && !self.slots_available() {
-            PlacementKind::Tenant
-        } else {
-            self.kind
-        };
-        Some((root, kind))
+    pub(super) fn chosen(&self) -> Option<(PathBuf, SpaceKind)> {
+        Some((self.landed.clone()?, self.kind()))
     }
 
-    fn landed_root(&self) -> Option<PathBuf> {
+    fn resolve_landed(&self) -> Option<PathBuf> {
         let landed = match self.candidate(self.selected) {
             Some(candidate) => candidate.path.clone(),
             None => {
@@ -228,6 +220,16 @@ impl RootPicker {
             }
         };
         Some(uze_application::space_root(&landed))
+    }
+
+    /// Re-resolves the landed root after the selection moved; a different
+    /// root forgets the previous one's profile.
+    fn reland(&mut self) {
+        let landed = self.resolve_landed();
+        if landed != self.landed {
+            self.profile = None;
+            self.landed = landed;
+        }
     }
 
     fn refresh(&mut self) {
@@ -255,6 +257,7 @@ impl RootPicker {
         leading.append(&mut inner);
         self.matched = leading;
         self.selected = 0;
+        self.reland();
     }
 }
 

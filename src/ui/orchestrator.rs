@@ -14,7 +14,7 @@ use crossterm::event::{
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
@@ -30,7 +30,7 @@ use std::{
 use uze_application::AgentIdentity;
 use uze_application::{
     CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
-    TenantView, UpstreamSync,
+    UpstreamSync,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -40,8 +40,8 @@ use uze_extensions::{
 use uze_keys::{Action, Chord, Key};
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
-    PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
-    read_event, send_request,
+    PaneSnapshot, RenderCell, Session, Space, SpaceId, SpaceKind, Tab, TabId, TerminalColor,
+    attach, read_event, send_request,
 };
 
 /// Input/redraw cadence. Unlike the pane content itself — which the server
@@ -387,28 +387,19 @@ fn spawn_task_evaluation(
         // key, and the directory is then never evaluated again.
         let answered = answered_or(
             || {
-                tui_application(home).ok().map(|app| {
+                tui_application(home).ok().and_then(|app| {
                     let workspace = app.workspace();
-                    // Every question here is about the *repository*, and `cwd` is
-                    // only how the caller happened to name it — usually a pane's
-                    // directory. Once that directory is removed it names nothing:
-                    // `primary_of` asks Git and `evaluate_tasks` opens the
-                    // repository, so both answered empty, and the client kept the
-                    // task view it already had — one that still believed it had a
-                    // checkout, which is the single thing the way back in is gated
-                    // on. The slot key is the same repository, derived lexically
-                    // before this thread started and already what every other
-                    // lookup below asks with; the three that took `cwd` now take
-                    // the repository too.
-                    // A directory that is no repository still answers: it
-                    // has no tasks, but it may well have tenants.
-                    let primary = workspace
-                        .primary_of(&cwd)
-                        .or_else(|| {
-                            uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
-                        })
-                        .unwrap_or_else(|| key.clone());
-                    EvaluationAnswer {
+                    // Every question here is about the *repository*, and `cwd`
+                    // is only how the caller named it. A slot removed from
+                    // under its pane names nothing Git can answer for, so
+                    // the repository is the slot's key, derived lexically
+                    // before this thread started — otherwise the client
+                    // keeps a view that still believes the task has its
+                    // checkout, which is what the way back in is gated on.
+                    let primary = workspace.primary_of(&cwd).or_else(|| {
+                        uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
+                    })?;
+                    Some(EvaluationAnswer {
                         branch: workspace.current_branch(&key),
                         target: workspace
                             .delivery_policy(&key)
@@ -416,7 +407,7 @@ fn spawn_task_evaluation(
                         sync: workspace.target_upstream_sync(&key),
                         evaluation: workspace.evaluate_tasks(&primary, &occupied),
                         primary,
-                    }
+                    })
                 })
             },
             None,
@@ -676,9 +667,7 @@ fn spawn_commit_detail(
 }
 
 /// The answer to a placement request: where the agent goes, or why it
-/// cannot. A new agent always goes somewhere — isolation that fails falls
-/// back to the directory it was asked from — but a resume that fails has
-/// nowhere to fall back to, and opens no tab.
+/// cannot — in which case no tab opens.
 struct PlacementResolution {
     label: String,
     command: Vec<String>,
@@ -697,7 +686,7 @@ struct PlacementResolution {
 enum PlacementRequest {
     New {
         from: PathBuf,
-        kind: uze_application::PlacementKind,
+        kind: SpaceKind,
         harness: String,
     },
     Resume {
@@ -741,6 +730,13 @@ fn spawn_agent_placement(
                     harness,
                 } => tui_application(home)
                     .and_then(|app| {
+                        // The one place the space's kind becomes a domain
+                        // request: the wire and placement each keep their
+                        // own vocabulary.
+                        let kind = match kind {
+                            SpaceKind::Worktree => uze_application::PlacementKind::Slot,
+                            SpaceKind::Workspace => uze_application::PlacementKind::Tenant,
+                        };
                         app.workspace()
                             .place_new_agent(&from, kind, &harness, &occupied)
                     })
@@ -885,8 +881,7 @@ fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>
         let profile = answered_or(
             || uze_application::root_profile(&root),
             uze_application::RootProfile {
-                repository: false,
-                has_commit: false,
+                slots_possible: false,
             },
         );
         let _ = sender.send(RootProfileResolution { root, profile });
@@ -1047,50 +1042,12 @@ pub(crate) fn attach_workspace(
         prompt_recorder: Some(prompt_recorder),
         layout_recorder: Some(layout_recorder),
         management_layout: layout.management.clone(),
-        ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
+        remembered: std::mem::take(&mut memory.remembered),
+        ..WorkspaceModel::default()
     };
     // A registered harness set doesn't change mid-session, so this is built
     // once per attach.
     let identities = agent_identities(home);
-    // This is the exact `HarnessHealth` read model used by the Integrations
-    // screen. It loads asynchronously so inspecting support never delays a
-    // live terminal attach or a pane redraw. Unlike `identities` above, this
-    // one *does* go stale — `AGENTS.md`/the runtime projection can change
-    // underneath an open workspace (another session writing it, a race in
-    // `claude_runtime_projection` resolving) — so `OpenAgentSupport` below
-    // fires a fresh one on every open rather than trusting this attach-time
-    // snapshot for the rest of the session.
-    // No attach-time prefetch: there is nothing to resolve until a tab is
-    // recognized as running an agent, and what to resolve then depends on
-    // that pane's own directory. The loop below kicks a refresh the moment
-    // the selection names an agent whose answer is not already in hand —
-    // the same moment the "✦" badge appears.
-    // The answer channels outlive this attach with the rest of the memory:
-    // a read still running when the runtime goes away lands after the
-    // client attaches again, instead of vanishing with a receiver that was
-    // dropped and leaving its key reserved forever.
-    let support_sender = memory.support.sender.clone();
-    let support_receiver = &memory.support.receiver;
-    let task_sender = memory.tasks.sender.clone();
-    let task_receiver = &memory.tasks.receiver;
-    let delivery_sender = memory.deliveries.sender.clone();
-    let delivery_receiver = &memory.deliveries.receiver;
-    let mutation_sender = memory.mutations.sender.clone();
-    let mutation_receiver = &memory.mutations.receiver;
-    let git_sender = memory.git.sender.clone();
-    let git_receiver = &memory.git.receiver;
-    let commit_detail_sender = memory.commit_details.sender.clone();
-    let commit_detail_receiver = &memory.commit_details.receiver;
-    let changes_sender = memory.code_changes.sender.clone();
-    let changes_receiver = &memory.code_changes.receiver;
-    let files_sender = memory.code_files.sender.clone();
-    let files_receiver = &memory.code_files.receiver;
-    let occupancy_sender = memory.occupancy.sender.clone();
-    let occupancy_receiver = &memory.occupancy.receiver;
-    let placement_sender = memory.placements.sender.clone();
-    let root_profile_sender = memory.root_profiles.sender.clone();
-    let root_profile_receiver = &memory.root_profiles.receiver;
-    let placement_receiver = &memory.placements.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     let activity_frames = theme::frames(Symbol::StatusWorking);
@@ -1129,44 +1086,21 @@ pub(crate) fn attach_workspace(
         stream,
         home,
         identities,
-        answers: AttachAnswers {
-            support: support_sender,
-            tasks: task_sender,
-            deliveries: delivery_sender,
-            mutations: mutation_sender,
-            git: git_sender,
-            commit_details: commit_detail_sender,
-            code_changes: changes_sender,
-            code_files: files_sender,
-            occupancy: occupancy_sender,
-            placements: placement_sender,
-            root_profiles: root_profile_sender,
-        },
+        // The answer channels outlive this attach with the rest of the
+        // memory: a read still running when the runtime goes away lands
+        // after the client attaches again.
+        channels: &memory.channels,
         spinner: activity_spinner,
         next_tick: next_activity_tick,
         asked_for_a_tab: false,
         manage_memory: manage,
         keyboard: terminal.keyboard(),
     };
-    let inbox = AttachInbox {
-        events: &receiver,
-        support: support_receiver,
-        tasks: task_receiver,
-        deliveries: delivery_receiver,
-        mutations: mutation_receiver,
-        git: git_receiver,
-        commit_details: commit_detail_receiver,
-        code_changes: changes_receiver,
-        code_files: files_receiver,
-        occupancy: occupancy_receiver,
-        placements: placement_receiver,
-        root_profiles: root_profile_receiver,
-    };
     // Every way out of the loop — a quit, a runtime gone, an error — must
     // hand the model's memory back, so the loop runs inside one call whose
     // result is read only after that handover.
     let outcome: Result<WorkspaceExit> = (|| loop {
-        if let Flow::Exit(exit) = attach.pump(&inbox) {
+        if let Flow::Exit(exit) = attach.pump(&receiver) {
             return Ok(exit);
         }
         let size = terminal.size()?;
@@ -1200,7 +1134,11 @@ pub(crate) fn attach_workspace(
             terminal.draw(|frame| render(frame, model, identities, &mut hits, &mut metrics))?;
             attach.model.hits = hits;
             attach.model.tree_overflow = metrics.tree_overflow;
-            attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
+            attach.model.remembered.tree_scroll = attach
+                .model
+                .remembered
+                .tree_scroll
+                .min(metrics.tree_overflow);
             if let Some(rendered) = metrics.code {
                 attach.model.code_tree_scroll = rendered.navigator_scroll;
                 attach.model.code_scrollbars = rendered;
@@ -1219,7 +1157,7 @@ pub(crate) fn attach_workspace(
     // next run — opens on it.
     attach.close_manage();
     attach.model.shape().apply_to(layout);
-    memory.remembered = attach.model.remember();
+    memory.remembered = attach.model.remembered;
     outcome
 }
 
@@ -1284,7 +1222,7 @@ pub(super) enum WorkspaceHit {
     /// picker.
     PickSpaceRoot(usize),
     /// One of the two kind chips under the picker's directory line.
-    PickSpaceKind(uze_application::PlacementKind),
+    PickSpaceKind(SpaceKind),
     /// The tab strip's right-corner button — opens the Git extension's
     /// changes of the active tab's checkout — the code surface
     /// (`WorkspaceModel::code`), opened on its diff.
@@ -1555,11 +1493,8 @@ struct AgentPicker {
     /// The tab strip's "✦" button's own rect — the popup anchors just
     /// under it.
     anchor: Rect,
-    /// A directory the new agent must start in — a preserved task's own
-    /// slot, when resuming it. `None` lets placement acquire a slot.
-    cwd: Option<PathBuf>,
-    /// A preserved task whose slot is gone: placement gives it a slot
-    /// again, on its own branch, and the agent starts there.
+    /// A preserved task to continue: placement answers with its slot, or
+    /// gives it one again on its own branch, and the agent starts there.
     resume: Option<ResumeTarget>,
 }
 
@@ -1591,10 +1526,6 @@ enum MenuTarget {
     Tab(TabId),
 }
 
-/// One row a [`ContextMenu`] can offer — the menu itself (items, selection,
-/// rendering) is generic over this enum, so adding a third action is adding
-/// a variant plus a match arm here and in [`dispatch_menu_action`], not
-/// restructuring the popup.
 /// Open state of the right-click action menu a space header or agent tab
 /// raises. Closing a space/tab is never one click any more — right-click,
 /// then confirm the menu's own "close" row — deliberately two steps, so an
@@ -1642,15 +1573,12 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
         .collect()
 }
 
-/// The recognized agent, if any, running in `tab`'s focused pane — matched
-/// against `identities` primarily by live foreground process name (a
-/// shim-launched process reports its invoked alias there via
-/// `UZE_SHIM_NAME`, not its raw `comm` — see
-/// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
-/// tab's own label only for legacy tabs created before generic agent labels
-/// were introduced. Returns the harness's short binary/alias
-/// name (`claude`, `codex`, …) — what decides whether a tab lists under
-/// "agents" or "shell" at all.
+/// The recognized agent, if any, running in `tab`'s pane — matched against
+/// `identities` by the live foreground process name (a shim-launched
+/// process reports its invoked alias there via `UZE_SHIM_NAME`, not its raw
+/// `comm` — see `uze_terminal::PaneRuntime::foreground_status`). Returns
+/// the harness's short binary/alias name (`claude`, `codex`, …) — what
+/// decides whether a tab lists under "agents" or "shell" at all.
 fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a str> {
     agent_for_tab(identities, tab).map(|identity| identity.binary)
 }
@@ -1658,11 +1586,9 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
 /// The harness running in `tab`, as [`agent_identity_for_tab`] recognizes
 /// it — the whole identity, for a caller that names it to a person.
 fn agent_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a AgentIdentity> {
-    let process = Some(tab.pane.process.as_str());
-    identities.iter().find(|identity| {
-        process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
-            || tab.label.eq_ignore_ascii_case(identity.display_name)
-    })
+    identities
+        .iter()
+        .find(|identity| tab.pane.process.eq_ignore_ascii_case(identity.binary))
 }
 
 /// What the sidebar shows beside one agent tab. These four states are the
@@ -1792,16 +1718,8 @@ fn workspace_has_active_agent_operation(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
 ) -> bool {
-    model.session.as_ref().is_some_and(|session| {
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .any(|tab| {
-                agent_identity_for_tab(identities, tab).is_some()
-                    && model.agent_is_working(tab.pane.id)
-            })
+    model.tabs().any(|tab| {
+        agent_identity_for_tab(identities, tab).is_some() && model.agent_is_working(tab.pane.id)
     })
 }
 
@@ -1813,13 +1731,8 @@ fn selected_agent_context(
     identities: &[AgentIdentity],
 ) -> Option<SupportKey> {
     let tab = model.session.as_ref()?.selected_tab();
-    let binary = agent_identity_for_tab(identities, tab)?;
-    let integration = identities
-        .iter()
-        .find(|identity| identity.binary == binary)
-        .map(|identity| identity.integration)?;
-    let cwd = tab.pane.cwd.clone();
-    Some((integration.to_owned(), cwd))
+    let identity = agent_for_tab(identities, tab)?;
+    Some((identity.integration.to_owned(), tab.pane.cwd.clone()))
 }
 
 /// Every live agent pane as `(integration, directory)` — the same pair
@@ -1827,20 +1740,10 @@ fn selected_agent_context(
 /// selected one, since an agent nobody is looking at is exactly the one
 /// whose conversation would otherwise go unrecorded.
 fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<LaunchedAgent> {
-    let Some(session) = model.session.as_ref() else {
-        return Vec::new();
-    };
-    session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| space.tabs.iter())
+    model
+        .tabs()
         .filter_map(|tab| {
-            let binary = agent_identity_for_tab(identities, tab)?;
-            let integration = identities
-                .iter()
-                .find(|identity| identity.binary == binary)
-                .map(|identity| identity.integration)?;
+            let integration = agent_for_tab(identities, tab)?.integration;
             let id = launched_agent_id(tab)?.to_owned();
             // The directory as it was given, not the kernel's note about
             // what became of it: a removed checkout is still where the
@@ -1930,13 +1833,20 @@ impl<T> Default for Answers<T> {
 /// `uze_application::ClientLayout` both surfaces share.
 #[derive(Default)]
 pub(crate) struct WorkspaceMemory {
-    /// The model's own remembered half, taken by the attach and handed
-    /// back when it ends (see [`WorkspaceModel::recall`]/[`WorkspaceModel::remember`]).
+    /// The model's own remembered half, moved into the attach's model and
+    /// handed back when it ends.
     remembered: Remembered,
-    /// The channels background reads answer on. Kept with the answers they
-    /// carry, so a read still running when the user leaves lands after
-    /// they come back instead of vanishing with a dropped receiver — which
-    /// would also have left its key reserved in the pending sets forever.
+    channels: Channels,
+}
+
+/// The channels background reads answer on, one per kind of answer.
+///
+/// Kept with the memory rather than with one attach, so a read still
+/// running when the user leaves lands after they come back instead of
+/// vanishing with a dropped receiver — which would also have left its key
+/// reserved in the pending sets forever.
+#[derive(Default)]
+struct Channels {
     support: Answers<SupportResolution>,
     tasks: Answers<TaskResolution>,
     deliveries: Answers<DeliveryResolution>,
@@ -1958,147 +1868,12 @@ pub(crate) struct WorkspaceMemory {
     root_profiles: Answers<RootProfileResolution>,
 }
 
-/// The fields of [`WorkspaceModel`] that outlive one attach — each is
-/// documented on the model, where it is read. Everything not listed here
-/// belongs to one attach: the server's view of the session, presentation
-/// state such as open overlays and drags, and per-attach transients like
-/// echo windows and hit rects.
+/// The half of [`WorkspaceModel`] that outlives one attach. Everything
+/// else belongs to one attach: the server's view of the session,
+/// presentation state such as open overlays and drags, and per-attach
+/// transients like echo windows and hit rects.
 #[derive(Default)]
 struct Remembered {
-    agent_activity: BTreeMap<PaneId, AgentActivity>,
-    completed_agent_panes: BTreeSet<PaneId>,
-    agent_support: Option<SupportResolution>,
-    agent_support_pending: Option<SupportKey>,
-    git_badge: Option<GitBadge>,
-    git_pending: Option<PathBuf>,
-    prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
-    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
-    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
-    branches: BTreeMap<PathBuf, String>,
-    targets: BTreeMap<PathBuf, String>,
-    upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
-    task_eval_pending: BTreeSet<PathBuf>,
-    label_adoptions: BTreeMap<TabId, String>,
-    /// What [`adopt_task_names`] last put on each tab. Its own ledger
-    /// rather than a second use of `label_adoptions`: that one is retained
-    /// against a *shell* label still being generated, which would drop
-    /// these the moment they land.
-    task_name_adoptions: BTreeMap<TabId, String>,
-    last_task_refresh: Option<Instant>,
-    delivery_pending: BTreeSet<String>,
-    task_mutation_pending: BTreeSet<String>,
-    notice: Option<Notice>,
-    pane_checkouts: BTreeMap<PaneId, PathBuf>,
-    occupied_checkouts: BTreeSet<PathBuf>,
-    lost_checkouts: BTreeSet<PaneId>,
-    slots_swept: bool,
-    roots_shown: BTreeSet<SpaceId>,
-    strip_selection: BTreeMap<TabId, TabId>,
-    tree_scroll: u16,
-}
-
-impl WorkspaceModel {
-    /// A model starting an attach with what the previous one remembered.
-    fn recall(remembered: Remembered) -> Self {
-        let Remembered {
-            agent_activity,
-            completed_agent_panes,
-            agent_support,
-            task_name_adoptions,
-            agent_support_pending,
-            git_badge,
-            git_pending,
-            prompt_buffers,
-            tasks,
-            tenants,
-            branches,
-            targets,
-            upstream_syncs,
-            task_eval_pending,
-            label_adoptions,
-            last_task_refresh,
-            delivery_pending,
-            task_mutation_pending,
-            notice,
-            pane_checkouts,
-            occupied_checkouts,
-            lost_checkouts,
-            slots_swept,
-            roots_shown,
-            strip_selection,
-            tree_scroll,
-        } = remembered;
-        Self {
-            agent_activity,
-            completed_agent_panes,
-            agent_support,
-            task_name_adoptions,
-            agent_support_pending,
-            git_badge,
-            git_pending,
-            prompt_buffers,
-            tasks,
-            tenants,
-            branches,
-            targets,
-            upstream_syncs,
-            task_eval_pending,
-            label_adoptions,
-            last_task_refresh,
-            delivery_pending,
-            task_mutation_pending,
-            notice,
-            pane_checkouts,
-            occupied_checkouts,
-            lost_checkouts,
-            slots_swept,
-            roots_shown,
-            strip_selection,
-            tree_scroll,
-            ..Self::default()
-        }
-    }
-
-    /// What this attach leaves for the next one.
-    fn remember(self) -> Remembered {
-        Remembered {
-            agent_activity: self.agent_activity,
-            completed_agent_panes: self.completed_agent_panes,
-            agent_support: self.agent_support,
-            task_name_adoptions: self.task_name_adoptions,
-            agent_support_pending: self.agent_support_pending,
-            git_badge: self.git_badge,
-            git_pending: self.git_pending,
-            prompt_buffers: self.prompt_buffers,
-            tasks: self.tasks,
-            tenants: self.tenants,
-            branches: self.branches,
-            targets: self.targets,
-            upstream_syncs: self.upstream_syncs,
-            task_eval_pending: self.task_eval_pending,
-            label_adoptions: self.label_adoptions,
-            last_task_refresh: self.last_task_refresh,
-            delivery_pending: self.delivery_pending,
-            task_mutation_pending: self.task_mutation_pending,
-            notice: self.notice,
-            pane_checkouts: self.pane_checkouts,
-            occupied_checkouts: self.occupied_checkouts,
-            lost_checkouts: self.lost_checkouts,
-            slots_swept: self.slots_swept,
-            roots_shown: self.roots_shown,
-            strip_selection: self.strip_selection,
-            tree_scroll: self.tree_scroll,
-        }
-    }
-}
-
-#[derive(Default)]
-struct WorkspaceModel {
-    session: Option<Session>,
-    panes: BTreeMap<PaneId, PaneSnapshot>,
-    last_size: (u16, u16),
-    error: Option<String>,
-    tick: usize,
     /// Per-agent-pane repaint evidence and busy deadline. A pane starts
     /// working either because the user submitted a line into it or because
     /// it started animating on its own — an agent that resumes work with
@@ -2113,6 +1888,108 @@ struct WorkspaceModel {
     /// is actually on screen, making completion discoverable without
     /// leaving a stale busy spinner.
     completed_agent_panes: BTreeSet<PaneId>,
+    /// The most recently resolved agent support answer, tagged with the
+    /// `(harness, cwd)` it answers — never assumed to apply to a different
+    /// selection.
+    agent_support: Option<SupportResolution>,
+    /// The key a background resolution is currently in flight for, so the
+    /// per-frame check cannot queue the same read repeatedly.
+    agent_support_pending: Option<SupportKey>,
+    /// Cached Git summary for the selected agent/shell tab's live cwd.
+    /// Stored client-side because it is display chrome, not terminal session
+    /// state that belongs in `uze-terminal`.
+    git_badge: Option<GitBadge>,
+    /// The checkout a background Git read is out for, so the workspace
+    /// asks once rather than once per frame — see [`spawn_git_read`].
+    git_pending: Option<PathBuf>,
+    /// Per-pane reconstruction of the line being typed, flushed on Enter.
+    prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
+    /// Every repository's tasks as last evaluated, keyed by its primary
+    /// checkout. Display state: the truth is Git and the task store.
+    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    /// The branch checked out at each evaluation key (see
+    /// [`evaluation_key`]) — the primary's for every slot of a repository,
+    /// a directory's own outside any slot. Read for an agent outside any
+    /// slot, whose caption has no task to take a branch from.
+    branches: BTreeMap<PathBuf, String>,
+    /// The delivery target of the repository at each evaluation key —
+    /// what the timeline marks a commit as ahead of.
+    targets: BTreeMap<PathBuf, String>,
+    /// How the branch in [`Self::branches`] stands against its upstream,
+    /// under the same key, for the keys where that branch is the delivery
+    /// target and tracks something. Read for an agent outside any slot:
+    /// the operator's own tree is the one a pull or a push is due on.
+    upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
+    /// Repositories an evaluation is in flight for, so a quiet pane and
+    /// the clock cannot queue the same read twice.
+    task_eval_pending: BTreeSet<PathBuf>,
+    /// Shell tabs told to take an agent label, and the label each was
+    /// told, until the session confirms it — so two updates arriving
+    /// before the rename lands do not ask twice.
+    label_adoptions: BTreeMap<TabId, String>,
+    /// What [`adopt_task_names`] last put on each tab. Its own ledger
+    /// rather than a second use of `label_adoptions`: that one is retained
+    /// against a *shell* label still being generated, which would drop
+    /// these the moment they land.
+    task_name_adoptions: BTreeMap<TabId, String>,
+    last_task_refresh: Option<Instant>,
+    /// Tasks a delivery is in flight for.
+    delivery_pending: BTreeSet<String>,
+    /// Tasks a finish or a discard is in flight for. Its own set rather
+    /// than a flag: what a second Enter must not start is a second
+    /// removal of *this* task, and the answer arrives keyed by the task
+    /// it was asked about.
+    task_mutation_pending: BTreeSet<String>,
+    /// A one-line message and when it appeared.
+    notice: Option<Notice>,
+    /// The checkout each open pane was first seen in — a pane's slot does
+    /// not change when it `cd`s. A directory fact, and the only thing it
+    /// answers is slot occupancy; which agent a pane is for is what the
+    /// session's tab says (see [`launched_agent_id`]).
+    pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    /// The slot directories a pane still holds. A checkout that leaves this
+    /// set lost its last pane, which is what ends the task running there.
+    occupied_checkouts: BTreeSet<PathBuf>,
+    /// Panes whose checkout is gone from under them — removed outside UZE
+    /// while the agent ran. The process is still there, standing in a
+    /// directory that no longer exists; its row says so instead of
+    /// showing the kernel's own `(deleted)` path.
+    lost_checkouts: BTreeSet<PaneId>,
+    /// Whether the sweep for tasks nobody's session restored has run.
+    slots_swept: bool,
+    /// The spaces whose header row shows its root instead of its label —
+    /// flipped by the `⇄` behind the name (see
+    /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
+    /// one line wide and a path is the one thing on it that can be any
+    /// length. Remembered across attaches like any other sidebar
+    /// resolution, so an attach does not flip it back.
+    roots_shown: BTreeSet<SpaceId>,
+    /// Which tab each agent was last left on: the agent's own tab, or one
+    /// of the shells opened beside it in its strip.
+    ///
+    /// A space holds one `selected_tab`, so walking from agent A to agent
+    /// B and back used to land on A's own tab — the shell the user had
+    /// been working in beside it was forgotten the moment they looked at
+    /// something else. This is what puts them back where they were.
+    /// Rebuilt from every session update rather than maintained by hand,
+    /// so an agent that closes takes its entry with it.
+    strip_selection: BTreeMap<TabId, TabId>,
+    /// The first row of the space tree the sidebar shows — where the wheel
+    /// over it has scrolled to. Held to `tree_overflow`, so the tree can
+    /// never be scrolled off its own foot.
+    tree_scroll: u16,
+}
+
+#[derive(Default)]
+struct WorkspaceModel {
+    /// What this client resolved on its own and keeps across attaches
+    /// (see [`WorkspaceMemory`]).
+    remembered: Remembered,
+    session: Option<Session>,
+    panes: BTreeMap<PaneId, PaneSnapshot>,
+    last_size: (u16, u16),
+    error: Option<String>,
+    tick: usize,
     /// Until when each pane's own repaints are the echo of input we
     /// forwarded to it, rather than the agent working (see
     /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
@@ -2172,13 +2049,6 @@ struct WorkspaceModel {
     /// it. Just the anchor, since the catalog itself is generated from the
     /// same tables the sidebar draws with and holds no state of its own.
     status_catalog: Option<Rect>,
-    /// The most recently resolved agent support answer, tagged with the
-    /// `(harness, cwd)` it answers — never assumed to apply to a different
-    /// selection.
-    agent_support: Option<SupportResolution>,
-    /// The key a background resolution is currently in flight for, so the
-    /// per-frame check cannot queue the same read repeatedly.
-    agent_support_pending: Option<SupportKey>,
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
@@ -2212,13 +2082,6 @@ struct WorkspaceModel {
     /// dragged. Client-local presentation state — nothing is sent to the
     /// server until release (see `TabDragGroup`/`DraggingTab`).
     dragging_tab: Option<DraggingTab>,
-    /// Cached Git summary for the selected agent/shell tab's live cwd.
-    /// Stored client-side because it is display chrome, not terminal session
-    /// state that belongs in `uze-terminal`.
-    git_badge: Option<GitBadge>,
-    /// The checkout a background Git read is out for, so the workspace
-    /// asks once rather than once per frame — see [`spawn_git_read`].
-    git_pending: Option<PathBuf>,
     /// The commit a background `git show` is out for; see
     /// [`CommitDetailResolution`] for why the answer names it back.
     commit_detail_pending: Option<String>,
@@ -2227,8 +2090,6 @@ struct WorkspaceModel {
     /// halves have two cadences and can be in flight at once.
     code_changes_pending: bool,
     code_request_pending: bool,
-    /// Per-pane reconstruction of the line being typed, flushed on Enter.
-    prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
@@ -2237,50 +2098,9 @@ struct WorkspaceModel {
     /// changes it. `None` leaves the stored layout untouched — the
     /// default, so tests fold and drag without writing to a real UZE home.
     layout_recorder: Option<mpsc::Sender<WorkspaceShape>>,
-    /// Every repository's tasks as last evaluated, keyed by its primary
-    /// checkout. Display state: the truth is Git and the task store.
-    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
-    /// The live tenants of each space root, from the same evaluation that
-    /// lists a repository's tasks.
-    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
-    /// The branch checked out at each evaluation key (see
-    /// [`evaluation_key`]) — the primary's for every slot of a repository,
-    /// a directory's own outside any slot. Read for an agent outside any
-    /// slot, whose caption has no task to take a branch from.
-    branches: BTreeMap<PathBuf, String>,
-    /// The delivery target of the repository at each evaluation key —
-    /// what the timeline marks a commit as ahead of.
-    targets: BTreeMap<PathBuf, String>,
-    /// How the branch in [`Self::branches`] stands against its upstream,
-    /// under the same key, for the keys where that branch is the delivery
-    /// target and tracks something. Read for an agent outside any slot:
-    /// the operator's own tree is the one a pull or a push is due on.
-    upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
-    /// Repositories an evaluation is in flight for, so a quiet pane and
-    /// the clock cannot queue the same read twice.
-    task_eval_pending: BTreeSet<PathBuf>,
-    /// Shell tabs told to take an agent label, and the label each was
-    /// told, until the session confirms it — so two updates arriving
-    /// before the rename lands do not ask twice.
-    label_adoptions: BTreeMap<TabId, String>,
-    /// What [`adopt_task_names`] last put on each tab. Its own ledger
-    /// rather than a second use of `label_adoptions`: that one is retained
-    /// against a *shell* label still being generated, which would drop
-    /// these the moment they land.
-    task_name_adoptions: BTreeMap<TabId, String>,
-    last_task_refresh: Option<Instant>,
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
     recently_quiet: Vec<PaneId>,
-    /// Tasks a delivery is in flight for.
-    delivery_pending: BTreeSet<String>,
-    /// Tasks a finish or a discard is in flight for. Its own set rather
-    /// than a flag: what a second Enter must not start is a second
-    /// removal of *this* task, and the answer arrives keyed by the task
-    /// it was asked about.
-    task_mutation_pending: BTreeSet<String>,
-    /// A one-line message and when it appeared.
-    notice: Option<Notice>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
     /// Everything that can be done here, each with the key that reaches
@@ -2289,26 +2109,11 @@ struct WorkspaceModel {
     /// out — so this is the one place that answers "what can I do", in the
     /// mode where the keyboard mostly belongs to something else.
     action_index: Option<ActionIndexOverlay>,
-    /// The checkout each open pane was first seen in — a pane's slot does
-    /// not change when it `cd`s. A directory fact, and the only thing it
-    /// answers is slot occupancy; which agent a pane is for is what the
-    /// session's tab says (see [`launched_agent_id`]).
-    pane_checkouts: BTreeMap<PaneId, PathBuf>,
     /// What each root the picker landed on allows, once a worker answered:
     /// asked once per root and kept for the attach, so walking back over a
     /// directory never asks Git again.
     root_profiles: BTreeMap<PathBuf, uze_application::RootProfile>,
     root_profile_pending: BTreeSet<PathBuf>,
-    /// The slot directories a pane still holds. A checkout that leaves this
-    /// set lost its last pane, which is what ends the task running there.
-    occupied_checkouts: BTreeSet<PathBuf>,
-    /// Panes whose checkout is gone from under them — removed outside UZE
-    /// while the agent ran. The process is still there, standing in a
-    /// directory that no longer exists; its row says so instead of
-    /// showing the kernel's own `(deleted)` path.
-    lost_checkouts: BTreeSet<PaneId>,
-    /// Whether the sweep for tasks nobody's session restored has run.
-    slots_swept: bool,
     /// Whether the pane set has moved since occupancy was last worked out.
     ///
     /// The loop runs at 60Hz and the pane set changes when a tab opens or
@@ -2324,28 +2129,11 @@ struct WorkspaceModel {
     /// two acquisitions racing over the same pool is how two agents end
     /// up in one checkout.
     placement_pending: bool,
-    /// The spaces whose header row shows its root instead of its label —
-    /// flipped by the `⇄` behind the name (see
-    /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
-    /// one line wide and a path is the one thing on it that can be any
-    /// length. Remembered across attaches like any other sidebar
-    /// resolution, so an attach does not flip it back.
-    roots_shown: BTreeSet<SpaceId>,
     /// Whether the sidebar's timeline section shows only its header —
     /// folded by clicking that header (see `ViewHit::ToggleSection`).
     /// A preference, kept in the shared `ClientLayout` rather than in
     /// this attach's memory (see `shape`).
     timeline_collapsed: bool,
-    /// Which tab each agent was last left on: the agent's own tab, or one
-    /// of the shells opened beside it in its strip.
-    ///
-    /// A space holds one `selected_tab`, so walking from agent A to agent
-    /// B and back used to land on A's own tab — the shell the user had
-    /// been working in beside it was forgotten the moment they looked at
-    /// something else. This is what puts them back where they were.
-    /// Rebuilt from every session update rather than maintained by hand,
-    /// so an agent that closes takes its entry with it.
-    strip_selection: BTreeMap<TabId, TabId>,
     /// How many commit rows the user dragged the timeline section to;
     /// `None` leaves it to `render::timeline_height`'s own default.
     /// Mirrors `sidebar_width`/`dragging_sidebar`, kept like
@@ -2356,10 +2144,6 @@ struct WorkspaceModel {
     /// scrolled it to. Clamped when drawn, so a history that shrank under
     /// it still shows its tail rather than nothing.
     timeline_scroll: usize,
-    /// The first row of the space tree the sidebar shows — where the wheel
-    /// over it has scrolled to. Held to `tree_overflow`, so the tree can
-    /// never be scrolled off its own foot.
-    tree_scroll: u16,
     /// Rows of the tree the last frame could not show (see
     /// `render::FrameMetrics`). Zero while the whole tree fits, which is
     /// also what makes the wheel a no-op there.
@@ -2584,15 +2368,11 @@ impl WorkspaceModel {
         // A space the user is not looking at keeps whatever it had: only
         // the spaces this update actually described are re-stated, and an
         // agent that has gone is one no space names any more.
-        let known: BTreeSet<TabId> = session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| space.tabs.iter().map(|tab| tab.id))
-            .collect();
-        self.strip_selection
+        let known: BTreeSet<TabId> = self.tabs().map(|tab| tab.id).collect();
+        self.remembered
+            .strip_selection
             .retain(|agent, _| known.contains(agent));
-        self.strip_selection.extend(live);
+        self.remembered.strip_selection.extend(live);
     }
 
     /// Whether `tab` is the agent its own space is currently in context of
@@ -2611,7 +2391,7 @@ impl WorkspaceModel {
     /// tab it was last left on, when that tab is still open beside it, and
     /// otherwise the agent itself.
     fn strip_tab_for(&self, agent: TabId) -> TabId {
-        let Some(remembered) = self.strip_selection.get(&agent).copied() else {
+        let Some(remembered) = self.remembered.strip_selection.get(&agent).copied() else {
             return agent;
         };
         if remembered == agent {
@@ -2665,12 +2445,7 @@ impl WorkspaceModel {
     fn hit_rect_at(&self, column: u16, row: u16) -> Option<(Rect, WorkspaceHit)> {
         self.hits
             .iter()
-            .find(|(rect, _)| {
-                rect.x <= column
-                    && column < rect.x + rect.width
-                    && rect.y <= row
-                    && row < rect.y + rect.height
-            })
+            .find(|(rect, _)| rect.contains(Position::new(column, row)))
             .map(|(rect, hit)| (*rect, *hit))
     }
 
@@ -2730,16 +2505,25 @@ impl WorkspaceModel {
             .as_ref()
             .map(|session| session.selected_tab().id)
     }
-    fn pane_for_tab(&self, tab: TabId) -> Option<PaneId> {
-        self.session.as_ref().and_then(|session| {
-            session
-                .workspace
-                .spaces
-                .iter()
-                .flat_map(|space| &space.tabs)
-                .find(|candidate| candidate.id == tab)
-                .map(|candidate| candidate.pane.id)
-        })
+    /// Every tab of every space, in the order the session lists them.
+    pub(super) fn tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.session
+            .iter()
+            .flat_map(|session| &session.workspace.spaces)
+            .flat_map(|space| &space.tabs)
+    }
+
+    pub(super) fn tab(&self, id: TabId) -> Option<&Tab> {
+        self.tabs().find(|tab| tab.id == id)
+    }
+
+    fn tab_of_pane(&self, pane: PaneId) -> Option<&Tab> {
+        self.tabs().find(|tab| tab.pane.id == pane)
+    }
+
+    /// The pane a tab — and the sidebar row standing for it — shows.
+    pub(super) fn pane_for_tab(&self, tab: TabId) -> Option<PaneId> {
+        self.tab(tab).map(|tab| tab.pane.id)
     }
     /// Marks the pane as busy and, when the submission was reconstructed
     /// with confidence, records it. Activity is noted for every Enter in an
@@ -2771,9 +2555,12 @@ impl WorkspaceModel {
         let Some(origin) = origin else {
             return;
         };
-        self.agent_activity.entry(pane).or_default().working_until =
-            Some(Instant::now() + AGENT_QUIET_AFTER);
-        self.completed_agent_panes.remove(&pane);
+        self.remembered
+            .agent_activity
+            .entry(pane)
+            .or_default()
+            .working_until = Some(Instant::now() + AGENT_QUIET_AFTER);
+        self.remembered.completed_agent_panes.remove(&pane);
         self.dirty = true;
 
         if let (Some(prompt), Some(recorder)) = (prompt, self.prompt_recorder.as_ref())
@@ -2795,15 +2582,16 @@ impl WorkspaceModel {
         if !self.is_agent_pane(pane, identities) || self.is_echoing_input(pane, now) {
             return;
         }
-        let activity = self.agent_activity.entry(pane).or_default();
+        let activity = self.remembered.agent_activity.entry(pane).or_default();
         if activity.note_repaint(now) {
             activity.working_until = Some(now + AGENT_QUIET_AFTER);
-            self.completed_agent_panes.remove(&pane);
+            self.remembered.completed_agent_panes.remove(&pane);
         }
     }
 
     fn agent_is_working(&self, pane: PaneId) -> bool {
-        self.agent_activity
+        self.remembered
+            .agent_activity
             .get(&pane)
             .is_some_and(AgentActivity::is_working)
     }
@@ -2909,14 +2697,8 @@ impl WorkspaceModel {
     }
 
     fn is_agent_pane(&self, pane: PaneId, identities: &[AgentIdentity]) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            session
-                .workspace
-                .spaces
-                .iter()
-                .flat_map(|space| &space.tabs)
-                .any(|tab| tab.pane.id == pane && agent_identity_for_tab(identities, tab).is_some())
-        })
+        self.tab_of_pane(pane)
+            .is_some_and(|tab| agent_identity_for_tab(identities, tab).is_some())
     }
 
     /// Advances every agent pane's phase for the current instant: a pane
@@ -2928,14 +2710,14 @@ impl WorkspaceModel {
     fn expire_agent_activity(&mut self, now: Instant) -> bool {
         let focused = self.focused_pane();
         let mut expired = Vec::new();
-        for (pane, activity) in &mut self.agent_activity {
+        for (pane, activity) in &mut self.remembered.agent_activity {
             if activity.expire(now) {
                 expired.push(*pane);
             }
         }
         for pane in &expired {
             if *pane != focused {
-                self.completed_agent_panes.insert(*pane);
+                self.remembered.completed_agent_panes.insert(*pane);
             }
         }
         self.recently_quiet.extend(expired.iter().copied());
@@ -2943,9 +2725,10 @@ impl WorkspaceModel {
         // recent repaints, have nothing left to say about themselves —
         // dropping them keeps this tick's early exit reachable.
         self.input_echo_until.retain(|_, until| now < *until);
-        self.agent_activity
+        self.remembered
+            .agent_activity
             .retain(|_, activity| activity.is_working() || !activity.repaints.is_empty());
-        let acknowledged = self.completed_agent_panes.remove(&focused);
+        let acknowledged = self.remembered.completed_agent_panes.remove(&focused);
         // A pane whose tab is gone can never be looked at again, and its id
         // is free to be handed to a future pane — leaving its check behind
         // would eventually surface on something unrelated.
@@ -2957,33 +2740,25 @@ impl WorkspaceModel {
         // Runs on every input tick, so it earns the early exit: with no
         // per-pane state held there is nothing to reconcile, and walking
         // the tab tree to build a live-pane set would be pure overhead.
-        if self.agent_activity.is_empty()
-            && self.completed_agent_panes.is_empty()
+        if self.remembered.agent_activity.is_empty()
+            && self.remembered.completed_agent_panes.is_empty()
             && self.input_echo_until.is_empty()
         {
             return;
         }
-        let Some(session) = self.session.as_ref() else {
+        if self.session.is_none() {
             return;
-        };
-        let live: BTreeSet<PaneId> = session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .map(|tab| tab.pane.id)
-            .collect();
-        self.agent_activity.retain(|pane, _| live.contains(pane));
-        self.completed_agent_panes
+        }
+        let live: BTreeSet<PaneId> = self.tabs().map(|tab| tab.pane.id).collect();
+        self.remembered
+            .agent_activity
+            .retain(|pane, _| live.contains(pane));
+        self.remembered
+            .completed_agent_panes
             .retain(|pane| live.contains(pane));
         self.input_echo_until.retain(|pane, _| live.contains(pane));
     }
 
-    /// The one place the four sidebar states are decided. Working outranks
-    /// Completed (fresh output means the run the check would announce is
-    /// not over), and both outrank Selected — a spinner or a check on the
-    /// tab you are already on still carries information the plain dot does
-    /// not.
     /// The root of the space `pane`'s tab belongs to.
     fn space_root_of_pane(&self, pane: PaneId) -> Option<PathBuf> {
         let session = self.session.as_ref()?;
@@ -2997,31 +2772,12 @@ impl WorkspaceModel {
 
     /// The agent a tab was launched for, by the identity the session echoes.
     pub(super) fn tab_agent_id(&self, tab: TabId) -> Option<&str> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|candidate| candidate.id == tab)
-            .and_then(launched_agent_id)
-    }
-
-    /// The same, for the pane an agent tab's row stands for.
-    fn pane_agent_id(&self, pane: PaneId) -> Option<&str> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|tab| tab.pane.id == pane)
-            .and_then(launched_agent_id)
+        self.tab(tab).and_then(launched_agent_id)
     }
 
     /// The task listed for an identity, whichever repository listed it.
     fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &TaskView)> {
-        self.tasks.iter().find_map(|(primary, tasks)| {
+        self.remembered.tasks.iter().find_map(|(primary, tasks)| {
             tasks
                 .iter()
                 .find(|task| task.id == id)
@@ -3043,11 +2799,12 @@ impl WorkspaceModel {
     /// resolves. Only
     /// while the task is waiting for a slot: once resumed it has one, and
     /// the row that lost its own is nobody's way back in any more.
-    pub(super) fn lost_task(&self, pane: PaneId) -> Option<(&PathBuf, &TaskView)> {
-        if !self.lost_checkouts.contains(&pane) {
+    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &TaskView)> {
+        let tab = self.tab(tab)?;
+        if !self.remembered.lost_checkouts.contains(&tab.pane.id) {
             return None;
         }
-        let (primary, task) = self.task_with_id(self.pane_agent_id(pane)?)?;
+        let (primary, task) = self.task_with_id(launched_agent_id(tab)?)?;
         let resumable = task.checkout.is_none()
             && !matches!(
                 task.state,
@@ -3069,52 +2826,32 @@ impl WorkspaceModel {
     /// this is the one state drawn from the client rather than from the
     /// view it was handed.
     pub(super) fn drawn_state(&self, task: &TaskView) -> TaskStateView {
-        if self.delivery_pending.contains(&task.id) {
+        if self.remembered.delivery_pending.contains(&task.id) {
             return TaskStateView::Integrating;
         }
         task.state.clone()
     }
 
-    /// The pane an agent tab's row stands for.
-    pub(super) fn tab_focus_pane(&self, tab: TabId) -> Option<PaneId> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|candidate| candidate.id == tab)
-            .map(|tab| tab.pane.id)
-    }
-
     fn pane_cwd(&self, pane: PaneId) -> Option<PathBuf> {
-        let session = self.session.as_ref()?;
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find_map(|tab| (tab.pane.id == pane).then(|| tab.pane.cwd.clone()))
+        self.tab_of_pane(pane).map(|tab| tab.pane.cwd.clone())
     }
 
-    /// The pane of the tab running in `checkout` — where a message for
-    /// that task's agent goes, and what makes the task "in front of
-    /// someone". Any tab counts: a shell the operator opened in a slot is
-    /// as much in front of it as the agent was.
-    fn pane_for_checkout(&self, checkout: &Path) -> Option<PaneId> {
-        let session = self.session.as_ref()?;
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find_map(|tab| tab.pane.cwd.starts_with(checkout).then_some(tab.pane.id))
+    /// The pane of the tab launched for agent `id` — where a message for
+    /// that agent goes, and what makes its task "in front of someone".
+    /// By the launch's stamp, never by directory: a shell standing in the
+    /// agent's slot is not the agent, and a message typed into it runs as
+    /// a command.
+    fn pane_for_agent(&self, id: &str) -> Option<PaneId> {
+        self.tabs()
+            .find(|tab| launched_agent_id(tab) == Some(id))
+            .map(|tab| tab.pane.id)
     }
 
     /// Tasks holding work that no live agent tab is in front of, with the
     /// repository each belongs to — what "preserved from yesterday" lists.
     pub(super) fn preserved_tasks(&self) -> Vec<(PathBuf, TaskView)> {
         let mut preserved: Vec<(PathBuf, TaskView)> = self
+            .remembered
             .tasks
             .iter()
             .flat_map(|(primary, tasks)| tasks.iter().map(move |task| (primary, task)))
@@ -3124,11 +2861,7 @@ impl WorkspaceModel {
                     TaskStateView::Integrated | TaskStateView::Closed
                 )
             })
-            .filter(|(_, task)| {
-                task.checkout
-                    .as_deref()
-                    .is_none_or(|checkout| self.pane_for_checkout(checkout).is_none())
-            })
+            .filter(|(_, task)| self.pane_for_agent(&task.id).is_none())
             .map(|(primary, task)| (primary.clone(), task.clone()))
             .collect();
         preserved.sort_by_key(|(_, task)| task.created_at_unix);
@@ -3142,10 +2875,10 @@ impl WorkspaceModel {
         sender: &mpsc::Sender<TaskResolution>,
     ) {
         let key = evaluation_key(&cwd);
-        if !self.task_eval_pending.insert(key.clone()) {
+        if !self.remembered.task_eval_pending.insert(key.clone()) {
             return;
         }
-        let occupied: Vec<PathBuf> = self.occupied_checkouts.iter().cloned().collect();
+        let occupied: Vec<PathBuf> = self.remembered.occupied_checkouts.iter().cloned().collect();
         spawn_task_evaluation(home, key, cwd, occupied, sender.clone());
     }
 
@@ -3167,7 +2900,7 @@ impl WorkspaceModel {
     }
 
     fn note(&mut self, text: String, owner: Option<(&str, &str)>, busy: bool) {
-        self.notice = Some(Notice {
+        self.remembered.notice = Some(Notice {
             text,
             since: Instant::now(),
             owner: owner.map(|(task, label)| NoticeOwner {
@@ -3183,7 +2916,10 @@ impl WorkspaceModel {
     /// running — what keeps the spinner's clock turning (see
     /// `workspace_has_active_agent_operation`).
     fn notice_is_busy(&self) -> bool {
-        self.notice.as_ref().is_some_and(|notice| notice.busy)
+        self.remembered
+            .notice
+            .as_ref()
+            .is_some_and(|notice| notice.busy)
     }
 
     /// The active notice as the header's message zone draws it, or nothing
@@ -3191,7 +2927,7 @@ impl WorkspaceModel {
     /// screen, one about a task that is not, and a workspace-wide one all
     /// land here, the middle one carrying the label that names it.
     pub(super) fn notice_chip(&self) -> Option<NoticeChip> {
-        let notice = self.notice.as_ref()?;
+        let notice = self.remembered.notice.as_ref()?;
         let about_selected_task = notice.owner.as_ref().is_some_and(|owner| {
             self.selected_tab()
                 .and_then(|tab| self.tab_task(tab))
@@ -3207,10 +2943,15 @@ impl WorkspaceModel {
         })
     }
 
+    /// The one place the four sidebar states are decided. Working outranks
+    /// Completed (fresh output means the run the check would announce is
+    /// not over), and both outrank Selected — a spinner or a check on the
+    /// tab you are already on still carries information the plain dot does
+    /// not.
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
         if self.agent_is_working(pane) {
             AgentTabStatus::Working
-        } else if self.completed_agent_panes.contains(&pane) {
+        } else if self.remembered.completed_agent_panes.contains(&pane) {
             AgentTabStatus::Completed
         } else if selected {
             AgentTabStatus::Selected
@@ -3221,7 +2962,7 @@ impl WorkspaceModel {
 
     fn acknowledge_completed_agent_tab(&mut self, tab: TabId) {
         if let Some(pane) = self.pane_for_tab(tab)
-            && self.completed_agent_panes.remove(&pane)
+            && self.remembered.completed_agent_panes.remove(&pane)
         {
             self.dirty = true;
         }
@@ -3241,14 +2982,18 @@ impl WorkspaceModel {
     /// half, and it now happens where nobody is waiting for a frame.
     fn schedule_git_read(&mut self, sender: &mpsc::Sender<GitResolution>) {
         let Some(cwd) = self.focused_cwd() else {
-            self.git_badge = None;
+            self.remembered.git_badge = None;
             return;
         };
-        if self.git_pending.is_some() {
+        if self.remembered.git_pending.is_some() {
             return;
         }
         let now = Instant::now();
-        let current = self.git_badge.as_ref().filter(|badge| badge.cwd == cwd);
+        let current = self
+            .remembered
+            .git_badge
+            .as_ref()
+            .filter(|badge| badge.cwd == cwd);
         let summary_fresh =
             current.is_some_and(|badge| now.duration_since(badge.checked_at) < GIT_BADGE_REFRESH);
         let timeline_fresh = current
@@ -3256,8 +3001,8 @@ impl WorkspaceModel {
         if summary_fresh && timeline_fresh {
             return;
         }
-        let target = self.targets.get(&evaluation_key(&cwd)).cloned();
-        self.git_pending = Some(cwd.clone());
+        let target = self.remembered.targets.get(&evaluation_key(&cwd)).cloned();
+        self.remembered.git_pending = Some(cwd.clone());
         spawn_git_read(cwd, target, !timeline_fresh, sender.clone());
     }
 
@@ -3268,18 +3013,19 @@ impl WorkspaceModel {
     /// not stay reserved — and then discarded: it is not wrong, it is no
     /// longer the question being asked.
     fn absorb_git_read(&mut self, resolution: GitResolution) -> bool {
-        if self.git_pending.as_ref() == Some(&resolution.cwd) {
-            self.git_pending = None;
+        if self.remembered.git_pending.as_ref() == Some(&resolution.cwd) {
+            self.remembered.git_pending = None;
         }
         if self.focused_cwd().as_ref() != Some(&resolution.cwd) {
             return false;
         }
         let now = Instant::now();
         let carried = self
+            .remembered
             .git_badge
             .take()
             .filter(|badge| badge.cwd == resolution.cwd);
-        self.git_badge = Some(match resolution.answer {
+        self.remembered.git_badge = Some(match resolution.answer {
             GitAnswer::Summary(summary) => GitBadge {
                 cwd: resolution.cwd,
                 summary,
@@ -3698,19 +3444,18 @@ fn adopt_agent_labels(
     model: &mut WorkspaceModel,
     identities: &[AgentIdentity],
 ) -> Vec<ClientRequest> {
+    let still_generated: BTreeSet<TabId> = model
+        .tabs()
+        .filter(|tab| is_generated_shell_label(&tab.label))
+        .map(|tab| tab.id)
+        .collect();
+    model
+        .remembered
+        .label_adoptions
+        .retain(|tab, _| still_generated.contains(tab));
     let Some(session) = model.session.as_ref() else {
         return Vec::new();
     };
-    let tabs: Vec<&Tab> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .collect();
-    model.label_adoptions.retain(|tab, _| {
-        tabs.iter()
-            .any(|candidate| candidate.id == *tab && is_generated_shell_label(&candidate.label))
-    });
     let mut requests = Vec::new();
     for space in &session.workspace.spaces {
         let mut agents = space
@@ -3721,7 +3466,7 @@ fn adopt_agent_labels(
         for tab in &space.tabs {
             if !is_generated_shell_label(&tab.label)
                 || agent_identity_for_tab(identities, tab).is_none()
-                || model.label_adoptions.contains_key(&tab.id)
+                || model.remembered.label_adoptions.contains_key(&tab.id)
             {
                 continue;
             }
@@ -3731,7 +3476,7 @@ fn adopt_agent_labels(
                 tab: tab.id,
                 label: label.clone(),
             });
-            model.label_adoptions.insert(tab.id, label);
+            model.remembered.label_adoptions.insert(tab.id, label);
         }
     }
     requests
@@ -3749,14 +3494,8 @@ fn adopt_agent_labels(
 /// Asked once per tab through the same `label_adoptions` ledger, so a
 /// session that has not yet echoed the rename is not asked twice.
 fn adopt_task_names(model: &mut WorkspaceModel) -> Vec<ClientRequest> {
-    let Some(session) = model.session.as_ref() else {
-        return Vec::new();
-    };
-    let named: Vec<(TabId, String)> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
+    let named: Vec<(TabId, String)> = model
+        .tabs()
         .filter_map(|tab| {
             let task = model.tab_task(tab.id)?;
             if task.label.is_empty() || task.label == task.id || task.label == tab.label {
@@ -3768,14 +3507,17 @@ fn adopt_task_names(model: &mut WorkspaceModel) -> Vec<ClientRequest> {
             // — by its agent, by the operator's `git branch -m` — carries
             // the tab with it. Anything else is a name a person typed, and
             // it stays.
-            let ours = model.task_name_adoptions.get(&tab.id) == Some(&tab.label);
+            let ours = model.remembered.task_name_adoptions.get(&tab.id) == Some(&tab.label);
             (is_generated_agent_label(&tab.label) || ours).then(|| (tab.id, task.label.clone()))
         })
         .collect();
     named
         .into_iter()
         .map(|(tab, label)| {
-            model.task_name_adoptions.insert(tab, label.clone());
+            model
+                .remembered
+                .task_name_adoptions
+                .insert(tab, label.clone());
             ClientRequest::RenameTab { tab, label }
         })
         .collect()
@@ -3807,12 +3549,7 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
         .hits
         .iter()
         .rev()
-        .find(|(rect, _)| {
-            rect.x <= column
-                && column < rect.x + rect.width
-                && rect.y <= row
-                && row < rect.y + rect.height
-        })
+        .find(|(rect, _)| rect.contains(Position::new(column, row)))
         .map(|(_, hit)| *hit)
 }
 
@@ -3922,17 +3659,8 @@ fn begin_rename(model: &mut WorkspaceModel, target: MenuTarget) {
     let (rename_target, label) = match target {
         MenuTarget::Tab(tab) => {
             let label = model
-                .session
-                .as_ref()
-                .and_then(|session| {
-                    session
-                        .workspace
-                        .spaces
-                        .iter()
-                        .flat_map(|space| &space.tabs)
-                        .find(|t| t.id == tab)
-                })
-                .map(|t| t.label.clone())
+                .tab(tab)
+                .map(|tab| tab.label.clone())
                 .unwrap_or_default();
             (RenameTarget::Tab(tab), label)
         }
@@ -3975,7 +3703,7 @@ fn deliver_selected_tab(
     let Some(cwd) = tab_cwd(model, tab) else {
         return;
     };
-    if !model.delivery_pending.insert(task.id.clone()) {
+    if !model.remembered.delivery_pending.insert(task.id.clone()) {
         return;
     }
     // No message: the press is already answered where the state lives.
@@ -4019,13 +3747,17 @@ fn sync_slot_occupancy(
     let Some(session) = model.session.as_ref() else {
         return;
     };
-    let live: Vec<(PaneId, PathBuf)> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .map(|tab| &tab.pane)
-        .map(|pane| (pane.id, pane.cwd.clone()))
+    let live: Vec<(PaneId, PathBuf)> = model
+        .tabs()
+        .map(|tab| (tab.pane.id, tab.pane.cwd.clone()))
+        .collect();
+    // Which agents still have a tab: what the launch stamped, echoed back
+    // by the server, and the one fact that still names a task after its
+    // checkout is gone from under it.
+    let echoed: Vec<String> = model
+        .tabs()
+        .filter_map(launched_agent_id)
+        .map(str::to_owned)
         .collect();
     let space_roots: Vec<PathBuf> = session
         .workspace
@@ -4042,32 +3774,23 @@ fn sync_slot_occupancy(
         let named = named_checkout(cwd);
         if let Some(checkout) = uze_application::isolated_checkout(&named) {
             model
+                .remembered
                 .pane_checkouts
                 .entry(*pane)
                 .or_insert_with(|| checkout.directory());
         }
     }
     model
+        .remembered
         .pane_checkouts
         .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
-    let occupied: BTreeSet<PathBuf> = model.pane_checkouts.values().cloned().collect();
-    // Which agents still have a tab: what the launch stamped, echoed back
-    // by the server, and the one fact that still names a task after its
-    // checkout is gone from under it.
-    let echoed: Vec<String> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .filter_map(launched_agent_id)
-        .map(str::to_owned)
-        .collect();
+    let occupied: BTreeSet<PathBuf> = model.remembered.pane_checkouts.values().cloned().collect();
     // Bound to a checkout that is no longer on disk, or first seen already
     // standing in one: `/proc` reports a removed directory as its old path
     // followed by ` (deleted)`, which is not a path anything resolves.
     let lost: BTreeSet<PaneId> = live
         .iter()
-        .filter(|(pane, cwd)| checkout_lost(model.pane_checkouts.get(pane), cwd))
+        .filter(|(pane, cwd)| checkout_lost(model.remembered.pane_checkouts.get(pane), cwd))
         .map(|(pane, _)| *pane)
         .collect();
     // A checkout that has just gone changes what its repository's tasks
@@ -4076,24 +3799,25 @@ fn sync_slot_occupancy(
     // drawing a task view that still believes it has a checkout — the one
     // thing the way back into it is gated on.
     let orphaned: Vec<PathBuf> = lost
-        .difference(&model.lost_checkouts)
-        .filter_map(|pane| model.pane_checkouts.get(pane))
+        .difference(&model.remembered.lost_checkouts)
+        .filter_map(|pane| model.remembered.pane_checkouts.get(pane))
         .filter_map(|checkout| {
             uze_application::isolated_checkout(checkout).map(|slot| slot.primary.to_path_buf())
         })
         .collect();
-    model.lost_checkouts = lost;
+    model.remembered.lost_checkouts = lost;
     for primary in orphaned {
         model.schedule_evaluation(home, primary, tasks);
     }
     let vanished: Vec<PathBuf> = model
+        .remembered
         .occupied_checkouts
         .difference(&occupied)
         .cloned()
         .collect();
-    let sweeping = !model.slots_swept;
-    model.slots_swept = true;
-    model.occupied_checkouts = occupied.clone();
+    let sweeping = !model.remembered.slots_swept;
+    model.remembered.slots_swept = true;
+    model.remembered.occupied_checkouts = occupied.clone();
     if !sweeping && vanished.is_empty() {
         return;
     }
@@ -4113,10 +3837,6 @@ fn sync_slot_occupancy(
     );
 }
 
-/// Whether the directory a pane works in is gone: the checkout it was
-/// bound to no longer exists, or the pane was first seen already standing
-/// in a removed directory — `/proc` reports one as its old path followed
-/// by ` (deleted)`, which is not a path anything resolves.
 /// The directory a pane was given, with the kernel's ` (deleted)` note
 /// stripped — what a removed checkout is still *named*, which is what a
 /// task is matched by. Any other path is its own name.
@@ -4127,6 +3847,10 @@ fn named_checkout(cwd: &Path) -> PathBuf {
     }
 }
 
+/// Whether the directory a pane works in is gone: the checkout it was
+/// bound to no longer exists, or the pane was first seen already standing
+/// in a removed directory — `/proc` reports one as its old path followed
+/// by ` (deleted)`, which is not a path anything resolves.
 fn checkout_lost(bound_checkout: Option<&PathBuf>, cwd: &Path) -> bool {
     bound_checkout.is_some_and(|checkout| !checkout.is_dir())
         || cwd.to_string_lossy().ends_with(" (deleted)")
@@ -4155,8 +3879,8 @@ fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
 /// state, no server round trip to eventually mark the model dirty — same
 /// as `OpenStatusCatalog`.
 fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
-    if !model.roots_shown.remove(&space) {
-        model.roots_shown.insert(space);
+    if !model.remembered.roots_shown.remove(&space) {
+        model.remembered.roots_shown.insert(space);
     }
     model.dirty = true;
 }
@@ -4181,6 +3905,7 @@ fn toggle_timeline(model: &mut WorkspaceModel) {
 /// oldest commit rather than a page of nothing.
 fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
     let commits = model
+        .remembered
         .git_badge
         .as_ref()
         .and_then(|badge| badge.timeline.as_ref())
@@ -4198,9 +3923,9 @@ fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
 /// what the last frame found it could not show, so the foot of the tree is
 /// as far as it goes.
 fn scroll_tree(model: &mut WorkspaceModel, direction: ScrollDirection) {
-    model.tree_scroll = match direction {
-        ScrollDirection::Up => model.tree_scroll.saturating_sub(1),
-        ScrollDirection::Down => model.tree_scroll.saturating_add(1),
+    model.remembered.tree_scroll = match direction {
+        ScrollDirection::Up => model.remembered.tree_scroll.saturating_sub(1),
+        ScrollDirection::Down => model.remembered.tree_scroll.saturating_add(1),
     }
     .min(model.tree_overflow);
     model.dirty = true;
@@ -4220,7 +3945,7 @@ fn open_commit_detail(
     anchor: Rect,
     sender: &mpsc::Sender<CommitDetailResolution>,
 ) {
-    let Some(badge) = model.git_badge.as_ref() else {
+    let Some(badge) = model.remembered.git_badge.as_ref() else {
         return;
     };
     let Some(commit) = badge
@@ -4232,7 +3957,7 @@ fn open_commit_detail(
     };
     let hash = commit.hash.clone();
     let cwd = badge.cwd.clone();
-    let target = model.targets.get(&evaluation_key(&cwd)).cloned();
+    let target = model.remembered.targets.get(&evaluation_key(&cwd)).cloned();
     model.commit_detail = None;
     model.commit_detail_pending = Some(hash.clone());
     model.dirty = true;
