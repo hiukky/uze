@@ -241,7 +241,7 @@ impl UzeApplication {
         // rewritten: this runs before every command, and rewriting every
         // catalogue (each a synced atomic write) to say what it already said
         // was most of what a read-only command cost.
-        self.republish_unpublished();
+        let _ = self.republish_unpublished(&self.installed_packages());
         Ok(installed_any)
     }
 
@@ -573,19 +573,32 @@ impl UzeApplication {
     }
 
     /// `republish_all`, for the integrations whose derived view no longer
-    /// matches the installed package set. Failures are dropped: this is
-    /// the best-effort bootstrap path, and `doctor` reports an unpublished
-    /// view on its own.
-    fn republish_unpublished(&self) {
-        let packages = self.installed_packages();
-        for integration in &self.integrations {
-            if let PublicationStatus::Unpublished(_) = integration.publication(&packages) {
+    /// matches `packages`: one outcome per view it rebuilt.
+    pub(crate) fn republish_unpublished(
+        &self,
+        packages: &[StoredPackage],
+    ) -> Vec<PublicationOutcome> {
+        self.integrations
+            .iter()
+            .filter(|integration| {
+                matches!(
+                    integration.publication(packages),
+                    PublicationStatus::Unpublished(_)
+                )
+            })
+            .map(|integration| {
                 let _span =
                     tracing::info_span!("integration.republish", integration = integration.id())
                         .entered();
-                let _ = integration.republish_packages(&packages);
-            }
-        }
+                PublicationOutcome {
+                    integration: integration.id().to_owned(),
+                    error: integration
+                        .republish_packages(packages)
+                        .err()
+                        .map(|error| error.to_string()),
+                }
+            })
+            .collect()
     }
 
     /// What the marketplace registered as `name` at `source` offers, from

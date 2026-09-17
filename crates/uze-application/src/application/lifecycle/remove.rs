@@ -63,52 +63,18 @@ impl Plugins<'_> {
         if !allow_protected && Self::is_protected_package(&package) {
             return Err(UzeError::ProtectedPackage(package.id.as_str().to_owned()));
         }
-        let report = self.0.reconcile(package.id.as_str());
-        let plan = plan_remove(&report);
-        let (detached_receipts, already_missing_receipts) = match &plan {
-            PackageRemovalPlan::Safe {
-                detachable_receipts,
-                already_missing_receipts,
-            } => (
-                detachable_receipts.clone(),
-                already_missing_receipts.clone(),
-            ),
-            _ => (Vec::new(), Vec::new()),
-        };
-        if !matches!(plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked { report, plan });
-        }
-        for reconciled in &report.receipts {
-            if reconciled.inspection.state != AttachmentState::Matched {
-                continue;
-            }
-            let Some(integration) = self
-                .0
-                .integrations
-                .iter()
-                .find(|integration| integration.id() == reconciled.receipt.integration)
-            else {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.0.reconcile(package.id.as_str()),
-                    plan: PackageRemovalPlan::BlockedByInspection,
-                });
+        let (detached_receipts, already_missing_receipts, final_report) =
+            match self.0.detach_owned_receipts(package.id.as_str())? {
+                ReceiptTeardown::Refused { report, plan }
+                | ReceiptTeardown::Incomplete { report, plan } => {
+                    return Ok(RemovePluginReport::Blocked { report, plan });
+                }
+                ReceiptTeardown::Detached {
+                    detached_receipts,
+                    already_missing_receipts,
+                    final_report,
+                } => (detached_receipts, already_missing_receipts, final_report),
             };
-            let detached = integration.detach_receipt(&reconciled.receipt)?;
-            if detached.state != AttachmentState::Missing {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.0.reconcile(package.id.as_str()),
-                    plan: plan_remove(&self.0.reconcile(package.id.as_str())),
-                });
-            }
-        }
-        let final_report = self.0.reconcile(package.id.as_str());
-        let final_plan = plan_remove(&final_report);
-        if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked {
-                report: final_report,
-                plan: final_plan,
-            });
-        }
         for reconciled in &final_report.receipts {
             state::forget_receipt(&self.0.home, &reconciled.ledger_key)?;
         }
@@ -131,4 +97,78 @@ pub(crate) fn is_protected_plugin(marketplace: &str, plugin: &str) -> bool {
     marketplace == BUILT_IN_MARKETPLACE
         && bootstrap::entries()
             .is_ok_and(|official| official.plugins.iter().any(|entry| entry.name == plugin))
+}
+
+/// Where detaching a package's receipts got to.
+pub(crate) enum ReceiptTeardown {
+    /// Nothing was touched: the receipts do not all reconcile as safe to
+    /// remove.
+    Refused {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
+    /// Detaching began and did not finish; `report` was taken afterwards.
+    Incomplete {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
+    /// Every artifact the receipts own is gone, verified by `final_report` —
+    /// which is what the ledger may be forgotten against, never the snapshot
+    /// taken before detaching.
+    Detached {
+        detached_receipts: Vec<String>,
+        already_missing_receipts: Vec<String>,
+        final_report: ReconciliationReport,
+    },
+}
+
+impl UzeApplication {
+    /// Detaches every artifact `package_id`'s receipts own, only when all of
+    /// them reconcile as safe to remove. Leaves the ledger alone: whether a
+    /// receipt that failed to be forgotten is an error is the caller's call.
+    ///
+    /// `Err` only when an integration fails to detach.
+    pub(crate) fn detach_owned_receipts(&self, package_id: &str) -> Result<ReceiptTeardown> {
+        let report = self.reconcile(package_id);
+        let (detachable_receipts, already_missing_receipts) = match plan_remove(&report) {
+            PackageRemovalPlan::Safe {
+                detachable_receipts,
+                already_missing_receipts,
+            } => (detachable_receipts, already_missing_receipts),
+            plan => return Ok(ReceiptTeardown::Refused { report, plan }),
+        };
+        for reconciled in &report.receipts {
+            if reconciled.inspection.state != AttachmentState::Matched {
+                continue;
+            }
+            let Some(integration) = self
+                .integrations
+                .iter()
+                .find(|integration| integration.id() == reconciled.receipt.integration)
+            else {
+                return Ok(ReceiptTeardown::Incomplete {
+                    report: self.reconcile(package_id),
+                    plan: PackageRemovalPlan::BlockedByInspection,
+                });
+            };
+            if integration.detach_receipt(&reconciled.receipt)?.state != AttachmentState::Missing {
+                let report = self.reconcile(package_id);
+                let plan = plan_remove(&report);
+                return Ok(ReceiptTeardown::Incomplete { report, plan });
+            }
+        }
+        let final_report = self.reconcile(package_id);
+        let final_plan = plan_remove(&final_report);
+        if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
+            return Ok(ReceiptTeardown::Incomplete {
+                report: final_report,
+                plan: final_plan,
+            });
+        }
+        Ok(ReceiptTeardown::Detached {
+            detached_receipts: detachable_receipts,
+            already_missing_receipts,
+            final_report,
+        })
+    }
 }
