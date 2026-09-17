@@ -143,8 +143,8 @@ impl ManagedArtifact {
     /// destructive operation.
     pub fn detach_standard(&self) -> Result<AttachmentInspection> {
         match self {
-            // `text_region::detach` re-inspects immediately before its own
-            // destructive write (ADR-009).
+            // `text_region::detach` inspects the region in the same read it
+            // removes it from, so drift never becomes a removal (ADR-009).
             Self::ManagedTextRegion {
                 target_file,
                 region_identity,
