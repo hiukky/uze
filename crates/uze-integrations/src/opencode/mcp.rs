@@ -1,9 +1,7 @@
-//! OpenCode V2 MCP exposure — UZE registers the standard stdio command/args
-//! via the documented `opencode mcp add <name> -- <command>` CLI into the
-//! global `mcp.servers.<name>.command` array in `opencode.json`; the
-//! OpenCode MCP runtime remains native. Detach stays direct JSON rewrite
-//! (no `mcp remove` verb exists — verified `opencode mcp --help` lists only
-//! `add/list/auth/logout/debug`).
+//! OpenCode V2 MCP exposure — UZE writes the standard stdio command/args
+//! into the global `mcp.servers.<name>` entry of `opencode.json` directly,
+//! the same file inspection and detach read; the OpenCode MCP runtime
+//! remains native.
 
 use std::{fs, path::Path, path::PathBuf};
 
@@ -11,7 +9,6 @@ use uze_core::{
     Result, UzeError,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
-    harness_runtime::resolve_real_executable,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
     router::CompatibilityRoute,
@@ -20,7 +17,6 @@ use uze_core::{
 
 use super::OpenCodeIntegration;
 use super::unsupported;
-use crate::shared::process::{failed_message, is_cli_safe_token};
 
 pub(super) fn configured_server<'a>(
     config: &'a serde_json::Value,
@@ -46,11 +42,6 @@ impl OpenCodeIntegration {
         else {
             return unsupported("Resource has no derivable attachment entry name.");
         };
-        if !is_cli_safe_token(&entry_name) {
-            return unsupported(
-                "MCP server name would be parsed as a flag by `opencode mcp add`, not a name; refusing to attach.",
-            );
-        }
         let Some((command, args)) = parse_mcp(&resource.capability.payload) else {
             return unsupported("mcp.json server entry is missing a usable `command` field.");
         };
@@ -65,7 +56,7 @@ impl OpenCodeIntegration {
                 environment: Vec::new(),
                 enabled: Some(true),
             }),
-            evidence: "UZE registers the store-owned MCP server via `opencode mcp add <name> -- <command>` into opencode.json's mcp.servers.<name>.command array; OpenCode MCP runtime remains native. Verified `opencode mcp --help` exposes `add` (requires ` -- ` separator); no `remove` verb exists so detach stays direct JSON rewrite."
+            evidence: "UZE writes the store-owned MCP server into opencode.json's mcp.servers.<name> entry (type local, command array) — the one file attach, inspection and detach all read, with foreign entries left untouched; OpenCode MCP runtime remains native."
                 .to_owned(),
         }
     }
@@ -133,114 +124,6 @@ pub(super) fn attach_mcp_config(
     bytes.push(b'\n');
     write_atomic(config_path, &bytes)?;
     Ok(Some(config_path.to_path_buf()))
-}
-
-pub(super) fn attach_mcp_entry(
-    executable: &Path,
-    command_home: &Path,
-    xdg_config_home: Option<&Path>,
-    entry_name: &str,
-    command: &Path,
-    args: &[String],
-    config_path: &Path,
-) -> Result<Option<PathBuf>> {
-    if !is_cli_safe_token(entry_name) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "MCP server name `{entry_name}` would be parsed as a flag by `opencode mcp add`"
-        )));
-    }
-    // Idempotency / collision check mirrors the file path: if the desired
-    // entry already exists at the UZE-managed config_path, don't shell out.
-    if config_path.exists()
-        && let Ok(bytes) = fs::read(config_path)
-        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-        && let Some(current) = configured_server(&value, entry_name)
-    {
-        let expected: Vec<serde_json::Value> =
-            std::iter::once(command.to_string_lossy().into_owned())
-                .chain(args.iter().cloned())
-                .map(serde_json::Value::String)
-                .collect();
-        let desired = serde_json::json!({ "type": "local", "command": expected });
-        if current == &desired {
-            return Ok(Some(config_path.to_path_buf()));
-        }
-        return Err(UzeError::ExposureUnavailable(format!(
-            "OpenCode MCP entry `{entry_name}` already exists and is not owned by this UZE plan"
-        )));
-    }
-    let mut mcp_args: Vec<std::ffi::OsString> = vec![
-        std::ffi::OsString::from("mcp"),
-        std::ffi::OsString::from("add"),
-        std::ffi::OsString::from(entry_name),
-        std::ffi::OsString::from("--"),
-    ];
-    mcp_args.push(command.as_os_str().to_owned());
-    mcp_args.extend(args.iter().map(std::ffi::OsString::from));
-
-    let mut cmd = std::process::Command::new(executable);
-    cmd.env("HOME", command_home);
-    if let Some(xdg) = xdg_config_home {
-        cmd.env("XDG_CONFIG_HOME", xdg);
-    }
-    let config_parent = config_path.parent().expect("config path has a parent");
-    fs::create_dir_all(config_parent).map_err(|source| UzeError::Write {
-        path: config_parent.to_path_buf(),
-        source,
-    })?;
-    // OpenCode discovers a project-local `opencode.json` from its cwd. Run
-    // its native command at the integration-owned config directory so a UZE
-    // operation can never create a config in the caller's project checkout.
-    cmd.current_dir(config_parent);
-    cmd.args(&mcp_args);
-    cmd.stdin(std::process::Stdio::null());
-    let output = cmd.output().map_err(|error| {
-        UzeError::HarnessCommand(format!(
-            "failed to run `opencode mcp add` for entry `{entry_name}`: {error}"
-        ))
-    })?;
-    if !output.status.success() {
-        return Err(UzeError::HarnessCommand(failed_message(
-            &format!("opencode mcp add `{entry_name}`"),
-            &output,
-        )));
-    }
-    // CLI writes to the XDG/HOME-derived location. Ensure the integration's
-    // managed config_path also reflects the entry so isolated tests (where
-    // config_path = <tmp>/config/opencode.json, not <tmp>/.config/...) stay
-    // inspectable. This is a no-op in production where the paths align.
-    let _ = attach_mcp_config(config_path, entry_name, command, args);
-    Ok(Some(config_path.to_path_buf()))
-}
-
-pub(super) fn resolve_home_and_xdg(config_path: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
-    // Best-effort HOME/XDG derivation for CLI invocation. Production
-    // `config_path` is `$HOME/.config/opencode/opencode.json` or
-    // `$XDG_CONFIG_HOME/opencode/opencode.json`; tests use
-    // `<tmp>/config/opencode.json`. In the latter case we treat the
-    // grandparent of `config/` as HOME and `config/` as XDG.
-    if let Some(parent) = config_path.parent() {
-        if parent.ends_with("opencode") {
-            if let Some(xdg) = parent.parent() {
-                // parent = .../opencode, xdg = .../.config or .../config
-                if (xdg.ends_with(".config") || xdg.ends_with("config"))
-                    && let Some(home) = xdg.parent()
-                {
-                    return (Some(home.to_path_buf()), Some(xdg.to_path_buf()));
-                }
-                return (None, Some(xdg.to_path_buf()));
-            }
-        } else if (parent.ends_with(".config") || parent.ends_with("config"))
-            && let Some(home) = parent.parent()
-        {
-            return (Some(home.to_path_buf()), Some(parent.to_path_buf()));
-        }
-    }
-    (None, None)
-}
-
-pub(super) fn provisioning_executable_for_attach(shims_dir: &Path) -> Option<PathBuf> {
-    resolve_real_executable(&["opencode", "opencode2"], shims_dir)
 }
 
 fn parse_mcp(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
@@ -319,14 +202,11 @@ pub(super) fn inspect_opencode_mcp_value(
 
 #[cfg(test)]
 mod mcp_tests {
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
+    use std::path::{Path, PathBuf};
 
     use uze_core::integration::AttachmentState;
 
-    use super::{attach_mcp_entry, inspect_opencode_mcp_value};
+    use super::inspect_opencode_mcp_value;
 
     #[test]
     fn managed_cwd_and_environment_reference_drift_are_detected() {
@@ -354,44 +234,5 @@ mod mcp_tests {
             .state,
             AttachmentState::Drifted
         );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn native_mcp_command_runs_in_the_managed_config_directory() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = uze_testkit::temp::scratch("opencode-mcp-cwd");
-        let _ = fs::remove_dir_all(&root);
-        let config_path = root.join("config/opencode.json");
-        let cwd_capture = root.join("cwd.txt");
-        let executable = root.join("fake-opencode");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(
-            &executable,
-            format!("#!/bin/sh\npwd > {}\n", cwd_capture.display()),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&executable, permissions).unwrap();
-
-        attach_mcp_entry(
-            &executable,
-            &root,
-            Some(&root.join("config")),
-            "uze-test",
-            Path::new("/bin/echo"),
-            &[],
-            &config_path,
-        )
-        .unwrap();
-
-        assert_eq!(
-            fs::read_to_string(&cwd_capture).unwrap().trim(),
-            config_path.parent().unwrap().to_string_lossy(),
-            "the native CLI must not inherit the caller's project cwd"
-        );
-        let _ = fs::remove_dir_all(root);
     }
 }
