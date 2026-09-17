@@ -26,7 +26,7 @@ use uze_core::{
 };
 
 use super::AntigravityIntegration;
-use crate::shared::process::run_quiet;
+use crate::shared::process::{json, run_quiet};
 
 /// The `kind` stamped on explicit-plugin receipts. Only this module and its
 /// composition root interpret it.
@@ -131,39 +131,19 @@ pub(super) fn run_agy(
     run_quiet(Path::new(executable), command_home, label, args)
 }
 
-/// `agy plugin list` writes its machine-readable JSON document to stdout
-/// and exits 0 (verified against 1.1.19; `{"imports":[...]}`). Falling back
-/// to stderr keeps this correct if a future release moves the payload — the
-/// same defensive stdout-first choice the other integrations make.
-pub(super) fn agy_json(
-    executable: &str,
-    command_home: &Path,
-    args: &[&str],
-) -> std::result::Result<serde_json::Value, String> {
-    use std::process::Command;
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run `agy`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("`agy` inspection exited with {}", output.status));
-    }
-    let payload = if output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()) {
-        &output.stdout
-    } else {
-        &output.stderr
-    };
-    serde_json::from_slice(payload).map_err(|error| format!("agy JSON is invalid: {error}"))
-}
-
-/// The full `agy plugin list` document. An unreadable listing is an error
-/// — inspection must never guess about ownership from silence.
+/// The full `agy plugin list` document, which the CLI writes as JSON
+/// (verified against 1.1.19; `{"imports":[...]}`). An unreadable listing is
+/// an error — inspection must never guess about ownership from silence.
 pub(super) fn installed_plugins(
     executable: &str,
     command_home: &Path,
 ) -> std::result::Result<serde_json::Value, String> {
-    agy_json(executable, command_home, &["plugin", "list"])
+    json(
+        Path::new(executable),
+        command_home,
+        &["plugin", "list"],
+        "agy",
+    )
 }
 
 /// The ownership decision for one installed plugin, separated from the

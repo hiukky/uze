@@ -6,8 +6,7 @@
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir reference), [`plugin`] (the native
-//! `.agents/plugins/marketplace.json` catalogue), and [`provision`]
-//! (install/update via the official installer). This file is the
+//! `.agents/plugins/marketplace.json` catalogue). This file is the
 //! composition root: the `CodexIntegration` struct and its `IntegrationPort`
 //! impl, delegating to each submodule.
 
@@ -38,7 +37,6 @@ mod generate;
 mod mcp;
 mod plugin;
 mod preferences;
-mod provision;
 mod session;
 mod skills;
 
@@ -46,7 +44,7 @@ pub use mcp::detach_mcp_entry;
 
 use crate::hooks as hook_projection;
 use crate::shared::agent::agent_name;
-use crate::shared::process::{real_executable, run_quiet};
+use crate::shared::process::{VersionToken, detect_version, real_executable, run_quiet};
 use crate::shared::provision::provision_cli;
 use crate::shared::skill::{head_value, split_frontmatter};
 use generate::{
@@ -60,7 +58,6 @@ use plugin::{
     MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
     marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
 };
-use provision::detect_binary;
 use skills::codex_skill_exposure_name_candidates;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
@@ -381,7 +378,7 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary(&self.provisioning_executable())
+        codex_version(&self.provisioning_executable())
     }
 
     /// OpenCode also discovers Skills from this exact same
@@ -408,7 +405,7 @@ impl IntegrationPort for CodexIntegration {
             // subcommand instead.
             ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
-            detect_binary,
+            codex_version,
         )
     }
 
@@ -740,6 +737,11 @@ impl CodexIntegration {
             "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned.",
         )
     }
+}
+
+/// `codex --version` prints "codex-cli 0.148.0" — the version trails.
+fn codex_version(program: &str) -> HarnessDetection {
+    detect_version(program, VersionToken::Last)
 }
 
 impl PreferencePort for CodexIntegration {

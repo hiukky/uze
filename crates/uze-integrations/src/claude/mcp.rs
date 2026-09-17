@@ -2,7 +2,7 @@
 //! `claude mcp <verb>` CLI surface, plus `~/.claude.json`'s `mcpServers`
 //! read path used for read-only inspection.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -15,7 +15,7 @@ use uze_core::{
 
 use super::ClaudeIntegration;
 use crate::shared::plan::unsupported;
-use crate::shared::process::{capture, failed_message, is_cli_safe_token};
+use crate::shared::process::{capture, failed_message, is_cli_safe_token, succeeds};
 
 impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -96,12 +96,7 @@ pub(super) fn attach_mcp_entry(
 /// overwrite behavior for a colliding, differently-configured name was not
 /// confirmed by research, so UZE never relies on it (see ADR-007).
 pub(super) fn mcp_entry_exists(executable: &Path, command_home: &Path, entry_name: &str) -> bool {
-    Command::new(executable)
-        .env("HOME", command_home)
-        .args(["mcp", "get", entry_name])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    succeeds(executable, command_home, &["mcp", "get", entry_name])
 }
 
 /// Claude has no structured `mcp get` output. This is deliberately read-only:

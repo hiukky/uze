@@ -4,7 +4,7 @@
 //! and the exact-coverage computation that tells UZE which resources that
 //! native envelope already accounts for.
 
-use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf, process::Command};
+use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -14,7 +14,7 @@ use uze_core::{
 };
 
 use crate::shared::path::normalize_declared_relative_path;
-use crate::shared::process::run_quiet;
+use crate::shared::process::{json, run_quiet};
 
 use super::{CLAUDE_MARKETPLACE_NAME, MARKETPLACE_OWNER_URL};
 use crate::shared::plan::blocked;
@@ -24,14 +24,12 @@ pub(super) fn claude_marketplace_exists(
     command_home: &Path,
     root: &Path,
 ) -> bool {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "marketplace", "list", "--json"])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+    let Ok(value) = json(
+        executable,
+        command_home,
+        &["plugin", "marketplace", "list", "--json"],
+        "claude",
+    ) else {
         return false;
     };
     let entries = value.as_array().or_else(|| {
@@ -74,14 +72,12 @@ pub(super) fn claude_plugin_installed(
     command_home: &Path,
     selector: &str,
 ) -> bool {
-    let Ok(output) = Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "list", "--json"])
-        .output()
-    else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+    let Ok(value) = json(
+        executable,
+        command_home,
+        &["plugin", "list", "--json"],
+        "claude",
+    ) else {
         return false;
     };
     value.as_array().is_some_and(|entries| {
@@ -284,10 +280,11 @@ pub(super) fn inspect_claude_plugin(
     marketplace_root: &Path,
 ) -> AttachmentInspection {
     // Verify marketplace still points at expected root.
-    let marketplace_list = match claude_json(
+    let marketplace_list = match json(
         executable,
         command_home,
-        ["plugin", "marketplace", "list", "--json"],
+        &["plugin", "marketplace", "list", "--json"],
+        "claude",
     ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
@@ -328,7 +325,12 @@ pub(super) fn inspect_claude_plugin(
         };
     }
     // Verify plugin installed.
-    let plugins = match claude_json(executable, command_home, ["plugin", "list", "--json"]) {
+    let plugins = match json(
+        executable,
+        command_home,
+        &["plugin", "list", "--json"],
+        "claude",
+    ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -361,24 +363,6 @@ pub(super) fn inspect_claude_plugin(
         state: AttachmentState::Matched,
         reason: "Claude native plugin matches receipt".to_owned(),
     }
-}
-
-fn claude_json<const N: usize>(
-    executable: &Path,
-    command_home: &Path,
-    args: [&str; N],
-) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run `claude`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("`claude` inspection exited with {}", output.status));
-    }
-    // claude marketplace list --json writes to stdout; plugin list also.
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Claude JSON is invalid: {error}"))
 }
 
 pub(super) fn remove_claude_plugin(

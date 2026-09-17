@@ -6,7 +6,7 @@
 //! `opencode2` name is still probed for backward compatibility. UZE's
 //! runtime shim keeps `opencode` stable without mutating vendor paths.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use uze_core::{
     Result,
@@ -14,6 +14,8 @@ use uze_core::{
     integration::HarnessDetection,
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
 };
+
+use crate::shared::process::{VersionToken, detect_version};
 
 /// Resolves the OpenCode V2 executable. V2 is the standard channel
 /// (`opencode`); the legacy `opencode2` alias is still accepted for
@@ -33,19 +35,10 @@ pub(super) fn resolve_opencode_binary(shims_dir: &Path) -> Option<(String, Harne
     detection.present.then_some((path, detection))
 }
 
-pub(super) fn detect_binary(program: &str) -> HarnessDetection {
-    let Ok(output) = Command::new(program).arg("--version").output() else {
-        return HarnessDetection::default();
-    };
-    // `opencode --version` prints "opencode2 v0.0.0-beta-17823" — the
-    // version trails, and comes with a `v` prefix intact.
-    HarnessDetection {
-        present: true,
-        version: String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .last()
-            .map(str::to_owned),
-    }
+/// `opencode --version` prints "opencode2 v0.0.0-beta-17823" — the version
+/// trails, and comes with a `v` prefix intact.
+fn detect_binary(program: &str) -> HarnessDetection {
+    detect_version(program, VersionToken::Last)
 }
 
 pub(super) fn provision_opencode(

@@ -8,8 +8,8 @@
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir shim), [`plugin`] (the native
 //! `.claude-plugin/marketplace.json` catalogue and its exact-coverage
-//! computation), [`provision`] (install/update via the official installer),
-//! and [`runtime`] (the experimental `--add-dir` runtime projection). This
+//! computation), and [`runtime`] (the experimental `--add-dir` runtime
+//! projection). This
 //! file is the composition root: the `ClaudeIntegration` struct and its
 //! `IntegrationPort` impl, delegating to each submodule.
 
@@ -41,7 +41,6 @@ mod generate;
 mod mcp;
 mod plugin;
 mod preferences;
-mod provision;
 mod runtime;
 mod session;
 mod skills;
@@ -50,7 +49,7 @@ pub use mcp::detach_mcp_entry;
 
 use crate::hooks as hook_projection;
 use crate::shared::agent::{agent_name, markdown_agent_plan};
-use crate::shared::process::{real_executable, run_quiet};
+use crate::shared::process::{VersionToken, detect_version, real_executable, run_quiet};
 use crate::shared::provision::provision_cli;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
@@ -64,7 +63,6 @@ use plugin::{
     claude_plugin_installed, claude_publishable, detail_path, inspect_claude_plugin,
     remove_claude_plugin, run_claude_marketplace_add, write_claude_catalogue,
 };
-use provision::detect_binary;
 use skills::materialize_shim;
 const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
 /// The owner every catalogue UZE writes into Claude's marketplace UI
@@ -290,7 +288,7 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary(&self.provisioning_executable())
+        claude_version(&self.provisioning_executable())
     }
 
     /// `id()` is `claude-code`; the binary people actually have on `PATH`
@@ -366,7 +364,7 @@ impl IntegrationPort for ClaudeIntegration {
             .with_inherited_output(),
             ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
-            detect_binary,
+            claude_version,
         )
     }
 
@@ -723,6 +721,11 @@ impl ClaudeIntegration {
             "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
         )
     }
+}
+
+/// `claude --version` prints "2.1.239 (Claude Code)" — the version leads.
+fn claude_version(program: &str) -> HarnessDetection {
+    detect_version(program, VersionToken::First)
 }
 
 impl PreferencePort for ClaudeIntegration {

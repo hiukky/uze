@@ -3,7 +3,7 @@
 //! with its own external `.codex-plugin/plugin.json` is republished
 //! through, and the `codex plugin`/`codex mcp` inspection JSON parsing.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -13,20 +13,18 @@ use uze_core::{
 
 use crate::shared::path::normalize_declared_relative_path;
 use crate::shared::plan::blocked;
-use crate::shared::process::run_quiet;
+use crate::shared::process::{json, run_quiet};
 
 /// Name of the local catalogue this integration publishes into.
 pub(super) const MARKETPLACE_NAME: &str = "uze-local";
 
 pub(super) fn marketplace_exists(executable: &Path, command_home: &Path, root: &Path) -> bool {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "marketplace", "list", "--json"])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+    let Ok(value) = json(
+        executable,
+        command_home,
+        &["plugin", "marketplace", "list", "--json"],
+        "codex",
+    ) else {
         return false;
     };
     value["marketplaces"].as_array().is_some_and(|entries| {
@@ -60,10 +58,11 @@ pub(super) fn inspect_codex_plugin(
     marketplace_root: &Path,
     package_root: &Path,
 ) -> AttachmentInspection {
-    let marketplace = match codex_json(
+    let marketplace = match json(
         executable,
         command_home,
-        ["plugin", "marketplace", "list", "--json"],
+        &["plugin", "marketplace", "list", "--json"],
+        "codex",
     ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
@@ -100,7 +99,12 @@ pub(super) fn inspect_codex_plugin(
             reason: "Codex marketplace root differs from receipt".to_owned(),
         };
     }
-    let plugins = match codex_json(executable, command_home, ["plugin", "list", "--json"]) {
+    let plugins = match json(
+        executable,
+        command_home,
+        &["plugin", "list", "--json"],
+        "codex",
+    ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -163,23 +167,6 @@ fn inspect_codex_plugin_value(
         state: AttachmentState::Matched,
         reason: "Codex native plugin matches receipt".to_owned(),
     }
-}
-
-fn codex_json<const N: usize>(
-    executable: &Path,
-    command_home: &Path,
-    args: [&str; N],
-) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run `codex`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("`codex` inspection exited with {}", output.status));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Codex JSON is invalid: {error}"))
 }
 
 pub(super) fn remove_plugin(executable: &Path, command_home: &Path, selector: &str) -> Result<()> {
