@@ -36,7 +36,7 @@ use uze_core::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
     provisioning::{ProcessRunner, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities},
+    router::HarnessCapabilities,
     state,
     store::PackageId,
 };
@@ -47,7 +47,7 @@ mod provision;
 mod session;
 mod skills;
 
-use crate::hooks as hook_projection;
+use crate::hooks::{self as hook_projection, HookTarget};
 use crate::shared::agent::{agent_name, markdown_agent_plan};
 use crate::shared::json_config;
 use crate::shared::plan::{blocked, unsupported};
@@ -173,7 +173,7 @@ impl IntegrationPort for OpenCodeIntegration {
     }
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
-        hook_projection::opencode_capabilities()
+        HookTarget::OpenCode.capabilities()
     }
     fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
         uze_core::integration::SessionContinuity::Observed
@@ -411,36 +411,16 @@ impl OpenCodeIntegration {
     /// plugin directory — a single load source, with no `plugin` config
     /// entry to duplicate (verified against the real harness).
     fn hook_plan(&self, resource: &Resource) -> ExposurePlan {
-        let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-            return unsupported("hook resource payload is not a valid portable hook group");
-        };
-        let compatibility = uze_core::hook::assess(&hook, &self.hook_capabilities(), true);
-        let mechanism = match compatibility.route {
-            CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
-                ExposureMechanism::Unsupported {
-                    rationale: compatibility
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| "no compatible hook route".to_owned()),
-                }
-            }
-            _ => ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile {
-                path: hook_projection::opencode_bridge_path(
-                    self.config_root(),
-                    resource.package_id.as_str(),
-                ),
-            }),
-        };
-        let base = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file, so the delivered artifact is a generated Plugin.define plugin that IS the wrapper: it registers ctx.tool.hook callbacks and runs the authored handlers sequentially on the harness's embedded Bun runtime against the portable HOOK_* contract (per-handler timeouts, PLUGIN_ROOT injected, first-deny-wins, fail-closed by effect) with the package's groups as data. The V2 tool hooks carry the tool input but no block signal, and the only decision point (permission.evaluate) carries the action's resources rather than the input, so deny/ask are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the plugin can never be loaded twice.";
-        let evidence = match &compatibility.reason {
-            Some(reason) => format!("{base} Compatibility: {reason}"),
-            None => base.to_owned(),
-        };
-        ExposurePlan {
-            route: compatibility.route,
-            mechanism,
+        let path =
+            hook_projection::opencode_bridge_path(self.config_root(), resource.package_id.as_str());
+        let evidence = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file, so the delivered artifact is a generated Plugin.define plugin that IS the wrapper: it registers ctx.tool.hook callbacks and runs the authored handlers sequentially on the harness's embedded Bun runtime against the portable HOOK_* contract (per-handler timeouts, PLUGIN_ROOT injected, first-deny-wins, fail-closed by effect) with the package's groups as data. The V2 tool hooks carry the tool input but no block signal, and the only decision point (permission.evaluate) carries the action's resources rather than the input, so deny/ask are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the plugin can never be loaded twice.";
+        hook_projection::hook_plan(
+            resource,
+            &HookTarget::OpenCode.capabilities(),
+            true,
             evidence,
-        }
+            |_| Some(ManagedArtifact::ManagedHookFile { path }),
+        )
     }
 
     /// The config root is the parent of `opencode.json` — the physical

@@ -42,7 +42,7 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
-use crate::hooks as hook_projection;
+use crate::hooks::{HookEntry, HookTarget};
 use crate::shared::agent::agent_name;
 use crate::shared::process::{VersionToken, detect_version, real_executable, run_quiet};
 use crate::shared::provision::provision_cli;
@@ -352,7 +352,7 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
-        hook_projection::codex_capabilities()
+        HookTarget::Codex.capabilities()
     }
 
     fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
@@ -522,14 +522,16 @@ impl IntegrationPort for CodexIntegration {
                 expected,
                 wrapper,
             } => {
-                hook_projection::attach_event_entry(
+                HookTarget::Codex.attach_entry(
                     &self.uze_home,
                     self.id(),
-                    config_file,
-                    *event,
-                    entry_name,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
                 )?;
                 true
             }
@@ -619,20 +621,17 @@ impl IntegrationPort for CodexIntegration {
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
-            } => {
-                // A damaged ledger entry must block inspection, never
-                // panic doctor/remove.
-                hook_projection::inspect_event_entry(
-                    config_file,
-                    *event,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
-                )
-            }
+            } => HookTarget::Codex.inspect_entry(&HookEntry {
+                config_file,
+                entry_name,
+                event: *event,
+                expected,
+                wrapper,
+            }),
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
@@ -669,19 +668,22 @@ impl IntegrationPort for CodexIntegration {
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
             } => {
-                let detached = hook_projection::remove_event_entry(
-                    config_file,
-                    *event,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
-                )?;
-                hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "codex");
-                return Ok(detached);
+                return HookTarget::Codex.detach_entry(
+                    &self.uze_home,
+                    self.id(),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
+                );
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>
@@ -724,16 +726,10 @@ impl CodexIntegration {
     }
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        hook_projection::hook_exposure_plan(
+        HookTarget::Codex.entry_plan(
             &self.uze_home,
             resource,
-            &self.hook_capabilities(),
             self.hooks_config_path(),
-            "codex",
-            // Codex's hook entry carries a command string only, so the
-            // wrapper invocation is rendered as one quoted shell line.
-            false,
-            false,
             "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned.",
         )
     }

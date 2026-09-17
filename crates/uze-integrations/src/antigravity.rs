@@ -85,7 +85,7 @@ mod provision;
 mod session;
 mod skills;
 
-use crate::hooks as hook_projection;
+use crate::hooks::{HookEntry, HookTarget};
 use crate::shared::agent::{agent_name, markdown_agent_plan};
 use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::real_executable;
@@ -289,7 +289,7 @@ impl IntegrationPort for AntigravityIntegration {
     }
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
-        hook_projection::antigravity_capabilities()
+        HookTarget::Antigravity.capabilities()
     }
 
     fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
@@ -498,23 +498,21 @@ impl IntegrationPort for AntigravityIntegration {
             ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
+                event,
                 expected,
                 wrapper,
-                ..
             } => {
-                // The wrapper is what the harness actually runs, so it lands
-                // before the entry that names it.
-                if let Some(source) =
-                    hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET)
-                {
-                    hook_projection::materialize_wrapper(wrapper, &source)?;
-                }
-                let entry: serde_json::Value =
-                    serde_json::from_str(expected).map_err(|source| UzeError::Json {
-                        path: config_file.clone(),
-                        source,
-                    })?;
-                hook_projection::merge_named_entry(config_file, entry_name, &entry)?;
+                HookTarget::Antigravity.attach_entry(
+                    &self.uze_home,
+                    self.id(),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
+                )?;
                 true
             }
             _ => false,
@@ -564,15 +562,16 @@ impl IntegrationPort for AntigravityIntegration {
             ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
+                event,
                 expected,
                 wrapper,
-                ..
-            } => hook_projection::inspect_named_entry(
+            } => HookTarget::Antigravity.inspect_entry(&HookEntry {
                 config_file,
                 entry_name,
+                event: *event,
                 expected,
-                Some((hook_projection::ANTIGRAVITY_TARGET, wrapper.as_path())),
-            ),
+                wrapper,
+            }),
             _ => receipt.artifact.inspect_standard(),
         }
     }
@@ -612,22 +611,21 @@ impl IntegrationPort for AntigravityIntegration {
             ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
+                event,
                 expected,
                 wrapper,
-                ..
             } => {
-                let detached = hook_projection::remove_named_entry(
-                    config_file,
-                    entry_name,
-                    expected,
-                    Some((hook_projection::ANTIGRAVITY_TARGET, wrapper.as_path())),
-                )?;
-                hook_projection::prune_shared_wrapper(
+                return HookTarget::Antigravity.detach_entry(
                     &self.uze_home,
                     self.id(),
-                    hook_projection::ANTIGRAVITY_TARGET,
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
                 );
-                return Ok(detached);
             }
             _ => {
                 let detached = receipt.artifact.detach_standard()?;
@@ -664,14 +662,17 @@ impl AntigravityIntegration {
     }
 
     /// A Hook resource's delivery: one named entry merged into the shared
-    /// `~/.gemini/config/hooks.json`, the same shape UZE already uses for
-    /// Codex's shared `hooks.json`. Native, and receipt-owned by content.
+    /// `~/.gemini/config/hooks.json`, keyed `<package>:<group-id>`. The
+    /// wrapper lives under UZE's own state rather than inside a plugin: a
+    /// shared config file has no plugin root to resolve against, and the
+    /// harness runs a hook with its cwd set to the directory holding
+    /// `hooks.json`, so every path in the entry is absolute.
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        hook_projection::antigravity_hook_exposure_plan(
+        HookTarget::Antigravity.entry_plan(
             &self.uze_home,
             resource,
-            &self.hook_capabilities(),
             self.hooks_config_path(),
+            "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).",
         )
     }
 }
