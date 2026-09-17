@@ -288,7 +288,6 @@ pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
 pub struct TaskStore {
     pub schema_version: u32,
     pub tasks: Vec<Task>,
-    #[serde(default)]
     pub tenants: Vec<Tenant>,
 }
 
@@ -690,7 +689,11 @@ mod tests {
 
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, br#"{"schema_version": 99, "tasks": []}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"schema_version": 99, "tasks": [], "tenants": []}"#,
+        )
+        .unwrap();
         let error = load(&home, &root).unwrap_err();
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),
