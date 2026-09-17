@@ -3,6 +3,21 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — A client that stops reading is bounded
+
+- **Bug (robustness):** each attached client had an unbounded event queue. A client that stopped reading, such as a suspended `uze` or a stalled socket, made the server buffer every repaint of every pane for as long as it stayed attached.
+- **Change:**
+  - A per-client `Outbox` bounded at 256 events. Broadcasts `offer` without waiting; on overflow the client is marked stale and sent nothing more.
+  - Once its queue has drained, the broadcaster resyncs it with a `Snapshot` and whole-pane repaints built from `snapshot()`, which leaves the shared damage baseline untouched.
+  - Direct answers to a client's own request `reply`, which may wait, but only on that client's own thread.
+- **Rejected:**
+  - Disconnecting a lagging client: a suspended TUI would be thrown out.
+  - A per-client damage baseline: that rewrites the shared diff model for the same outcome.
+- **Proof:**
+  - `a_client_that_stops_reading_is_bounded_and_resynchronized` checks three things: pending ≤ capacity after 16 384 broadcasts, the client is marked stale, and it gets a `Snapshot` after draining.
+  - Full test suite 1 901/0; gate journeys 23/23.
+- **Risk:** errors broadcast to a stale client are dropped; the resync does not carry them.
+
 ## 2026-09-17 — Every production `unsafe` states its contract
 
 - **Change:**

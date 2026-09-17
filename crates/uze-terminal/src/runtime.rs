@@ -748,8 +748,102 @@ struct Selection {
 
 struct Client {
     id: u64,
-    events: mpsc::Sender<ClientEvent>,
+    events: Arc<Outbox>,
     selection: Selection,
+}
+
+/// How many events a client may have waiting on its socket before it is
+/// treated as stale. A frame is at most one pane's repaint, so this bounds
+/// what a client that stopped reading can make the server hold.
+const OUTBOX_CAPACITY: usize = 256;
+
+/// The events waiting for one client's socket.
+///
+/// Bounded, because a client that stops reading — a suspended `uze`, a
+/// stalled socket — would otherwise have every repaint of every pane
+/// queued for it for as long as it stays attached. What overflows is not
+/// kept: the client is marked stale and, once its queue has drained, is
+/// sent the whole workspace again (see [`Server::resync_stale_clients`]).
+/// Nothing is lost by dropping repaints — each one carries absolute cells,
+/// and the resync supersedes all of them.
+struct Outbox {
+    sender: mpsc::SyncSender<ClientEvent>,
+    pending: std::sync::atomic::AtomicUsize,
+    stale: std::sync::atomic::AtomicBool,
+}
+
+impl Outbox {
+    fn new() -> (Self, mpsc::Receiver<ClientEvent>) {
+        let (sender, receiver) = mpsc::sync_channel(OUTBOX_CAPACITY);
+        let outbox = Self {
+            sender,
+            pending: std::sync::atomic::AtomicUsize::new(0),
+            stale: std::sync::atomic::AtomicBool::new(false),
+        };
+        (outbox, receiver)
+    }
+
+    /// Queues a broadcast without ever waiting, and answers whether the
+    /// client is still there. A stale client is sent nothing until it is
+    /// resynchronized.
+    fn offer(&self, event: ClientEvent) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.stale.load(Relaxed) {
+            return true;
+        }
+        match self.sender.try_send(event) {
+            Ok(()) => {
+                self.pending.fetch_add(1, Relaxed);
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                self.stale.store(true, Relaxed);
+                true
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    /// Queues an answer to this client's own request. It may wait: only
+    /// the thread serving this client is held, and an answer is not
+    /// something a resync could stand in for.
+    fn reply(&self, event: ClientEvent) {
+        if self.sender.send(event).is_ok() {
+            self.pending
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn delivered(&self) {
+        self.pending
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether this client missed broadcasts and has since caught up with
+    /// everything it was sent, so a resync would reach it.
+    fn awaits_resync(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stale.load(Relaxed) && self.pending.load(Relaxed) == 0
+    }
+
+    /// Sends the whole workspace to a stale client, and answers whether the
+    /// client is still there. A resync that overflows again leaves the
+    /// client stale; the next one starts from a fresh `Snapshot`.
+    fn resync(&self, session: Session, repaints: &[PaneDamage]) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stale.store(false, Relaxed);
+        let events = std::iter::once(ClientEvent::Snapshot { session })
+            .chain(repaints.iter().cloned().map(ClientEvent::Damage));
+        for event in events {
+            if !self.offer(event) {
+                return false;
+            }
+            if self.stale.load(Relaxed) {
+                break;
+            }
+        }
+        true
+    }
 }
 
 struct Server {
@@ -907,8 +1001,10 @@ impl Server {
             Ok(value) => value,
             Err(_) => return,
         };
-        let (events, receiver) = mpsc::channel();
-        thread::spawn(move || forward_events(stream, &receiver));
+        let (outbox, receiver) = Outbox::new();
+        let events = Arc::new(outbox);
+        let writer = Arc::clone(&events);
+        thread::spawn(move || forward_events(stream, &receiver, &writer));
 
         // A deadline on the handshake only — see [`HANDSHAKE_DEADLINE`] —
         // and a frame limit sized for what a handshake actually says rather
@@ -957,7 +1053,7 @@ impl Server {
                             sized_at_creation = true;
                         }
                         Err(error) => {
-                            let _ = events.send(ClientEvent::Error {
+                            events.reply(ClientEvent::Error {
                                 message: format!(
                                     "could not open a space at {}: {error}",
                                     seat.root.display()
@@ -968,7 +1064,7 @@ impl Server {
                 }
                 self.clients.lock().expect("clients poisoned").push(Client {
                     id: client,
-                    events: events.clone(),
+                    events: Arc::clone(&events),
                     selection,
                 });
                 if let Some((columns, rows)) = drawn
@@ -980,7 +1076,7 @@ impl Server {
                 Some(client)
             }
             Ok(Some(ClientRequest::Attach { .. })) => {
-                let _ = events.send(ClientEvent::Error {
+                events.reply(ClientEvent::Error {
                     message: "incompatible terminal runtime protocol".into(),
                 });
                 None
@@ -1002,7 +1098,7 @@ impl Server {
                 tracing::debug_span!("terminal.request", kind = request.kind(), client).entered();
             match request {
                 ClientRequest::Detach => {
-                    let _ = events.send(ClientEvent::Detached);
+                    events.reply(ClientEvent::Detached);
                     break;
                 }
                 ClientRequest::SetPalette(palette) => self.set_palette(palette),
@@ -1029,7 +1125,7 @@ impl Server {
                     let launch = match crate::launch::validate(command, env) {
                         Ok(launch) => launch,
                         Err(refusal) => {
-                            let _ = events.send(ClientEvent::Error {
+                            events.reply(ClientEvent::Error {
                                 message: refusal.to_string(),
                             });
                             continue;
@@ -1067,7 +1163,7 @@ impl Server {
                         selection.tabs.insert(space, tab);
                     });
                     if self.spawn_pane(pane, launch).is_err() {
-                        let _ = events.send(ClientEvent::Error {
+                        events.reply(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
                         });
                     }
@@ -1104,7 +1200,7 @@ impl Server {
                             self.broadcast_session();
                         }
                         None => {
-                            let _ = events.send(ClientEvent::Error {
+                            events.reply(ClientEvent::Error {
                                 message: "cannot close the workspace's only tab".into(),
                             });
                         }
@@ -1193,7 +1289,7 @@ impl Server {
                     }
                 }
                 ClientRequest::Stop => {
-                    let _ = events.send(ClientEvent::Stopped);
+                    events.reply(ClientEvent::Stopped);
                     self.shut_down();
                     break;
                 }
@@ -1226,9 +1322,9 @@ impl Server {
 
     /// Starts a space a client just brought into being and puts that client
     /// in it.
-    fn spawn_new_space(&self, client: u64, created: NewSpace, events: &mpsc::Sender<ClientEvent>) {
+    fn spawn_new_space(&self, client: u64, created: NewSpace, events: &Outbox) {
         if self.spawn_pane(created.pane, Launch::Shell).is_err() {
-            let _ = events.send(ClientEvent::Error {
+            events.reply(ClientEvent::Error {
                 message: "could not create terminal pane".into(),
             });
         }
@@ -1438,12 +1534,7 @@ impl Server {
         self.clients
             .lock()
             .expect("clients poisoned")
-            .retain(|client| {
-                client
-                    .events
-                    .send(ClientEvent::Damage(damage.clone()))
-                    .is_ok()
-            });
+            .retain(|client| client.events.offer(ClientEvent::Damage(damage.clone())));
     }
 
     /// Sends just the tab/selection structure to every attached client —
@@ -1461,12 +1552,9 @@ impl Server {
             .lock()
             .expect("clients poisoned")
             .retain(|client| {
-                client
-                    .events
-                    .send(ClientEvent::SessionUpdated {
-                        session: view_for(&session, &client.selection),
-                    })
-                    .is_ok()
+                client.events.offer(ClientEvent::SessionUpdated {
+                    session: view_for(&session, &client.selection),
+                })
             });
     }
 
@@ -1501,25 +1589,50 @@ impl Server {
             .lock()
             .expect("clients poisoned")
             .retain(|client| {
-                client
-                    .events
-                    .send(ClientEvent::Snapshot {
-                        session: view_for(&session, &client.selection),
-                    })
-                    .is_ok()
+                client.events.offer(ClientEvent::Snapshot {
+                    session: view_for(&session, &client.selection),
+                })
             });
         for pane in panes {
             let repaint = whole_pane(pane.snapshot_and_remember());
             self.clients
                 .lock()
                 .expect("clients poisoned")
-                .retain(|client| {
-                    client
-                        .events
-                        .send(ClientEvent::Damage(repaint.clone()))
-                        .is_ok()
-                });
+                .retain(|client| client.events.offer(ClientEvent::Damage(repaint.clone())));
         }
+    }
+
+    /// Sends the whole workspace to every client that fell behind and has
+    /// since drained what it was sent. Built from `snapshot`, not
+    /// `snapshot_and_remember`: the damage baseline is shared by every
+    /// client, and resetting it for one would cost the others a change.
+    fn resync_stale_clients(&self) {
+        let stale = self
+            .clients
+            .lock()
+            .expect("clients poisoned")
+            .iter()
+            .any(|client| client.events.awaits_resync());
+        if !stale {
+            return;
+        }
+        let session = self.session.lock().expect("session poisoned").clone();
+        let repaints: Vec<PaneDamage> = self
+            .panes
+            .lock()
+            .expect("panes poisoned")
+            .values()
+            .map(|pane| whole_pane(pane.snapshot()))
+            .collect();
+        self.clients
+            .lock()
+            .expect("clients poisoned")
+            .retain(|client| {
+                !client.events.awaits_resync()
+                    || client
+                        .events
+                        .resync(view_for(&session, &client.selection), &repaints)
+            });
     }
 
     fn stop_panes(&self) {
@@ -1564,6 +1677,7 @@ fn spawn_damage_broadcaster(server: Arc<Server>, damage: mpsc::Receiver<PaneId>)
             for pane in std::mem::take(&mut dirty) {
                 server.broadcast_pane_damage(pane);
             }
+            server.resync_stale_clients();
         }
     });
 }
@@ -2019,8 +2133,9 @@ fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, 
 /// will never read pile up in a channel nobody drains. Shutting both
 /// halves is what makes the failure arrive where a client can act on it —
 /// as the disconnect it actually is.
-fn forward_events(mut socket: UnixStream, events: &mpsc::Receiver<ClientEvent>) {
+fn forward_events(mut socket: UnixStream, events: &mpsc::Receiver<ClientEvent>, outbox: &Outbox) {
     while let Ok(event) = events.recv() {
+        outbox.delivered();
         if let Err(error) = write_message(&mut socket, &event) {
             tracing::warn!(%error, "dropping a terminal client an event could not reach");
             let _ = socket.shutdown(std::net::Shutdown::Both);
@@ -2946,6 +3061,88 @@ mod tests {
     /// attach that named the launch directory every time reopened the
     /// space closed just before it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// A client that stops reading is not buffered for without limit: once
+    /// its queue is full it is marked stale and sent nothing more, and once
+    /// it has caught up it is sent the whole workspace again.
+    #[test]
+    fn a_client_that_stops_reading_is_bounded_and_resynchronized() {
+        let scratch = uze_testkit::temp::socket_scratch("stalled-client");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+        let (server, _damage) =
+            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let server = Arc::new(server);
+
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                columns: 80,
+                rows: 24,
+                seat: None,
+            },
+        )
+        .unwrap();
+        let outbox = || {
+            let clients = server.clients.lock().expect("clients poisoned");
+            Arc::clone(&clients.first().expect("the client attached").events)
+        };
+        let attached = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .any(|event| matches!(event, crate::ClientEvent::Snapshot { .. }));
+        assert!(attached, "the client never attached");
+
+        // Far more than its queue and its socket's buffer can hold. Damage,
+        // not session updates: those persist the workspace on every call.
+        let pane = server
+            .session
+            .lock()
+            .expect("session poisoned")
+            .selected_tab()
+            .pane
+            .id;
+        for _ in 0..super::OUTBOX_CAPACITY * 64 {
+            server.broadcast_pane_damage(pane);
+        }
+        let waiting = outbox().pending.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            waiting <= super::OUTBOX_CAPACITY,
+            "{waiting} events queued for a client that reads nothing"
+        );
+        assert!(outbox().stale.load(std::sync::atomic::Ordering::Relaxed));
+
+        let caught_up = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .any(|_| outbox().awaits_resync());
+        assert!(caught_up, "the client never drained its queue");
+        server.resync_stale_clients();
+        let resynchronized = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .any(|event| matches!(event, crate::ClientEvent::Snapshot { .. }));
+        assert!(
+            resynchronized,
+            "the stale client was never sent the workspace again"
+        );
+        assert!(!outbox().stale.load(std::sync::atomic::Ordering::Relaxed));
+
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        drop(writer);
+        drop(reader);
+        let _ = serving.join();
+        server.stop_panes();
+    }
+
     /// A stopped pane's process is reaped, not left a zombie for the life of
     /// the server: once the reaper is done, its pid names no process at all
     /// — a zombie would still answer `kill(pid, 0)`.
@@ -4552,14 +4749,16 @@ mod tests {
     #[test]
     fn a_client_an_event_cannot_reach_is_disconnected_rather_than_frozen() {
         let (peer, socket) = std::os::unix::net::UnixStream::pair().unwrap();
-        let (events, receiver) = std::sync::mpsc::channel();
-        let writing = std::thread::spawn(move || super::forward_events(socket, &receiver));
+        let (outbox, receiver) = super::Outbox::new();
+        let events = Arc::new(outbox);
+        let writing = {
+            let events = Arc::clone(&events);
+            std::thread::spawn(move || super::forward_events(socket, &receiver, &events))
+        };
 
-        events
-            .send(crate::ClientEvent::Error {
-                message: "x".repeat(MAX_FRAME as usize + 1),
-            })
-            .unwrap();
+        events.reply(crate::ClientEvent::Error {
+            message: "x".repeat(MAX_FRAME as usize + 1),
+        });
 
         let mut read = peer;
         read.set_read_timeout(Some(Duration::from_secs(30)))
