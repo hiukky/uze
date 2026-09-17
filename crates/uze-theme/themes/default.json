@@ -10,6 +10,7 @@
     "surface.raised-bright": "~24",
     "surface.recessed": "~06",
     "surface.hover": "~33",
+    "surface.scrim": "~12",
 
     "text.bright": "#f2f0ea",
     "text.primary": "#e6e4de",

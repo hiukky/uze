@@ -515,8 +515,14 @@ pub(super) fn render_sidebar(
     // other one — the management modal. No top padding: it lands on the
     // exact row the tab strip's own content does.
     if let Some(rect) = rows.next(1) {
+        // One column in, the pad its controls keep at the other end: the
+        // header is the column's own chrome, and a name flush against the
+        // edge under a right-hand pad reads as a row that slipped.
         frame.render_widget(
-            Paragraph::new(Span::styled("work", theme::fg_bold(Token::TextMuted))),
+            Paragraph::new(Span::styled(
+                format!("{}work", " ".repeat(TRAILING_PAD as usize)),
+                theme::fg_bold(Token::TextMuted),
+            )),
             rect,
         );
         let more = theme::glyph(Symbol::Manage);
@@ -595,6 +601,9 @@ pub(super) fn render_sidebar(
     if let Some(rect) = rows.next(1) {
         frame.render_widget(
             Paragraph::new(Span::styled(
+                // The full width, up to the divider between the two
+                // columns: it is a rule closing the header, not a row of
+                // content keeping the column's trailing pad.
                 theme::glyph(Symbol::TreeDivider).repeat(rect.width as usize),
                 theme::fg(Token::BorderFaint),
             )),
@@ -653,7 +662,9 @@ pub(super) fn render_sidebar(
             .saturating_sub(reserved),
     ));
 
-    rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
+    // One row of air above the foot, so a tree that grows to meet it still
+    // reads as a tree over two sections rather than as one list.
+    rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y.saturating_sub(1));
     // The release notice sits on whatever holds the foot — the steps, or
     // the history once the steps are put away — rather than under them: it
     // is news, and news below two sections reads as the column's floor.
@@ -762,7 +773,7 @@ pub(super) fn render_sidebar(
         crate::ui::extension_view::render_section(
             frame,
             &steps.section(),
-            &mut Rows::over(rect),
+            &mut Rows::over(section_column(rect)),
             false,
             &mut section_hits,
         );
@@ -1325,10 +1336,16 @@ fn render_timeline(
         model.timeline_scroll,
     );
     let mut section_hits = Vec::new();
+    let mut column = Rows::over(section_column(Rect::new(
+        rows.x,
+        rows.y,
+        rows.width,
+        rows.remaining(),
+    )));
     crate::ui::extension_view::render_section(
         frame,
         &section,
-        rows,
+        &mut column,
         model.dragging_timeline,
         &mut section_hits,
     );
@@ -2119,6 +2136,21 @@ const PICKER_LEAD: usize = 1;
 
 /// The gap on either side of the rule between the header's two controls.
 const HEADER_GAP: u16 = 1;
+
+/// A foot section's own column: one step in from the column's edge, where
+/// a space's fold sits, so its title lands in the column a space's name
+/// does and the two read as one grid rather than two.
+fn section_column(area: Rect) -> Rect {
+    Rect::new(
+        area.x + SECTION_LEAD,
+        area.y,
+        area.width.saturating_sub(SECTION_LEAD),
+        area.height,
+    )
+}
+
+/// The width of that step.
+const SECTION_LEAD: u16 = 1;
 
 /// The row that says which kind of space the prompt would create: the one
 /// it is on, alone. Both words side by side asked to be read as a sentence

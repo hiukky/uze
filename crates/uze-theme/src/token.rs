@@ -40,6 +40,14 @@ vocabulary! {
         /// this one", and an answer that differs per control is one the eye
         /// has to learn twice.
         SurfaceHover = "surface.hover",
+        /// The wash a modal's backdrop is pulled toward: one step away from
+        /// the theme's own polarity, so a dark theme's backdrop lifts a
+        /// little and a light theme's sinks a little — far enough to read as
+        /// another layer, near enough that the screen underneath is still
+        /// the screen. Pulled toward the backdrop instead, a dark
+        /// screen only flattened into the dark it already was, and the two
+        /// layers were told apart by the modal's hairline alone.
+        SurfaceScrim = "surface.scrim",
 
         // ── text ───────────────────────────────────────────────────────
         /// Headings and the active state — the brightest text there is.
@@ -170,6 +178,7 @@ impl Token {
                 | Token::SurfaceRaisedBright
                 | Token::SurfaceRecessed
                 | Token::SurfaceHover
+                | Token::SurfaceScrim
                 | Token::StateDiffAdded
                 | Token::StateDiffRemoved
                 | Token::BorderDefault

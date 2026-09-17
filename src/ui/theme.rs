@@ -92,14 +92,16 @@ pub(crate) fn width(symbol: Symbol) -> u16 {
     uze_theme::active().symbol(symbol).width()
 }
 
-/// A colour pushed most of the way toward the backdrop.
+/// A colour pushed most of the way toward the veil a backdrop wears.
 ///
 /// What a modal's scrim is made of. The frame underneath has to keep
 /// reading as a place — the shape of the list, the row that was selected,
 /// the panel the question came from — while nothing in it competes with
 /// the question drawn on top. A colour blended toward
-/// [`Token::SurfaceBackground`] keeps every one of those and drops the
-/// contrast, which is exactly that.
+/// [`Token::SurfaceScrim`] keeps every one of those and drops the contrast,
+/// which is exactly that — and it does it by lifting a dark screen rather
+/// than darkening it, so the layer underneath is a different colour from
+/// the modal's own rather than more of it.
 ///
 /// Blended here rather than left to ratatui's `DIM`: that modifier is one
 /// bit handed to the terminal, and terminals disagree about it — several
@@ -111,16 +113,16 @@ pub(crate) fn width(symbol: Symbol) -> u16 {
 /// `absent` is the token to read a cell that names no colour of its own
 /// as: a foreground asks for the body text, a background for the backdrop.
 pub(crate) fn scrimmed(color: Color, absent: Token) -> Color {
-    /// How far a scrimmed colour travels toward the backdrop, in percent.
+    /// How far a scrimmed colour travels toward the veil, in percent.
     /// Enough that no word behind a modal competes with one in it; short of
     /// the flat wash that would make the screen underneath unreadable as a
     /// place, which is the thing a backdrop is for.
-    const TOWARD_BACKDROP: u16 = 62;
+    const TOWARD_VEIL: u16 = 70;
 
-    let ground = uze_theme::active().color(Token::SurfaceBackground);
+    let ground = uze_theme::active().color(Token::SurfaceScrim);
     let (red, green, blue) = channels(color, absent);
     let toward = |from: u8, to: u8| {
-        ((u16::from(from) * (100 - TOWARD_BACKDROP) + u16::from(to) * TOWARD_BACKDROP) / 100) as u8
+        ((u16::from(from) * (100 - TOWARD_VEIL) + u16::from(to) * TOWARD_VEIL) / 100) as u8
     };
     Color::Rgb(
         toward(red, ground.0),
@@ -220,8 +222,8 @@ mod tests {
     }
 
     #[test]
-    fn a_scrimmed_colour_sits_between_what_it_was_and_the_backdrop() {
-        let ground = uze_theme::active().color(Token::SurfaceBackground);
+    fn a_scrimmed_colour_sits_between_what_it_was_and_the_veil() {
+        let ground = uze_theme::active().color(Token::SurfaceScrim);
         let Color::Rgb(red, ..) = scrimmed(color(Token::TextBright), Token::TextPrimary) else {
             panic!("a scrimmed colour is a resolved one");
         };
@@ -230,24 +232,26 @@ mod tests {
         };
         assert!(
             red.abs_diff(ground.0) < was.abs_diff(ground.0),
-            "it moved toward the backdrop"
+            "it moved toward the veil"
         );
         assert_ne!(red, ground.0, "and stopped short of it");
     }
 
     #[test]
-    fn scrimming_the_backdrop_leaves_it_where_it_is() {
-        // The cell nothing was drawn into is the one the eye reads the
-        // scrim against, so a backdrop that shifted would be the screen
-        // itself changing colour rather than its content receding.
-        assert_eq!(
-            scrimmed(color(Token::SurfaceBackground), Token::SurfaceBackground),
-            color(Token::SurfaceBackground)
-        );
+    fn scrimming_the_backdrop_lifts_it_toward_the_veil() {
+        // The cell nothing was drawn into is most of what a backdrop is, so
+        // it is what carries the layer: on a dark theme the empty screen
+        // lifts toward the veil, which is what a modal painted in the
+        // backdrop's own colour then stands out against.
+        let veil = color(Token::SurfaceScrim);
+        let ground = color(Token::SurfaceBackground);
+        let lifted = scrimmed(ground, Token::SurfaceBackground);
+        assert_ne!(lifted, ground, "the empty screen is not left where it was");
+        assert_ne!(lifted, veil, "and stops short of the veil itself");
         assert_eq!(
             scrimmed(Color::Reset, Token::SurfaceBackground),
-            color(Token::SurfaceBackground),
-            "and a cell that named no colour is read as the surface it sits on"
+            lifted,
+            "a cell that named no colour is read as the surface it sits on"
         );
     }
 

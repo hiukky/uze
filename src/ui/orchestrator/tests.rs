@@ -5001,6 +5001,44 @@ mod workspace_tests {
         );
     }
 
+    /// One grid down the column: a section at the foot folds from the
+    /// column a space folds from and names itself in the column a space
+    /// names itself in, with a row of air between the tree and the foot so
+    /// a tree that grows to meet it still reads as two things.
+    #[test]
+    fn the_foot_sections_stand_on_the_columns_own_grid() {
+        let mut model = three_spaces();
+        model.first_steps_collapsed = false;
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let column = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        let header = space_header(&hits, SpaceId(1)).y as usize;
+        let steps = rows
+            .iter()
+            .position(|row| row.contains("first steps"))
+            .expect("the steps are at the foot");
+
+        assert_eq!(
+            column(&rows[steps], "first steps"),
+            column(&rows[header], "one"),
+            "a section names itself where a space does: {rows:?}"
+        );
+        assert_eq!(
+            column(
+                &rows[steps],
+                &theme::glyph(crate::ui::theme::Symbol::ChevronExpanded)
+            ),
+            column(
+                &rows[header],
+                &theme::glyph(crate::ui::theme::Symbol::ChevronExpanded)
+            ),
+            "and folds from the column a space folds from: {rows:?}"
+        );
+        assert!(
+            rows[steps - 1].trim_end_matches('│').trim().is_empty(),
+            "a row of air over the foot: {rows:?}"
+        );
+    }
+
     /// The picker is a small table: the kinds as one control over what is
     /// being typed and the directories it matches, all in one column, with
     /// the way out at the right edge of the row it opens on.
