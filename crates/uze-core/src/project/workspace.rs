@@ -1,9 +1,11 @@
 //! Deterministic workspace detection for `agents.yaml` / `marketplace.json`.
 //!
-//! One predictable rule, no git assumption, no harness assumption: a
-//! directory is a workspace when it contains `agents.yaml` (consumer), or
-//! `marketplace.json` (marketplace), or both (hybrid). The nearest such
-//! directory wins over any ancestor.
+//! One predictable rule, no harness assumption: a directory is a workspace
+//! when it contains `agents.yaml` (consumer), or `marketplace.json`
+//! (marketplace), or both (hybrid). The nearest such directory wins over any
+//! ancestor. A Git repository is not an anchor; it only answers which root a
+//! runtime identity keys on when nothing is anchored
+//! ([`workspace_root_or_self`]).
 //!
 //! The consumer anchor is the *manifest*, not the lock: a project that has
 //! declared an environment but never resolved one has no lock yet and is
@@ -270,7 +272,7 @@ mod tests {
         assert_eq!(
             resolved.kind,
             WorkspaceKind::Consumer,
-            "the nearest anchor (the nested agents.lock) must win"
+            "the nearest anchor (the nested agents.yaml) must win"
         );
         assert_eq!(resolved.root, inner.canonicalize().unwrap());
         fs::remove_dir_all(&outer).unwrap();

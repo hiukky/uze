@@ -108,11 +108,11 @@ impl Workspace<'_> {
     pub fn summary(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
         let resolved = workspace::resolve_workspace(cwd)?;
         let root = resolved.root.clone();
-        let has_lock = matches!(
+        let declares_project = matches!(
             resolved.kind,
             WorkspaceKind::Consumer | WorkspaceKind::Hybrid
         );
-        let has_manifest = matches!(
+        let is_marketplace = matches!(
             resolved.kind,
             WorkspaceKind::Marketplace | WorkspaceKind::Hybrid
         );
@@ -123,15 +123,15 @@ impl Workspace<'_> {
             agents_directory_present: root
                 .join(uze_core::project_context::AGENTS_DIRECTORY_NAME)
                 .is_dir(),
-            project: self.project_overview(&root, has_lock),
-            marketplace: has_manifest.then(|| Self::marketplace_overview(&root)),
+            project: self.project_overview(&root, declares_project),
+            marketplace: is_marketplace.then(|| Self::marketplace_overview(&root)),
         })
     }
 
     /// The project half — always present, so a directory without
-    /// `agents.lock` still answers "not configured" instead of nothing.
-    fn project_overview(&self, root: &Path, has_lock: bool) -> ProjectOverview {
-        let loaded = has_lock.then(|| project_lock::load_lock(root));
+    /// `agents.yaml` still answers "not configured" instead of nothing.
+    fn project_overview(&self, root: &Path, declares_project: bool) -> ProjectOverview {
+        let loaded = declares_project.then(|| project_lock::load_lock(root));
         let (environment, declared, installed, missing) = match loaded {
             Some(Ok(Some(lock))) => {
                 let installed_ids: BTreeSet<String> = self
