@@ -77,8 +77,7 @@ mod workspace_tests {
     }
 
     /// A one-tab session whose only tab `agent_identity_for_tab` resolves
-    /// to the fixture identity, matched on the tab label the way a tab created
-    /// before generic agent labels is.
+    /// to the fixture identity by its probed process.
     fn agent_session() -> WorkspaceModel {
         let mut session = Session::new(
             uze_terminal::SpaceSeat {
@@ -89,6 +88,7 @@ mod workspace_tests {
             24,
         );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
         WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
@@ -166,6 +166,7 @@ mod workspace_tests {
             24,
         );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
         session.create_space(
             Some("second".into()),
             uze_terminal::SpaceSeat {
@@ -176,6 +177,7 @@ mod workspace_tests {
             24,
         );
         session.workspace.spaces[1].tabs[0].label = "Agent".into();
+        session.workspace.spaces[1].tabs[0].pane.process = "agent".into();
         let model = WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
@@ -3144,6 +3146,7 @@ mod workspace_tests {
         );
         let tab = &mut session.workspace.spaces[0].tabs[0];
         tab.label = "Agent".into();
+        tab.pane.process = "agent".into();
         tab.pane.cwd = cwd.into();
         WorkspaceModel {
             session: Some(session),
@@ -4581,6 +4584,7 @@ mod workspace_tests {
             24,
         );
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
         for index in 1..8 {
             session.create_space(
                 Some(format!("space {index}")),
@@ -4592,6 +4596,7 @@ mod workspace_tests {
                 24,
             );
             session.workspace.spaces[index].tabs[0].label = "Agent".into();
+            session.workspace.spaces[index].tabs[0].pane.process = "agent".into();
         }
         let mut model = WorkspaceModel {
             session: Some(session),
@@ -5429,6 +5434,7 @@ mod workspace_tests {
             24,
             "/tmp".into(),
         );
+        session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -5471,6 +5477,7 @@ mod workspace_tests {
             24,
             "/tmp".into(),
         );
+        session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -5512,6 +5519,7 @@ mod workspace_tests {
             24,
             "/tmp".into(),
         );
+        session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -5710,6 +5718,7 @@ mod workspace_tests {
             24,
         );
         session.workspace.spaces[0].tabs[0].label = "Claude Code".into();
+        session.workspace.spaces[0].tabs[0].pane.process = "claude".into();
         let tab = session.workspace.spaces[0].selected_tab;
         let model = WorkspaceModel {
             session: Some(session),

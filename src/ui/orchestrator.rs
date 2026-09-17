@@ -1630,15 +1630,12 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
         .collect()
 }
 
-/// The recognized agent, if any, running in `tab`'s focused pane — matched
-/// against `identities` primarily by live foreground process name (a
-/// shim-launched process reports its invoked alias there via
-/// `UZE_SHIM_NAME`, not its raw `comm` — see
-/// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
-/// tab's own label only for legacy tabs created before generic agent labels
-/// were introduced. Returns the harness's short binary/alias
-/// name (`claude`, `codex`, …) — what decides whether a tab lists under
-/// "agents" or "shell" at all.
+/// The recognized agent, if any, running in `tab`'s pane — matched against
+/// `identities` by the live foreground process name (a shim-launched
+/// process reports its invoked alias there via `UZE_SHIM_NAME`, not its raw
+/// `comm` — see `uze_terminal::PaneRuntime::foreground_status`). Returns
+/// the harness's short binary/alias name (`claude`, `codex`, …) — what
+/// decides whether a tab lists under "agents" or "shell" at all.
 fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a str> {
     agent_for_tab(identities, tab).map(|identity| identity.binary)
 }
@@ -1646,11 +1643,9 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
 /// The harness running in `tab`, as [`agent_identity_for_tab`] recognizes
 /// it — the whole identity, for a caller that names it to a person.
 fn agent_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a AgentIdentity> {
-    let process = Some(tab.pane.process.as_str());
-    identities.iter().find(|identity| {
-        process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
-            || tab.label.eq_ignore_ascii_case(identity.display_name)
-    })
+    identities
+        .iter()
+        .find(|identity| tab.pane.process.eq_ignore_ascii_case(identity.binary))
 }
 
 /// What the sidebar shows beside one agent tab. These four states are the
@@ -1801,13 +1796,8 @@ fn selected_agent_context(
     identities: &[AgentIdentity],
 ) -> Option<SupportKey> {
     let tab = model.session.as_ref()?.selected_tab();
-    let binary = agent_identity_for_tab(identities, tab)?;
-    let integration = identities
-        .iter()
-        .find(|identity| identity.binary == binary)
-        .map(|identity| identity.integration)?;
-    let cwd = tab.pane.cwd.clone();
-    Some((integration.to_owned(), cwd))
+    let identity = agent_for_tab(identities, tab)?;
+    Some((identity.integration.to_owned(), tab.pane.cwd.clone()))
 }
 
 /// Every live agent pane as `(integration, directory)` — the same pair
@@ -1824,11 +1814,7 @@ fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<L
         .iter()
         .flat_map(|space| space.tabs.iter())
         .filter_map(|tab| {
-            let binary = agent_identity_for_tab(identities, tab)?;
-            let integration = identities
-                .iter()
-                .find(|identity| identity.binary == binary)
-                .map(|identity| identity.integration)?;
+            let integration = agent_for_tab(identities, tab)?.integration;
             let id = launched_agent_id(tab)?.to_owned();
             // The directory as it was given, not the kernel's note about
             // what became of it: a removed checkout is still where the
