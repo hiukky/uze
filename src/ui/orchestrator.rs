@@ -1050,19 +1050,6 @@ pub(crate) fn attach_workspace(
     // A registered harness set doesn't change mid-session, so this is built
     // once per attach.
     let identities = agent_identities(home);
-    // This is the exact `HarnessHealth` read model used by the Integrations
-    // screen. It loads asynchronously so inspecting support never delays a
-    // live terminal attach or a pane redraw. Unlike `identities` above, this
-    // one *does* go stale — `AGENTS.md`/the runtime projection can change
-    // underneath an open workspace (another session writing it, a race in
-    // `claude_runtime_projection` resolving) — so `OpenAgentSupport` below
-    // fires a fresh one on every open rather than trusting this attach-time
-    // snapshot for the rest of the session.
-    // No attach-time prefetch: there is nothing to resolve until a tab is
-    // recognized as running an agent, and what to resolve then depends on
-    // that pane's own directory. The loop below kicks a refresh the moment
-    // the selection names an agent whose answer is not already in hand —
-    // the same moment the "✦" badge appears.
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     let activity_frames = theme::frames(Symbol::StatusWorking);
@@ -1541,10 +1528,6 @@ enum MenuTarget {
     Tab(TabId),
 }
 
-/// One row a [`ContextMenu`] can offer — the menu itself (items, selection,
-/// rendering) is generic over this enum, so adding a third action is adding
-/// a variant plus a match arm here and in [`dispatch_menu_action`], not
-/// restructuring the popup.
 /// Open state of the right-click action menu a space header or agent tab
 /// raises. Closing a space/tab is never one click any more — right-click,
 /// then confirm the menu's own "close" row — deliberately two steps, so an
@@ -2778,11 +2761,6 @@ impl WorkspaceModel {
         self.input_echo_until.retain(|pane, _| live.contains(pane));
     }
 
-    /// The one place the four sidebar states are decided. Working outranks
-    /// Completed (fresh output means the run the check would announce is
-    /// not over), and both outrank Selected — a spinner or a check on the
-    /// tab you are already on still carries information the plain dot does
-    /// not.
     /// The root of the space `pane`'s tab belongs to.
     fn space_root_of_pane(&self, pane: PaneId) -> Option<PathBuf> {
         let session = self.session.as_ref()?;
@@ -2967,6 +2945,11 @@ impl WorkspaceModel {
         })
     }
 
+    /// The one place the four sidebar states are decided. Working outranks
+    /// Completed (fresh output means the run the check would announce is
+    /// not over), and both outrank Selected — a spinner or a check on the
+    /// tab you are already on still carries information the plain dot does
+    /// not.
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
         if self.agent_is_working(pane) {
             AgentTabStatus::Working
@@ -3856,10 +3839,6 @@ fn sync_slot_occupancy(
     );
 }
 
-/// Whether the directory a pane works in is gone: the checkout it was
-/// bound to no longer exists, or the pane was first seen already standing
-/// in a removed directory — `/proc` reports one as its old path followed
-/// by ` (deleted)`, which is not a path anything resolves.
 /// The directory a pane was given, with the kernel's ` (deleted)` note
 /// stripped — what a removed checkout is still *named*, which is what a
 /// task is matched by. Any other path is its own name.
@@ -3870,6 +3849,10 @@ fn named_checkout(cwd: &Path) -> PathBuf {
     }
 }
 
+/// Whether the directory a pane works in is gone: the checkout it was
+/// bound to no longer exists, or the pane was first seen already standing
+/// in a removed directory — `/proc` reports one as its old path followed
+/// by ` (deleted)`, which is not a path anything resolves.
 fn checkout_lost(bound_checkout: Option<&PathBuf>, cwd: &Path) -> bool {
     bound_checkout.is_some_and(|checkout| !checkout.is_dir())
         || cwd.to_string_lossy().ends_with(" (deleted)")

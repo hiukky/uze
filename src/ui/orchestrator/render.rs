@@ -406,12 +406,6 @@ pub(super) fn render_context_menu(
     }
 }
 
-/// How a caption row reads a pane's directory: a slot shows as the primary
-/// it hangs off rather than as its own `.worktrees/<id>` path — that tail
-/// is two more segments in a column only 28-40 wide (see
-/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
-/// is; the slot is where the agent is, which every agent has and none
-/// needs announced.
 /// The column's account of itself: what there is, then where — the count
 /// carries the weight and its whereabouts recede behind it.
 fn sidebar_account(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Line<'static> {
@@ -441,6 +435,12 @@ fn sidebar_account(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Line
     ])
 }
 
+/// How a caption row reads a pane's directory: a slot shows as the primary
+/// it hangs off rather than as its own `.worktrees/<id>` path — that tail
+/// is two more segments in a column only 28-40 wide (see
+/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
+/// is; the slot is where the agent is, which every agent has and none
+/// needs announced.
 fn caption_path(cwd: &Path) -> String {
     match uze_application::isolated_checkout(cwd) {
         Some(checkout) => crate::ui::display_project_path(checkout.primary),
@@ -498,21 +498,14 @@ fn push_trailing_mark(
     }
 }
 
-/// A two-level tree, one block per space the user has created (blank-line
-/// separated — see the loop below), each expanded (no collapse/accordion)
-/// into the agent tabs [`agent_identity_for_tab`] recognizes as running
-/// inside it — `●`/`○` for the space's context agent (see
-/// `space_context_agent`) vs. the rest, plus its label and, right-
-/// aligned on that same row, its task's mark (see [`push_trailing_mark`]).
-/// The harness an agent runs on is not named there: the sidebar's narrow
-/// column goes to what the work is and where it stands. A caption line underneath —
-/// dim, or in the warning hue under the agent receiving keystrokes (see
-/// [`caption_color`]) — names the task's own working branch, falling back to its
-/// pane's live cwd (as [`caption_path`] renders it, so an agent in a slot
-/// reads as its primary checkout rather than as a `.worktrees/<id>` path
-/// too long for the column) for the moment before that task association
-/// resolves. A space with no agent tabs shows its current `cwd` alone in place of the tree,
-/// so an empty space still reads as "somewhere", not blank. Plain shell
+/// One block per space the user has created (blank-line separated — see
+/// the loop below), each expanded (no collapse/accordion) into the agent
+/// tabs [`agent_identity_for_tab`] recognizes as running inside it, laid
+/// out as the space's kind says (see [`SpaceLayout`]): a worktree space as
+/// a tree whose items carry their task's mark and a caption naming the
+/// branch, a workspace space as one row per tenant naming its harness. A
+/// space with no agent tabs shows its current `cwd` alone in place of the
+/// tree, so an empty space still reads as "somewhere", not blank. Plain shell
 /// tabs (and anything else not recognized as an agent) never appear here;
 /// they still exist in the tab strip above the pane (see
 /// [`render_tab_strip`]), scoped to whichever space is selected. The
@@ -1595,8 +1588,6 @@ pub(super) fn render_commit_detail(
     );
 }
 
-/// The one column every right-pinned label in the sidebar keeps off the
-/// divider (see `render_sidebar`'s `Padding::new(1, 0, 0, 0)`).
 /// One space's header row in the sidebar tree — its label, or its root once
 /// the `⇄` behind it is clicked (never both: see
 /// `WorkspaceModel::roots_shown`) — dim for every space,
@@ -1608,18 +1599,15 @@ pub(super) fn render_commit_detail(
 /// [`render_sidebar`]) gets a neutral background instead of a left accent
 /// bar, so the highlight reads as "this whole block is where you are"
 /// rather than a thin per-row marker or an on-brand "selected" tint
-/// One encoding per kind: the tree gets the block fill below, and the
-/// flat list of a workspace space gets a bar at the selected row's edge
-/// instead (see `draw_flat`) — never both in one list, which is the drift
-/// this note exists to prevent.
-/// (deliberately not `theme::color(Token::SurfaceSelected)` — that one borrows the accent hue for a
-/// different kind of selection). This header row itself stays at the
-/// lighter [`theme::color(Token::SurfaceRaised)`] while the rows it anchors go one
-/// step darker, [`theme::color(Token::SurfaceRaisedSubtle)`] — the title lifts
-/// slightly above the block it names instead of blending into it. Its own
-/// small function (unlike the tab row, which stays inline in
-/// [`render_sidebar`]) purely to keep that function's now-nested loop
-/// readable — this has no reuse motivation beyond that.
+/// (deliberately not `theme::color(Token::SurfaceSelected)` — that one
+/// borrows the accent hue for a different kind of selection). One encoding
+/// per kind: the tree gets the block fill, and the flat list of a
+/// workspace space gets a bar at the selected row's edge instead (see
+/// `draw_flat`) — never both in one list, which is the drift this note
+/// exists to prevent. This header row itself stays at the lighter
+/// [`theme::color(Token::SurfaceRaised)`] while the rows it anchors go one
+/// step darker, [`theme::color(Token::SurfaceRaisedSubtle)`] — the title
+/// lifts slightly above the block it names instead of blending into it.
 pub(super) fn render_space_header(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,

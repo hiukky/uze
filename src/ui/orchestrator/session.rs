@@ -424,9 +424,6 @@ impl Attach<'_> {
         self.model.dirty = true;
     }
 
-    /// Performs one action. The two that leave the screen answer first,
-    /// wherever they were asked from — which is what makes sealing a
-    /// surface safe.
     /// One action, performed, and noted if it was a first step that landed.
     ///
     /// Every action this client performs passes through here, whichever way
@@ -455,6 +452,9 @@ impl Attach<'_> {
         }
     }
 
+    /// Performs one action. The two that leave the screen answer first,
+    /// wherever they were asked from — which is what makes sealing a
+    /// surface safe.
     fn perform(&mut self, action: Action, viewport: &Viewport) -> Flow {
         let Viewport { columns, rows, .. } = *viewport;
         match action {
@@ -1182,15 +1182,11 @@ impl Attach<'_> {
         Flow::Continue
     }
 
-    /// Clicks, drags and wheels. The same precedence the keyboard has,
-    /// plus the hit list the last frame left behind
-    /// (`WorkspaceModel::hits`) for everything that resolves to chrome.
-    /// Clicks, drags and wheels, routed by button and kind.
-    ///
-    /// The kinds partition the arms exactly — no guard ever tested two —
-    /// so what used to be one 26-arm match is six matches whose *name*
-    /// says which gesture they answer, and whose guards say only what is
-    /// open.
+    /// Clicks, drags and wheels, routed by button and kind: each handler's
+    /// name says which gesture it answers, and its guards say only what is
+    /// open — the same precedence the keyboard has, plus the hit list the
+    /// last frame left behind (`WorkspaceModel::hits`) for everything that
+    /// resolves to chrome.
     fn mouse(&mut self, mouse: MouseEvent, viewport: &Viewport) -> Flow {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => self.press(mouse, viewport),
