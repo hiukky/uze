@@ -1666,7 +1666,8 @@ struct PaneRuntime {
     id: PaneId,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// Shared with the thread that reaps it once the pane is stopped.
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     terminal: Arc<Mutex<Term<ReplySink>>>,
     /// What this pane was spawned as — kept so a workspace restart can
     /// respawn the same launch in the same tab (see [`Server::persist`]),
@@ -1829,7 +1830,7 @@ impl PaneRuntime {
             id,
             master: Mutex::new(pair.master),
             writer,
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
             terminal,
             launch,
             last_sent: Mutex::new(None),
@@ -1865,8 +1866,21 @@ impl PaneRuntime {
             .expect("terminal poisoned")
             .resize(TermSize::new(columns as usize, rows as usize));
     }
-    fn stop(&self) {
-        let _ = self.child.lock().expect("child poisoned").kill();
+    /// Ends the pane's process and reaps it, on a thread of its own.
+    ///
+    /// `kill` is a SIGHUP with a grace period of up to a fifth of a second
+    /// and then a SIGKILL nobody waits on: done inline it held the request
+    /// that closed the tab for that long, and left every pane whose program
+    /// outlived the grace period a zombie for the life of the server.
+    fn stop(&self) -> thread::JoinHandle<()> {
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || {
+            let mut child = child.lock().expect("child poisoned");
+            // Waited on whether or not the signal landed: a program that
+            // already exited is exactly the zombie this is here to reap.
+            let _ = child.kill();
+            let _ = child.wait();
+        })
     }
 
     fn finished_agent(&self) -> bool {
@@ -2922,6 +2936,57 @@ mod tests {
     /// attach that named the launch directory every time reopened the
     /// space closed just before it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// A stopped pane's process is reaped, not left a zombie for the life of
+    /// the server: once the reaper is done, its pid names no process at all
+    /// — a zombie would still answer `kill(pid, 0)`.
+    #[test]
+    fn a_stopped_pane_leaves_no_zombie() {
+        let (damage, damage_events) = std::sync::mpsc::channel();
+        let pane = PaneRuntime::spawn(
+            PaneId(7),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            // Deaf to the SIGHUP `kill` tries first, so it takes the SIGKILL
+            // that nothing used to wait on.
+            Launch::Program {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "trap '' HUP; echo deaf-to-hangup; exec sleep 30".into(),
+                ],
+                env: Vec::new(),
+            },
+            Arc::new(Mutex::new(Palette::default())),
+        )
+        .unwrap();
+        // Only once the trap is in place does the hangup go unheard; a
+        // signal that beat it would kill the shell and prove nothing.
+        let deaf = damage_events.iter().any(|_| {
+            pane.snapshot()
+                .cells
+                .iter()
+                .map(|cell| cell.character)
+                .collect::<String>()
+                .contains("deaf-to-hangup")
+        });
+        assert!(deaf, "the program never reported its trap");
+        let pid = pane
+            .child
+            .lock()
+            .expect("child poisoned")
+            .process_id()
+            .expect("a spawned child has a pid");
+
+        pane.stop().join().expect("the reaper finished");
+
+        // SAFETY: signal 0 only asks whether `pid` is addressable; nothing
+        // is delivered, and `pid` is the positive id of our own child.
+        let addressable = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        assert!(!addressable, "pid {pid} survived as a zombie");
+    }
+
     /// A program's first output can land before its pane is registered,
     /// and damage for a pane nobody can find is dropped. Registration is
     /// what flushes it, so a pane is delivered even when its program
