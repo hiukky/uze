@@ -67,7 +67,7 @@ impl AgentId {
 
 /// The branch a task's work lives on while it stays local and nobody has
 /// named it: the identifier under UZE's own prefix.
-pub fn generated_branch(id: &AgentId) -> String {
+fn generated_branch(id: &AgentId) -> String {
     format!("{BRANCH_PREFIX}{}", id.as_str())
 }
 

@@ -28,7 +28,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    task::{self, AgentId, Base, Task, TaskState, TaskStore},
+    task::{AgentId, Base, Task, TaskState, TaskStore},
     worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY, label_of},
 };
 
@@ -415,9 +415,9 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             target.to_owned(),
         );
         task.label = label;
-        task.branch = branch
-            .clone()
-            .unwrap_or_else(|| task::generated_branch(&task.id));
+        if let Some(branch) = branch {
+            task.branch = branch.clone();
+        }
         task.checkout = Some(id);
         // Nobody recorded this checkout, so nobody recorded a delivery
         // from it either: empty means it ended with nothing, not that its

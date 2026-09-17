@@ -36,14 +36,6 @@ impl Workspace<'_> {
         workspace::workspace_root_or_self(cwd)
     }
 
-    /// The isolated checkout a path sits in, or `None` when it is not
-    /// isolated. Lexical against the fixed layout: a display asks this of
-    /// every open tab on every frame.
-    #[tracing::instrument(name = "workspace.isolated_checkout", skip_all)]
-    pub fn isolated_checkout<'a>(&self, path: &'a Path) -> Option<worktree::IsolatedCheckout<'a>> {
-        worktree::isolated_checkout(path)
-    }
-
     /// The harnesses this installation can recognize, as descriptors.
     #[tracing::instrument(name = "workspace.agent_identities", skip_all)]
     pub fn agent_identities(&self) -> Vec<AgentIdentity> {
@@ -536,17 +528,7 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.delivery_policy", skip_all, fields(cwd = %cwd.display()))]
     pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
         let repository = self.repository(cwd)?;
-        let declared = manifest::load(&repository.primary)
-            .ok()
-            .flatten()
-            .and_then(|manifest| manifest.worktrees)
-            .is_some();
         Some(DeliveryPolicyView {
-            source: if declared {
-                PolicySource::Declared
-            } else {
-                PolicySource::BuiltInDefault
-            },
             completion: repository.policy.completion.abi_name(),
             target: repository
                 .policy
@@ -1073,7 +1055,7 @@ impl Workspace<'_> {
     /// is ever touched here, and nothing a live pane sits in (`occupied`);
     /// that is the operator's alone.
     #[tracing::instrument(name = "workspace.collect_slot_garbage", skip_all, fields(cwd = %cwd.display()))]
-    pub fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
+    fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
         let Some(repository) = self.repository(cwd) else {
             return Vec::new();
         };
@@ -1462,16 +1444,10 @@ pub enum TaskStateView {
 }
 
 impl TaskStateView {
-    /// Whether delivery may be offered for a task in this state.
-    ///
-    /// `Published` included: the request is level with the branch, but the
-    /// target moves, and a re-sync is how the branch follows it.
-    pub fn is_deliverable(&self) -> bool {
-        matches!(self, Self::Ready | Self::Published | Self::GateFailed)
-    }
-
     /// Why delivery is refused, for a state where it is — `None` for the
-    /// states [`is_deliverable`](Self::is_deliverable) accepts.
+    /// states delivery may be offered for. `Published` is one: the request
+    /// is level with the branch, but the target moves, and a re-sync is how
+    /// the branch follows it.
     ///
     /// Beside the predicate rather than beside whoever shows the answer:
     /// "not yet" and "already done" are the same refusal to a caller that
@@ -1492,11 +1468,6 @@ impl TaskStateView {
             Self::Closed => Some("branch holds nothing"),
             Self::Parked => Some("parked — resume it first"),
         }
-    }
-
-    /// Whether the task still has an agent's work in front of it.
-    pub fn is_live(&self) -> bool {
-        !matches!(self, Self::Integrated | Self::Parked | Self::Closed)
     }
 }
 
@@ -1592,31 +1563,6 @@ pub struct DeliveryPolicyView {
     pub completion: &'static str,
     pub target: Option<String>,
     pub gate: Vec<String>,
-    /// Whether this is what the project declared or what UZE falls back to.
-    /// A reader who cannot tell the two apart learns nothing from being
-    /// shown `handoff`: they cannot know whether anyone chose it.
-    pub source: PolicySource,
-}
-
-/// Where the policy in force came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PolicySource {
-    /// `agents.yaml` declares it.
-    Declared,
-    /// Nothing declares it; this is the built-in default, identical on
-    /// every machine.
-    BuiltInDefault,
-}
-
-impl PolicySource {
-    /// How the client attributes it, in the words a reader needs rather
-    /// than the words the code uses.
-    pub fn attribution(self) -> &'static str {
-        match self {
-            Self::Declared => "agents.yaml",
-            Self::BuiltInDefault => "default",
-        }
-    }
 }
 
 /// Where an agent starts, and the record its launch carries.
@@ -1750,7 +1696,7 @@ mod placement_tests {
         let task = slot(&placement);
         assert_eq!(
             repository.branch_of(&placement.cwd),
-            task::generated_branch(task)
+            format!("agent/{task}")
         );
     }
 
@@ -3295,7 +3241,6 @@ mod task_service_tests {
             "and no pane in its checkout does not make it abandoned"
         );
         assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrating);
-        assert!(!TaskStateView::Integrating.is_deliverable());
         assert_eq!(
             TaskStateView::Integrating.undeliverable_reason(),
             Some("already delivering"),
