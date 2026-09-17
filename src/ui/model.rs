@@ -1555,21 +1555,20 @@ impl TuiModel {
             return;
         }
         let step = delta.signum();
-        let mut index = self.appearance_selected as isize;
-        for _ in 0..delta.abs() {
-            let mut next = index + step;
-            while rows
-                .get(next.clamp(0, rows.len() as isize - 1) as usize)
-                .is_some_and(|row| !row.selectable())
-            {
-                next += step;
+        let mut index = self.appearance_selected.min(rows.len() - 1);
+        for _ in 0..delta.unsigned_abs() {
+            let next_choice = std::iter::successors(Some(index), |row| {
+                row.checked_add_signed(step)
+                    .filter(|next| *next < rows.len())
+            })
+            .skip(1)
+            .find(|row| rows[*row].selectable());
+            match next_choice {
+                Some(row) => index = row,
+                None => break,
             }
-            if next < 0 || next >= rows.len() as isize {
-                break;
-            }
-            index = next;
         }
-        self.appearance_selected = index.clamp(0, rows.len() as isize - 1) as usize;
+        self.appearance_selected = index;
     }
 
     /// Puts the selection on the theme in force, or on the first thing that
@@ -1610,13 +1609,7 @@ impl TuiModel {
     /// list, so it is no [`ListScreen`] and clamps whichever panel is
     /// currently focused.
     pub(crate) fn move_profile_selection(&mut self, delta: isize) {
-        let clamp = |current: usize, len: usize| -> usize {
-            if len == 0 {
-                0
-            } else {
-                (current as isize + delta).clamp(0, len as isize - 1) as usize
-            }
-        };
+        let clamp = |current: usize, len: usize| step_within(current, delta, len);
         match self.profile_panel {
             ProfilePanel::List => {
                 self.remembered.profiles_selected = clamp(
@@ -1688,11 +1681,10 @@ impl TuiModel {
         let Some(screen) = self.list_mut(route) else {
             return;
         };
+        screen.selected = step_within(screen.selected, delta, len);
         if len == 0 {
-            screen.selected = 0;
             return;
         }
-        screen.selected = (screen.selected as isize + delta).clamp(0, len as isize - 1) as usize;
         // A list's drawer opens as soon as something is selected — matches
         // the design's click-to-select-and-open (the Plugins drawer is
         // bookended by install/update/remove, so a selection there always
@@ -1717,8 +1709,7 @@ impl TuiModel {
             return;
         }
         self.remembered.overview_prompt_selected =
-            (self.remembered.overview_prompt_selected as isize + delta).clamp(0, len as isize - 1)
-                as usize;
+            step_within(self.remembered.overview_prompt_selected, delta, len);
     }
 
     /// Leaves management for the tab the selected prompt was typed into.
@@ -1847,4 +1838,11 @@ impl TuiModel {
         }
         crate::ui::worker::Intent::None
     }
+}
+
+/// `current` moved by `delta` and held inside a list of `len` rows; `0` for
+/// an empty list.
+fn step_within(current: usize, delta: isize, len: usize) -> usize {
+    len.checked_sub(1)
+        .map_or(0, |last| current.saturating_add_signed(delta).min(last))
 }

@@ -4606,6 +4606,36 @@ fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
     );
 }
 
+/// The list opens with a heading, so moving up from the first choice has
+/// nowhere to go: it stays put. It used to step past the heading forever,
+/// clamping back onto it at every step, and freeze the whole client.
+#[test]
+fn moving_up_from_the_first_appearance_choice_stays_put() {
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_themes: vec![uze_application::application::ThemeSummary {
+            id: "dracula".to_owned(),
+            active: false,
+            path: None,
+        }],
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+    let (done, finished) = std::sync::mpsc::channel();
+    let mover = std::thread::spawn(move || {
+        model.move_appearance_selection(-1);
+        let _ = done.send(model.activate_appearance());
+    });
+    let answered = finished.recv_timeout(std::time::Duration::from_secs(5));
+    assert_eq!(
+        answered.ok(),
+        Some(crate::ui::worker::Intent::SelectTheme("dracula".to_owned())),
+        "moving up past the leading heading never returned"
+    );
+    let _ = mover.join();
+}
+
 /// Coming back to Appearance builds the model afresh, so the selection has
 /// to be settled again — on the theme in force, not on the first card.
 #[test]
