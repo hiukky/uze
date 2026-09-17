@@ -18,10 +18,8 @@ use uze_core::{
 };
 
 /// `detect` re-probes the executable to capture its version string once
-/// installation/update has been confirmed successful — deliberately a
-/// caller-supplied closure rather than a shared parsing function, because
-/// Claude's and Codex's own `--version` output shapes differ (leading vs.
-/// trailing version token) and that parsing stays vendor-specific.
+/// installation/update has been confirmed successful; where the version sits
+/// in `--version` output is the vendor's (`process::VersionToken`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn provision_cli(
     runner: &dyn ProcessRunner,

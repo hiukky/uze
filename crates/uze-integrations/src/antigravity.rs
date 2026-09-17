@@ -30,11 +30,8 @@
 //! - `agy` has **no independent custom-command primitive**: the official
 //!   migration path converts legacy commands to skills
 //!   (`commands: N legacy commands converted to skills`, verified against
-//!   1.1.19). Skills are model-discoverable (progressive disclosure)
-//!   *and* slash-invocable, and no explicit-only mechanism is documented
-//!   or observable, so a canonical Command delivered through this physical
-//!   primitive is classified **Adapted** — user invocation is native, the
-//!   explicit-only property degrades.
+//!   1.1.19). How a Skill's invocation policy reaches it is stated once, in
+//!   [`skills`].
 //! - MCP servers are managed through `agy mcp add <name> <cmd> [args...]`
 //!   (global `~/.gemini/config/mcp_config.json`, schema `command/args/
 //!   disabled`, remote `serverUrl`), inspected by reading that JSON file
@@ -273,17 +270,7 @@ impl IntegrationPort for AntigravityIntegration {
             ]
                 .into_iter()
                 .collect(),
-            // Non-default invocation policies are ADAPTED, never Native:
-            // Antigravity has no explicit-invocation-only mechanism and no
-            // way to hide a Skill from the model or the user's slash
-            // surface (verified against agy 1.1.19 — the official
-            // migration path converts legacy commands to Skills, which are
-            // both model-discoverable and slash-invocable). Per ADR-030,
-            // Native requires preserving the canonical invocation policy;
-            // the non-default half degrades here. This is declared through
-            // the per-resource exposure plan, kept honest per policy — a
-            // default model+user Skill is fully Native.
-            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json and/or canonical hooks.json gets a deterministically synthesized plugin carrying a translated mcp_config.json and a named-entry hooks.json respectively, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall; the hook projection itself is deterministic emission, real-binary verification pending in the conformance lab). Non-default invocation policies are ADAPTED (no explicit-invocation-only mechanism exists; Skills stay model-discoverable and slash-invocable — verified against 1.1.19). MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
+            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json gets a deterministically synthesized plugin carrying a translated mcp_config.json, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall). Portable Hooks are merged into the shared ~/.gemini/config/hooks.json as named entries running the generated `hooks/exec` wrapper — the harness never reads a plugin's hooks.json. A non-default Skill invocation policy is carried natively by the Skill's own disable-model-invocation / disable-slash-command front matter (agy 1.1.27), so a package holding one is delivered capability by capability rather than as an unchanged plugin tree. MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -416,8 +403,8 @@ impl IntegrationPort for AntigravityIntegration {
         plugin_manifest_name(package)?;
         // A plugin stages its entire skills/ tree unchanged. When any
         // Skill carries a non-default invocation policy, delivering that
-        // tree would bypass the capability wrapper that translates (or
-        // honestly adapts) the policy. Decompose the package instead: each
+        // tree would bypass the capability wrapper that translates the
+        // policy. Decompose the package instead: each
         // capability then gets exactly one policy-aware delivery.
         if resources.iter().any(|resource| {
             resource.capability.kind == CapabilityKind::AgentSkill
@@ -442,7 +429,7 @@ impl IntegrationPort for AntigravityIntegration {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             provided_resource_identities: provided,
-            evidence: "The canonical plugin.json is a valid Antigravity plugin manifest, so the package is installed whole, straight from the UZE store, through `agy plugin install`; its conventional skills/ plus any author-shipped mcp_config.json are what it declares (default-policy Skills only — a non-default invoke policy degrades and is delivered capability-level, reported honestly). Undeclared resources fall back to individual attachment."
+            evidence: "The canonical plugin.json is a valid Antigravity plugin manifest, so the package is installed whole, straight from the UZE store, through `agy plugin install`; its conventional skills/ plus any author-shipped mcp_config.json are what it declares. Undeclared resources fall back to individual attachment."
                 .to_owned(),
         })
     }
