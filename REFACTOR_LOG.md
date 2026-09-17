@@ -3,6 +3,16 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Appearance no longer freezes; naming journey runs on macOS
+
+- **Bug (UI freeze):** the Appearance list opens with a heading. Moving up from the first choice clamped the index back onto that heading at every step and never left the loop.
+  - Found while consolidating the four selection movers.
+  - `moving_up_from_the_first_appearance_choice_stays_put` runs the move on a thread with a timeout. It fails without the fix.
+  - The walk now uses checked arithmetic bounded by the list, and the movers share `step_within`.
+- **CI:** macOS `E2E - UZE` failed on `03-naming-the-work`, the only red job on `8be9c88`. The journey read the agent's stamp from `/proc`, which macOS lacks; it now uses `ps eww`, verified on the journey image.
+  - Gate: 1 903/0.
+  - Journeys: 23/23.
+
 ## 2026-09-17 — `clippy::pedantic` evaluated; only defect-finding lints acted on
 
 - **Survey:** `-W clippy::pedantic` reports 1 220 warnings. The bulk are stylistic:
