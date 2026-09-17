@@ -11,13 +11,14 @@ use std::{fs, path::Path, path::PathBuf};
 use uze_core::{
     Result, UzeError,
     capability::Resource,
-    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
+    exposure::ExposurePlan,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     router::CompatibilityRoute,
     state,
 };
 
 use super::AntigravityIntegration;
+use crate::shared::mcp::managed_stdio_plan;
 use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
@@ -40,25 +41,16 @@ impl AntigravityIntegration {
                 "Antigravity setup has not completed, so no managed MCP entry exists yet.",
             );
         }
-        let Some((command, args)) = stdio_command(resource) else {
-            return unsupported(
-                "Antigravity MCP attachment is only modeled for a stdio command/args server.",
-            );
-        };
-        ExposurePlan {
-            route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
-                entry_name,
-                transport: "stdio".to_owned(),
-                command,
-                args,
-                cwd: None,
-                environment: Vec::new(),
-                enabled: None,
-            }),
-            evidence: "UZE registers the store-owned MCP server once via `agy mcp add <name> <command> [args...]`, writing to ~/.gemini/config/mcp_config.json's mcpServers. The Antigravity MCP runtime remains native."
-                .to_owned(),
-        }
+        managed_stdio_plan(
+            resource,
+            entry_name,
+            CompatibilityRoute::Adaptable,
+            None,
+            "UZE registers the store-owned MCP server once via `agy mcp add <name> <command> [args...]`, writing to ~/.gemini/config/mcp_config.json's mcpServers. The Antigravity MCP runtime remains native.",
+        )
+        .unwrap_or_else(|| {
+            unsupported("Antigravity MCP attachment is only modeled for a stdio command/args server.")
+        })
     }
 }
 
@@ -68,7 +60,7 @@ pub(super) fn attach_mcp_entry(
     entry_name: &str,
     command: &Path,
     args: &[String],
-) -> Result<Option<PathBuf>> {
+) -> Result<()> {
     // Checked before ever calling `mcp add`: Antigravity's verb is
     // add-or-update (help text: "Add or update an MCP server
     // configuration"), so a colliding, differently-configured name would be
@@ -97,7 +89,7 @@ pub(super) fn attach_mcp_entry(
             &output,
         )));
     }
-    Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
+    Ok(())
 }
 
 fn mcp_config_path(command_home: &Path) -> PathBuf {
@@ -212,23 +204,6 @@ fn inspect_antigravity_mcp_value(
         state: AttachmentState::Matched,
         reason: "Antigravity MCP entry matches receipt".to_owned(),
     }
-}
-
-pub(super) fn stdio_command(resource: &Resource) -> Option<(PathBuf, Vec<String>)> {
-    let config: serde_json::Value = serde_json::from_slice(&resource.capability.payload).ok()?;
-    let command = config.get("command").and_then(serde_json::Value::as_str)?;
-    let args = config
-        .get("args")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    Some((PathBuf::from(command), args))
 }
 
 #[cfg(test)]

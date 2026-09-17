@@ -3,12 +3,12 @@
 //! the same file inspection and detach read; the OpenCode MCP runtime
 //! remains native.
 
-use std::{fs, path::Path, path::PathBuf};
+use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
     capability::Resource,
-    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
+    exposure::ExposurePlan,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
     router::CompatibilityRoute,
@@ -16,6 +16,7 @@ use uze_core::{
 };
 
 use super::OpenCodeIntegration;
+use crate::shared::mcp::managed_stdio_plan;
 use crate::shared::plan::unsupported;
 
 pub(super) fn configured_server<'a>(
@@ -42,23 +43,14 @@ impl OpenCodeIntegration {
         else {
             return unsupported("Resource has no derivable attachment entry name.");
         };
-        let Some((command, args)) = parse_mcp(&resource.capability.payload) else {
-            return unsupported("mcp.json server entry is missing a usable `command` field.");
-        };
-        ExposurePlan {
-            route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
-                entry_name,
-                transport: "stdio".to_owned(),
-                command,
-                args,
-                cwd: None,
-                environment: Vec::new(),
-                enabled: Some(true),
-            }),
-            evidence: "UZE writes the store-owned MCP server into opencode.json's mcp.servers.<name> entry (type local, command array) — the one file attach, inspection and detach all read, with foreign entries left untouched; OpenCode MCP runtime remains native."
-                .to_owned(),
-        }
+        managed_stdio_plan(
+            resource,
+            entry_name,
+            CompatibilityRoute::Native,
+            Some(true),
+            "UZE writes the store-owned MCP server into opencode.json's mcp.servers.<name> entry (type local, command array) — the one file attach, inspection and detach all read, with foreign entries left untouched; OpenCode MCP runtime remains native.",
+        )
+        .unwrap_or_else(|| unsupported("mcp.json server entry is missing a usable `command` field."))
     }
 }
 
@@ -67,7 +59,7 @@ pub(super) fn attach_mcp_config(
     entry_name: &str,
     command: &Path,
     args: &[String],
-) -> Result<Option<PathBuf>> {
+) -> Result<()> {
     let mut config = if config_path.exists() {
         serde_json::from_slice(&fs::read(config_path).map_err(|source| UzeError::Read {
             path: config_path.to_path_buf(),
@@ -104,7 +96,7 @@ pub(super) fn attach_mcp_config(
             .collect();
     let desired = serde_json::json!({ "type": "local", "command": command_values });
     match servers.get(entry_name) {
-        Some(current) if current == &desired => return Ok(Some(config_path.to_path_buf())),
+        Some(current) if current == &desired => return Ok(()),
         Some(_) => {
             return Err(UzeError::ExposureUnavailable(format!(
                 "OpenCode MCP entry `{entry_name}` already exists and is not owned by this UZE plan"
@@ -122,25 +114,7 @@ pub(super) fn attach_mcp_config(
     // Atomic: a crash mid-write must not corrupt the user's opencode.json.
     let mut bytes = serde_json::to_vec_pretty(&config).expect("config serializable");
     bytes.push(b'\n');
-    write_atomic(config_path, &bytes)?;
-    Ok(Some(config_path.to_path_buf()))
-}
-
-fn parse_mcp(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
-    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    Some((
-        PathBuf::from(value.get("command")?.as_str()?),
-        value
-            .get("args")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    ))
+    write_atomic(config_path, &bytes)
 }
 
 pub(super) fn inspect_opencode_mcp_value(

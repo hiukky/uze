@@ -551,8 +551,8 @@ impl IntegrationPort for ClaudeIntegration {
                     entry_name,
                     command,
                     args,
-                )?
-                .is_some()
+                )?;
+                true
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,

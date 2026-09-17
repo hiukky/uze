@@ -2,20 +2,21 @@
 //! `claude mcp <verb>` CLI surface, plus `~/.claude.json`'s `mcpServers`
 //! read path used for read-only inspection.
 
-use std::{fs, path::Path, path::PathBuf};
+use std::{fs, path::Path};
 
 use uze_core::{
-    Result, UzeError,
+    Result,
     capability::Resource,
-    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
+    exposure::ExposurePlan,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     router::CompatibilityRoute,
     state,
 };
 
 use super::ClaudeIntegration;
+use crate::shared::mcp::{cli_add, cli_remove, managed_stdio_plan};
 use crate::shared::plan::unsupported;
-use crate::shared::process::{capture, failed_message, is_cli_safe_token, succeeds};
+use crate::shared::process::is_cli_safe_token;
 
 impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -36,67 +37,35 @@ impl ClaudeIntegration {
                 "MCP server name would be parsed as a flag by `claude mcp add`, not a name; refusing to attach.",
             );
         }
-        let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
-            return unsupported("mcp.json server entry is missing a usable `command` field.");
-        };
-        ExposurePlan {
-            route: CompatibilityRoute::Adaptable,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
-                entry_name,
-                transport: "stdio".to_owned(),
-                command,
-                args,
-                cwd: None,
-                environment: Vec::new(),
-                enabled: None,
-            }),
-            evidence: "UZE registers the store-owned MCP server once via `claude mcp add --scope user --transport stdio`, writing to ~/.claude.json's mcpServers. Available to every future session in any project with no --plugin-dir-style flag."
-                .to_owned(),
-        }
+        managed_stdio_plan(
+            resource,
+            entry_name,
+            CompatibilityRoute::Adaptable,
+            None,
+            "UZE registers the store-owned MCP server once via `claude mcp add --scope user --transport stdio`, writing to ~/.claude.json's mcpServers. Available to every future session in any project with no --plugin-dir-style flag.",
+        )
+        .unwrap_or_else(|| unsupported("mcp.json server entry is missing a usable `command` field."))
     }
 }
 
+/// Registers the server at user scope (`--scope user`), where every future
+/// session in any project reads it.
 pub(super) fn attach_mcp_entry(
     executable: &Path,
     command_home: &Path,
     entry_name: &str,
     command: &Path,
     args: &[String],
-) -> Result<Option<PathBuf>> {
-    if mcp_entry_exists(executable, command_home, entry_name) {
-        return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
-    }
-    let mut mcp_args: Vec<std::ffi::OsString> = vec![
-        std::ffi::OsString::from("mcp"),
-        std::ffi::OsString::from("add"),
-        std::ffi::OsString::from("--scope"),
-        std::ffi::OsString::from("user"),
-        std::ffi::OsString::from("--transport"),
-        std::ffi::OsString::from("stdio"),
-        std::ffi::OsString::from(entry_name),
-        std::ffi::OsString::from("--"),
-    ];
-    mcp_args.push(command.as_os_str().to_owned());
-    mcp_args.extend(args.iter().map(std::ffi::OsString::from));
-    let output = capture(executable, command_home, &mcp_args).map_err(|error| {
-        UzeError::HarnessCommand(format!(
-            "failed to run `claude mcp add` for entry `{entry_name}`: {error}"
-        ))
-    })?;
-    if !output.status.success() {
-        return Err(UzeError::HarnessCommand(failed_message(
-            &format!("claude mcp add `{entry_name}`"),
-            &output,
-        )));
-    }
-    Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
-}
-
-/// Idempotently checked before ever calling `claude mcp add` — Claude's
-/// overwrite behavior for a colliding, differently-configured name was not
-/// confirmed by research, so UZE never relies on it (see ADR-007).
-pub(super) fn mcp_entry_exists(executable: &Path, command_home: &Path, entry_name: &str) -> bool {
-    succeeds(executable, command_home, &["mcp", "get", entry_name])
+) -> Result<()> {
+    cli_add(
+        executable,
+        command_home,
+        "claude",
+        &["mcp", "add", "--scope", "user", "--transport", "stdio"],
+        entry_name,
+        command,
+        args,
+    )
 }
 
 /// Claude has no structured `mcp get` output. This is deliberately read-only:
@@ -182,49 +151,7 @@ pub(super) fn inspect_claude_mcp(
 
 /// Removes a UZE-registered MCP entry. Wired to the remove lifecycle
 /// (`detach_receipt`) and exercised directly by `tests/integrations/
-/// contract.rs`. `command_home` is set explicitly as `HOME` for the same
-/// reason `attach_mcp_entry` does — never relies on the calling process's
-/// own environment.
+/// contract.rs`; `command_home` is always set as `HOME`, never inherited.
 pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
-    if !is_cli_safe_token(entry_name) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "MCP server name `{entry_name}` would be parsed as a flag by `claude mcp remove`, not a name; refusing to detach."
-        )));
-    }
-    let output =
-        capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
-            UzeError::HarnessCommand(format!(
-                "failed to run `claude mcp remove` for entry `{entry_name}`: {error}"
-            ))
-        })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    // Already absent is not an error — removal is idempotent.
-    if !mcp_entry_exists(executable, command_home, entry_name) {
-        return Ok(());
-    }
-    Err(UzeError::HarnessCommand(failed_message(
-        &format!("claude mcp remove `{entry_name}`"),
-        &output,
-    )))
-}
-
-/// Parses `{"command": "...", "args": [...]}` from a payload produced by
-/// `engine`'s MCP resource discovery (one server's config object,
-/// already extracted from `mcp.json`'s `mcpServers` map).
-pub(super) fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
-    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    let command = value.get("command")?.as_str()?.to_owned();
-    let args = value
-        .get("args")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    Some((PathBuf::from(command), args))
+    cli_remove(executable, command_home, "claude", entry_name)
 }

@@ -512,8 +512,8 @@ impl IntegrationPort for CodexIntegration {
                     entry_name,
                     command,
                     args,
-                )?
-                .is_some()
+                )?;
+                true
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,

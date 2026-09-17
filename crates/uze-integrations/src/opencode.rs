@@ -297,7 +297,10 @@ impl IntegrationPort for OpenCodeIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_config(&self.config_path, entry_name, command, args)?.is_some(),
+            } => {
+                attach_mcp_config(&self.config_path, entry_name, command, args)?;
+                true
+            }
             _ => false,
         };
         Ok(attached.then_some(artifact))

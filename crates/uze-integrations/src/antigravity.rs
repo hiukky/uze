@@ -485,14 +485,16 @@ impl IntegrationPort for AntigravityIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_entry(
-                &self.provisioning_executable(),
-                &self.command_home,
-                entry_name,
-                command,
-                args,
-            )?
-            .is_some(),
+            } => {
+                attach_mcp_entry(
+                    &self.provisioning_executable(),
+                    &self.command_home,
+                    entry_name,
+                    command,
+                    args,
+                )?;
+                true
+            }
             ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
