@@ -5925,6 +5925,122 @@ mod workspace_tests {
         }
     }
 
+    /// A space's own row lands on a shell of the space's, not on whichever
+    /// agent the strip was showing: it is the way back to the space's
+    /// shells. A space of nothing but agents has no such tab, so the click
+    /// is a plain switch.
+    #[test]
+    fn a_space_row_lands_on_its_own_shell_and_otherwise_switches_the_space() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-row"));
+        let click_space_row = |model: WorkspaceModel| {
+            let mut driven = driven(model, &home);
+            driven.frame();
+            let (row, space) = driven
+                .attach
+                .model
+                .hits
+                .iter()
+                .find_map(|(rect, hit)| match hit {
+                    WorkspaceHit::SelectSpace(space) => Some((*rect, *space)),
+                    _ => None,
+                })
+                .expect("the space row is a target");
+            driven.press(row.x + 1, row.y);
+            let sent = driven.sent();
+            (space, sent)
+        };
+
+        let mut with_shell = session("/repo", uze_terminal::SpaceKind::Worktree);
+        let space = with_shell.selected_space().id;
+        let shell = with_shell.selected_tab().id;
+        let agent_pane = with_shell.add_tab(
+            space,
+            "agent 1".into(),
+            None,
+            80,
+            24,
+            PathBuf::from("/repo"),
+        );
+        with_shell.update_pane_status(agent_pane, PathBuf::from("/repo"), "agent".into());
+        let (_, sent) = click_space_row(model_of(with_shell));
+        assert!(
+            sent.iter().any(
+                |request| matches!(request, ClientRequest::SelectTab { tab } if *tab == shell)
+            ),
+            "the space's own shell was not selected: {sent:?}"
+        );
+
+        let mut only_agents = session("/repo", uze_terminal::SpaceKind::Worktree);
+        let pane = only_agents.selected_tab().pane.id;
+        only_agents.update_pane_status(pane, PathBuf::from("/repo"), "agent".into());
+        let (space, sent) = click_space_row(model_of(only_agents));
+        assert!(
+            sent.iter()
+                .any(|request| matches!(request, ClientRequest::SelectSpace { space: selected } if *selected == space)),
+            "a space of agents alone was not switched to: {sent:?}"
+        );
+    }
+
+    /// The context menu answers the keyboard like the agent picker does:
+    /// the selection moves within the items and stops at their ends,
+    /// Enter acts on the highlighted one and closes the menu.
+    #[test]
+    fn the_context_menu_is_driven_by_the_keyboard() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-menu-keys"));
+        let mut driven = driven(
+            model_of(session("/repo", uze_terminal::SpaceKind::Worktree)),
+            &home,
+        );
+        driven.frame();
+        let row = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)).then_some(*rect))
+            .expect("the space row is a target");
+        driven.mouse(row.x + 1, row.y, MouseEventKind::Down(MouseButton::Right));
+        let scopes = [
+            uze_keys::Scope::Global,
+            uze_keys::Scope::Workspace,
+            uze_keys::Scope::ContextMenu,
+        ];
+        let press = |driven: &mut Driven<'_>, action| {
+            let chord = uze_keys::active()
+                .chord_for(action, &scopes)
+                .expect("the menu is reachable from the keyboard");
+            driven.press_key(key_event(chord));
+        };
+        let selected = |driven: &Driven<'_>| {
+            driven
+                .attach
+                .model
+                .context_menu
+                .as_ref()
+                .map(|menu| menu.selected)
+        };
+
+        press(&mut driven, uze_keys::Action::SelectPrevious);
+        assert_eq!(selected(&driven), Some(0), "it stops at the first item");
+        press(&mut driven, uze_keys::Action::SelectNext);
+        press(&mut driven, uze_keys::Action::SelectNext);
+        assert_eq!(selected(&driven), Some(1), "and at the last");
+
+        let _ = driven.sent();
+        press(&mut driven, uze_keys::Action::Activate);
+        assert!(
+            driven.attach.model.context_menu.is_none(),
+            "acting closes it"
+        );
+        assert!(
+            driven
+                .sent()
+                .iter()
+                .any(|request| matches!(request, ClientRequest::CloseSpace { .. })),
+            "Enter acted on the highlighted item, delete"
+        );
+    }
+
     /// A lone space can be deleted like any other: its menu offers it, and
     /// deleting it names a space at home to take its place, so the
     /// workspace is never left with nowhere to land.
