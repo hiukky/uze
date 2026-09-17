@@ -1322,6 +1322,11 @@ impl Server {
             .lock()
             .expect("panes poisoned")
             .insert(pane_id, Arc::new(runtime));
+        // The reader is live before the pane is registered, and damage for
+        // a pane the broadcaster cannot find yet is dropped. A program that
+        // prints once and then waits — a harness's banner, then its prompt —
+        // would never be drawn, so the pane is flushed once it can be found.
+        let _ = self.damage.send(pane_id);
         Ok(())
     }
 
@@ -2181,7 +2186,7 @@ impl Handshake {
 impl Read for Handshake {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if let Some(deadline) = self.deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -2917,6 +2922,51 @@ mod tests {
     /// attach that named the launch directory every time reopened the
     /// space closed just before it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// A program's first output can land before its pane is registered,
+    /// and damage for a pane nobody can find is dropped. Registration is
+    /// what flushes it, so a pane is delivered even when its program
+    /// prints nothing more — here, nothing at all.
+    #[test]
+    fn a_spawned_pane_is_flushed_once_it_is_registered() {
+        let scratch = uze_testkit::temp::socket_scratch("flushed-on-spawn");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+
+        let (server, damage) =
+            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let pane = server
+            .session
+            .lock()
+            .expect("session poisoned")
+            .create_space(None, worktree_seat(&project), 80, 24)
+            .pane;
+        let silent = Launch::Program {
+            argv: vec!["sleep".into(), "30".into()],
+            env: Vec::new(),
+        };
+        server.spawn_pane(pane, silent).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let flushed = std::iter::from_fn(|| {
+            damage
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .ok()
+        })
+        .any(|notified| notified == pane);
+        server.stop_panes();
+        assert!(
+            flushed,
+            "the silent pane was never offered to the broadcaster"
+        );
+    }
+
     #[test]
     fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {
         let scratch = uze_testkit::temp::socket_scratch("rootless");
