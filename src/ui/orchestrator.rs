@@ -2014,6 +2014,10 @@ struct Remembered {
     /// Repositories an evaluation is in flight for, so a quiet pane and
     /// the clock cannot queue the same read twice.
     task_eval_pending: BTreeSet<PathBuf>,
+    /// The directories an evaluation has answered for at least once,
+    /// whatever it found — a directory that is no repository is answered
+    /// too, and must not be asked again on every frame.
+    evaluated: BTreeSet<PathBuf>,
     /// Shell tabs told to take an agent label, and the label each was
     /// told, until the session confirms it — so two updates arriving
     /// before the rename lands do not ask twice.
@@ -2987,6 +2991,33 @@ impl WorkspaceModel {
         preserved
     }
 
+    /// Every directory the sidebar names a branch for — each space's root
+    /// and each agent's own — that no evaluation has answered for yet.
+    fn unread_named_directories(&self, identities: &[AgentIdentity]) -> Vec<PathBuf> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        let mut unread: Vec<PathBuf> = session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| {
+                std::iter::once(space.root.clone()).chain(
+                    render::agent_tabs_of(space, identities)
+                        .into_iter()
+                        .map(|tab| tab.pane.cwd.clone()),
+                )
+            })
+            .filter(|cwd| {
+                let key = evaluation_key(cwd);
+                !self.remembered.evaluated.contains(&key)
+                    && !self.remembered.task_eval_pending.contains(&key)
+            })
+            .collect();
+        unread.dedup();
+        unread
+    }
+
     fn schedule_evaluation(
         &mut self,
         home: &UzeHome,
@@ -3719,36 +3750,50 @@ fn dispatch_menu_action<W: io::Write>(
                     },
                 );
             }
-            MenuTarget::Tab(tab) => {
-                if tab_needs_replacement_shell(model, identities, tab) {
-                    // The runtime refuses to leave a space without a focused tab.
-                    // Select the target first: right-clicking a background agent must
-                    // replace it in its own space, not in the currently selected one.
-                    let _ = send_request(stream, &ClientRequest::SelectTab { tab });
-                    let (columns, rows) = model.last_size;
-                    let _ = send_request(
-                        stream,
-                        &ClientRequest::CreateTab {
-                            label: next_shell_label_for_tab(model, tab),
-                            // It stands in for the agent rather than
-                            // beside it: the agent is on its way out.
-                            agent: None,
-                            columns,
-                            rows,
-                            cwd: tab_cwd(model, tab),
-                            command: None,
-                            env: Vec::new(),
-                        },
-                    );
-                }
-                let _ = send_request(stream, &ClientRequest::CloseTab { tab });
-            }
+            MenuTarget::Tab(tab) => close_tab_keeping_a_shell(stream, model, identities, tab),
         },
         // Every other action is one no menu offers here — the target
         // vocabulary is the product's whole one now, and this menu uses
         // two of it.
         _ => {}
     }
+}
+
+/// Closes `tab`, first opening a shell of the space's own in its place when
+/// closing it would leave the space with none — the same rule that replaces
+/// a closed last space with one at home. The space's own shell is what its
+/// header lands on; without one a click there reached nothing.
+///
+/// Every way a tab is closed goes through here: the strip's close mark,
+/// the keyboard, and the sidebar's menu.
+fn close_tab_keeping_a_shell<W: io::Write>(
+    stream: &mut W,
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+    tab: TabId,
+) {
+    if tab_needs_replacement_shell(model, identities, tab) {
+        // Select the target first: the new shell opens in the selected
+        // space, and a background agent closed from the sidebar is replaced
+        // in its own space, not in the one in front.
+        let _ = send_request(stream, &ClientRequest::SelectTab { tab });
+        let (columns, rows) = model.last_size;
+        let _ = send_request(
+            stream,
+            &ClientRequest::CreateTab {
+                label: next_shell_label_for_tab(model, tab),
+                // It stands in for the tab rather than beside it: that tab
+                // is on its way out.
+                agent: None,
+                columns,
+                rows,
+                cwd: tab_cwd(model, tab),
+                command: None,
+                env: Vec::new(),
+            },
+        );
+    }
+    let _ = send_request(stream, &ClientRequest::CloseTab { tab });
 }
 
 /// A normal tab can close when it has a sibling. A lone recognized agent is
@@ -3767,17 +3812,28 @@ fn can_close_tab_from_menu(
     })
 }
 
+/// Whether closing `tab` would leave its space without a shell of its own:
+/// no other tab that is one, nor a shell of `tab`'s that becomes one when
+/// `tab` goes (see `Session::remove_tab`). A space's only tab, when that tab
+/// is already its own shell, is not replaced — the runtime keeps it.
 fn tab_needs_replacement_shell(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
     tab: TabId,
 ) -> bool {
+    let own = |candidate: &Tab| {
+        candidate.agent.is_none() && agent_identity_for_tab(identities, candidate).is_none()
+    };
     model.session.as_ref().is_some_and(|session| {
         session.workspace.spaces.iter().any(|space| {
-            space.tabs.len() == 1
-                && space.tabs.first().is_some_and(|candidate| {
-                    candidate.id == tab && agent_identity_for_tab(identities, candidate).is_some()
-                })
+            let Some(closing) = space.tabs.iter().find(|candidate| candidate.id == tab) else {
+                return false;
+            };
+            let lone_own_shell = space.tabs.len() == 1 && own(closing);
+            let another_remains = space.tabs.iter().any(|candidate| {
+                candidate.id != tab && (own(candidate) || candidate.agent == Some(tab))
+            });
+            !lone_own_shell && !another_remains
         })
     })
 }

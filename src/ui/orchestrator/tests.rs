@@ -4669,8 +4669,14 @@ mod workspace_tests {
             .branches
             .insert(PathBuf::from("/repo"), "main".into());
         let rows = sidebar(&model, &identities_fixture()).rows;
+        let agent = rows
+            .iter()
+            .position(|row| row.contains("Agent"))
+            .expect("the agent's row");
         assert!(
-            !rows.iter().any(|row| row.contains("main")),
+            !rows[agent..=agent + 1]
+                .iter()
+                .any(|row| row.contains("main")),
             "no task, no branch: {rows:?}"
         );
     }
@@ -4692,10 +4698,15 @@ mod workspace_tests {
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
         let rows = sidebar(&model, &identities_fixture()).rows;
-        let caption = rows
+        let agent = rows
             .iter()
-            .find(|row| row.contains("main"))
-            .expect("the branch captions the agent");
+            .position(|row| row.contains("Agent"))
+            .expect("the agent's row");
+        let caption = &rows[agent + 1];
+        assert!(
+            caption.contains("main"),
+            "the branch captions the agent: {caption:?}"
+        );
         assert!(
             caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
             "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
@@ -4718,7 +4729,8 @@ mod workspace_tests {
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
         let rows = sidebar(&model, &identities_fixture()).rows;
-        let caption = rows.iter().find(|row| row.contains("main")).unwrap();
+        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
+        let caption = &rows[agent + 1];
         assert!(
             !caption.contains('\u{21e3}') && caption.ends_with("\u{21e1}\u{2083} \u{2502}"),
             "nothing to pull, three to push: {caption:?}"
@@ -4729,7 +4741,8 @@ mod workspace_tests {
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync::default());
         let rows = sidebar(&model, &identities_fixture()).rows;
-        let caption = rows.iter().find(|row| row.contains("main")).unwrap();
+        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
+        let caption = &rows[agent + 1];
         assert!(
             !caption.contains('\u{21e1}') && !caption.contains('\u{21e3}'),
             "in sync says nothing: {caption:?}"
@@ -5534,6 +5547,88 @@ mod workspace_tests {
         assert!(!can_close_tab_from_menu(&model, &identities(), tab));
     }
 
+    /// A space always keeps a shell of its own: closing the last one beside
+    /// its agents opens another first, while a shell with a sibling of its
+    /// kind, or an agent whose own shells become the space's, needs none.
+    #[test]
+    fn closing_a_spaces_last_own_shell_is_replaced_and_no_other_close_is() {
+        let session_of_one_agent = || {
+            let mut solo = session("/tmp", uze_terminal::SpaceKind::Worktree);
+            solo.workspace.spaces[0].tabs[0].pane.process = "claude".into();
+            solo
+        };
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
+        let space = session.workspace.selected_space;
+        let shell = session.workspace.spaces[0].tabs[0].id;
+        let pane = session.add_tab(space, "Claude Code".into(), None, 80, 24, "/tmp".into());
+        session.update_pane_status(pane, "/tmp".into(), "claude".into());
+        let agent = session.workspace.spaces[0].tabs[1].id;
+        let model = model_of(session.clone());
+        assert!(
+            tab_needs_replacement_shell(&model, &identities(), shell),
+            "the space's only shell of its own"
+        );
+        assert!(
+            !tab_needs_replacement_shell(&model, &identities(), agent),
+            "the agent goes, the shell stays"
+        );
+
+        session.add_tab(space, "shell 2".into(), None, 80, 24, "/tmp".into());
+        let model = model_of(session.clone());
+        assert!(
+            !tab_needs_replacement_shell(&model, &identities(), shell),
+            "another shell of its own remains"
+        );
+
+        let mut solo = session_of_one_agent();
+        let lone = solo.workspace.spaces[0].tabs[0].id;
+        let space = solo.workspace.selected_space;
+        solo.add_tab(space, "shell 2".into(), Some(lone), 80, 24, "/tmp".into());
+        let model = model_of(solo);
+        assert!(
+            !tab_needs_replacement_shell(&model, &identities(), lone),
+            "the agent's own shell becomes the space's when it goes"
+        );
+    }
+
+    /// Closed from the keyboard, the last shell of a space's own is
+    /// replaced before it goes, so the header still has somewhere to land.
+    #[test]
+    fn the_close_chord_on_a_spaces_last_shell_opens_another_first() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-last-shell"));
+        let mut session = session("/repo", uze_terminal::SpaceKind::Worktree);
+        let space = session.workspace.selected_space;
+        let shell = session.workspace.spaces[0].tabs[0].id;
+        let pane = session.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
+        session.update_pane_status(pane, "/repo".into(), "agent".into());
+        session.workspace.spaces[0].selected_tab = shell;
+        let mut driven = driven(model_of(session), &home);
+        let close = uze_keys::active()
+            .chord_for(uze_keys::Action::CloseTab, &[uze_keys::Scope::Workspace])
+            .expect("closing a tab is reachable from the keyboard");
+
+        driven.press_key(key_event(close));
+
+        let sent = driven.sent();
+        let opened = sent.iter().position(|request| {
+            matches!(
+                request,
+                ClientRequest::CreateTab {
+                    agent: None,
+                    command: None,
+                    ..
+                }
+            )
+        });
+        let closed = sent.iter().position(
+            |request| matches!(request, ClientRequest::CloseTab { tab } if *tab == shell),
+        );
+        assert!(
+            matches!((opened, closed), (Some(opened), Some(closed)) if opened < closed),
+            "a shell of its own opens before the last one closes: {sent:?}"
+        );
+    }
+
     #[test]
     fn a_plain_shell_matches_neither_signal() {
         let tab = tab_with("shell", "zsh");
@@ -5980,7 +6075,9 @@ mod workspace_tests {
     /// and in the accent.
     #[test]
     fn a_space_is_one_block_down_its_gutter() {
-        let model = three_spaces();
+        let mut model = three_spaces();
+        // All three spaces in the column, with the steps folded at the foot.
+        model.first_steps_collapsed = true;
         let Sidebar {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
@@ -5993,17 +6090,18 @@ mod workspace_tests {
                 SpaceId(1),
                 Symbol::TreeBranch,
                 Symbol::TreeVertical,
-                [muted, muted, muted],
+                [muted, muted, muted, muted],
             ),
             (
                 SpaceId(3),
                 Symbol::TreeBranch,
                 Symbol::TreeVertical,
-                [muted, accent, accent],
+                [muted, muted, accent, accent],
             ),
         ] {
             let header = space_header(&hits, space);
-            let (column, span) = (header.x, header.y..header.y + 3);
+            // Header, its caption, then the agent's two rows.
+            let (column, span) = (header.x, header.y..header.y + 4);
             for (row, hue) in span.clone().zip(hues) {
                 assert_eq!(
                     buffer[(column, row)].fg,
@@ -6011,12 +6109,12 @@ mod workspace_tests {
                     "row {row} of {space:?}: {rows:?}"
                 );
             }
-            let item = &rows[span.start as usize + 1];
+            let item = &rows[span.start as usize + 2];
             assert!(
                 item.trim_start().starts_with(&theme::glyph(branch)),
                 "the agent branches off the gutter: {item:?}"
             );
-            let below = &rows[span.start as usize + 2];
+            let below = &rows[span.start as usize + 3];
             assert!(
                 below.trim_start().starts_with(&theme::glyph(caption)),
                 "and its caption runs down it: {below:?}"
@@ -6027,11 +6125,23 @@ mod workspace_tests {
                 "the blank row after the space is outside its gutter: {rows:?}"
             );
         }
+
+        // The selected block is filled up to its gutter, never under it:
+        // the line is the block's edge.
+        let header = space_header(&hits, SpaceId(3));
+        for row in header.y..header.y + 4 {
+            assert_ne!(
+                buffer[(header.x, row)].bg,
+                buffer[(header.x + 1, row)].bg,
+                "row {row}: the gutter's cell stays off the fill: {rows:?}"
+            );
+        }
     }
 
-    /// The column reads space > agent: an agent's status glyph under the
-    /// space's name, the agent's name one step in, and its caption under
-    /// that name — the same columns in either kind of space.
+    /// The column reads space > agent: the header's fold against the
+    /// gutter and its name just after, with the space's caption pinned under
+    /// its `⇄`; each agent's status glyph and name one column further in, its
+    /// caption under that name — the same in either kind of space.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -6045,22 +6155,60 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
-        let agent = column_of(&rows[header + 1], "shell");
-        assert_eq!(agent, name + 2, "{rows:?}");
-        assert_eq!(column_of(&rows[header + 2], "/one"), agent, "{rows:?}");
+        let toggle = column_of(&rows[header], "⇄");
+        assert_eq!(column_of(&rows[header + 1], "/one") + 3, toggle, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], &idle), name - 1, "{rows:?}");
+        let agent = column_of(&rows[header + 2], "shell");
+        assert_eq!(agent, name + 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 3], "/one"), agent, "{rows:?}");
 
         let flat = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &tenant_identities());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let toggle = column_of(&rows[header], "⇄");
+        assert_eq!(column_of(&rows[header + 1], "main") + 3, toggle, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], &idle), name - 1, "{rows:?}");
         assert_eq!(
-            column_of(&rows[header + 1], "agent 1"),
-            name + 2,
+            column_of(&rows[header + 2], "agent 1"),
+            name + 1,
             "{rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 2], "main"), name + 2, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 3], "main"), name + 1, "{rows:?}");
+    }
+
+    /// A space's root and each of its agents' directories are read as soon
+    /// as the sidebar names them — once each, answered or still asked.
+    #[test]
+    fn every_directory_the_sidebar_names_is_read_once() {
+        let mut model = three_spaces();
+        let unread = |model: &WorkspaceModel| {
+            let mut unread = model.unread_named_directories(&identities_fixture());
+            unread.sort();
+            unread
+        };
+        assert_eq!(
+            unread(&model),
+            ["/one", "/three", "/two"].map(PathBuf::from).to_vec(),
+            "each root, which is also where each agent runs"
+        );
+
+        model.remembered.evaluated.insert(PathBuf::from("/one"));
+        model
+            .remembered
+            .task_eval_pending
+            .insert(PathBuf::from("/two"));
+        assert_eq!(unread(&model), vec![PathBuf::from("/three")]);
+
+        let session = model.session.as_mut().unwrap();
+        let space = session.workspace.selected_space;
+        let pane = session.add_tab(space, "agent 2".into(), None, 80, 24, "/three".into());
+        session.update_pane_status(pane, "/three/.worktrees/x".into(), "agent".into());
+        model.remembered.evaluated.insert(PathBuf::from("/three"));
+        assert!(
+            unread(&model).is_empty(),
+            "a slot is answered by its repository's one evaluation"
+        );
     }
 
     /// The fold minimizes a space to its header and opens it again, on this
@@ -6137,10 +6285,11 @@ mod workspace_tests {
         assert!(lit, "{folded:?}");
     }
 
-    /// Minimized, a space is still a two-row item: under its header, the
-    /// agent it is on, else the branch its root is on, else the root.
+    /// A space is a two-row item, open or minimized, and its caption says
+    /// where its work is either way: the branch its root is on, else the
+    /// root — never the agent that was in front when it was folded.
     #[test]
-    fn a_folded_space_names_its_agent_else_its_branch_else_its_root() {
+    fn a_space_caption_names_where_it_is_open_or_folded() {
         let caption = |model: &WorkspaceModel, space: SpaceId| {
             let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, space).y as usize;
@@ -6148,24 +6297,26 @@ mod workspace_tests {
         };
         let mut model = three_spaces();
         let one = SpaceId(1);
-        model.remembered.collapsed_spaces.insert(one);
-        assert!(caption(&model, one).contains("shell"), "the agent it is on");
-
-        let session = model.session.as_mut().unwrap();
-        let pane = session.workspace.spaces[0].tabs[0].pane.id;
-        session.update_pane_status(pane, "/one".into(), "bash".into());
-        let row = caption(&model, one);
-        assert!(
-            row.contains("/one"),
-            "no agent, no branch: the root: {row:?}"
-        );
-
-        model
-            .remembered
-            .branches
-            .insert(PathBuf::from("/one"), "main".into());
-        let row = caption(&model, one);
-        assert!(row.contains("main"), "no agent: the branch: {row:?}");
+        for folded in [false, true] {
+            if folded {
+                model.remembered.collapsed_spaces.insert(one);
+            }
+            model.remembered.branches.clear();
+            let row = caption(&model, one);
+            assert!(
+                row.contains("/one") && !row.contains("shell"),
+                "folded={folded}: no branch, the root: {row:?}"
+            );
+            model
+                .remembered
+                .branches
+                .insert(PathBuf::from("/one"), "main".into());
+            let row = caption(&model, one);
+            assert!(
+                row.contains("main") && !row.contains("shell"),
+                "folded={folded}: the branch: {row:?}"
+            );
+        }
     }
 
     /// The scroll bound is measured with the folds, so a column of folded
@@ -6192,7 +6343,11 @@ mod workspace_tests {
         model.remembered.collapsed_spaces.insert(SpaceId(1));
         let folded = sidebar(&model, &identities_fixture()).metrics.tree_overflow;
         assert!(open > 2, "the column overflows: {open}");
-        assert_eq!(open - folded, 1, "two agent rows give way to one caption");
+        assert_eq!(
+            open - folded,
+            2,
+            "the agent's two rows are no longer counted"
+        );
     }
 
     /// A space is carried by its header: while it moves, a line shows where

@@ -521,7 +521,7 @@ impl Attach<'_> {
             }
             Action::CloseTab => {
                 if let Some(tab) = self.model.selected_tab() {
-                    let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
+                    close_tab_keeping_a_shell(&mut self.stream, &self.model, &self.identities, tab);
                 }
             }
             Action::NewAgent => {
@@ -2020,7 +2020,7 @@ impl Attach<'_> {
                 }
             }
             WorkspaceHit::CloseTab(tab) => {
-                let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
+                close_tab_keeping_a_shell(&mut self.stream, &self.model, &self.identities, tab);
             }
             WorkspaceHit::NewTab => {
                 let _ = send_request(
@@ -2449,6 +2449,10 @@ impl Attach<'_> {
                 .remembered
                 .task_eval_pending
                 .remove(&resolution.key);
+            self.model
+                .remembered
+                .evaluated
+                .insert(resolution.key.clone());
             let Some(EvaluationAnswer {
                 primary,
                 branch,
@@ -2581,6 +2585,14 @@ impl Attach<'_> {
             .filter_map(|pane| self.model.pane_cwd(pane))
             .collect();
         for cwd in quiet {
+            self.model
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
+        }
+        // A directory the sidebar names is read the moment it is known,
+        // not when its pane next goes quiet or on the refresh clock: a
+        // folded space's root or a tenant nobody selected otherwise showed
+        // its path for as long as `TASK_REFRESH` before its branch.
+        for cwd in self.model.unread_named_directories(&self.identities) {
             self.model
                 .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
