@@ -729,7 +729,7 @@ pub(super) fn render_sidebar(
         if agents.is_empty() {
             render_empty_space_caption(frame, &mut rows, hits, space, is_active_space);
         } else {
-            SpaceLayout::of(space).draw(frame, &mut rows, hits, space, is_active_space, &agents);
+            SpaceLayout::of(space).draw(frame, &mut rows, hits, model, space, &agents);
         }
         // One blank row *between* spaces (not between a tab and its own
         // detail line, which stays tight per the comment above) — each
@@ -849,13 +849,23 @@ impl SpaceLayout {
         frame: &mut ratatui::Frame<'_>,
         rows: &mut Rows,
         hits: &mut Vec<(Rect, WorkspaceHit)>,
+        model: &WorkspaceModel,
         space: &Space,
-        is_active_space: bool,
         agents: &[SidebarAgent<'_>],
     ) {
         match self {
-            Self::Tree => draw_tree(frame, rows, hits, is_active_space, agents),
-            Self::Flat => draw_flat(frame, rows, hits, space, agents),
+            Self::Tree => {
+                let is_active_space = model
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.workspace.selected_space == space.id);
+                let captions: Vec<TreeCaption> = agents
+                    .iter()
+                    .map(|agent| TreeCaption::resolve(model, space, agent))
+                    .collect();
+                draw_tree(frame, rows, hits, is_active_space, agents, &captions);
+            }
+            Self::Flat => draw_flat(frame, rows, hits, agents),
         }
     }
 }
@@ -873,61 +883,37 @@ struct SidebarAgent<'a> {
     is_current: bool,
     status: AgentTabStatus,
     renaming: Option<&'a str>,
+    drop_target: bool,
+    harness: Option<&'a str>,
+    tick: usize,
+}
+
+/// What only the tree's two-row item says about an agent: its task's mark
+/// and the caption row beneath the label.
+struct TreeCaption {
     task_mark: Option<(String, Color)>,
     /// A checkout removed from under the agent whose task the preserved
     /// list still holds — the row offers to resume it.
     resumable: bool,
-    drop_target: bool,
-    harness: Option<&'a str>,
-    /// The tree's second row: the task's branch, the harness while the
-    /// root toggle is on, or the words for a checkout that is gone.
+    /// The task's branch, the harness while the root toggle is on, or the
+    /// words for a checkout that is gone.
     detail: String,
     detail_color: Color,
     sync: Vec<(String, Color)>,
-    tick: usize,
 }
 
-impl<'a> SidebarAgent<'a> {
-    fn resolve(
-        model: &'a WorkspaceModel,
-        identities: &'a [AgentIdentity],
-        space: &Space,
-        tab: &'a Tab,
-        is_last: bool,
-        is_active_space: bool,
-    ) -> Self {
-        let cwd = tab.pane.cwd.clone();
-        // The agent the space is about, not its `selected_tab`: a shell
-        // opened beside an agent is part of that agent's own context, and
-        // switching into it must not unselect the agent in this tree (see
-        // `space_context_agent`). Every space names a context agent,
-        // including the ones the user is not in — so `selected` alone put
-        // a `●` on one agent per open space, each claiming to be the one
-        // receiving keystrokes. Only the active space's selection is that
-        // agent.
-        let selected = Some(tab.id) == space_context_agent(space, identities);
-        let is_current = is_active_space && selected;
-        let status = model.agent_tab_status(tab.pane.id, is_current);
-        let renaming = model
-            .renaming
-            .as_ref()
-            .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
-            .map(|(_, buffer)| buffer.as_str());
-        let task_mark = model
-            .tab_task(tab.id)
-            .and_then(|task| task_mark(&model.drawn_state(task)));
+impl TreeCaption {
+    fn resolve(model: &WorkspaceModel, space: &Space, agent: &SidebarAgent<'_>) -> Self {
+        let tab = agent.tab;
+        let cwd = &tab.pane.cwd;
+        let task = model.tab_task(tab.id);
+        let task_mark = task.and_then(|task| task_mark(&model.drawn_state(task)));
         // A checkout removed from under the agent is said in words, not as
         // the kernel's `(deleted)` path: the process cannot work there any
         // more, and the task it was running is what the preserved list now
         // holds.
         let lost = model.remembered.lost_checkouts.contains(&tab.pane.id);
         let resumable = lost && model.lost_task(tab.id).is_some();
-        // A tab-reorder drag in this exact space, resolved to drop right
-        // before (or, on the last row, at the end after) this one.
-        let drop_target = model.dragging_tab.is_some_and(|dragging| {
-            dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
-        });
-        let harness = agent_identity_for_tab(identities, tab);
         // The task's own working branch in place of the cwd path — what
         // this agent will deliver from. An agent outside any slot has no
         // task, so its branch is the one its evaluation read at the
@@ -941,35 +927,66 @@ impl<'a> SidebarAgent<'a> {
         let showing_runtime = model.remembered.roots_shown.contains(&space.id);
         let detail = if lost {
             "checkout removed".to_owned()
-        } else if let Some(harness) = harness.filter(|_| showing_runtime) {
+        } else if let Some(harness) = agent.harness.filter(|_| showing_runtime) {
             harness.to_owned()
         } else {
-            model
-                .tab_task(tab.id)
-                .map(|task| task.branch.clone())
-                .or_else(|| unisolated_branch(model, &cwd))
-                .unwrap_or_else(|| caption_path(&cwd))
+            task.map(|task| task.branch.clone())
+                .or_else(|| unisolated_branch(model, cwd))
+                .unwrap_or_else(|| caption_path(cwd))
         };
         let detail_color = if lost {
             theme::color(Token::StateWarning)
         } else {
-            caption_color(is_current)
+            caption_color(agent.is_current)
         };
-        let sync = unisolated_sync_caption(model, &cwd);
+        Self {
+            task_mark,
+            resumable,
+            detail,
+            detail_color,
+            sync: unisolated_sync_caption(model, cwd),
+        }
+    }
+}
+
+impl<'a> SidebarAgent<'a> {
+    fn resolve(
+        model: &'a WorkspaceModel,
+        identities: &'a [AgentIdentity],
+        space: &Space,
+        tab: &'a Tab,
+        is_last: bool,
+        is_active_space: bool,
+    ) -> Self {
+        // The agent the space is about, not its `selected_tab`: a shell
+        // opened beside an agent is part of that agent's own context, and
+        // switching into it must not unselect the agent in this tree (see
+        // `space_context_agent`). Every space names a context agent,
+        // including the ones the user is not in — so `selected` alone put
+        // a `●` on one agent per open space, each claiming to be the one
+        // receiving keystrokes. Only the active space's selection is that
+        // agent.
+        let selected = Some(tab.id) == space_context_agent(space, identities);
+        let is_current = is_active_space && selected;
+        let renaming = model
+            .renaming
+            .as_ref()
+            .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
+            .map(|(_, buffer)| buffer.as_str());
+        // A tab-reorder drag in this exact space, resolved to drop right
+        // before (or, on the last row, at the end after) this one.
+        let drop_target = model.dragging_tab.is_some_and(|dragging| {
+            dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
+        });
         Self {
             tab,
             is_last,
             selected,
             is_current,
-            status,
+            status: model.agent_tab_status(tab.pane.id, is_current),
             renaming,
-            task_mark,
-            resumable,
             drop_target,
-            harness,
-            detail,
-            detail_color,
-            sync,
+            harness: agent_identity_for_tab(identities, tab),
             tick: model.tick,
         }
     }
@@ -1050,8 +1067,9 @@ fn draw_tree(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     is_active_space: bool,
     agents: &[SidebarAgent<'_>],
+    captions: &[TreeCaption],
 ) {
-    for agent in agents {
+    for (agent, caption) in agents.iter().zip(captions) {
         let tab = agent.tab;
         // One extra level of indent versus a flat list — these tabs read
         // as children of the space header row just drawn above.
@@ -1070,13 +1088,13 @@ fn draw_tree(
         if let Some(label_rect) = label_slot.visible() {
             let connector_span = Span::styled(connector, theme::fg(Token::TextFaint));
             let indicator_span = Span::styled(
-                agent.status.glyph(frame_tick_of(agent)),
+                agent.status.glyph(agent.tick),
                 Style::default().fg(agent.status.color()),
             );
             // Elided rather than run under the mark pinned to the right
             // edge, the way the branch beneath it is.
             let taken = (connector_span.width() + indicator_span.width()) as u16
-                + agent
+                + caption
                     .task_mark
                     .as_ref()
                     .map_or(0, |(mark, _)| 1 + Span::raw(mark.as_str()).width() as u16)
@@ -1091,7 +1109,7 @@ fn draw_tree(
             // first rect it lands in — a 1-column target inside a row-wide
             // one only ever wins by being found first.
             let mut spans = vec![connector_span, indicator_span, label];
-            if let Some((mark, hue)) = &agent.task_mark {
+            if let Some((mark, hue)) = &caption.task_mark {
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
             if is_active_space {
@@ -1127,10 +1145,10 @@ fn draw_tree(
             // through. Offered only while the task is waiting for one (see
             // `lost_task`).
             const RESUME: &str = "resume";
-            let sync: Vec<Span<'_>> = if agent.resumable {
+            let sync: Vec<Span<'_>> = if caption.resumable {
                 vec![Span::styled(RESUME, theme::fg(Token::Accent))]
             } else {
-                agent
+                caption
                     .sync
                     .iter()
                     .enumerate()
@@ -1153,12 +1171,12 @@ fn draw_tree(
                     + crate::ui::TRAILING_PAD;
                 let room = detail_rect.width.saturating_sub(taken).max(1);
                 spans.push(Span::styled(
-                    crate::ui::elide_tail(&agent.detail, room as usize),
-                    Style::default().fg(agent.detail_color),
+                    crate::ui::elide_tail(&caption.detail, room as usize),
+                    Style::default().fg(caption.detail_color),
                 ));
             }
             if !sync.is_empty() {
-                if agent.resumable {
+                if caption.resumable {
                     let x = detail_rect
                         .right()
                         .saturating_sub(TRAILING_PAD + RESUME.len() as u16);
@@ -1238,10 +1256,8 @@ fn draw_flat(
     frame: &mut ratatui::Frame<'_>,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
-    space: &Space,
     agents: &[SidebarAgent<'_>],
 ) {
-    let _ = space;
     for agent in agents {
         let tab = agent.tab;
         let slot = rows.slot(1);
@@ -1253,7 +1269,7 @@ fn draw_flat(
         };
         let glyph = match agent.status {
             AgentTabStatus::Selected => " ".to_owned(),
-            _ => agent.status.glyph(frame_tick_of(agent)),
+            _ => agent.status.glyph(agent.tick),
         };
         let lead = Span::raw("  ");
         let indicator = Span::styled(glyph, Style::default().fg(agent.status.color()));
@@ -1302,12 +1318,6 @@ fn draw_flat(
             );
         }
     }
-}
-
-/// The animation frame a status glyph is drawn at. The tick lives on the
-/// model; the agent row carries no clock of its own.
-fn frame_tick_of(agent: &SidebarAgent<'_>) -> usize {
-    agent.tick
 }
 
 /// What is worth trying once on this side of the product: putting an agent
@@ -2066,10 +2076,7 @@ fn render_root_picker(
         let Some(rect) = rows.next(1) else { return };
         let selected = index == picker.selected();
         let mut spans = vec![
-            Span::styled(
-                if selected { "  › " } else { "    " },
-                theme::fg(Token::Accent),
-            ),
+            Span::styled(pointer_column(selected), theme::fg(Token::Accent)),
             Span::styled(
                 candidate.name.clone(),
                 Style::default().fg(if selected {
@@ -2099,6 +2106,21 @@ fn render_root_picker(
     }
 }
 
+/// The mark in front of the one row a picker is on, or the blank that
+/// keeps every other row in the same column.
+fn pointer(on: bool) -> String {
+    if on {
+        format!("{} ", theme::glyph(Symbol::ChevronRight))
+    } else {
+        " ".repeat(usize::from(theme::width(Symbol::ChevronRight)) + 1)
+    }
+}
+
+/// [`pointer`], indented under the prompt it belongs to.
+fn pointer_column(on: bool) -> String {
+    format!("  {}", pointer(on))
+}
+
 /// The two kinds a space can be created as, side by side under the
 /// directory being chosen: the chosen one bright and marked, the other
 /// plain, and one the root cannot honour faint. Both are offered until
@@ -2118,7 +2140,7 @@ fn render_kind_chips(
     let mut x = rect.x + 4;
     for (kind, name, available) in chips {
         let chosen = picker.kind() == kind;
-        let marker = if chosen { "› " } else { "  " };
+        let marker = pointer(chosen);
         let style = if !available {
             theme::fg(Token::TextFaint)
         } else if chosen {
@@ -2127,7 +2149,7 @@ fn render_kind_chips(
             theme::fg(Token::TextInactive)
         };
         let text = format!("{marker}{name}");
-        let width = text.chars().count() as u16;
+        let width = Span::raw(text.as_str()).width() as u16;
         if available {
             hits.push((
                 Rect::new(x, rect.y, width, 1),
