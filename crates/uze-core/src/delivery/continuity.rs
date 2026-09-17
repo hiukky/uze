@@ -65,7 +65,7 @@ pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort)
         return LaunchPlan::nothing();
     };
     let cwd = claim.cwd;
-    let mut record = conversation::load(home, &owner.primary, &owner.agent);
+    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
 
     // A launch whose read-back never happened — the client was not running,
@@ -86,7 +86,7 @@ pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort)
     {
         let launched_at = entry.launched_at_unix;
         if record.observed(id, launched_at, observed) {
-            let _ = conversation::save(home, &owner.primary, &record);
+            let _ = conversation::save(home, &owner.project_root, &record);
         }
     }
 
@@ -142,7 +142,7 @@ fn start(
     };
     // A record that cannot be written is a conversation that will not be
     // carried over next time — never a launch that does not happen.
-    let _ = conversation::save(home, &owner.primary, record);
+    let _ = conversation::save(home, &owner.project_root, record);
     plan
 }
 
@@ -161,7 +161,7 @@ pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPo
         return false;
     };
     let cwd = claim.cwd;
-    let mut record = conversation::load(home, &owner.primary, &owner.agent);
+    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
     let Some(entry) = record.get(id) else {
         return false;
@@ -182,7 +182,7 @@ pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPo
     if !record.observed(id, launched_at, observed) {
         return false;
     }
-    conversation::save(home, &owner.primary, &record).is_ok()
+    conversation::save(home, &owner.project_root, &record).is_ok()
 }
 
 /// Records a conversation an authoritative source named for a claim — a
@@ -203,7 +203,7 @@ pub fn record_observed(
     let Some(owner) = conversation::owner_of(home, claim) else {
         return false;
     };
-    let mut record = conversation::load(home, &owner.primary, &owner.agent);
+    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let Some(entry) = record.get(integration_id) else {
         return false;
     };
@@ -214,7 +214,7 @@ pub fn record_observed(
     if !record.observed(integration_id, launched_at, session) {
         return false;
     }
-    conversation::save(home, &owner.primary, &record).is_ok()
+    conversation::save(home, &owner.project_root, &record).is_ok()
 }
 
 #[cfg(test)]

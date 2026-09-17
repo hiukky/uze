@@ -44,7 +44,7 @@ use crate::{
     harness_runtime::project_id_for,
     home::UzeHome,
     persistence::write_atomic,
-    task::{self, AgentId},
+    task::{self, AgentId, AgentKind},
 };
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -260,12 +260,13 @@ pub fn forget(home: &UzeHome, project_root: &Path, task: &AgentId) {
     let _ = fs::remove_file(store_path(home, project_root, task));
 }
 
-/// The agent a verified claim resolved to, and the project root every
-/// record for it is keyed on.
+/// The agent a verified claim resolved to, which kind of record it is, and
+/// the project root every record for it is keyed on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Owner {
-    pub primary: PathBuf,
+    pub project_root: PathBuf,
     pub agent: AgentId,
+    pub kind: AgentKind,
 }
 
 /// What a process says about itself: the identifier its launch carried,
@@ -303,8 +304,9 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
         let own = record.own_directory(root)?;
         let own = own.canonicalize().unwrap_or(own);
         cwd.starts_with(&own).then(|| Owner {
-            primary: root.to_path_buf(),
+            project_root: root.to_path_buf(),
             agent: record.id().clone(),
+            kind: record.kind(),
         })
     })
 }
@@ -511,7 +513,8 @@ mod tests {
         )
         .expect("the claim is backed by its record");
         assert_eq!(owner.agent, current_id);
-        assert_eq!(owner.primary, primary.canonicalize().unwrap());
+        assert_eq!(owner.kind, AgentKind::Task);
+        assert_eq!(owner.project_root, primary.canonicalize().unwrap());
         // Two records over one slot are told apart by the identifier alone.
         let previous_owner = owner_of(
             &home,
@@ -522,6 +525,33 @@ mod tests {
         )
         .expect("the earlier tenant of the slot still resolves by its own id");
         assert_eq!(previous_owner.agent, previous_id);
+    }
+
+    #[test]
+    fn a_tenants_claim_resolves_inside_its_root_and_says_it_is_a_tenant() {
+        let home = home("conversation-tenant-owner");
+        let root = project("conversation-tenant-owner-project")
+            .canonicalize()
+            .unwrap();
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let tenant = crate::tenant::Tenant::new("claude-code", &root);
+        let id = tenant.id.clone();
+        let mut store = TaskStore::default();
+        store.upsert_tenant(tenant);
+        task::save(&home, &root, &store).unwrap();
+
+        let owner = owner_of(
+            &home,
+            Claim {
+                id: id.as_str(),
+                cwd: &nested,
+            },
+        )
+        .expect("a tenant's claim is backed by its record");
+        assert_eq!(owner.agent, id);
+        assert_eq!(owner.kind, AgentKind::Tenant);
+        assert_eq!(owner.project_root, root);
     }
 
     #[test]

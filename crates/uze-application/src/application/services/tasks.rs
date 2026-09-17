@@ -15,7 +15,7 @@ use uze_core::{
     conversation::{self, Claim},
     landing::{self, Delivered, DeliveryFailure, Readiness},
     manifest, prompt_history,
-    task::{self, AgentId, Base, Task, TaskState, TaskStore},
+    task::{self, AgentId, AgentKind, Base, Task, TaskState, TaskStore},
     tenant::Tenant,
     workspace,
     worktree::{self, BranchVocabulary, CompletionBehavior, NameRefusal, WorktreePolicy},
@@ -351,42 +351,39 @@ impl Workspace<'_> {
         Ok(placement)
     }
 
-    /// Names the work the agent in `cwd` is doing.
+    /// Names the work of the agent a claim identifies.
     ///
-    /// The task is the one owning the checkout `cwd` sits in — resolved
-    /// from the directory alone, with no identifier to pass, because an
-    /// identifier is exactly what would let one agent rename another's
-    /// branch. A slot that served earlier tasks answers for the one that
-    /// owns it now, by the rule `checkout::reconcile` already uses.
+    /// The claim is verified the way every reader verifies one: the store
+    /// names its identifier and the directory is the record's own. The
+    /// stamp says which agent and the directory says where, so a process
+    /// editing its own environment cannot reach another agent's branch.
+    /// A tenant is refused before anything else is resolved — it works on
+    /// the operator's branch, which already has the name it will keep, and
+    /// may stand in a directory that is no repository at all.
     ///
     /// First-writer-wins: a task that already carries a chosen name is
     /// refused, so nothing an agent or an operator decided is ever
     /// replaced by a later mechanism.
     #[tracing::instrument(name = "workspace.name_task", skip_all, fields(agent = %claim.id, cwd = %claim.cwd.display(), proposed = %proposed), err)]
     pub fn name_task(&self, claim: Claim<'_>, proposed: &str) -> Result<NamedTask> {
-        let cwd = claim.cwd;
+        let not_an_agent =
+            || UzeError::TaskNaming("this process is not an agent UZE launched".to_owned());
+        let owner = conversation::owner_of(&self.0.home, claim).ok_or_else(not_an_agent)?;
+        if owner.kind == AgentKind::Tenant {
+            return Err(UzeError::TaskNaming(
+                "this agent works in the operator's checkout; its work is not named".to_owned(),
+            ));
+        }
         let (primary, policy) = self
-            .repository_context(cwd)
+            .repository_context(claim.cwd)
             .ok_or_else(|| UzeError::TaskNaming("not inside a Git working tree".to_owned()))?;
         let vocabulary = policy.branch.clone();
         let branch = vocabulary
             .accept(proposed)
             .map_err(|refusal| UzeError::TaskNaming(refusal_words(&refusal, &vocabulary)))?;
-        let not_an_agent =
-            || UzeError::TaskNaming("this process is not an agent UZE launched".to_owned());
-        // Verified the way every reader of a claim verifies it: the store
-        // names the identifier, and the directory is the record's own.
-        let owner = conversation::owner_of(&self.0.home, claim).ok_or_else(not_an_agent)?;
         let target = target_of(&primary, &policy);
         task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            // A tenant works on the operator's own branch, and work there
-            // is not named: the branch already has the name it will keep.
-            if store.tenant_mut(&owner.agent).is_some() {
-                return Err(UzeError::TaskNaming(
-                    "this agent works in the operator's checkout; its work is not named".to_owned(),
-                ));
-            }
             let task = store.get_mut(&owner.agent).ok_or_else(not_an_agent)?;
             if task.is_named() {
                 return Err(UzeError::TaskNaming(format!(
@@ -394,7 +391,7 @@ impl Workspace<'_> {
                     task.branch
                 )));
             }
-            if checkout::current_branch(cwd).as_deref() != Some(task.branch.as_str()) {
+            if checkout::current_branch(claim.cwd).as_deref() != Some(task.branch.as_str()) {
                 return Err(UzeError::TaskNaming(
                     "this checkout is not on the task's branch — finish the rebase first"
                         .to_owned(),
@@ -3578,6 +3575,35 @@ mod naming_tests {
         }
         assert_eq!(branch_of(&placed.checkout), before, "nothing was renamed");
         assert_eq!(branch_of(&root), "main", "and never the operator's branch");
+    }
+
+    /// A tenant's work is not named, and that is the refusal it hears —
+    /// even where its directory is no repository, which is the question a
+    /// tenant never needed answered.
+    #[test]
+    fn a_tenant_is_refused_as_work_that_is_not_named() {
+        let plain = uze_testkit::temp::scratch("naming-tenant-directory");
+        let app = application("naming-tenant-home");
+        let placed = app
+            .workspace()
+            .place_new_agent(&plain, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        let id = placed.placement.agent().as_str().to_owned();
+
+        let error = app
+            .workspace()
+            .name_task(
+                Claim {
+                    id: &id,
+                    cwd: &placed.cwd,
+                },
+                "fix/not-mine",
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("its work is not named"), "{error}");
+        std::fs::remove_dir_all(plain).unwrap();
     }
 
     /// First-writer-wins: the second call is refused and the first name

@@ -313,7 +313,22 @@ pub enum AgentRecord<'a> {
     Tenant(&'a Tenant),
 }
 
+/// Which kind of record an identifier named, for a reader that must treat
+/// the two differently and has no use for the record itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentKind {
+    Task,
+    Tenant,
+}
+
 impl AgentRecord<'_> {
+    pub fn kind(&self) -> AgentKind {
+        match self {
+            Self::Task(_) => AgentKind::Task,
+            Self::Tenant(_) => AgentKind::Tenant,
+        }
+    }
+
     pub fn id(&self) -> &AgentId {
         match self {
             Self::Task(task) => &task.id,
