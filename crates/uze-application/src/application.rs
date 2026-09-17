@@ -605,28 +605,33 @@ impl UzeApplication {
             .collect()
     }
 
-    /// Resolves a requested harness name against the integrations actually
-    /// registered in this composition root. There is deliberately no central
-    /// list of vendors: an integration declares its own id and aliases, so
-    /// registering one is the only step needed to make it selectable.
-    pub(crate) fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+    /// The registered integration a person or a record names: by its stable
+    /// id (`claude-code`), an alias people type (`claude`), or the label UZE
+    /// shows back (`Claude Code`). There is deliberately no central list of
+    /// vendors: an integration declares its own names, so registering one is
+    /// the only step needed to make it selectable.
+    pub(crate) fn integration_named(&self, name: &str) -> Option<&dyn IntegrationPort> {
         self.integrations
             .iter()
+            .map(|integration| integration.as_ref())
             .find(|integration| {
-                integration.id() == requested || integration.aliases().contains(&requested)
+                integration.id() == name
+                    || integration.aliases().contains(&name)
+                    || integration.display_name() == name
             })
+    }
+
+    pub(crate) fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+        self.integration_named(requested)
             .map(|integration| integration.id())
-            .ok_or_else(|| {
-                let known = self
+            .ok_or_else(|| UzeError::UnknownHarness {
+                requested: requested.to_owned(),
+                known: self
                     .integrations
                     .iter()
                     .map(|integration| integration.id())
                     .collect::<Vec<_>>()
-                    .join(", ");
-                UzeError::UnknownHarness {
-                    requested: requested.to_owned(),
-                    known,
-                }
+                    .join(", "),
             })
     }
 

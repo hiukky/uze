@@ -100,7 +100,7 @@ impl Workspace<'_> {
             .collect()
     }
 
-    /// The single-harness slice of [`UzeApplication::agent_context`] — what
+    /// The single-harness slice of [`Workspace::agent_context`] — what
     /// an agent pane running one known harness needs, without paying for
     /// the others.
     #[tracing::instrument(name = "workspace.agent_context_for", skip_all, fields(integration_id = %integration_id, cwd = %cwd.display()), err)]
@@ -109,16 +109,11 @@ impl Workspace<'_> {
         integration_id: &str,
         cwd: &Path,
     ) -> Result<AgentContextStatus> {
-        let integration = self
-            .0
-            .integrations
-            .iter()
-            .find(|integration| integration.id() == integration_id)
-            .ok_or_else(|| {
-                UzeError::UnknownPackage(format!("harness `{integration_id}` not found"))
-            })?;
+        let integration = self.0.integration_named(integration_id).ok_or_else(|| {
+            UzeError::UnknownPackage(format!("harness `{integration_id}` not found"))
+        })?;
         let context = project_context::resolve(cwd);
-        Ok(self.resolve_agent_context(integration.as_ref(), cwd, &context))
+        Ok(self.resolve_agent_context(integration, cwd, &context))
     }
 
     fn resolve_agent_context(
