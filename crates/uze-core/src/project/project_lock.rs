@@ -214,10 +214,9 @@ pub fn stale_against(
 /// offline promise — two documents compared, nothing else asked.
 ///
 /// Scoped to the marketplaces the manifest actually declares, and this is
-/// the load-bearing part: silence is not a claim. A lock inherited from
-/// before the manifest existed, or one whose marketplace nobody has
-/// declared, is a project that has said nothing about those plugins — not
-/// a project asking for all of them to be taken away. Only a marketplace
+/// the load-bearing part: silence is not a claim. A locked plugin whose
+/// marketplace the manifest does not declare belongs to a project that has
+/// said nothing about it — not one asking for it to be taken away. Only a marketplace
 /// the manifest names can make one of its plugins surplus, which is
 /// exactly the edit a person makes when they mean it.
 pub fn surplus_against(
@@ -313,12 +312,6 @@ pub fn remove_lock(root: &Path) -> Result<()> {
 }
 
 pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
-    if lock.version != SUPPORTED_LOCK_VERSION {
-        return Err(UzeError::UnsupportedLockVersion {
-            found: lock.version,
-            expected: SUPPORTED_LOCK_VERSION,
-        });
-    }
     let path = lock_path_for(root);
     // Deterministic YAML: BTreeMap ensures sorted keys, serde_yaml preserves order.
     let mut yaml = serde_yaml::to_string(lock).map_err(|e| UzeError::MalformedLock {
