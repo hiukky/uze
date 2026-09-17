@@ -5925,6 +5925,68 @@ mod workspace_tests {
         }
     }
 
+    /// A lone space can be deleted like any other: its menu offers it, and
+    /// deleting it names a space at home to take its place, so the
+    /// workspace is never left with nowhere to land.
+    #[test]
+    fn a_lone_space_offers_delete_and_is_replaced_by_home() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-close-last-space"));
+        let model = model_of(session("/repo", uze_terminal::SpaceKind::Worktree));
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let (row, space) = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| match hit {
+                WorkspaceHit::SelectSpace(space) => Some((*rect, *space)),
+                _ => None,
+            })
+            .expect("the space row is a target");
+
+        driven.mouse(row.x + 1, row.y, MouseEventKind::Down(MouseButton::Right));
+        let menu = driven
+            .attach
+            .model
+            .context_menu
+            .as_ref()
+            .expect("a menu opened on the space row");
+        assert_eq!(
+            menu.items,
+            vec![
+                uze_keys::Action::RenameSelection,
+                uze_keys::Action::CloseTab
+            ]
+        );
+
+        let mut requests = Vec::new();
+        crate::ui::orchestrator::dispatch_menu_action(
+            &mut requests,
+            &mut driven.attach.model,
+            &identities_fixture(),
+            crate::ui::orchestrator::MenuTarget::Space(space),
+            uze_keys::Action::CloseTab,
+        );
+        let request: ClientRequest =
+            bincode::deserialize(&requests[4..]).expect("one request was written");
+        let ClientRequest::CloseSpace {
+            space: closed,
+            replacement,
+            ..
+        } = request
+        else {
+            panic!("expected CloseSpace, got {request:?}");
+        };
+        assert_eq!(closed, space);
+        assert_eq!(replacement.kind, uze_terminal::SpaceKind::Workspace);
+        assert_eq!(
+            Some(replacement.root.as_os_str()),
+            std::env::var_os("HOME").as_deref(),
+            "the workspace lands at home"
+        );
+    }
+
     /// Walking away from an agent and coming back returns to the tab it
     /// was left on. A space holds one selection, so a shell opened beside
     /// an agent used to be forgotten the moment the user looked at
