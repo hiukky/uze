@@ -154,6 +154,9 @@ pub(super) fn materialize_shim(
         source,
     })?;
 
+    // Claude resolves a skill's relative scripts and references against the
+    // shim, not against the Store, so they are linked beside its SKILL.md.
+    crate::shared::skill::link_extras(canonical_skill_dir, shim_root, &[".claude-plugin"])?;
     let skill_link = shim_root.join("SKILL.md");
     if policy.is_default() {
         let skill_source = canonical_skill_dir.join("SKILL.md");
@@ -161,8 +164,7 @@ pub(super) fn materialize_shim(
         return Ok(());
     }
     // Non-default policy: the delivered SKILL.md must carry Claude's own
-    // frontmatter markers, so it is materialized — never a symlink — while
-    // everything else in the canonical skill directory stays referenced.
+    // frontmatter markers, so it is materialized — never a symlink.
     let bytes = fs::read(canonical_skill_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
         path: canonical_skill_dir.join("SKILL.md"),
         source: error,
@@ -257,4 +259,39 @@ fn write_or_replace_file(target: &Path, content: &[u8]) -> Result<()> {
         path: target.to_path_buf(),
         source: source_error,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A skill's relative scripts must resolve from the shim Claude loads,
+    /// whichever policy decides how its `SKILL.md` is delivered.
+    #[test]
+    fn the_shim_links_the_skills_supporting_files_beside_its_skill_md() {
+        for (label, body) in [
+            (
+                "claude-shim-default",
+                "---\nname: deploy\n---\nRun scripts/run.sh.\n",
+            ),
+            (
+                "claude-shim-user-only",
+                "---\nname: deploy\ninvoke:\n  model: false\n  user: true\n---\nRun scripts/run.sh.\n",
+            ),
+        ] {
+            let root = uze_testkit::temp::scratch(label);
+            let canonical = root.join("store/skills/deploy");
+            fs::create_dir_all(canonical.join("scripts")).unwrap();
+            fs::write(canonical.join("SKILL.md"), body).unwrap();
+            fs::write(canonical.join("scripts/run.sh"), "#!/bin/sh\n").unwrap();
+            let shim = root.join("shim");
+            let policy = uze_core::skill::parse_skill_invocation(body.as_bytes())
+                .unwrap_or(SkillInvocationPolicy::MODEL_AND_USER);
+            materialize_shim(&shim, &canonical, "flow:deploy", Some("flow"), &policy).unwrap();
+            assert!(shim.join("scripts").is_symlink(), "{label}");
+            assert!(shim.join("scripts/run.sh").is_file(), "{label}");
+            assert!(shim.join("SKILL.md").exists(), "{label}");
+            let _ = fs::remove_dir_all(root);
+        }
+    }
 }

@@ -344,25 +344,7 @@ fn materialize_wrapped_skill(
         path: target_dir.join("SKILL.md"),
         source: source_error,
     })?;
-    for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
-        path: canonical_dir.to_path_buf(),
-        source: error,
-    })? {
-        let entry = entry.map_err(|error| UzeError::Read {
-            path: canonical_dir.to_path_buf(),
-            source: error,
-        })?;
-        let name = entry.file_name();
-        if name == "SKILL.md" {
-            continue;
-        }
-        let source = entry.path();
-        let target = target_dir.join(&name);
-        if !target.exists() && !target.is_symlink() {
-            uze_core::persistence::create_symlink(&source, &target)?;
-        }
-    }
-    Ok(())
+    crate::shared::skill::link_extras(canonical_dir, target_dir, &[])
 }
 
 /// Removes one package's generated envelope directory by id alone — used at

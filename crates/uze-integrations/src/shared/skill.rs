@@ -253,9 +253,19 @@ pub fn write_superset_skill_wrapper(
             source,
         })?;
     }
-    // Everything else in the canonical skill directory stays referenced.
-    // An absent canonical directory (a Resource built without a real Store
-    // path, in unit-test contexts) simply has no extras to reference.
+    // A canonical `agents/` directory stays out: the sidecar above is the
+    // encoding this wrapper owns, and an author's own `agents/openai.yaml`
+    // is never re-derived into it.
+    link_extras(canonical_dir, dir, &["agents"])
+}
+
+/// Links every entry of a canonical skill directory except `SKILL.md` (and
+/// the names in `skip`) into a generated skill directory, so a wrapper that
+/// replaces `SKILL.md` never drops the scripts and references it names by
+/// relative path. An entry already present is left as it is. An absent
+/// canonical directory (a Resource built without a real Store path, in
+/// unit-test contexts) has no extras to link.
+pub fn link_extras(canonical_dir: &Path, target_dir: &Path, skip: &[&str]) -> Result<()> {
     let entries = match fs::read_dir(canonical_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -271,20 +281,13 @@ pub fn write_superset_skill_wrapper(
             path: canonical_dir.to_path_buf(),
             source,
         })?;
-        let entry_name = entry.file_name();
-        if entry_name == "SKILL.md" {
+        let name = entry.file_name();
+        if name == "SKILL.md" || skip.iter().any(|skipped| name == *skipped) {
             continue;
         }
-        if entry_name == "agents" {
-            // The canonical skill may ship its own `agents/` support files;
-            // they stay canonical (and a canonical `agents/openai.yaml` is
-            // the author's, never re-derived here).
-            continue;
-        }
-        let source = entry.path();
-        let target = dir.join(&entry_name);
+        let target = target_dir.join(&name);
         if !target.exists() && !target.is_symlink() {
-            uze_core::persistence::create_symlink(&source, &target)?;
+            uze_core::persistence::create_symlink(&entry.path(), &target)?;
         }
     }
     Ok(())
