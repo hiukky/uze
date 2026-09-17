@@ -310,7 +310,9 @@ pub(super) fn codex_exact_coverage(
                 // live inside the declared skills root, not merely share a
                 // string prefix — `Path::starts_with` compares components,
                 // so "skills-extra" is never mistaken for inside "skills".
-                if parent.starts_with(declared_dir) {
+                if parent.starts_with(declared_dir)
+                    && explicit_envelope_preserves_policy(resource, &package.root.join(parent))
+                {
                     provided.insert(resource.identity());
                 }
             }
@@ -325,6 +327,24 @@ pub(super) fn codex_exact_coverage(
         }
     }
     provided
+}
+
+/// Whether the author's own bytes already carry Codex's encoding of the
+/// Skill's canonical `invoke:` policy (ADR-030 §6): UZE never rewrites an
+/// explicit envelope, so a path match alone is not coverage. A user-only
+/// Skill needs its own `agents/openai.yaml` explicit-only sidecar; a
+/// model-only Skill degrades on Codex and an invalid one is never projected,
+/// so neither is ever claimed — both fall through to capability-level
+/// delivery, which reports them honestly.
+fn explicit_envelope_preserves_policy(
+    resource: &uze_core::capability::Resource,
+    skill_dir: &Path,
+) -> bool {
+    let policy = resource.skill_invocation();
+    if policy.is_invalid() || !policy.user {
+        return false;
+    }
+    policy.model || crate::shared::skill::has_explicit_only_sidecar(skill_dir)
 }
 
 /// Reads one integration-defined detail out of an opaque receipt payload.
@@ -470,6 +490,66 @@ mod codex_native_coverage_tests {
             },
             name.to_owned(),
         )
+    }
+
+    fn policy_skill_resource(
+        pkg: &uze_core::store::StoredPackage,
+        skill: &str,
+        body: &str,
+    ) -> Resource {
+        let path = pkg.root.join("skills").join(skill).join("SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, body).unwrap();
+        Resource::from_package(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::AgentSkill,
+                path,
+                payload: body.as_bytes().to_vec(),
+            },
+        )
+    }
+
+    const USER_ONLY: &str =
+        "---\nname: review\ninvoke:\n  model: false\n  user: true\n---\nBody.\n";
+
+    /// ADR-030 §6: an explicit envelope never rewritten by UZE covers a
+    /// user-only Skill only when the author shipped Codex's own
+    /// explicit-only sidecar beside it.
+    #[test]
+    fn explicit_user_only_skill_is_covered_only_with_the_authors_policy_sidecar() {
+        let (_root, pkg) = make_package("policy-sidecar", Some(r#""./skills/""#), None, None);
+        let without = policy_skill_resource(&pkg, "review", USER_ONLY);
+        assert!(
+            codex_exact_coverage(&pkg, &[&without]).is_empty(),
+            "a path-matched user-only Skill without the sidecar would silently become model-invocable"
+        );
+        let sidecar = pkg.root.join("skills/review/agents/openai.yaml");
+        fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        fs::write(&sidecar, "policy:\n  allow_implicit_invocation: false\n").unwrap();
+        assert_eq!(
+            codex_exact_coverage(&pkg, &[&without]),
+            BTreeSet::from([without.identity()])
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn explicit_model_only_and_invalid_skills_are_never_covered() {
+        let (_root, pkg) = make_package("policy-degraded", Some(r#""./skills/""#), None, None);
+        let model_only = policy_skill_resource(
+            &pkg,
+            "legacy",
+            "---\ninvoke:\n  model: true\n  user: false\n---\nBody.\n",
+        );
+        let invalid = policy_skill_resource(
+            &pkg,
+            "dead",
+            "---\ninvoke:\n  model: false\n  user: false\n---\nBody.\n",
+        );
+        assert!(codex_exact_coverage(&pkg, &[&model_only, &invalid]).is_empty());
+        let _ = fs::remove_dir_all(_root);
     }
 
     const MCP_FILE_ONE_SERVER: &str = r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#;

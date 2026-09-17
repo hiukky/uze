@@ -150,6 +150,16 @@ pub fn has_slash_false(bytes: &[u8]) -> bool {
     text.lines().any(|line| line.trim() == "slash: false")
 }
 
+/// Whether `skill_dir` carries Codex's explicit-only policy sidecar:
+/// `agents/openai.yaml` declaring `allow_implicit_invocation: false`.
+pub fn has_explicit_only_sidecar(skill_dir: &Path) -> bool {
+    fs::read_to_string(skill_dir.join("agents/openai.yaml")).is_ok_and(|policy| {
+        policy
+            .lines()
+            .any(|line| line.trim() == "allow_implicit_invocation: false")
+    })
+}
+
 fn is_utf8(bytes: &[u8]) -> Option<&str> {
     std::str::from_utf8(bytes).ok()
 }
