@@ -1,5 +1,60 @@
 # Refactor log
 
+## Executive summary
+
+**Main changes**
+
+- Codebase-wide simplification against the settled design: net −4 833 lines. Dead layers were removed, the rules repeated across four harnesses were unified, and types now carry invariants (`Launch`, `SpaceSeat`, `HookTarget`).
+- Fifteen bugs fixed. Each fix has a test that fails without it.
+  - **Orchestration:**
+    - panes that printed before registration were never drawn;
+    - zombie panes and orphaned process groups;
+    - server memory had no bound for a client that stopped reading;
+    - tenants never ended;
+    - restore misaligned tabs.
+  - **UI:**
+    - a freeze in Appearance;
+    - unstamped resumes;
+    - notices typed into shells.
+  - **Integrations:**
+    - Codex provisioned through UZE's own shim;
+    - Codex coverage ignored invocation policy;
+    - Claude's shim skipped sibling files.
+- PR #67 went from red CI (4 journeys failing since the feature commits) to **21/21 green**, macOS included.
+
+**Measured**
+
+| Check | Result |
+|---|---|
+| Tests | 1 911 passed / 0 failed |
+| Coverage | 85.0 % lines |
+| Gate journeys | 23/23 |
+| Conformance Lab | 180/180 asserted across the four harnesses |
+| Frame cost, 80 agents on 260×70 | 0.73 ms |
+| `cargo deny` | clean |
+
+**Open risks**
+
+- **Breaking, pre-1.0** (`BREAKING_CHANGES.md`):
+  - an old `workspace.json` is discarded once;
+  - the doctor/inspect JSON shape changed;
+  - probes now time out.
+- A job an interactive shell moved into its own process group is not signalled when its pane stops; it still receives the terminal hangup.
+- Errors broadcast to a stale client are dropped by its resync.
+
+**Needs you** (`QUESTIONS.md`)
+
+1. Whether `uze-core` must be free of I/O. Recommendation: no.
+2. Removing the seven `.worktrees/simplify*` checkouts and their `agent/simplify-*` branches, which are merged.
+3. Installing `hyperfine`/`perf` for CLI startup measurement.
+
+**Next steps**
+
+- Remaining `session.rs` input paths (hover, tab drag).
+- Host-only gestures inside the extension contract.
+- CLI startup measured once `hyperfine` is available.
+- Property tests only when an invariant appears that example tests miss.
+
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
