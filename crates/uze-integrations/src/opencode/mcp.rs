@@ -16,7 +16,7 @@ use uze_core::{
 };
 
 use super::OpenCodeIntegration;
-use super::unsupported;
+use crate::shared::plan::unsupported;
 
 pub(super) fn configured_server<'a>(
     config: &'a serde_json::Value,

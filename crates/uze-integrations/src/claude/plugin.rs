@@ -17,6 +17,7 @@ use crate::shared::path::normalize_declared_relative_path;
 use crate::shared::process::run_quiet;
 
 use super::{CLAUDE_MARKETPLACE_NAME, MARKETPLACE_OWNER_URL};
+use crate::shared::plan::blocked;
 
 pub(super) fn claude_marketplace_exists(
     executable: &Path,
@@ -293,7 +294,7 @@ pub(super) fn inspect_claude_plugin(
     };
     let marketplace_name = selector.rsplit_once('@').map(|(_, name)| name);
     let Some(marketplace_name) = marketplace_name else {
-        return blocked("plugin receipt selector has no marketplace identity".to_owned());
+        return blocked("plugin receipt selector has no marketplace identity");
     };
     let entries = marketplace_list.as_array().or_else(|| {
         marketplace_list
@@ -301,7 +302,7 @@ pub(super) fn inspect_claude_plugin(
             .and_then(serde_json::Value::as_array)
     });
     let Some(entries) = entries else {
-        return blocked("Claude marketplace JSON has no marketplaces array".to_owned());
+        return blocked("Claude marketplace JSON has no marketplaces array");
     };
     let matching = entries.iter().find(|entry| {
         entry
@@ -332,7 +333,7 @@ pub(super) fn inspect_claude_plugin(
         Err(reason) => return blocked(reason),
     };
     let Some(installed) = plugins.as_array() else {
-        return blocked("Claude plugin JSON is not an array".to_owned());
+        return blocked("Claude plugin JSON is not an array");
     };
     let Some(plugin) = installed.iter().find(|entry| {
         entry
@@ -401,13 +402,6 @@ pub(super) fn detail_path(
         .get(key)
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
-}
-
-pub(super) fn blocked(reason: String) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason,
-    }
 }
 
 #[cfg(test)]

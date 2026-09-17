@@ -15,12 +15,13 @@
 
 use std::{fs, path::Path};
 
+use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::{RuntimeContext, resolve_real_executable},
+    harness_runtime::RuntimeContext,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
@@ -48,7 +49,9 @@ mod skills;
 pub use mcp::detach_mcp_entry;
 
 use crate::hooks as hook_projection;
-use crate::shared::process::run_quiet;
+use crate::shared::agent::{agent_name, markdown_agent_plan};
+use crate::shared::process::{real_executable, run_quiet};
+use crate::shared::provision::provision_cli;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_packages_present,
@@ -61,7 +64,7 @@ use plugin::{
     claude_plugin_installed, claude_publishable, detail_path, inspect_claude_plugin,
     remove_claude_plugin, run_claude_marketplace_add, write_claude_catalogue,
 };
-use provision::{detect_binary, provision_cli};
+use provision::detect_binary;
 use skills::materialize_shim;
 const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
 /// The owner every catalogue UZE writes into Claude's marketplace UI
@@ -143,22 +146,8 @@ impl ClaudeIntegration {
             .join(".claude-plugin/marketplace.json")
     }
 
-    /// The real `claude` executable, resolved explicitly rather than through
-    /// a bare `Command::new("claude")` PATH lookup. Once `uze setup claude`
-    /// has ever succeeded, `~/.uze/shims` sits ahead of the real binary on
-    /// `PATH` (see `UzeApplication::ensure_runtime_shim`), so a bare lookup
-    /// here would re-enter UZE's own runtime shim instead of the vendor CLI.
-    /// The shim then prepends `--add-dir <dir>` before whatever argument
-    /// follows — for `["update"]`, since `--add-dir` is a variadic option,
-    /// the real CLI swallows `update` into that directory list instead of
-    /// recognizing it as a subcommand, and falls through to its default
-    /// action: starting a full interactive session instead of checking for
-    /// updates. Falls back to the bare name (previous behavior) if no real
-    /// binary can be found outside the shims directory.
     fn provisioning_executable(&self) -> String {
-        resolve_real_executable(&["claude"], &self.uze_home.shims_dir())
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "claude".to_owned())
+        real_executable("claude", &self.uze_home.shims_dir(), None)
     }
 
     /// Installs a package whose source ships its own `.claude-plugin/
@@ -368,6 +357,7 @@ impl IntegrationPort for ClaudeIntegration {
         provision_cli(
             runner,
             &executable,
+            "Claude Code",
             self.detect(),
             ProcessSpec::new(
                 "sh",
@@ -376,6 +366,7 @@ impl IntegrationPort for ClaudeIntegration {
             .with_inherited_output(),
             ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
+            detect_binary,
         )
     }
 
@@ -630,7 +621,7 @@ impl IntegrationPort for ClaudeIntegration {
                 detail,
             } if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND => {
                 let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
-                    return plugin::blocked("plugin receipt has no marketplace root".to_owned());
+                    return blocked("plugin receipt has no marketplace root");
                 };
                 let executable = self.provisioning_executable();
                 inspect_claude_plugin(
@@ -709,13 +700,13 @@ impl ClaudeIntegration {
         let entry_name = resource
             .resolved_exposure_name
             .clone()
-            .or_else(|| resource.logical_capability_name())
-            .unwrap_or_else(|| resource.name());
-        ExposurePlan {
-            route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
-            evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
-        }
+            .unwrap_or_else(|| agent_name(resource));
+        markdown_agent_plan(
+            &self.agents_dir,
+            &entry_name,
+            resource,
+            "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.",
+        )
     }
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -762,80 +753,19 @@ impl PreferencePort for ClaudeIntegration {
     }
 }
 
-fn unsupported(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod lifecycle_tests {
     use std::path::Path;
-    use std::sync::Mutex;
 
     use uze_core::exposure::McpEnvironmentReference;
     use uze_core::home::UzeHome;
     use uze_core::integration::{
         AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact,
     };
-    use uze_core::provisioning::{ProcessResult, ProcessRunner, ProcessSpec};
 
     use super::mcp::inspect_claude_mcp;
-    use super::provision::provision_cli;
     use super::{ClaudeIntegration, fs};
 
-    struct RecordingRunner {
-        commands: Mutex<Vec<ProcessSpec>>,
-    }
-
-    impl ProcessRunner for RecordingRunner {
-        fn run(&self, spec: &ProcessSpec) -> Result<ProcessResult, uze_core::UzeError> {
-            self.commands.lock().unwrap().push(spec.clone());
-            Ok(ProcessResult {
-                success: true,
-                timed_out: false,
-            })
-        }
-    }
-
-    #[test]
-    fn missing_harness_uses_its_documented_official_install_route_then_verifies() {
-        let runner = RecordingRunner {
-            commands: Mutex::new(Vec::new()),
-        };
-        let result = provision_cli(
-            &runner,
-            "claude-test-does-not-exist",
-            uze_core::integration::HarnessDetection::default(),
-            ProcessSpec::new("sh", ["-c", "official-install"]),
-            ProcessSpec::new("claude-test-does-not-exist", ["update"]),
-            "official-native-installer",
-        )
-        .unwrap();
-        if cfg!(unix) {
-            assert_eq!(
-                result.action,
-                uze_core::provisioning::ProvisionAction::Install
-            );
-            assert_eq!(
-                result.status,
-                uze_core::provisioning::ProvisionStatus::Verified
-            );
-            let commands = runner.commands.lock().unwrap();
-            assert_eq!(commands[0].program, "sh");
-            assert_eq!(
-                commands[0].output,
-                uze_core::provisioning::ProcessOutput::Quiet,
-                "the helper's synthetic test command is intentionally quiet"
-            );
-            assert_eq!(commands[1].program, "claude-test-does-not-exist");
-            assert_eq!(commands[1].arguments, ["--version"]);
-        }
-    }
     fn check(value: &str) -> AttachmentState {
         let root = uze_testkit::temp::scratch("claude-config");
         fs::create_dir_all(&root).unwrap();

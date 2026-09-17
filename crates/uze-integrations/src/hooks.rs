@@ -16,6 +16,7 @@
 
 use std::{fs, path::Path, path::PathBuf};
 
+use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::Resource,
@@ -1494,13 +1495,6 @@ fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspectio
     }
 }
 
-fn blocked(reason: &str) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason: reason.to_owned(),
-    }
-}
-
 // ============================================================================
 // OpenCode bridge (generated TypeScript, no author toolchain)
 // ============================================================================
@@ -1768,7 +1762,7 @@ pub(crate) fn hook_exposure_plan(
     evidence: &str,
 ) -> ExposurePlan {
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan("hook resource payload is not a valid portable hook group");
+        return unsupported("hook resource payload is not a valid portable hook group");
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, bridged);
     let mut undeliverable = None;
@@ -1842,7 +1836,7 @@ pub(crate) fn antigravity_hook_exposure_plan(
 ) -> ExposurePlan {
     const EVIDENCE: &str = "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).";
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan("hook resource payload is not a valid portable hook group");
+        return unsupported("hook resource payload is not a valid portable hook group");
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, false);
     let mut undeliverable = false;
@@ -1893,16 +1887,6 @@ pub(crate) fn antigravity_hook_exposure_plan(
 /// qualified-capability naming policy (ADR-026): `<package>:<hook-id>`.
 pub(crate) fn hook_entry_name(resource: &Resource, hook: &PortableHook) -> String {
     format!("{}:{}", resource.package_id.as_str(), hook.id)
-}
-
-fn unsupported_plan(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
 }
 
 #[cfg(test)]

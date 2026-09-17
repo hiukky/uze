@@ -17,8 +17,10 @@
 //! (`claude.rs`, `codex.rs`, `opencode.rs`, `antigravity.rs`) is still the
 //! only thing `uze-application` or any downstream crate ever names.
 
+pub(crate) mod agent;
 pub(crate) mod json_config;
 pub(crate) mod path;
+pub(crate) mod plan;
 pub(crate) mod preference;
 pub(crate) mod process;
 pub(crate) mod projection;

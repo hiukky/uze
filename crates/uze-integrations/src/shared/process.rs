@@ -14,7 +14,7 @@
 
 use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -33,6 +33,20 @@ pub const VENDOR_CLI_TIMEOUT: Duration = Duration::from_secs(120);
 /// Per-stream cap for captured vendor output. A chatty vendor must not be
 /// able to exhaust memory; inspection only ever reads the tail anyway.
 const VENDOR_OUTPUT_CAP: usize = 256 * 1024;
+
+/// The vendor executable UZE runs itself, resolved past UZE's own runtime
+/// shims rather than through a bare PATH lookup. Once `uze setup` has run,
+/// `~/.uze/shims` sits ahead of the real binary on `PATH`, and the shim
+/// prepends `--add-dir <dir>` to whatever follows — for `["update"]` a
+/// variadic option swallows the subcommand and the CLI starts an
+/// interactive session instead. `fallback` names a documented install
+/// location to try before the bare name.
+pub(crate) fn real_executable(name: &str, shims_dir: &Path, fallback: Option<PathBuf>) -> String {
+    uze_core::harness_runtime::resolve_real_executable(&[name], shims_dir)
+        .or(fallback)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned())
+}
 
 /// A value is safe to pass as a bare positional argument to a vendor CLI
 /// only when it cannot be mistaken for a flag. Package-controlled strings

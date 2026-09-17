@@ -56,7 +56,7 @@ use uze_core::{
 };
 
 use super::OpenCodeIntegration;
-use super::unsupported;
+use crate::shared::plan::unsupported;
 
 /// Root of every generated OpenCode Skill wrapper directory. Under
 /// `$UZE_HOME/state/attachments/opencode/skills/`, never under the Store.

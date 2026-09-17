@@ -18,7 +18,7 @@ use uze_core::{
 };
 
 use super::AntigravityIntegration;
-use super::unsupported;
+use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
 impl AntigravityIntegration {
@@ -131,8 +131,7 @@ pub(super) fn inspect_antigravity_mcp(
 ) -> AttachmentInspection {
     if transport != "stdio" || cwd.is_some() || !environment.is_empty() || enabled.is_some() {
         return blocked(
-            "Antigravity MCP receipt requests state this integration cannot verify safely"
-                .to_owned(),
+            "Antigravity MCP receipt requests state this integration cannot verify safely",
         );
     }
     if !path.exists() {
@@ -146,7 +145,7 @@ pub(super) fn inspect_antigravity_mcp(
         Err(error) => return blocked(error.to_string()),
     };
     if serde_json::from_slice::<serde_json::Value>(&bytes).is_err() {
-        return blocked("Antigravity MCP config is malformed".to_owned());
+        return blocked("Antigravity MCP config is malformed");
     }
     let Some(entry) = read_mcp_entry(path, entry_name) else {
         return AttachmentInspection {
@@ -230,13 +229,6 @@ pub(super) fn stdio_command(resource: &Resource) -> Option<(PathBuf, Vec<String>
         })
         .unwrap_or_default();
     Some((PathBuf::from(command), args))
-}
-
-fn blocked(reason: String) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason,
-    }
 }
 
 #[cfg(test)]

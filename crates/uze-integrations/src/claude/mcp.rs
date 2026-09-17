@@ -14,7 +14,7 @@ use uze_core::{
 };
 
 use super::ClaudeIntegration;
-use super::unsupported;
+use crate::shared::plan::unsupported;
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
 impl ClaudeIntegration {

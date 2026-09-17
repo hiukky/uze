@@ -20,6 +20,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::shared::plan::unsupported;
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
@@ -49,6 +50,7 @@ mod session;
 mod skills;
 
 use crate::hooks as hook_projection;
+use crate::shared::agent::{agent_name, markdown_agent_plan};
 use mcp::attach_mcp_config;
 use provision::{provision_opencode, resolve_opencode_binary};
 
@@ -447,14 +449,12 @@ impl PreferencePort for OpenCodeIntegration {
 
 impl OpenCodeIntegration {
     fn agent_plan(&self, resource: &Resource) -> ExposurePlan {
-        let entry_name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
-        ExposurePlan {
-            route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
-            evidence: "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
-        }
+        markdown_agent_plan(
+            &self.agents_dir,
+            &agent_name(resource),
+            resource,
+            "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.",
+        )
     }
 
     /// The per-resource hook plan: semantic compatibility assessed against
@@ -665,16 +665,6 @@ impl OpenCodeIntegration {
             state: AttachmentState::Missing,
             reason: "managed OpenCode hook bridge detached".to_owned(),
         })
-    }
-}
-
-fn unsupported(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
     }
 }
 

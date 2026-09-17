@@ -14,7 +14,7 @@ use uze_core::{
 };
 
 use super::CodexIntegration;
-use super::unsupported;
+use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
 impl CodexIntegration {
@@ -122,9 +122,7 @@ pub(super) fn inspect_codex_mcp(
     {
         Ok(output) => output,
         Err(error) => {
-            return super::plugin::blocked(format!(
-                "failed to run `codex mcp get --json`: {error}"
-            ));
+            return blocked(format!("failed to run `codex mcp get --json`: {error}"));
         }
     };
     if !output.status.success() {
@@ -141,14 +139,14 @@ pub(super) fn inspect_codex_mcp(
                 reason: "Codex MCP entry is absent".to_owned(),
             };
         }
-        return super::plugin::blocked(format!(
+        return blocked(format!(
             "`codex mcp get --json` could not verify entry: {}",
             stderr.trim()
         ));
     }
     let value = match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
         Ok(value) => value,
-        Err(error) => return super::plugin::blocked(format!("Codex MCP JSON is invalid: {error}")),
+        Err(error) => return blocked(format!("Codex MCP JSON is invalid: {error}")),
     };
     inspect_codex_mcp_value(
         &value,
@@ -177,7 +175,7 @@ pub(super) fn inspect_codex_mcp_value(
         .as_object()
         .or_else(|| value.get("server")?.as_object());
     let Some(object) = object else {
-        return super::plugin::blocked("Codex MCP JSON has no server object".to_owned());
+        return blocked("Codex MCP JSON has no server object");
     };
     if let Some(name) = object
         .get("name")
@@ -213,17 +211,17 @@ pub(super) fn inspect_codex_mcp_value(
         };
     }
     let Some(actual_command) = transport.get("command").and_then(serde_json::Value::as_str) else {
-        return super::plugin::blocked("Codex MCP JSON has no stdio command".to_owned());
+        return blocked("Codex MCP JSON has no stdio command");
     };
     let Some(actual_args) = transport.get("args").and_then(serde_json::Value::as_array) else {
-        return super::plugin::blocked("Codex MCP JSON has no args array".to_owned());
+        return blocked("Codex MCP JSON has no args array");
     };
     let actual_args = actual_args
         .iter()
         .map(serde_json::Value::as_str)
         .collect::<Option<Vec<_>>>();
     let Some(actual_args) = actual_args else {
-        return super::plugin::blocked("Codex MCP JSON args are not strings".to_owned());
+        return blocked("Codex MCP JSON args are not strings");
     };
     if let Some(expected_cwd) = expected_cwd
         && transport.get("cwd").and_then(serde_json::Value::as_str)

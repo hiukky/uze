@@ -12,6 +12,7 @@ use uze_core::{
 };
 
 use crate::shared::path::normalize_declared_relative_path;
+use crate::shared::plan::blocked;
 use crate::shared::process::run_quiet;
 
 /// Name of the local catalogue this integration publishes into.
@@ -69,13 +70,13 @@ pub(super) fn inspect_codex_plugin(
     };
     let marketplace_name = selector.rsplit_once('@').map(|(_, name)| name);
     let Some(marketplace_name) = marketplace_name else {
-        return blocked("plugin receipt selector has no marketplace identity".to_owned());
+        return blocked("plugin receipt selector has no marketplace identity");
     };
     let Some(entries) = marketplace
         .get("marketplaces")
         .and_then(serde_json::Value::as_array)
     else {
-        return blocked("Codex marketplace JSON has no marketplaces array".to_owned());
+        return blocked("Codex marketplace JSON has no marketplaces array");
     };
     let matching_name = entries.iter().find(|entry| {
         entry
@@ -112,7 +113,7 @@ fn inspect_codex_plugin_value(
     package_root: &Path,
 ) -> AttachmentInspection {
     let Some(installed) = value.get("installed").and_then(serde_json::Value::as_array) else {
-        return blocked("Codex plugin JSON has no installed array".to_owned());
+        return blocked("Codex plugin JSON has no installed array");
     };
     let Some(plugin) = installed.iter().find(|entry| {
         ["pluginId", "id", "plugin_id", "selector"]
@@ -126,27 +127,27 @@ fn inspect_codex_plugin_value(
         };
     };
     let Some(enabled) = plugin.get("enabled").and_then(serde_json::Value::as_bool) else {
-        return blocked("Codex plugin JSON has no enabled state".to_owned());
+        return blocked("Codex plugin JSON has no enabled state");
     };
     let Some(installed_state) = plugin.get("installed").and_then(serde_json::Value::as_bool) else {
-        return blocked("Codex plugin JSON has no installed state".to_owned());
+        return blocked("Codex plugin JSON has no installed state");
     };
     let Some((_, marketplace_name)) = selector.rsplit_once('@') else {
-        return blocked("plugin receipt selector has no marketplace identity".to_owned());
+        return blocked("plugin receipt selector has no marketplace identity");
     };
     let Some(actual_marketplace) = plugin
         .get("marketplaceName")
         .or_else(|| plugin.get("marketplace_name"))
         .and_then(serde_json::Value::as_str)
     else {
-        return blocked("Codex plugin JSON has no marketplace identity".to_owned());
+        return blocked("Codex plugin JSON has no marketplace identity");
     };
     let source = plugin
         .get("path")
         .or_else(|| plugin.pointer("/source/path"))
         .and_then(serde_json::Value::as_str);
     let Some(source) = source else {
-        return blocked("Codex plugin JSON has no package source path".to_owned());
+        return blocked("Codex plugin JSON has no package source path");
     };
     if !enabled
         || !installed_state
@@ -188,13 +189,6 @@ pub(super) fn remove_plugin(executable: &Path, command_home: &Path, selector: &s
         &format!("codex plugin remove {selector}"),
         &["plugin", "remove", selector],
     )
-}
-
-pub(super) fn blocked(reason: String) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason,
-    }
 }
 
 /// Packages carrying the Codex-native envelope. Deciding which packages

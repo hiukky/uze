@@ -57,12 +57,12 @@
 
 use std::{collections::BTreeMap, fs, path::Path, path::PathBuf};
 
+use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::resolve_real_executable,
     home::UzeHome,
     hook::HOOKS_FILE_NAME,
     integration::{
@@ -87,6 +87,8 @@ mod session;
 mod skills;
 
 use crate::hooks as hook_projection;
+use crate::shared::agent::{agent_name, markdown_agent_plan};
+use crate::shared::process::real_executable;
 use crate::shared::provision::provision_cli;
 use generate::remove_generated_plugin_by_id;
 use mcp::attach_mcp_entry;
@@ -188,18 +190,16 @@ impl AntigravityIntegration {
             .join("settings.json")
     }
 
-    /// Same PATH-shim recursion hazard and the same fix as every peer
-    /// integration: internal invocations must never risk re-entering UZE's
-    /// own `~/.uze/shims/agy`. Falls back to the installer's documented
-    /// destination (`~/.local/bin/agy`) when the binary is not on `PATH` —
-    /// a fresh official install lands there and should work even before the
-    /// user reopens their shell (the installer's own rc-file PATH append
-    /// only affects future shells).
+    /// Falls back to the installer's documented destination
+    /// (`~/.local/bin/agy`): a fresh official install lands there and should
+    /// work before the user reopens their shell, since the installer's own
+    /// rc-file PATH append only affects future shells.
     fn provisioning_executable(&self) -> String {
-        resolve_real_executable(&["agy"], &self.uze_home.shims_dir())
-            .or_else(|| provision::documented_install_path("agy"))
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "agy".to_owned())
+        real_executable(
+            "agy",
+            &self.uze_home.shims_dir(),
+            provision::documented_install_path("agy"),
+        )
     }
 }
 
@@ -528,7 +528,7 @@ impl IntegrationPort for AntigravityIntegration {
                 detail,
             } if kind == PLUGIN_KIND || kind == GENERATED_PLUGIN_KIND => {
                 let Some(expected_fingerprint) = detail_str(detail, "fingerprint") else {
-                    return blocked("plugin receipt has no expected fingerprint".to_owned());
+                    return blocked("plugin receipt has no expected fingerprint");
                 };
                 let staged_dir = self.plugins_dir.join(selector);
                 match installed_plugins(&self.provisioning_executable(), &self.command_home) {
@@ -651,33 +651,14 @@ fn detail_str(detail: &BTreeMap<String, serde_json::Value>, key: &str) -> Option
         .map(str::to_owned)
 }
 
-fn blocked(reason: String) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason,
-    }
-}
-
-fn unsupported(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
-}
-
 impl AntigravityIntegration {
     fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        let entry_name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
-        ExposurePlan {
-            route: CompatibilityRoute::Native,
-            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
-            evidence: "Antigravity CLI natively discovers Markdown custom agents from its global agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
-        }
+        markdown_agent_plan(
+            &self.agents_dir,
+            &agent_name(resource),
+            resource,
+            "Antigravity CLI natively discovers Markdown custom agents from its global agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.",
+        )
     }
 
     /// A Hook resource's delivery: one named entry merged into the shared

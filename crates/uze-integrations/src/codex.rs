@@ -13,12 +13,12 @@
 
 use std::{fs, path::Path, path::PathBuf};
 
+use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
@@ -45,7 +45,9 @@ mod skills;
 pub use mcp::detach_mcp_entry;
 
 use crate::hooks as hook_projection;
-use crate::shared::process::run_quiet;
+use crate::shared::agent::agent_name;
+use crate::shared::process::{real_executable, run_quiet};
+use crate::shared::provision::provision_cli;
 use crate::shared::skill::{head_value, split_frontmatter};
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
@@ -58,7 +60,7 @@ use plugin::{
     MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
     marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
 };
-use provision::{detect_binary, provision_cli};
+use provision::detect_binary;
 use skills::codex_skill_exposure_name_candidates;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
@@ -142,18 +144,8 @@ impl CodexIntegration {
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
     }
 
-    /// The real `codex` executable, resolved explicitly rather than through
-    /// a bare `Command::new("codex")` PATH lookup — same rationale, same
-    /// recursion hazard, as `ClaudeIntegration::provisioning_executable`:
-    /// once `uze setup codex` has ever succeeded, `~/.uze/shims/codex` can
-    /// sit ahead of the real binary on `PATH`, and an internal integration
-    /// call must never re-enter UZE's own runtime shim. Falls back to the
-    /// bare name (previous behavior) if no real binary can be found outside
-    /// the shims directory.
     fn provisioning_executable(&self) -> String {
-        resolve_real_executable(&["codex"], &self.uze_home.shims_dir())
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "codex".to_owned())
+        real_executable("codex", &self.uze_home.shims_dir(), None)
     }
 
     /// Installs a package whose source ships its own
@@ -269,9 +261,7 @@ impl CodexIntegration {
     }
 
     fn materialize_agent(&self, resource: &Resource) -> Result<PathBuf> {
-        let name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
+        let name = agent_name(resource);
         let target = self.generated_agents_dir.join(format!("{name}.toml"));
         fs::create_dir_all(&self.generated_agents_dir).map_err(|source| UzeError::Write {
             path: self.generated_agents_dir.clone(),
@@ -406,6 +396,7 @@ impl IntegrationPort for CodexIntegration {
         provision_cli(
             runner,
             &executable,
+            "Codex",
             self.detect(),
             ProcessSpec::new(
                 "sh",
@@ -417,6 +408,7 @@ impl IntegrationPort for CodexIntegration {
             // subcommand instead.
             ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
+            detect_binary,
         )
     }
 
@@ -650,10 +642,10 @@ impl IntegrationPort for CodexIntegration {
                 detail,
             } if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND => {
                 let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
-                    return plugin::blocked("plugin receipt has no marketplace root".to_owned());
+                    return blocked("plugin receipt has no marketplace root");
                 };
                 let Some(package_root) = detail_path(detail, "package_root") else {
-                    return plugin::blocked("plugin receipt has no package root".to_owned());
+                    return blocked("plugin receipt has no package root");
                 };
                 let executable = self.provisioning_executable();
                 inspect_codex_plugin(
@@ -726,9 +718,7 @@ impl IntegrationPort for CodexIntegration {
 
 impl CodexIntegration {
     fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        let entry_name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
+        let entry_name = agent_name(resource);
         ExposurePlan {
             route: CompatibilityRoute::Native,
             mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.toml")), target: self.generated_agents_dir.join(format!("{entry_name}.toml")) }),
@@ -787,14 +777,4 @@ fn codex_agent_toml(resource: &Resource, fallback_name: &str) -> String {
 
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings are JSON serializable")
-}
-
-fn unsupported(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
 }

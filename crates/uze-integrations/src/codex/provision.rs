@@ -3,38 +3,7 @@
 
 use std::process::Command;
 
-use uze_core::{
-    Result,
-    integration::HarnessDetection,
-    provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-};
-
-use crate::shared::provision::provision_cli as shared_provision_cli;
-
-/// Thin, vendor-labeled call into the shared install/update/verify flow —
-/// see `crate::shared::provision` for why this is safe to share with Claude
-/// (byte-identical control flow) while `detect_binary`'s own `--version`
-/// parsing stays here, unshared (Codex's output trails the version;
-/// Claude's leads).
-pub(super) fn provision_cli(
-    runner: &dyn ProcessRunner,
-    executable: &str,
-    before: HarnessDetection,
-    install: ProcessSpec,
-    update: ProcessSpec,
-    method: &str,
-) -> Result<ProvisioningResult> {
-    shared_provision_cli(
-        runner,
-        executable,
-        "Codex",
-        before,
-        install,
-        update,
-        method,
-        detect_binary,
-    )
-}
+use uze_core::integration::HarnessDetection;
 
 pub(super) fn detect_binary(program: &str) -> HarnessDetection {
     let Ok(output) = Command::new(program).arg("--version").output() else {
