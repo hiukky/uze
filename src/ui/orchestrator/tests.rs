@@ -47,8 +47,8 @@ mod workspace_tests {
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
             timeline_height,
         },
-        scroll_timeline, scroll_tree, selected_pane_cwd, space_context_agent, space_own_tab,
-        strip_tabs, sync_slot_occupancy, tab_drag_group, tab_drag_group_members,
+        scroll_timeline, scroll_tree, selected_pane_cwd, space_context_agent, space_cwd,
+        space_own_tab, strip_tabs, sync_slot_occupancy, tab_drag_group, tab_drag_group_members,
         tab_needs_replacement_shell, toggle_timeline, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
@@ -972,7 +972,8 @@ mod workspace_tests {
             .expect("the drop target's own row");
         let column = gutter_column(&hits);
         assert!(
-            lit_gutter_rows(&buffer, column).contains(&second_row),
+            lit_gutter_rows(&buffer, column, uze_terminal::SpaceKind::Worktree)
+                .contains(&second_row),
             "indicator on the target row: {rows:?}"
         );
 
@@ -981,7 +982,8 @@ mod workspace_tests {
             .map(|d| DraggingTab { armed: false, ..d });
         let buffer = sidebar(&model, &identities_fixture()).buffer;
         assert!(
-            !lit_gutter_rows(&buffer, column).contains(&second_row),
+            !lit_gutter_rows(&buffer, column, uze_terminal::SpaceKind::Worktree)
+                .contains(&second_row),
             "no indicator before the drag is armed"
         );
     }
@@ -1868,9 +1870,13 @@ mod workspace_tests {
         } = sidebar(&model, &tenant_identities());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits)),
+            lit_gutter_rows(
+                &buffer,
+                gutter_column(&hits),
+                uze_terminal::SpaceKind::Workspace
+            ),
             vec![agents[2], agents[3]],
-            "{rows:?}"
+            "a workspace space lights its own hue: {rows:?}"
         );
 
         let tree = agent_with_task(TaskStateView::Ready, 1);
@@ -1879,9 +1885,13 @@ mod workspace_tests {
         } = sidebar(&tree, &identities_fixture());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits)),
+            lit_gutter_rows(
+                &buffer,
+                gutter_column(&hits),
+                uze_terminal::SpaceKind::Worktree
+            ),
             vec![agents[0], agents[1]],
-            "{rows:?}"
+            "and a worktree space its own: {rows:?}"
         );
     }
 
@@ -2034,16 +2044,15 @@ mod workspace_tests {
         model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
-            rows.iter()
-                .any(|row| row.contains("› worktree") && row.contains("workspace")),
-            "both chips, worktree chosen by default: {rows:?}"
+            rows.iter().any(|row| row.contains("workspace")),
+            "a plain directory names the tenancy from the start: {rows:?}"
         );
         assert!(
             hits.iter().any(|(_, hit)| matches!(
                 hit,
-                WorkspaceHit::PickSpaceKind(uze_terminal::SpaceKind::Workspace)
+                WorkspaceHit::PickSpaceKind(uze_terminal::SpaceKind::Worktree)
             )),
-            "the other chip is a click away"
+            "and the other kind is one click away"
         );
 
         let landed = model
@@ -2057,17 +2066,27 @@ mod workspace_tests {
                 slots_possible: false,
             },
         );
-        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
-        assert!(
-            rows.iter().any(|row| row.contains("› workspace")),
-            "a directory that is no repository lands on the tenancy: {rows:?}"
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        let segments = rows
+            .iter()
+            .position(|row| row.contains("workspace"))
+            .expect("the kinds are offered");
+        let column = rows[segments].find("workspace").expect("the segment") as u16;
+        let chosen = &buffer[(column, segments as u16)];
+        assert_eq!(
+            chosen.fg,
+            theme::color(Token::SpaceWorkspace),
+            "a directory that is no repository lands on the tenancy, in that \
+             kind's own hue: {rows:?}"
         );
         assert!(
-            !hits.iter().any(|(_, hit)| matches!(
+            hits.iter().any(|(_, hit)| matches!(
                 hit,
                 WorkspaceHit::PickSpaceKind(uze_terminal::SpaceKind::Worktree)
             )),
-            "and the slot kind is not offered there"
+            "and the other kind is one click away: {rows:?}"
         );
         assert_eq!(
             model
@@ -2075,7 +2094,32 @@ mod workspace_tests {
                 .as_ref()
                 .and_then(RootPicker::chosen)
                 .map(|(_, kind)| kind),
-            Some(uze_terminal::SpaceKind::Workspace)
+            Some(uze_terminal::SpaceKind::Workspace),
+            "which is what it would create here"
+        );
+
+        // Looking for a repository from a directory that is not one is the
+        // whole point of the other kind: the flip is taken, the listing
+        // narrows to what a slot can be cut from, and with none of them
+        // there is nothing to create yet.
+        model
+            .root_picker
+            .as_mut()
+            .unwrap()
+            .choose_kind(uze_terminal::SpaceKind::Worktree);
+        assert_eq!(
+            model.root_picker.as_ref().map(RootPicker::kind),
+            Some(uze_terminal::SpaceKind::Worktree)
+        );
+        assert_eq!(
+            model.root_picker.as_ref().map(RootPicker::match_count),
+            Some(0),
+            "no repository under it"
+        );
+        assert_eq!(
+            model.root_picker.as_ref().and_then(RootPicker::chosen),
+            None,
+            "and nothing to create until one is found"
         );
     }
 
@@ -3901,7 +3945,7 @@ mod workspace_tests {
     }
 
     /// Creating a space is reachable from the keyboard, and the chord opens
-    /// exactly what the pointer's `+ new` opens: the picker, rooted where
+    /// exactly what the pointer's `new` opens: the picker, rooted where
     /// the selected space is.
     #[test]
     fn the_new_space_chord_opens_the_picker_the_pointer_opens() {
@@ -3920,9 +3964,13 @@ mod workspace_tests {
             .as_ref()
             .expect("the picker opened");
         assert_eq!(
-            picker.input(),
-            format!("{}/", crate::ui::display_project_path(Path::new("/repo"))),
+            picker.base(),
+            Path::new("/repo"),
             "rooted where the selected space is, as the pointer's control roots it"
+        );
+        assert!(
+            picker.input().is_empty(),
+            "with nothing typed for the operator"
         );
     }
 
@@ -4121,8 +4169,8 @@ mod workspace_tests {
         assert_eq!(manage_route(&driven), moved_to, "reopening lands on it");
     }
 
-    /// The sidebar opens with the surface's name and the way into the other
-    /// one, then the way to grow it.
+    /// The sidebar opens with the surface's name, the way to grow it and the
+    /// way into the other one, a rule between the two controls.
     #[test]
     fn the_sidebar_header_names_the_column_and_offers_the_modal() {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
@@ -4140,11 +4188,51 @@ mod workspace_tests {
             "a hairline closes the header: {:?}",
             rows[1]
         );
+        assert!(
+            header.contains("new"),
+            "the way to grow the column rides the header: {header:?}"
+        );
+        let rule = header
+            .find(&theme::glyph(crate::ui::theme::Symbol::TreeColumnDivider))
+            .expect("a rule between the two controls");
+        assert!(
+            header[..rule].contains("new"),
+            "with the rule between them: {header:?}"
+        );
+    }
+
+    /// The word is where the prompt came from: while that prompt is open it
+    /// is spent, and says so by going quiet until it closes.
+    #[test]
+    fn the_way_to_grow_the_column_goes_quiet_while_its_prompt_is_open() {
+        let hue_of_new = |model: &mut WorkspaceModel| {
+            let area = Rect::new(0, 0, 80, 24);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render::render(
+                        frame,
+                        model,
+                        &identities_fixture(),
+                        &mut Vec::new(),
+                        &mut render::FrameMetrics::default(),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let header = buffer_rows(&buffer)[0].clone();
+            let column = header.find("new").expect("the control is drawn") as u16;
+            buffer[(column, 0)].fg
+        };
+        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        assert_eq!(hue_of_new(&mut model), theme::color(Token::Accent));
+
+        model.root_picker = Some(RootPicker::opened_in("~"));
+
         assert_eq!(
-            rows[2].split('│').next().unwrap_or_default().trim(),
-            "+ new",
-            "creation alone on the row under it: {:?}",
-            rows[2]
+            hue_of_new(&mut model),
+            theme::color(Token::TextMuted),
+            "spent while the prompt it opened is open"
         );
     }
 
@@ -4520,13 +4608,22 @@ mod workspace_tests {
         }
     }
 
-    /// The rows whose gutter is lit — drawn in the accent in the sidebar's
-    /// leading column, `column`, which every space's gutter runs down.
-    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16) -> Vec<u16> {
+    /// The rows whose gutter is lit — drawn in the hue of the space's own
+    /// kind, in the sidebar's leading column `column`, which every space's
+    /// gutter runs down.
+    fn lit_gutter_rows(
+        buffer: &ratatui::buffer::Buffer,
+        column: u16,
+        kind: uze_terminal::SpaceKind,
+    ) -> Vec<u16> {
+        let hue = theme::color(match kind {
+            uze_terminal::SpaceKind::Worktree => Token::SpaceWorktree,
+            uze_terminal::SpaceKind::Workspace => Token::SpaceWorkspace,
+        });
         (0..buffer.area.height)
             .filter(|row| {
                 let cell = &buffer[(column, *row)];
-                cell.symbol() != " " && cell.fg == theme::color(Token::Accent)
+                cell.symbol() != " " && cell.fg == hue
             })
             .collect()
     }
@@ -4864,7 +4961,7 @@ mod workspace_tests {
         );
     }
 
-    /// The "+ new" prompt is a chooser, not a text field: the sidebar
+    /// The `new` prompt is a chooser, not a text field: the sidebar
     /// itself lists the directories the typed segment still matches, and
     /// clicking one is the same choice Enter makes.
     #[test]
@@ -4904,58 +5001,240 @@ mod workspace_tests {
         );
     }
 
-    /// The prompt is choosing where the next space goes, so it stands
-    /// exactly where the first space's header stood, and the directories
-    /// sit directly under it the way a space's tabs sit under theirs —
-    /// no blank row wedged between the two.
+    /// The picker is a small table: the kinds as one control over what is
+    /// being typed and the directories it matches, all in one column, with
+    /// the way out at the right edge of the row it opens on.
+    /// A name the query is the head of says so in the query's own hue; one
+    /// matched further in is left alone.
     #[test]
-    fn the_prompt_stands_where_the_first_space_header_stood() {
-        let root = uze_testkit::temp::TempDir::new("sidebar-root-place");
-        std::fs::create_dir_all(root.join("engine")).unwrap();
+    fn the_picker_lines_its_rows_up_in_columns() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-picker-grid");
+        for directory in ["craude", "cortex", "scribble"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
         let mut model = agent_session_in("/repo");
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let header_row = rows
-            .iter()
-            .position(|row| row.contains("repo"))
-            .expect("the space header is drawn");
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        for character in "cr".chars() {
+            picker.typed(character);
+        }
+        model.root_picker = Some(picker);
 
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let prompt_row = rows
+        let Sidebar { rows, buffer, .. } = sidebar(&model, &identities_fixture());
+        let kind = rows
             .iter()
-            .position(|row| row.contains(" at "))
-            .expect("the prompt row is drawn");
-
-        assert_eq!(prompt_row, header_row, "{rows:?}");
+            .position(|row| row.contains("workspace"))
+            .expect("the kind is named");
+        let column = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        // The kinds lead their row, then what is typed and the directories
+        // it matches, all in one column.
+        let values = column(&rows[kind], "workspace");
+        assert_eq!(column(&rows[kind + 1], "cr"), values, "{rows:?}");
+        for offset in 2..=3 {
+            let row = &rows[kind + offset];
+            let name = row.trim_start();
+            assert_eq!(
+                column(row, name.split(' ').next().unwrap()),
+                values,
+                "every row answers in one column: {rows:?}"
+            );
+        }
         assert!(
-            rows[prompt_row + 1].contains("worktree") && rows[prompt_row + 1].contains("workspace"),
-            "the kind chips sit right under the prompt: {rows:?}"
+            rows[kind]
+                .trim_end_matches('│')
+                .trim_end()
+                .ends_with(&theme::glyph(crate::ui::theme::Symbol::ArrowSwap)),
+            "the control that flips the kind ends its row: {rows:?}"
         );
-        assert!(
-            rows[prompt_row + 2].contains("engine"),
-            "and the listing starts under them: {rows:?}"
+        assert_eq!(
+            buffer[(0, kind as u16 + 1)].fg,
+            theme::color(Token::Accent),
+            "the row being typed into carries the accent"
+        );
+
+        // "craude" is what "cr" is the head of; "scribble" matched further in.
+        let head = |row: usize, at: u16| buffer[(values as u16 + at, row as u16)].fg;
+        assert_eq!(head(kind + 2, 0), theme::color(Token::Accent), "{rows:?}");
+        assert_eq!(
+            head(kind + 3, 0),
+            theme::color(Token::TextInactive),
+            "{rows:?}"
         );
     }
 
-    /// The filesystem root is a directory like any other, and `/` alone is
-    /// how it is named — so the prompt shows the separator that was typed
-    /// rather than an empty query listing the root behind the user's back.
+    /// The control that flips the kind answers the click: the picker stays
+    /// open, and a flip the root cannot honour leaves it open too — a
+    /// control the click falls through closes the prompt instead.
     #[test]
-    fn a_lone_separator_is_drawn_as_the_root_it_names() {
+    fn clicking_the_kind_control_flips_it_and_keeps_the_picker_open() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("picker-kind-click"));
+        let root = uze_testkit::temp::TempDir::new("sidebar-picker-kind-click");
+        std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in("~");
-        for _ in 0..2 {
-            picker.backspace();
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let control = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceKind(_)));
+
+        driven.press(control.x, control.y);
+
+        let picker = driven
+            .attach
+            .model
+            .root_picker
+            .as_ref()
+            .expect("the picker is still open");
+        assert_eq!(picker.kind(), uze_terminal::SpaceKind::Worktree);
+
+        driven.frame();
+        let control = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceKind(_)));
+        driven.press(control.x, control.y);
+
+        let picker = driven
+            .attach
+            .model
+            .root_picker
+            .as_ref()
+            .expect("and open again after flipping back");
+        assert_eq!(picker.kind(), uze_terminal::SpaceKind::Workspace);
+    }
+
+    /// A listing taller than the column is reached with the wheel too: it
+    /// walks the directories the way the arrow keys do, and the window
+    /// follows the one selected.
+    #[test]
+    fn the_wheel_walks_the_directories_the_picker_offers() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("picker-wheel"));
+        let root = uze_testkit::temp::TempDir::new("sidebar-picker-wheel");
+        for index in 0..40 {
+            std::fs::create_dir_all(root.join(format!("directory-{index:02}"))).unwrap();
         }
-        picker.typed('/');
-        model.root_picker = Some(picker);
+        let mut model = agent_session_in("/repo");
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let last_row = |driven: &Driven<'_>| {
+            let rows = sidebar(&driven.attach.model, &identities_fixture()).rows;
+            rows.iter()
+                .rev()
+                .find(|row| row.contains("directory-"))
+                .cloned()
+                .expect("the listing is drawn")
+        };
+        let before = last_row(&driven);
+
+        for _ in 0..25 {
+            driven.mouse(1, 6, MouseEventKind::ScrollDown);
+        }
+
+        let picker = driven
+            .attach
+            .model
+            .root_picker
+            .as_ref()
+            .expect("still open");
+        assert_eq!(
+            picker.selection(),
+            Some(24),
+            "the first turn takes the row in front, and the rest walk it"
+        );
+        assert_ne!(last_row(&driven), before, "and the window follows it");
+
+        for _ in 0..40 {
+            driven.mouse(1, 6, MouseEventKind::ScrollUp);
+        }
+        let picker = driven
+            .attach
+            .model
+            .root_picker
+            .as_ref()
+            .expect("still open");
+        assert_eq!(picker.selection(), Some(0), "and stops at the top");
+    }
+
+    /// The picker asks in the order it is answered — what kind of space,
+    /// then where — standing where the spaces it would join stand, with the
+    /// directories directly under it and no blank row wedged between them.
+    #[test]
+    fn the_prompt_stands_where_the_spaces_it_would_join_stand() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-place");
+        for directory in ["engine", "extensions"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        let mut model = agent_session_in("/repo");
+        let rows = sidebar(&model, &identities_fixture()).rows;
+        let spaces_row = rows
+            .iter()
+            .position(|row| row.contains("repo"))
+            .expect("the first space's header is drawn");
+
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let Sidebar { rows, buffer, .. } = sidebar(&model, &identities_fixture());
+        let kind_row = rows
+            .iter()
+            .position(|row| row.contains("workspace"))
+            .expect("the kind is named");
+
+        assert_eq!(
+            kind_row, spaces_row,
+            "the prompt stands where the spaces do: {rows:?}"
+        );
+        assert!(
+            rows[kind_row + 1].contains(&theme::glyph(crate::ui::theme::Symbol::CursorText)),
+            "the prompt follows the kinds: {rows:?}"
+        );
+        assert!(
+            rows[kind_row + 2].contains("engine"),
+            "and the listing starts under them: {rows:?}"
+        );
+        // The panel on the darker of the two surfaces, and the two rows the
+        // keyboard answers to — what is typed, and where it has landed —
+        // lifted onto the lighter one.
+        let surface = |row: usize| buffer[(2, row as u16)].bg;
+        assert_eq!(
+            surface(kind_row),
+            theme::color(Token::SurfaceRaisedSubtle),
+            "the kinds are part of the panel: {rows:?}"
+        );
+        assert_eq!(
+            surface(kind_row + 1),
+            theme::color(Token::SurfaceRaised),
+            "what is typed is lifted: {rows:?}"
+        );
+        // Nothing is chosen in the listing yet, so no row of it is lifted.
+        for row in [kind_row + 2, kind_row + 3] {
+            assert_eq!(
+                surface(row),
+                theme::color(Token::SurfaceRaisedSubtle),
+                "the listing is the panel: {rows:?}"
+            );
+        }
+    }
+
+    /// The prompt opens with nothing in it: the directory it is rooted at
+    /// is the row's own context, not text waiting to be deleted.
+    #[test]
+    fn the_prompt_opens_empty_over_the_directory_it_is_rooted_at() {
+        let mut model = agent_session_in("/repo");
+        model.root_picker = Some(RootPicker::opened_in("~"));
 
         let rows = sidebar(&model, &identities_fixture()).rows;
+        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
         let prompt = rows
             .iter()
-            .find(|row| row.contains(" at "))
+            .find(|row| row.contains(&cursor))
             .expect("the prompt row is drawn");
-        assert!(prompt.contains(" at /\u{258f}"), "{prompt}");
+        let typed = prompt
+            .trim_start()
+            .trim_start_matches(&theme::glyph(crate::ui::theme::Symbol::TreeVertical))
+            .trim_start();
+        assert!(
+            typed.starts_with(&cursor),
+            "nothing is typed for the operator: {prompt}"
+        );
+        assert!(
+            prompt.contains('~'),
+            "and the row says where it is: {prompt}"
+        );
     }
 
     /// Two trees in one column — directories and spaces — would leave no
@@ -5001,9 +5280,10 @@ mod workspace_tests {
         model.root_picker = Some(picker);
 
         let rows = sidebar(&model, &identities_fixture()).rows;
+        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
         let prompt = rows
             .iter()
-            .find(|row| row.contains(" at "))
+            .find(|row| row.contains(&cursor))
             .expect("the prompt row is drawn");
         assert!(prompt.contains("inn\u{258f}"), "{prompt}");
         assert!(prompt.contains('\u{2026}'), "the head gave way: {prompt}");
@@ -6090,18 +6370,18 @@ mod workspace_tests {
                 SpaceId(1),
                 Symbol::TreeBranch,
                 Symbol::TreeVertical,
-                [muted, muted, muted, muted],
+                [muted, muted, muted],
             ),
             (
                 SpaceId(3),
                 Symbol::TreeBranch,
                 Symbol::TreeVertical,
-                [muted, muted, accent, accent],
+                [muted, accent, accent],
             ),
         ] {
             let header = space_header(&hits, space);
-            // Header, its caption, then the agent's two rows.
-            let (column, span) = (header.x, header.y..header.y + 4);
+            // The header, then the agent's two rows.
+            let (column, span) = (header.x, header.y..header.y + 3);
             for (row, hue) in span.clone().zip(hues) {
                 assert_eq!(
                     buffer[(column, row)].fg,
@@ -6109,12 +6389,12 @@ mod workspace_tests {
                     "row {row} of {space:?}: {rows:?}"
                 );
             }
-            let item = &rows[span.start as usize + 2];
+            let item = &rows[span.start as usize + 1];
             assert!(
                 item.trim_start().starts_with(&theme::glyph(branch)),
                 "the agent branches off the gutter: {item:?}"
             );
-            let below = &rows[span.start as usize + 3];
+            let below = &rows[span.start as usize + 2];
             assert!(
                 below.trim_start().starts_with(&theme::glyph(caption)),
                 "and its caption runs down it: {below:?}"
@@ -6129,7 +6409,7 @@ mod workspace_tests {
         // The selected block is filled up to its gutter, never under it:
         // the line is the block's edge.
         let header = space_header(&hits, SpaceId(3));
-        for row in header.y..header.y + 4 {
+        for row in header.y..header.y + 3 {
             assert_ne!(
                 buffer[(header.x, row)].bg,
                 buffer[(header.x + 1, row)].bg,
@@ -6139,8 +6419,7 @@ mod workspace_tests {
     }
 
     /// The column reads space > agent: the header's fold against the
-    /// gutter and its name just after, with the space's caption pinned under
-    /// its `⇄`; each agent's status glyph and name one column further in, its
+    /// gutter and its name just after; each agent's status glyph and name one column further in, its
     /// caption under that name — the same in either kind of space.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
@@ -6155,26 +6434,69 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        let toggle = column_of(&rows[header], "⇄");
-        assert_eq!(column_of(&rows[header + 1], "/one") + 3, toggle, "{rows:?}");
-        assert_eq!(column_of(&rows[header + 2], &idle), name - 1, "{rows:?}");
-        let agent = column_of(&rows[header + 2], "shell");
+        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
+        let agent = column_of(&rows[header + 1], "shell");
         assert_eq!(agent, name + 1, "{rows:?}");
-        assert_eq!(column_of(&rows[header + 3], "/one"), agent, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "/one"), agent, "{rows:?}");
 
         let flat = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &tenant_identities());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        let toggle = column_of(&rows[header], "⇄");
-        assert_eq!(column_of(&rows[header + 1], "main") + 3, toggle, "{rows:?}");
-        assert_eq!(column_of(&rows[header + 2], &idle), name - 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
         assert_eq!(
-            column_of(&rows[header + 2], "agent 1"),
+            column_of(&rows[header + 1], "agent 1"),
             name + 1,
             "{rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 3], "main"), name + 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "main"), name + 1, "{rows:?}");
+    }
+
+    /// A space is where its own shell is: a `cd` there moves what the space
+    /// names and what its agents are placed from. With no shell of its own
+    /// — every tab an agent — it is the root it was opened at.
+    #[test]
+    fn a_cd_in_a_spaces_own_shell_moves_the_space() {
+        let mut session = session("/repo", uze_terminal::SpaceKind::Workspace);
+        let space = session.workspace.selected_space;
+        let shell = session.workspace.spaces[0].tabs[0].pane.id;
+        let agent = session.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
+        session.update_pane_status(agent, "/repo".into(), "claude".into());
+        assert_eq!(
+            space_cwd(&session.workspace.spaces[0], &tenant_identities()),
+            PathBuf::from("/repo")
+        );
+
+        session.update_pane_status(shell, "/repo/services/api".into(), "bash".into());
+        let moved = PathBuf::from("/repo/services/api");
+        assert_eq!(
+            space_cwd(&session.workspace.spaces[0], &tenant_identities()),
+            moved,
+            "the space followed its own shell"
+        );
+
+        let mut model = model_of(session.clone());
+        model.remembered.collapsed_spaces.insert(space);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
+        let header = space_header(&hits, space).y as usize;
+        assert!(
+            rows[header + 1].contains("api"),
+            "the caption names where it is now: {rows:?}"
+        );
+        model.remembered.roots_shown.insert(space);
+        let rows = sidebar(&model, &tenant_identities()).rows;
+        assert!(
+            rows[header].contains("api"),
+            "and so does the header's own toggle: {rows:?}"
+        );
+
+        // Nothing of its own left to follow: the root it was opened at.
+        session.update_pane_status(shell, "/repo/services/api".into(), "claude".into());
+        assert_eq!(
+            space_cwd(&session.workspace.spaces[0], &tenant_identities()),
+            PathBuf::from("/repo"),
+            "every tab an agent, so the space is its root again"
+        );
     }
 
     /// A space's root and each of its agents' directories are read as soon
@@ -6238,7 +6560,7 @@ mod workspace_tests {
         assert_eq!(
             two.y,
             space_header(&hits, one).y + 3,
-            "the next space follows the header, its one caption and its blank row"
+            "the next space follows the header, its caption and its blank row"
         );
         assert!(
             driven.sent().is_empty(),
@@ -6269,7 +6591,12 @@ mod workspace_tests {
                 rows, hits, buffer, ..
             } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, three).y;
-            let lit = lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header);
+            let lit = lit_gutter_rows(
+                &buffer,
+                gutter_column(&hits),
+                uze_terminal::SpaceKind::Worktree,
+            )
+            .contains(&header);
             (rows[header as usize].clone(), lit)
         };
         let (open, lit) = header_row(&model);
@@ -6285,38 +6612,42 @@ mod workspace_tests {
         assert!(lit, "{folded:?}");
     }
 
-    /// A space is a two-row item, open or minimized, and its caption says
-    /// where its work is either way: the branch its root is on, else the
-    /// root — never the agent that was in front when it was folded.
+    /// A minimized space keeps a caption under its header saying where its
+    /// work is — the branch its root is on, else the root, pinned under its
+    /// `⇄`, never an agent; open over its agents, it has none.
     #[test]
-    fn a_space_caption_names_where_it_is_open_or_folded() {
-        let caption = |model: &WorkspaceModel, space: SpaceId| {
+    fn a_folded_space_caption_names_where_it_is_and_an_open_one_has_none() {
+        let rows_at = |model: &WorkspaceModel, space: SpaceId| {
             let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, space).y as usize;
-            rows[header + 1].clone()
+            (rows[header].clone(), rows[header + 1].clone())
         };
         let mut model = three_spaces();
         let one = SpaceId(1);
-        for folded in [false, true] {
-            if folded {
-                model.remembered.collapsed_spaces.insert(one);
-            }
-            model.remembered.branches.clear();
-            let row = caption(&model, one);
-            assert!(
-                row.contains("/one") && !row.contains("shell"),
-                "folded={folded}: no branch, the root: {row:?}"
-            );
-            model
-                .remembered
-                .branches
-                .insert(PathBuf::from("/one"), "main".into());
-            let row = caption(&model, one);
-            assert!(
-                row.contains("main") && !row.contains("shell"),
-                "folded={folded}: the branch: {row:?}"
-            );
-        }
+        let (_, open) = rows_at(&model, one);
+        assert!(
+            open.contains("shell"),
+            "open, the agents follow the header: {open:?}"
+        );
+
+        model.remembered.collapsed_spaces.insert(one);
+        let (header, row) = rows_at(&model, one);
+        assert!(
+            row.contains("/one") && !row.contains("shell"),
+            "no branch, the root: {row:?}"
+        );
+        let column = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
+        assert_eq!(
+            column(&row, "/one") + 3,
+            column(&header, "⇄"),
+            "pinned under the toggle"
+        );
+        model
+            .remembered
+            .branches
+            .insert(PathBuf::from("/one"), "main".into());
+        let (_, row) = rows_at(&model, one);
+        assert!(row.contains("main"), "the branch: {row:?}");
     }
 
     /// The scroll bound is measured with the folds, so a column of folded
@@ -6345,8 +6676,8 @@ mod workspace_tests {
         assert!(open > 2, "the column overflows: {open}");
         assert_eq!(
             open - folded,
-            2,
-            "the agent's two rows are no longer counted"
+            1,
+            "the agent's two rows give way to one caption"
         );
     }
 
@@ -6418,14 +6749,14 @@ mod workspace_tests {
     /// gives it up once an agent of the space is selected.
     #[test]
     fn the_space_row_carries_the_bar_while_its_own_shells_are_selected() {
-        let header_lit = |model: &WorkspaceModel| {
+        let header_lit = |model: &WorkspaceModel, kind| {
             let Sidebar { hits, buffer, .. } = sidebar(model, &tenant_identities());
             let header = hits
                 .iter()
                 .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
                 .map(|(rect, _)| rect.y)
                 .expect("the space header");
-            lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header)
+            lit_gutter_rows(&buffer, gutter_column(&hits), kind).contains(&header)
         };
         for kind in [
             uze_terminal::SpaceKind::Worktree,
@@ -6437,7 +6768,7 @@ mod workspace_tests {
             let agent = on_shell.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
             on_shell.update_pane_status(agent, "/repo".into(), "claude".into());
             on_shell.workspace.spaces[0].selected_tab = shell;
-            assert!(header_lit(&model_of(on_shell.clone())), "{kind:?}");
+            assert!(header_lit(&model_of(on_shell.clone()), kind), "{kind:?}");
 
             let agent_tab = on_shell.workspace.spaces[0]
                 .tabs
@@ -6446,7 +6777,7 @@ mod workspace_tests {
                 .expect("the agent's tab")
                 .id;
             on_shell.workspace.spaces[0].selected_tab = agent_tab;
-            assert!(!header_lit(&model_of(on_shell)), "{kind:?}");
+            assert!(!header_lit(&model_of(on_shell), kind), "{kind:?}");
         }
     }
 
@@ -6754,16 +7085,16 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("orchestrator-space-root");
         std::fs::create_dir_all(root.join("inner")).unwrap();
         let mut model = session_rooted_at(root.path());
-        // Deleting the trailing separator is how the directory being
-        // listed is picked (see `RootPicker`) — here, the space's own root.
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
-        picker.backspace();
-        model.root_picker = Some(picker);
+        // The directory being listed is what an untouched prompt lands on
+        // (see `RootPicker`) — here, the space's own root.
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
         let mut driven = driven(model, &home);
 
         driven.frame();
-        let row = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceRoot(_)));
-        driven.press(row.x, row.y);
+        let enter = uze_keys::active()
+            .chord_for(uze_keys::Action::Activate, &[uze_keys::Scope::RootPicker])
+            .expect("the prompt is answered from the keyboard");
+        driven.press_key(key_event(enter));
 
         let sent = driven.sent();
         assert!(

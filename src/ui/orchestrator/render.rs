@@ -496,15 +496,16 @@ pub(super) fn render_sidebar(
     } else {
         theme::color(Token::BorderFaint)
     };
-    // No top padding: the header must land on the exact row the tab strip's
-    // own content does (that block has none either), or the two panes'
-    // dividers drift out of alignment by one row. No right padding either:
-    // the header action sits flush against the divider, with only the left
-    // side keeping its 1-column inset.
+    // No padding at all. Top: the header must land on the exact row the tab
+    // strip's own content does (that block has none either), or the two
+    // panes' dividers drift out of alignment by one row. Right: the rows
+    // keep their own pad off the divider. Left: every row of the column
+    // already leads with a column of its own — a space's gutter, a listing's
+    // lead — and an inset under those read as a margin the column could not
+    // afford.
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 0, 0, 0));
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -520,12 +521,47 @@ pub(super) fn render_sidebar(
         );
         let more = theme::glyph(Symbol::Manage);
         let more_width = theme::width(Symbol::Manage);
+        // One column off the divider, the same pad every row of this column
+        // keeps at its right edge.
         let more_rect = Rect::new(
-            rect.right().saturating_sub(more_width),
+            rect.right().saturating_sub(more_width + TRAILING_PAD),
             rect.y,
             more_width,
             1,
         );
+        // The way to grow the column sits beside the way out of it, with a
+        // rule between them: one names an action this surface takes, the
+        // other opens another surface, and side by side without it they read
+        // as one pair of controls.
+        // Muted while the prompt it opens is open: the word is where that
+        // prompt came from, and in the accent beside it, it reads as a
+        // second way in rather than as the one already taken.
+        let new = "new";
+        let new_hue = if model.root_picker.is_some() {
+            Token::TextMuted
+        } else {
+            Token::Accent
+        };
+        let new_width = Span::raw(new).width() as u16;
+        let divider = theme::glyph(Symbol::TreeColumnDivider);
+        let divider_width = theme::width(Symbol::TreeColumnDivider);
+        let new_rect = Rect::new(
+            more_rect
+                .x
+                .saturating_sub(new_width + divider_width + 2 * HEADER_GAP),
+            rect.y,
+            new_width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(new, theme::fg_bold(new_hue))),
+            new_rect,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(divider, theme::fg(Token::SurfaceHover))),
+            Rect::new(new_rect.right() + HEADER_GAP, rect.y, divider_width, 1),
+        );
+        hits.push((new_rect, WorkspaceHit::NewSpace));
         // Never a button: only the mark's own colour answers the pointer
         // — muted at rest, beside a label of the same weight, brighter
         // under the hover and brightest while pressed.
@@ -570,22 +606,13 @@ pub(super) fn render_sidebar(
         return;
     };
 
-    // The creation action, right-aligned on the row under the divider. The
-    // action's key stays in the action index rather than here.
-    if let Some(rect) = rows.next(1) {
-        let line = Line::from(Span::styled("+ new", theme::fg_bold(Token::Accent)));
-        let width = line.width() as u16;
-        let label_x = rect.x + rect.width.saturating_sub(width);
-        frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), rect);
-        hits.push((Rect::new(label_x, rect.y, width, 1), WorkspaceHit::NewSpace));
-    }
     // The blank row above each space is where a space being dragged is
     // shown landing (see `draw_space_drop`).
     let mut gap_above = rows.slot(1).visible();
     // While the root picker is open it owns the column: the listing it
     // draws is a tree of directories, and side by side with the tree of
-    // spaces neither would read as the one being chosen from. Closing it
-    // brings the spaces straight back.
+    // spaces neither would read as the one being chosen from. It stands
+    // where the spaces it would join stand. Closing it brings them back.
     if let Some(picker) = &model.root_picker {
         render_root_picker(frame, picker, &mut rows, hits);
         return;
@@ -675,8 +702,14 @@ pub(super) fn render_sidebar(
         if let Some(header_rect) = header.visible() {
             render_space_header(frame, header_rect, session, space, model, identities, hits);
         }
-        render_space_caption(frame, &mut rows, hits, model, session, space, identities);
-        if model.remembered.collapsed_spaces.contains(&space.id) {
+        // Minimized — or open with nothing in it — a space keeps the two-row
+        // shape of every item: its header over where its work is. Open over
+        // agents, they are that context, so the header stands alone.
+        let folded = model.remembered.collapsed_spaces.contains(&space.id);
+        if folded || agent_tabs_of(space, identities).is_empty() {
+            render_space_caption(frame, &mut rows, hits, model, session, space, identities);
+        }
+        if folded {
             gap_above = rows.slot(1).visible();
             continue;
         }
@@ -704,13 +737,12 @@ pub(super) fn render_sidebar(
                 .iter()
                 .map(|agent| TreeCaption::resolve(model, space, agent))
                 .collect();
-            let flat = space.kind == uze_terminal::SpaceKind::Workspace;
             draw_tree(
                 frame,
                 &mut rows,
                 hits,
                 is_active_space,
-                flat,
+                space.kind,
                 &agents,
                 &captions,
             );
@@ -772,9 +804,8 @@ pub(super) fn render_sidebar(
 /// The rows the space tree comes to, whether or not the column can show
 /// them all: a header per space, the cwd caption a space with no agent
 /// shows in place of its tree, two rows per agent with the connector row
-/// between siblings, and the blank row closing each space. Every space has
-/// its header and the caption under it, minimized or not; a minimized one
-/// has nothing more. Measured up front rather
+/// between siblings, and the blank row closing each space. A minimized space,
+/// or an open one with no agent, has its header and the caption under it. Measured up front rather
 /// than counted while drawing, because how far the tree may be scrolled
 /// has to be known before its first row is laid out.
 fn tree_rows(model: &WorkspaceModel, session: &Session, identities: &[AgentIdentity]) -> u16 {
@@ -783,12 +814,13 @@ fn tree_rows(model: &WorkspaceModel, session: &Session, identities: &[AgentIdent
         .spaces
         .iter()
         .map(|space| {
-            let body = if model.remembered.collapsed_spaces.contains(&space.id) {
-                0
+            let agents = agent_tabs_of(space, identities).len() as u16;
+            let body = if model.remembered.collapsed_spaces.contains(&space.id) || agents == 0 {
+                1
             } else {
-                agent_rows(agent_tabs_of(space, identities).len() as u16)
+                agent_rows(agents)
             };
-            1 + 1 + body + 1
+            1 + body + 1
         })
         .sum()
 }
@@ -976,12 +1008,10 @@ impl<'a> SidebarAgent<'a> {
     }
 }
 
-/// The row under a space's header, open or minimized: the two-row shape
-/// every item in the column has, and the parent its agents hang from. It
-/// says where the space's work is — the branch its root is on, or the root
-/// itself outside a repository — and says the same folded: which agent was
-/// in front is not what the space is. Selecting the space from this row,
-/// like from any caption.
+/// The row under a minimized or empty space's header, keeping the two-row shape
+/// every item in the column has: where the space's work is — the branch
+/// its root is on, or the root itself outside a repository. Lit along with
+/// its header, and selecting the space like any caption.
 fn render_space_caption(
     frame: &mut ratatui::Frame<'_>,
     rows: &mut Rows,
@@ -995,20 +1025,26 @@ fn render_space_caption(
         return;
     };
     let selected = space.id == session.workspace.selected_space;
-    let folded = model.remembered.collapsed_spaces.contains(&space.id);
+    let cwd = space_cwd(space, identities);
     let caption = model
         .remembered
         .branches
-        .get(&evaluation_key(&space.root))
+        .get(&evaluation_key(&cwd))
         .cloned()
-        .unwrap_or_else(|| crate::ui::display_project_path(&space.root));
+        .unwrap_or_else(|| crate::ui::display_project_path(&cwd));
     // Pinned to the right edge, under the header's `⇄`: the column the
     // header's own name leads stays the space's, and what it is about reads
     // as a caption to it rather than as another row of the tree. Lit along
     // with its header.
-    let mut spans = vec![space_gutter(header_is_current(
-        space, session, identities, folded,
-    ))];
+    let mut spans = vec![space_gutter(
+        header_is_current(
+            space,
+            session,
+            identities,
+            model.remembered.collapsed_spaces.contains(&space.id),
+        ),
+        space.kind,
+    )];
     let hue = theme::color(Token::TextDim);
     crate::ui::push_trailing(&mut spans, rect.width, caption, hue);
     if selected {
@@ -1038,7 +1074,7 @@ fn draw_tree(
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     is_active_space: bool,
-    flat: bool,
+    kind: SpaceKind,
     agents: &[SidebarAgent<'_>],
     captions: &[TreeCaption],
 ) {
@@ -1052,17 +1088,18 @@ fn draw_tree(
         // and so does the row a dragged agent would land before: the same
         // line, in the accent, never a heavier one.
         let lit = agent.is_current || agent.drop_target;
+        let flat = kind == SpaceKind::Workspace;
         let lead = || {
             if flat {
-                [space_gutter(lit), Span::raw(" ")]
+                [space_gutter(lit, kind), Span::raw(" ")]
             } else {
                 // Split at the trunk's own cell, so that cell alone stays
                 // off the row's fill (see `fill_space_row`).
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
-                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit)),
-                    Span::styled(branch[trunk..].to_owned(), gutter_style(lit)),
+                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit, kind)),
+                    Span::styled(branch[trunk..].to_owned(), gutter_style(lit, kind)),
                 ]
             }
         };
@@ -1112,7 +1149,7 @@ fn draw_tree(
         if let Some(detail_rect) = rows.slot(1).visible() {
             // Under the agent's name, past the status column, in either
             // kind.
-            let mut spans = vec![space_gutter(lit), Span::raw("   ")];
+            let mut spans = vec![space_gutter(lit, kind), Span::raw("   ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1195,7 +1232,7 @@ fn draw_tree(
         if !agent.is_last
             && let Some(gap_rect) = rows.slot(1).visible()
         {
-            let mut spans = vec![space_gutter(false)];
+            let mut spans = vec![space_gutter(false, kind)];
             if is_active_space {
                 fill_space_row(
                     &mut spans,
@@ -1530,7 +1567,7 @@ pub(super) fn render_space_header(
         Symbol::ChevronExpanded
     });
     let mut spans = vec![
-        space_gutter(is_current),
+        space_gutter(is_current, space.kind),
         Span::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
     ];
     // The fold and the space after it: a target two cells wide, pushed
@@ -1556,7 +1593,7 @@ pub(super) fn render_space_header(
             // that row should say.
             if model.remembered.roots_shown.contains(&space.id) {
                 spans.push(Span::styled(
-                    crate::ui::display_project_path(&space.root),
+                    crate::ui::display_project_path(&space_cwd(space, identities)),
                     theme::fg(Token::TextDim),
                 ));
             } else {
@@ -1571,7 +1608,9 @@ pub(super) fn render_space_header(
             push_root_toggle(&mut spans, hits, rect, space.id);
         }
     }
-    fill_space_row(&mut spans, rect.width, theme::color(header_lift(selected)));
+    if selected {
+        fill_space_row(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
@@ -1592,12 +1631,31 @@ fn fill_space_row(spans: &mut Vec<Span<'_>>, width: u16, bg: Color) {
     }
 }
 
-fn space_gutter(lit: bool) -> Span<'static> {
-    Span::styled(theme::glyph(Symbol::TreeVertical), gutter_style(lit))
+/// The vertical line down a space's leading column, from its header to its
+/// last row: the space as one block. Muted in every space, the one being
+/// worked in included; `lit`, in the hue of the space's own kind, only
+/// along what is selected in it.
+fn space_gutter(lit: bool, kind: SpaceKind) -> Span<'static> {
+    Span::styled(theme::glyph(Symbol::TreeVertical), gutter_style(lit, kind))
 }
 
-fn gutter_style(lit: bool) -> Style {
-    theme::fg(if lit { Token::Accent } else { Token::TextMuted })
+fn gutter_style(lit: bool, kind: SpaceKind) -> Style {
+    if lit {
+        theme::fg(kind_hue(kind))
+    } else {
+        theme::fg(Token::TextMuted)
+    }
+}
+
+/// The hue a kind of space marks itself in, wherever it does: the gutter
+/// along what is selected in it, and the word the picker says it would
+/// create. Two kinds in one column are told apart by colour before they
+/// are read.
+fn kind_hue(kind: SpaceKind) -> Token {
+    match kind {
+        SpaceKind::Worktree => Token::SpaceWorktree,
+        SpaceKind::Workspace => Token::SpaceWorkspace,
+    }
 }
 
 /// What a minimized space's agents are doing that is worth seeing through
@@ -1616,17 +1674,6 @@ fn folded_status(
     [AgentTabStatus::Working, AgentTabStatus::Completed]
         .into_iter()
         .find(|wanted| statuses.contains(wanted))
-}
-
-/// The surface a space's header rows are lifted on: every header, so a
-/// space reads as a block even in the background; the selected space's a
-/// step further.
-fn header_lift(selected: bool) -> Token {
-    if selected {
-        Token::SurfaceRaised
-    } else {
-        Token::SurfaceRaisedSubtle
-    }
 }
 
 /// Whether a space's header is the selected item: its space is selected and
@@ -1967,54 +2014,32 @@ fn elide_head(text: &str, width: usize) -> String {
 /// choosing where the next space in this very list goes. It stands where
 /// the first space's header stands, with the listing directly under it the
 /// way a space's tabs sit under theirs.
+///
+/// The kinds and the directories they would be created in share the darker
+/// of the column's two surfaces — they are the panel — and what is being
+/// typed stands on the lighter one, as does whichever directory it has
+/// landed on: the two rows that answer to the keyboard are the two that are
+/// lifted.
 fn render_root_picker(
     frame: &mut ratatui::Frame<'_>,
     picker: &RootPicker,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    if let Some(rect) = rows.next(1) {
-        // The typed segment is what the listing below is matching on, so
-        // it reads as the query it is — bright against the dim directory
-        // it is searching.
-        let (directory, needle) = picker
-            .input()
-            .rfind('/')
-            .map_or(("", picker.input()), |separator| {
-                picker.input().split_at(separator + 1)
-            });
-        let mut spans = vec![
-            Span::styled(" at ", theme::fg(Token::TextMuted)),
-            Span::styled(
-                // What is being typed must stay visible in a column this
-                // narrow, so the directory in front of it is the part that
-                // gives way.
-                elide_head(
-                    directory,
-                    (rect.width as usize).saturating_sub(" at ".len() + needle.chars().count() + 1),
-                ),
-                theme::fg(Token::TextDim),
-            ),
-            Span::styled(
-                format!("{needle}{}", theme::glyph(Symbol::CursorText)),
-                Style::default()
-                    .fg(theme::color(Token::TextBright))
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-        fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-    }
-    render_kind_chips(frame, picker, rows, hits);
+    render_kind_row(frame, picker, rows, hits);
+    render_query_row(frame, picker, rows);
     if picker.match_count() == 0 {
         if let Some(rect) = rows.next(1) {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "    no directory matches",
-                    theme::fg(Token::TextFaint),
-                )),
-                rect,
+            let mut spans = vec![
+                picker_lead(),
+                Span::styled("no directory matches", theme::fg(Token::TextFaint)),
+            ];
+            fill_row_bg(
+                &mut spans,
+                rect.width,
+                theme::color(Token::SurfaceRaisedSubtle),
             );
+            frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         }
         return;
     }
@@ -2023,23 +2048,33 @@ fn render_root_picker(
     // says how many more there are.
     let visible = usize::from(rows.remaining()).saturating_sub(1).max(1);
     let start = picker.window_start(visible);
+    let needle = picker.input().to_lowercase();
     for (index, candidate) in picker.matches().enumerate().skip(start).take(visible) {
         let Some(rect) = rows.next(1) else { return };
-        let selected = index == picker.selected();
+        let selected = picker.selection() == Some(index);
+        // A name the query is the head of says so, in the hue of the query
+        // itself; a match found further in says nothing, rather than
+        // colouring letters that had nothing to do with it.
+        let (matched, rest) = split_at_head(&candidate.name, &needle);
+        let rest_hue = if selected {
+            Token::TextBright
+        } else {
+            Token::TextInactive
+        };
         let mut spans = vec![
-            Span::styled(pointer_column(selected), theme::fg(Token::Accent)),
-            Span::styled(
-                candidate.name.clone(),
-                Style::default().fg(if selected {
-                    theme::color(Token::TextBright)
-                } else {
-                    theme::color(Token::TextInactive)
-                }),
-            ),
+            picker_lead(),
+            Span::styled(matched, theme::fg(Token::Accent)),
+            Span::styled(rest, theme::fg(rest_hue)),
         ];
-        if selected {
-            fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
-        }
+        fill_row_bg(
+            &mut spans,
+            rect.width,
+            theme::color(if selected {
+                Token::SurfaceRaised
+            } else {
+                Token::SurfaceRaisedSubtle
+            }),
+        );
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, WorkspaceHit::PickSpaceRoot(index)));
     }
@@ -2047,71 +2082,134 @@ fn render_root_picker(
     if hidden > 0
         && let Some(rect) = rows.next(1)
     {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!("    +{hidden} more"),
-                theme::fg(Token::TextFaint),
-            )),
-            rect,
+        let mut spans = vec![
+            picker_lead(),
+            Span::styled(format!("+{hidden} more"), theme::fg(Token::TextFaint)),
+        ];
+        fill_row_bg(
+            &mut spans,
+            rect.width,
+            theme::color(Token::SurfaceRaisedSubtle),
         );
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     }
 }
 
-/// The mark in front of the one row a picker is on, or the blank that
-/// keeps every other row in the same column.
-fn pointer(on: bool) -> String {
-    if on {
-        format!("{} ", theme::glyph(Symbol::ChevronRight))
-    } else {
-        " ".repeat(usize::from(theme::width(Symbol::ChevronRight)) + 1)
+/// `text` split after the head `needle` names, when it names one at all.
+fn split_at_head(text: &str, needle: &str) -> (String, String) {
+    if needle.is_empty() || !text.to_lowercase().starts_with(needle) {
+        return (String::new(), text.to_owned());
     }
+    let cut = text
+        .char_indices()
+        .nth(needle.chars().count())
+        .map_or(text.len(), |(index, _)| index);
+    (text[..cut].to_owned(), text[cut..].to_owned())
 }
 
-/// [`pointer`], indented under the prompt it belongs to.
-fn pointer_column(on: bool) -> String {
-    format!("  {}", pointer(on))
+/// The column every row of the picker starts in — the kinds, what is being
+/// typed, and each directory offered — with the row's own leading cell left
+/// to the mark that says where the keyboard is.
+fn picker_lead() -> Span<'static> {
+    Span::raw(" ".repeat(PICKER_LEAD))
 }
 
-/// The two kinds a space can be created as, side by side under the
-/// directory being chosen: the chosen one bright and marked, the other
-/// plain, and one the root cannot honour faint. Both are offered until
-/// the root's profile answers — the picker never waits on a repository.
-fn render_kind_chips(
+/// The width of that leading cell.
+const PICKER_LEAD: usize = 1;
+
+/// The gap on either side of the rule between the header's two controls.
+const HEADER_GAP: u16 = 1;
+
+/// The row that says which kind of space the prompt would create: the one
+/// it is on, alone. Both words side by side asked to be read as a sentence
+/// and answered nothing; one word is the state, and the `⇄` at the row's
+/// end is how it changes — the same control a space's header carries for
+/// the same kind of flip. A kind the root cannot honour is never the one
+/// shown: `RootPicker::kind` answers with what the root allows.
+fn render_kind_row(
     frame: &mut ratatui::Frame<'_>,
     picker: &RootPicker,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let Some(rect) = rows.next(1) else { return };
-    let chips = [
-        (SpaceKind::Worktree, "worktree", picker.slots_available()),
-        (SpaceKind::Workspace, "workspace", true),
+    let kind = picker.kind();
+    let name = match kind {
+        SpaceKind::Worktree => "worktree",
+        SpaceKind::Workspace => "workspace",
+    };
+    let mut spans = vec![
+        picker_lead(),
+        Span::styled(name, theme::fg_bold(kind_hue(kind))),
     ];
-    let mut spans = vec![Span::raw("    ")];
-    let mut x = rect.x + 4;
-    for (kind, name, available) in chips {
-        let chosen = picker.kind() == kind;
-        let marker = pointer(chosen);
-        let style = if !available {
-            theme::fg(Token::TextFaint)
-        } else if chosen {
-            theme::fg_bold(Token::Accent)
-        } else {
-            theme::fg(Token::TextInactive)
-        };
-        let text = format!("{marker}{name}");
-        let width = Span::raw(text.as_str()).width() as u16;
-        if available {
-            hits.push((
-                Rect::new(x, rect.y, width, 1),
-                WorkspaceHit::PickSpaceKind(kind),
-            ));
-        }
-        spans.push(Span::styled(text, style));
-        spans.push(Span::raw("  "));
-        x += width + 2;
-    }
+    // The other kind is what the control answers with, so the click target
+    // is the glyph rather than a word that is not on the row.
+    let toggle = match kind {
+        SpaceKind::Worktree => SpaceKind::Workspace,
+        SpaceKind::Workspace => SpaceKind::Worktree,
+    };
+    // Always a target, even where the root allows only the kind already
+    // shown: `RootPicker::choose_kind` refuses that flip on its own, and a
+    // control that is simply absent makes the click land on the picker's
+    // "clicked outside" rule and close it.
+    hits.push((
+        Rect::new(rect.right().saturating_sub(1 + TRAILING_PAD), rect.y, 1, 1),
+        WorkspaceHit::PickSpaceKind(toggle),
+    ));
+    crate::ui::push_trailing(
+        &mut spans,
+        rect.width,
+        theme::glyph(Symbol::ArrowSwap),
+        theme::color(Token::TextSecondary),
+    );
+    fill_row_bg(
+        &mut spans,
+        rect.width,
+        theme::color(Token::SurfaceRaisedSubtle),
+    );
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
+/// The row being typed into: what is being looked for, with the directory
+/// it is being looked for in at the row's other end — a prompt that opened
+/// with that path already typed into it asked to be deleted before it could
+/// be used. The accent down its leading column says this is the row the
+/// keyboard is in.
+fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &mut Rows) {
+    let Some(rect) = rows.next(1) else { return };
+    let needle = picker.input();
+    let mut spans = vec![
+        picker_lead(),
+        Span::styled(
+            format!("{needle}{}", theme::glyph(Symbol::CursorText)),
+            Style::default()
+                .fg(theme::color(Token::TextBright))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    // The end of the path is what says where you are, so it is the head
+    // that gives way in a column this narrow.
+    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
+    let room = rect.width.saturating_sub(used + TRAILING_PAD + 1);
+    crate::ui::push_trailing(
+        &mut spans,
+        rect.width,
+        elide_head(
+            &crate::ui::display_project_path(picker.base()),
+            room as usize,
+        ),
+        theme::color(Token::TextDim),
+    );
+    fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    frame.render_widget(
+        Paragraph::new(theme::glyph(Symbol::TreeVertical)).style(
+            Style::default()
+                .fg(theme::color(Token::Accent))
+                .bg(theme::color(Token::SurfaceRaised)),
+        ),
+        Rect::new(rect.x, rect.y, 1, 1),
+    );
 }
 
 /// What the pointer is doing to a control. The same four answers for

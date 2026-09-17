@@ -14,7 +14,7 @@ use crossterm::event::{
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
+    layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
@@ -3002,7 +3002,7 @@ impl WorkspaceModel {
             .spaces
             .iter()
             .flat_map(|space| {
-                std::iter::once(space.root.clone()).chain(
+                std::iter::once(space_cwd(space, identities)).chain(
                     render::agent_tabs_of(space, identities)
                         .into_iter()
                         .map(|tab| tab.pane.cwd.clone()),
@@ -3559,6 +3559,17 @@ fn space_own_tab(space: &Space, identities: &[AgentIdentity]) -> Option<TabId> {
         .filter(own)
         .or_else(|| space.tabs.iter().find(own))
         .map(|tab| tab.id)
+}
+
+/// Where a space currently is: the directory its own shell stands in, and
+/// the root it was opened at while it has none. A shell is a person's way
+/// of moving around, so a `cd` in it moves the space — what its agents are
+/// placed from, what its caption names, and what its `⇄` shows — rather
+/// than leaving the space pinned to the directory it was created in.
+pub(super) fn space_cwd(space: &Space, identities: &[AgentIdentity]) -> PathBuf {
+    space_own_tab(space, identities)
+        .and_then(|own| space.tabs.iter().find(|tab| tab.id == own))
+        .map_or_else(|| space.root.clone(), |tab| tab.pane.cwd.clone())
 }
 
 /// The label a new agent tab opens with. Agent labels are deliberately

@@ -97,6 +97,21 @@ vocabulary! {
         /// The wash behind a removed line in a diff.
         StateDiffRemoved = "state.diff-removed",
 
+        // ── the kinds of space ─────────────────────────────────────────
+        //
+        // What a space is shows in one hue, wherever a space marks itself:
+        // two kinds side by side in one column are told apart at a glance
+        // rather than by reading which of them a row belongs to.
+        /// A space giving each agent a checkout of its own. Aliases
+        /// [`Accent`](Self::Accent) by default — the kind the product opens
+        /// on wears the signature hue.
+        SpaceWorktree = "space.worktree",
+        /// A space whose agents work in its root, on the operator's own
+        /// branch. Warm where the other is the theme's own accent: the two
+        /// kinds have to be told apart at a glance, and two hues from the
+        /// same side of the wheel are read as one.
+        SpaceWorkspace = "space.workspace",
+
         // ── the pane's own 16 ──────────────────────────────────────────
         // A program inside a terminal pane emits indexed colours, and until
         // now they resolved to whatever the *outer* terminal happened to use

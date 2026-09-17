@@ -1841,6 +1841,20 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
+            // The picker has the column while it is open, so the wheel over
+            // it walks the directories it offers — the same move the arrow
+            // keys make, and what keeps a listing taller than the column
+            // reachable by pointer.
+            _ if self.model.root_picker.is_some() && mouse.column < layout.sidebar.right() => {
+                if let Some(picker) = self.model.root_picker.as_mut() {
+                    picker.move_selection(if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    });
+                    self.model.dirty = true;
+                }
+            }
             _ if self.model.no_modal_open()
                 && self.model.over_timeline(mouse.column, mouse.row) =>
             {
@@ -2237,15 +2251,15 @@ impl Attach<'_> {
                 primary: target.primary,
                 task: target.task,
             },
-            // Placed from the space's own root, whatever directory the
-            // selected pane has wandered into: the space is what the
-            // operator chose, and placement refuses rather than guess.
+            // Placed from where the space is now — its own shell's
+            // directory, which a `cd` there moves (see `space_cwd`) —
+            // rather than from the directory it was opened at.
             None => {
                 let Some(space) = self.model.session.as_ref().map(|s| s.selected_space()) else {
                     return;
                 };
                 PlacementRequest::New {
-                    from: space.root.clone(),
+                    from: space_cwd(space, &self.identities),
                     kind: space.kind,
                     harness,
                 }
