@@ -65,20 +65,30 @@ impl UzeApplication {
         prompt_limit: usize,
     ) -> Result<MachineSnapshot> {
         let _span = tracing::info_span!("snapshot.machine").entered();
-        let plugins = self.plugins().list()?;
         // Full health on every refresh: the inspection cache makes the
         // per-receipt vendor probing milliseconds in steady state, so every
         // screen sees real attachment state (never a masked "unknown").
         let doctor = self.health().report();
+        // The plugin list is the one doctor already read, and like doctor's
+        // it skips a package it cannot read rather than emptying every
+        // screen over it.
+        let plugins = doctor.plugins.clone();
         let marketplaces = self.marketplace().list()?;
         let marketplace_plugins = self.marketplace().plugins()?;
         let profiles = self.profiles().list()?;
-        let workspace = self.workspace().summary(context_root).ok();
-        let root = workspace
+        let resolved = workspace::resolve_workspace(context_root).ok();
+        let root = resolved
             .as_ref()
-            .map(|workspace| workspace.root.clone())
+            .map(|resolved| resolved.root.clone())
             .unwrap_or_else(|| context_root.to_path_buf());
         let context_status = self.context().inspect(&root).ok();
+        let workspace = resolved.map(|resolved| {
+            self.workspace().summary_of(
+                context_root,
+                resolved,
+                context_status.as_ref().map(|status| &status.portability),
+            )
+        });
         let prompt_history = self.workspace().prompt_history(&root, prompt_limit);
         Ok(MachineSnapshot {
             plugins,
@@ -104,7 +114,23 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.summary", skip_all, fields(cwd = %cwd.display()), err)]
     pub fn summary(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
         let resolved = workspace::resolve_workspace(cwd)?;
-        let root = resolved.root.clone();
+        let context = self.0.context().inspect(&resolved.root).ok();
+        Ok(self.summary_of(
+            cwd,
+            resolved,
+            context.as_ref().map(|status| &status.portability),
+        ))
+    }
+
+    /// [`summary`](Self::summary), for a caller that already resolved the
+    /// workspace and inspected its context.
+    fn summary_of(
+        &self,
+        cwd: &Path,
+        resolved: workspace::ResolvedWorkspace,
+        portability: Option<&Portability>,
+    ) -> OverviewWorkspaceSummary {
+        let root = resolved.root;
         let declares_project = matches!(
             resolved.kind,
             WorkspaceKind::Consumer | WorkspaceKind::Hybrid
@@ -113,21 +139,26 @@ impl Workspace<'_> {
             resolved.kind,
             WorkspaceKind::Marketplace | WorkspaceKind::Hybrid
         );
-        Ok(OverviewWorkspaceSummary {
+        OverviewWorkspaceSummary {
             cwd: cwd.to_path_buf(),
-            root: root.clone(),
             kind: resolved.kind,
             agents_directory_present: root
                 .join(uze_core::project_context::AGENTS_DIRECTORY_NAME)
                 .is_dir(),
-            project: self.project_overview(&root, declares_project),
+            project: self.project_overview(&root, declares_project, portability),
             marketplace: is_marketplace.then(|| Self::marketplace_overview(&root)),
-        })
+            root,
+        }
     }
 
     /// The project half — always present, so a directory without
     /// `agents.yaml` still answers "not configured" instead of nothing.
-    fn project_overview(&self, root: &Path, declares_project: bool) -> ProjectOverview {
+    fn project_overview(
+        &self,
+        root: &Path,
+        declares_project: bool,
+        portability: Option<&Portability>,
+    ) -> ProjectOverview {
         let loaded = declares_project.then(|| project_lock::load_lock(root));
         let (environment, declared, installed, missing) = match loaded {
             Some(Ok(Some(lock))) => {
@@ -156,12 +187,6 @@ impl Workspace<'_> {
         let agents_md = root
             .join(uze_core::project_context::AGENTS_MD_FILE_NAME)
             .is_file();
-        let portability = self
-            .0
-            .context()
-            .inspect(root)
-            .ok()
-            .map(|status| status.portability);
         // What `agents.yaml` asks for that the rest has not caught up to.
         // The client shows it and offers the action; it never applies it —
         // opening the client must write nothing into a repository somebody
@@ -180,7 +205,7 @@ impl Workspace<'_> {
         ProjectOverview {
             environment,
             drift,
-            memory: derive_memory(agents_md, portability.as_ref()),
+            memory: derive_memory(agents_md, portability),
             declared_plugins: declared,
             installed_plugins: installed,
             missing_plugins: missing,
