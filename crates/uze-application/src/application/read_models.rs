@@ -386,32 +386,70 @@ pub struct HarnessContextSupport {
 impl HarnessContextSupport {
     /// Derives the declaration from the integration's own answers plus the
     /// one environment fact that can defeat them (`runtime_shim_active`).
-    /// Mirrors the mechanism precedence `AgentContextStatus` applies per
-    /// project: a runtime projection outranks a persistent bridge.
     pub fn declared(integration: &dyn IntegrationPort, runtime_shim_active: bool) -> Self {
-        let projects = integration.supports_runtime_integration()
-            && integration.runtime_projects_project_context();
-        let projected = if runtime_shim_active {
-            ContextMechanism::RuntimeShim
-        } else {
-            ContextMechanism::ShimShadowed
-        };
-        let instructions = match integration.context_delivery() {
-            ContextDelivery::Native { .. } => ContextMechanism::Native,
-            ContextDelivery::Bridge { .. } if projects => projected,
-            ContextDelivery::Bridge { .. } => ContextMechanism::Bridge,
-            ContextDelivery::None => ContextMechanism::Unsupported,
-        };
-        let agents_directory = if integration.discovers_project_agents_directory() {
-            ContextMechanism::Native
-        } else if projects {
-            projected
-        } else {
-            ContextMechanism::Unsupported
-        };
+        let projection = RuntimeProjection::of(integration, runtime_shim_active);
         Self {
-            instructions,
-            agents_directory,
+            instructions: ContextMechanism::for_instructions(integration, projection),
+            agents_directory: ContextMechanism::for_agents_directory(integration, projection),
+        }
+    }
+}
+
+/// Whether UZE's runtime shim carries project context into a launch of one
+/// harness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeProjection {
+    /// Nothing is projected: the harness has no runtime projection of
+    /// project context, or it has nothing to project here.
+    Inactive,
+    /// A launch goes through the shim, which projects the context.
+    Active,
+    /// The harness would be projected, but a real binary resolves ahead of
+    /// the shim on this process's `PATH`.
+    Shadowed,
+}
+
+impl RuntimeProjection {
+    pub(crate) fn of(integration: &dyn IntegrationPort, runtime_shim_active: bool) -> Self {
+        if !(integration.supports_runtime_integration()
+            && integration.runtime_projects_project_context())
+        {
+            Self::Inactive
+        } else if runtime_shim_active {
+            Self::Active
+        } else {
+            Self::Shadowed
+        }
+    }
+}
+
+/// The one precedence every context read model applies: what the harness
+/// reads itself, then a runtime projection, then a persistent bridge.
+impl ContextMechanism {
+    pub(crate) fn for_instructions(
+        integration: &dyn IntegrationPort,
+        projection: RuntimeProjection,
+    ) -> Self {
+        match (integration.context_delivery(), projection) {
+            (ContextDelivery::Native { .. }, _) => Self::Native,
+            (ContextDelivery::None, _) => Self::Unsupported,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Active) => Self::RuntimeShim,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Shadowed) => Self::ShimShadowed,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Inactive) => Self::Bridge,
+        }
+    }
+
+    pub(crate) fn for_agents_directory(
+        integration: &dyn IntegrationPort,
+        projection: RuntimeProjection,
+    ) -> Self {
+        if integration.discovers_project_agents_directory() {
+            return Self::Native;
+        }
+        match projection {
+            RuntimeProjection::Active => Self::RuntimeShim,
+            RuntimeProjection::Shadowed => Self::ShimShadowed,
+            RuntimeProjection::Inactive => Self::Unsupported,
         }
     }
 }
@@ -444,6 +482,9 @@ pub enum HarnessContextDelivery {
         needed: bool,
         state: AttachmentState,
     },
+    /// UZE's runtime shim projects `AGENTS.md` into every launch from here,
+    /// so a missing bridge is not a gap.
+    Projected,
     /// This harness was not found on the machine at all; nothing here is
     /// evaluated as a gap.
     NotDetected,
@@ -468,8 +509,8 @@ pub enum Portability {
     /// No recognized instructions file exists at all.
     NoContext,
     /// A shared `AGENTS.md` exists and every detected harness that needs
-    /// something from it currently has it (natively, or via a matched
-    /// bridge).
+    /// something from it currently has it (natively, through the runtime
+    /// shim, or via a matched bridge).
     Portable,
     /// A shared `AGENTS.md` exists, but at least one detected harness that
     /// needs a bridge does not currently have a working one.

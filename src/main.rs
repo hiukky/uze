@@ -2646,6 +2646,7 @@ fn render_drift(drift: &uze_application::application::EnvironmentDrift) -> Strin
 fn render_status_harness(harness: &uze_application::application::HarnessContextStatus) -> String {
     let state = match &harness.delivery {
         HarnessContextDelivery::Native => progress::success_text("Native"),
+        HarnessContextDelivery::Projected => progress::success_text("Runtime shim"),
         HarnessContextDelivery::NotDetected => progress::label("Not installed"),
         HarnessContextDelivery::Bridge {
             state: uze_application::AttachmentState::Matched,
@@ -2765,6 +2766,7 @@ fn render_context_status(status: &ProjectContextStatus) -> String {
     for harness in &status.harnesses {
         let delivery = match &harness.delivery {
             HarnessContextDelivery::Native => "native".to_owned(),
+            HarnessContextDelivery::Projected => "runtime shim".to_owned(),
             HarnessContextDelivery::NotDetected => "not detected".to_owned(),
             HarnessContextDelivery::Bridge { needed, state } => {
                 format!(
