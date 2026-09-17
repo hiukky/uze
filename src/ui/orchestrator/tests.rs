@@ -34,16 +34,14 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        Attach, AttachAnswers, AttachInbox, ChangesResolution, CommitDetailPopup,
-        CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
-        FileResolution, Flow, GitAnswer, GitBadge, GitResolution, MutationResolution, NOTICE_TTL,
-        OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
-        RootProfileResolution, ScrollDirection, SupportResolution, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels,
-        agent_activity_frame, agent_identity_for_tab, answered_or, blank_pane,
-        can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key, forward_paste,
-        forward_scroll, next_agent_label, next_shell_label, open_commit_detail, pane_relative,
-        pending_tab_drop,
+        Attach, CommitDetailPopup, CommitDetailResolution, CompletionBehavior, DeliveryResolution,
+        DraggingTab, ExtensionHit, Flow, GitAnswer, GitBadge, GitResolution, NOTICE_TTL,
+        PendingDrop, PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection,
+        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
+        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
+        answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
+        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
+        open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -1350,8 +1348,9 @@ mod workspace_tests {
 
         driven
             .attach
-            .answers
+            .channels
             .deliveries
+            .sender
             .send(DeliveryResolution {
                 cwd: PathBuf::from("/repo/.worktrees/ai"),
                 reserved: Some(task.id.clone()),
@@ -5981,17 +5980,6 @@ mod workspace_tests {
         /// socket stops answering, which is how this client learns the
         /// terminal server is gone.
         events_sender: Option<std::sync::mpsc::Sender<ClientEvent>>,
-        support: std::sync::mpsc::Receiver<SupportResolution>,
-        tasks: std::sync::mpsc::Receiver<TaskResolution>,
-        deliveries: std::sync::mpsc::Receiver<DeliveryResolution>,
-        mutations: std::sync::mpsc::Receiver<MutationResolution>,
-        git: std::sync::mpsc::Receiver<GitResolution>,
-        commit_details: std::sync::mpsc::Receiver<CommitDetailResolution>,
-        code_changes: std::sync::mpsc::Receiver<ChangesResolution>,
-        code_files: std::sync::mpsc::Receiver<FileResolution>,
-        occupancy: std::sync::mpsc::Receiver<OccupancyResolution>,
-        placements: std::sync::mpsc::Receiver<PlacementResolution>,
-        root_profiles: std::sync::mpsc::Receiver<RootProfileResolution>,
     }
 
     impl Driven<'_> {
@@ -6038,21 +6026,7 @@ mod workspace_tests {
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
         fn pump(&mut self) -> Flow {
-            let inbox = AttachInbox {
-                events: &self.events,
-                support: &self.support,
-                tasks: &self.tasks,
-                deliveries: &self.deliveries,
-                mutations: &self.mutations,
-                git: &self.git,
-                commit_details: &self.commit_details,
-                code_changes: &self.code_changes,
-                code_files: &self.code_files,
-                occupancy: &self.occupancy,
-                placements: &self.placements,
-                root_profiles: &self.root_profiles,
-            };
-            self.attach.pump(&inbox)
+            self.attach.pump(&self.events)
         }
 
         /// The terminal server exiting under the client.
@@ -6086,7 +6060,12 @@ mod workspace_tests {
         /// Hands one already-received placement back to the client, the
         /// way the loop's own `pump` absorbs it.
         fn placements_answered(&mut self, resolution: PlacementResolution) {
-            self.attach.answers.placements.send(resolution).unwrap();
+            self.attach
+                .channels
+                .placements
+                .sender
+                .send(resolution)
+                .unwrap();
             self.pump();
         }
 
@@ -6107,17 +6086,6 @@ mod workspace_tests {
 
     fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
         let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
-        let (support, support_rx) = std::sync::mpsc::channel();
-        let (tasks, tasks_rx) = std::sync::mpsc::channel();
-        let (deliveries, deliveries_rx) = std::sync::mpsc::channel();
-        let (mutations, mutations_rx) = std::sync::mpsc::channel();
-        let (git, git_rx) = std::sync::mpsc::channel();
-        let (commit_details, commit_details_rx) = std::sync::mpsc::channel();
-        let (code_changes, code_changes_rx) = std::sync::mpsc::channel();
-        let (code_files, code_files_rx) = std::sync::mpsc::channel();
-        let (occupancy, occupancy_rx) = std::sync::mpsc::channel();
-        let (placements, placements_rx) = std::sync::mpsc::channel();
-        let (root_profiles, root_profiles_rx) = std::sync::mpsc::channel();
         let (events, events_rx) = std::sync::mpsc::channel();
         Driven {
             attach: Attach {
@@ -6125,19 +6093,9 @@ mod workspace_tests {
                 stream: client,
                 home,
                 identities: identities_fixture(),
-                answers: AttachAnswers {
-                    support,
-                    tasks,
-                    deliveries,
-                    mutations,
-                    git,
-                    commit_details,
-                    code_changes,
-                    code_files,
-                    occupancy,
-                    placements,
-                    root_profiles,
-                },
+                // Leaked like the management memory below: the attach
+                // borrows its channels for as long as it lives.
+                channels: Box::leak(Box::default()),
                 spinner: indicatif::ProgressBar::hidden(),
                 next_tick: Instant::now(),
                 asked_for_a_tab: false,
@@ -6152,17 +6110,6 @@ mod workspace_tests {
             server,
             events: events_rx,
             events_sender: Some(events),
-            support: support_rx,
-            tasks: tasks_rx,
-            deliveries: deliveries_rx,
-            mutations: mutations_rx,
-            git: git_rx,
-            commit_details: commit_details_rx,
-            code_changes: code_changes_rx,
-            code_files: code_files_rx,
-            occupancy: occupancy_rx,
-            placements: placements_rx,
-            root_profiles: root_profiles_rx,
         }
     }
 
@@ -6490,7 +6437,10 @@ mod workspace_tests {
         driven.press(option.x, option.y);
 
         let resolution = driven
+            .attach
+            .channels
             .placements
+            .receiver
             .recv_timeout(Duration::from_secs(30))
             .expect("the placement answers");
         let placed = resolution
@@ -6590,7 +6540,10 @@ mod workspace_tests {
         driven.press_key(key_event(resume));
         driven.press_key(key_event(pick));
         let resolution = driven
+            .attach
+            .channels
             .placements
+            .receiver
             .recv_timeout(Duration::from_secs(30))
             .expect("the placement answers");
         driven.placements_answered(resolution);
@@ -6630,8 +6583,9 @@ mod workspace_tests {
 
         driven
             .attach
-            .answers
+            .channels
             .tasks
+            .sender
             .send(TaskResolution {
                 key: PathBuf::from("/repo"),
                 answered: Some(super::EvaluationAnswer {

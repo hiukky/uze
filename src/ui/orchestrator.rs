@@ -1062,32 +1062,6 @@ pub(crate) fn attach_workspace(
     // that pane's own directory. The loop below kicks a refresh the moment
     // the selection names an agent whose answer is not already in hand —
     // the same moment the "✦" badge appears.
-    // The answer channels outlive this attach with the rest of the memory:
-    // a read still running when the runtime goes away lands after the
-    // client attaches again, instead of vanishing with a receiver that was
-    // dropped and leaving its key reserved forever.
-    let support_sender = memory.support.sender.clone();
-    let support_receiver = &memory.support.receiver;
-    let task_sender = memory.tasks.sender.clone();
-    let task_receiver = &memory.tasks.receiver;
-    let delivery_sender = memory.deliveries.sender.clone();
-    let delivery_receiver = &memory.deliveries.receiver;
-    let mutation_sender = memory.mutations.sender.clone();
-    let mutation_receiver = &memory.mutations.receiver;
-    let git_sender = memory.git.sender.clone();
-    let git_receiver = &memory.git.receiver;
-    let commit_detail_sender = memory.commit_details.sender.clone();
-    let commit_detail_receiver = &memory.commit_details.receiver;
-    let changes_sender = memory.code_changes.sender.clone();
-    let changes_receiver = &memory.code_changes.receiver;
-    let files_sender = memory.code_files.sender.clone();
-    let files_receiver = &memory.code_files.receiver;
-    let occupancy_sender = memory.occupancy.sender.clone();
-    let occupancy_receiver = &memory.occupancy.receiver;
-    let placement_sender = memory.placements.sender.clone();
-    let root_profile_sender = memory.root_profiles.sender.clone();
-    let root_profile_receiver = &memory.root_profiles.receiver;
-    let placement_receiver = &memory.placements.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     let activity_frames = theme::frames(Symbol::StatusWorking);
@@ -1126,44 +1100,21 @@ pub(crate) fn attach_workspace(
         stream,
         home,
         identities,
-        answers: AttachAnswers {
-            support: support_sender,
-            tasks: task_sender,
-            deliveries: delivery_sender,
-            mutations: mutation_sender,
-            git: git_sender,
-            commit_details: commit_detail_sender,
-            code_changes: changes_sender,
-            code_files: files_sender,
-            occupancy: occupancy_sender,
-            placements: placement_sender,
-            root_profiles: root_profile_sender,
-        },
+        // The answer channels outlive this attach with the rest of the
+        // memory: a read still running when the runtime goes away lands
+        // after the client attaches again.
+        channels: &memory.channels,
         spinner: activity_spinner,
         next_tick: next_activity_tick,
         asked_for_a_tab: false,
         manage_memory: manage,
         keyboard: terminal.keyboard(),
     };
-    let inbox = AttachInbox {
-        events: &receiver,
-        support: support_receiver,
-        tasks: task_receiver,
-        deliveries: delivery_receiver,
-        mutations: mutation_receiver,
-        git: git_receiver,
-        commit_details: commit_detail_receiver,
-        code_changes: changes_receiver,
-        code_files: files_receiver,
-        occupancy: occupancy_receiver,
-        placements: placement_receiver,
-        root_profiles: root_profile_receiver,
-    };
     // Every way out of the loop — a quit, a runtime gone, an error — must
     // hand the model's memory back, so the loop runs inside one call whose
     // result is read only after that handover.
     let outcome: Result<WorkspaceExit> = (|| loop {
-        if let Flow::Exit(exit) = attach.pump(&inbox) {
+        if let Flow::Exit(exit) = attach.pump(&receiver) {
             return Ok(exit);
         }
         let size = terminal.size()?;
@@ -1899,10 +1850,17 @@ pub(crate) struct WorkspaceMemory {
     /// The model's own remembered half, taken by the attach and handed
     /// back when it ends (see [`WorkspaceModel::recall`]/[`WorkspaceModel::remember`]).
     remembered: Remembered,
-    /// The channels background reads answer on. Kept with the answers they
-    /// carry, so a read still running when the user leaves lands after
-    /// they come back instead of vanishing with a dropped receiver — which
-    /// would also have left its key reserved in the pending sets forever.
+    channels: Channels,
+}
+
+/// The channels background reads answer on, one per kind of answer.
+///
+/// Kept with the memory rather than with one attach, so a read still
+/// running when the user leaves lands after they come back instead of
+/// vanishing with a dropped receiver — which would also have left its key
+/// reserved in the pending sets forever.
+#[derive(Default)]
+struct Channels {
     support: Answers<SupportResolution>,
     tasks: Answers<TaskResolution>,
     deliveries: Answers<DeliveryResolution>,

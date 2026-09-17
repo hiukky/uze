@@ -38,25 +38,6 @@ pub(super) enum Flow {
     Exit(WorkspaceExit),
 }
 
-/// The channels one attach's background reads answer on.
-///
-/// Cloned senders, not the receivers: the receivers stay with
-/// [`WorkspaceMemory`] so an answer still in flight when the user leaves
-/// for management lands when they come back.
-pub(super) struct AttachAnswers {
-    pub(super) support: mpsc::Sender<SupportResolution>,
-    pub(super) tasks: mpsc::Sender<TaskResolution>,
-    pub(super) deliveries: mpsc::Sender<DeliveryResolution>,
-    pub(super) mutations: mpsc::Sender<MutationResolution>,
-    pub(super) git: mpsc::Sender<GitResolution>,
-    pub(super) commit_details: mpsc::Sender<CommitDetailResolution>,
-    pub(super) code_changes: mpsc::Sender<ChangesResolution>,
-    pub(super) code_files: mpsc::Sender<FileResolution>,
-    pub(super) occupancy: mpsc::Sender<OccupancyResolution>,
-    pub(super) placements: mpsc::Sender<PlacementResolution>,
-    pub(super) root_profiles: mpsc::Sender<RootProfileResolution>,
-}
-
 /// The frame an event is handled against.
 ///
 /// Recomputed once per iteration, before any event is read, so a resize
@@ -78,7 +59,7 @@ pub(super) struct Attach<'a> {
     /// The registered harness set, resolved once per attach — it cannot
     /// change mid-session.
     pub(super) identities: Vec<AgentIdentity>,
-    pub(super) answers: AttachAnswers,
+    pub(super) channels: &'a Channels,
     /// Drives the agent-activity animation. Ratatui owns the alternate
     /// screen, so this one is hidden and only its position is read — see
     /// [`AGENT_ACTIVITY_FRAMES`].
@@ -587,11 +568,16 @@ impl Attach<'_> {
                 }
             }
             Action::DeliverTask => {
-                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
+                deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
             Action::DeliverAllTasks => {
                 if let Some(cwd) = selected_pane_cwd(&self.model) {
-                    spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
+                    spawn_delivery(
+                        self.home,
+                        cwd,
+                        None,
+                        self.channels.deliveries.sender.clone(),
+                    );
                     self.model.set_busy_notice("delivering all".to_owned());
                 }
             }
@@ -799,7 +785,7 @@ impl Attach<'_> {
             return;
         }
         if self.model.root_profile_pending.insert(root.clone()) {
-            spawn_root_profile(root, self.answers.root_profiles.clone());
+            spawn_root_profile(root, self.channels.root_profiles.sender.clone());
         }
     }
 
@@ -898,7 +884,7 @@ impl Attach<'_> {
                         self.home,
                         cwd.clone(),
                         Some(task.id.clone()),
-                        self.answers.deliveries.clone(),
+                        self.channels.deliveries.sender.clone(),
                     );
                 }
             }
@@ -964,7 +950,7 @@ impl Attach<'_> {
             task.id.clone(),
             task.label.clone(),
             mutation,
-            self.answers.mutations.clone(),
+            self.channels.mutations.sender.clone(),
         );
     }
 
@@ -2105,7 +2091,7 @@ impl Attach<'_> {
                 open_code(&mut self.model, code::ContentMode::Contents);
             }
             WorkspaceHit::Deliver(_) => {
-                deliver_selected_tab(&mut self.model, self.home, &self.answers.deliveries);
+                deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
@@ -2156,7 +2142,7 @@ impl Attach<'_> {
                     spawn_support_refresh(
                         self.home,
                         dropdown.key.clone(),
-                        self.answers.support.clone(),
+                        self.channels.support.sender.clone(),
                     );
                 }
                 self.model.dirty = true;
@@ -2175,7 +2161,7 @@ impl Attach<'_> {
                     &mut self.model,
                     index,
                     hit_rect,
-                    &self.answers.commit_details,
+                    &self.channels.commit_details.sender,
                 ),
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
@@ -2194,27 +2180,6 @@ impl Attach<'_> {
         }
         Flow::Continue
     }
-}
-
-/// Every receiver one attach drains, borrowed from [`WorkspaceMemory`].
-///
-/// The receivers stay in the memory rather than in [`Attach`] on purpose:
-/// an answer still in flight when the user leaves for management has to
-/// land when they come back, and a receiver dropped at the end of an
-/// attach would leave its key reserved forever.
-pub(super) struct AttachInbox<'a> {
-    pub(super) events: &'a mpsc::Receiver<ClientEvent>,
-    pub(super) support: &'a mpsc::Receiver<SupportResolution>,
-    pub(super) tasks: &'a mpsc::Receiver<TaskResolution>,
-    pub(super) deliveries: &'a mpsc::Receiver<DeliveryResolution>,
-    pub(super) mutations: &'a mpsc::Receiver<MutationResolution>,
-    pub(super) git: &'a mpsc::Receiver<GitResolution>,
-    pub(super) commit_details: &'a mpsc::Receiver<CommitDetailResolution>,
-    pub(super) code_changes: &'a mpsc::Receiver<ChangesResolution>,
-    pub(super) code_files: &'a mpsc::Receiver<FileResolution>,
-    pub(super) occupancy: &'a mpsc::Receiver<OccupancyResolution>,
-    pub(super) placements: &'a mpsc::Receiver<PlacementResolution>,
-    pub(super) root_profiles: &'a mpsc::Receiver<RootProfileResolution>,
 }
 
 impl Attach<'_> {
@@ -2267,7 +2232,7 @@ impl Attach<'_> {
             label,
             command,
             replacing,
-            self.answers.placements.clone(),
+            self.channels.placements.sender.clone(),
         );
     }
 
@@ -2328,8 +2293,11 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
-        self.model
-            .schedule_evaluation(self.home, placement.cwd.clone(), &self.answers.tasks);
+        self.model.schedule_evaluation(
+            self.home,
+            placement.cwd.clone(),
+            &self.channels.tasks.sender,
+        );
         // The launch carries the agent's identity, whichever kind of record
         // it is: what the shim resumes the conversation by, and what this
         // client reads back from the session to know which agent the tab
@@ -2359,7 +2327,7 @@ impl Attach<'_> {
         }
         for cwd in reconciliation.changed {
             self.model
-                .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
     }
 
@@ -2368,20 +2336,20 @@ impl Attach<'_> {
     /// has gone stale.
     ///
     /// Nothing here blocks. Every read this schedules runs on a thread of
-    /// its own and answers through [`AttachInbox`], which is what lets
+    /// its own and answers through [`Channels`], which is what lets
     /// this be called every tick without the frame waiting on any of it.
     ///
     /// Answers with a [`Flow`] for the one thing absorbing can discover
     /// that no keystroke can: the terminal runtime having gone away
     /// underneath the client.
-    pub(super) fn pump(&mut self, inbox: &AttachInbox<'_>) -> Flow {
+    pub(super) fn pump(&mut self, events: &mpsc::Receiver<ClientEvent>) -> Flow {
         if let Some((revision, notice)) = crate::self_update::since(self.model.release_revision) {
             self.model.release = notice;
             self.model.release_revision = revision;
             self.model.dirty = true;
         }
         loop {
-            match inbox.events.try_recv() {
+            match events.try_recv() {
                 Ok(event) => self.model.apply(event, &self.identities),
                 Err(mpsc::TryRecvError::Empty) => break,
                 // The reader thread drops its sender only when the socket
@@ -2419,26 +2387,26 @@ impl Attach<'_> {
         // Absorb before scheduling, throughout: an answer sitting in the
         // channel still holds its reservation, so draining first is what
         // lets the very same tick ask the next question.
-        while let Ok(resolution) = inbox.occupancy.try_recv() {
+        while let Ok(resolution) = self.channels.occupancy.receiver.try_recv() {
             self.absorb_occupancy(resolution);
         }
         sync_slot_occupancy(
             &mut self.model,
             self.home,
-            &self.answers.occupancy,
-            &self.answers.tasks,
+            &self.channels.occupancy.sender,
+            &self.channels.tasks.sender,
         );
-        while let Ok(resolution) = inbox.placements.try_recv() {
+        while let Ok(resolution) = self.channels.placements.receiver.try_recv() {
             self.absorb_placement(resolution);
         }
-        while let Ok(resolution) = inbox.support.try_recv() {
+        while let Ok(resolution) = self.channels.support.receiver.try_recv() {
             if self.model.agent_support_pending.as_ref() == Some(&resolution.key) {
                 self.model.agent_support_pending = None;
             }
             self.model.agent_support = Some(resolution);
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.tasks.try_recv() {
+        while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
             self.model.task_eval_pending.remove(&resolution.key);
             let Some(EvaluationAnswer {
                 primary,
@@ -2489,7 +2457,7 @@ impl Attach<'_> {
             }
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.deliveries.try_recv() {
+        while let Ok(resolution) = self.channels.deliveries.receiver.try_recv() {
             // Released before anything is read out of the answer: an
             // empty one is exactly the case that used to leave the task
             // drawn as "delivering" with no way back.
@@ -2529,10 +2497,10 @@ impl Attach<'_> {
                 });
             }
             self.model
-                .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
             self.model.dirty = true;
         }
-        while let Ok(resolution) = inbox.mutations.try_recv() {
+        while let Ok(resolution) = self.channels.mutations.receiver.try_recv() {
             self.model.task_mutation_pending.remove(&resolution.task);
             // Both endings are said. A finish whose store write failed
             // used to say nothing at all, and the re-evaluation right
@@ -2543,7 +2511,7 @@ impl Attach<'_> {
                 Err(error) => error,
             });
             self.model
-                .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
             self.model.dirty = true;
         }
         // Readiness is a Git fact, read when a pane goes quiet and, less
@@ -2555,7 +2523,7 @@ impl Attach<'_> {
             .collect();
         for cwd in quiet {
             self.model
-                .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
         if self
             .model
@@ -2577,7 +2545,7 @@ impl Attach<'_> {
             self.model.occupancy_stale = true;
             if let Some(cwd) = selected_pane_cwd(&self.model) {
                 self.model
-                    .schedule_evaluation(self.home, cwd, &self.answers.tasks);
+                    .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
             }
             // On the same clock, and for every agent rather than the
             // selected one: this is also where a launch left pending by a
@@ -2611,21 +2579,23 @@ impl Attach<'_> {
                 .is_none_or(|resolution| resolution.key != key)
         {
             self.model.agent_support_pending = Some(key.clone());
-            spawn_support_refresh(self.home, key, self.answers.support.clone());
+            spawn_support_refresh(self.home, key, self.channels.support.sender.clone());
         }
-        while let Ok(resolution) = inbox.git.try_recv() {
+        while let Ok(resolution) = self.channels.git.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_git_read(resolution);
         }
-        while let Ok(resolution) = inbox.commit_details.try_recv() {
+        while let Ok(resolution) = self.channels.commit_details.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_commit_detail(resolution);
         }
-        while let Ok(resolution) = inbox.code_changes.try_recv() {
+        while let Ok(resolution) = self.channels.code_changes.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_changes(resolution);
         }
-        while let Ok(resolution) = inbox.code_files.try_recv() {
+        while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
-        while let Ok(RootProfileResolution { root, profile }) = inbox.root_profiles.try_recv() {
+        while let Ok(RootProfileResolution { root, profile }) =
+            self.channels.root_profiles.receiver.try_recv()
+        {
             self.model.root_profile_pending.remove(&root);
             self.model.root_profiles.insert(root.clone(), profile);
             if let Some(picker) = self.model.root_picker.as_mut() {
@@ -2633,10 +2603,11 @@ impl Attach<'_> {
             }
             self.model.dirty = true;
         }
-        self.model.schedule_git_read(&self.answers.git);
+        self.model.schedule_git_read(&self.channels.git.sender);
         self.model
-            .schedule_changes_refresh(&self.answers.code_changes);
-        self.model.schedule_file_request(&self.answers.code_files);
+            .schedule_changes_refresh(&self.channels.code_changes.sender);
+        self.model
+            .schedule_file_request(&self.channels.code_files.sender);
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }
