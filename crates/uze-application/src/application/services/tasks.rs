@@ -7,7 +7,7 @@
 //! than a thin route into `uze-core`, which is why it is the one that
 //! became a file.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use uze_core::{
@@ -574,7 +574,7 @@ impl Workspace<'_> {
         let completion = policy.completion;
         let evaluated = task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let owners = slot_owners(store);
+            let owners = store.slot_owners();
             for task in &mut store.tasks {
                 // A task that ended is still looked at while it owns its
                 // slot: the agent that delivered usually keeps working in the
@@ -590,7 +590,7 @@ impl Workspace<'_> {
                 // agent that is there makes it a lie, whichever way it got
                 // there — a release that raced the tab opening, a resume.
                 let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
-                    && owners.contains(task.id.as_str());
+                    && owners.contains(&task.id);
                 let parked_with_agent = task.state == TaskState::Parked
                     && landing::slot_path(&primary, task)
                         .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
@@ -1237,34 +1237,6 @@ fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> Deli
         }
         Err(other) => DeliveryOutcome::Refused(other.to_string()),
     }
-}
-
-/// The task currently answering for each occupied slot, by id.
-///
-/// A checkout id can be named by more than one task over its life — a slot
-/// goes back to the pool and the next agent takes it — and the newest one
-/// is the owner, which is the rule `checkout::slot_state` already reads
-/// slots by. Anything older is history and must not be revived by what the
-/// directory now holds, because what it holds is somebody else's work.
-fn slot_owners(store: &TaskStore) -> BTreeSet<String> {
-    let mut newest: BTreeMap<&str, &Task> = BTreeMap::new();
-    for task in &store.tasks {
-        let Some(checkout) = &task.checkout else {
-            continue;
-        };
-        newest
-            .entry(checkout.as_str())
-            .and_modify(|held| {
-                if task.created_at_unix >= held.created_at_unix {
-                    *held = task;
-                }
-            })
-            .or_insert(task);
-    }
-    newest
-        .into_values()
-        .map(|task| task.id.as_str().to_owned())
-        .collect()
 }
 
 /// What naming a task produced.

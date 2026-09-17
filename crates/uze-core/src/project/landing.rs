@@ -24,7 +24,7 @@ use crate::{
     checkout::{self, commits_ahead, is_dirty},
     subprocess::run_shell_bounded,
     task::{Task, TaskState},
-    worktree::{CompletionBehavior, WORKTREES_DIRECTORY},
+    worktree::CompletionBehavior,
 };
 
 /// A gate that has not finished in this long is a hung gate.
@@ -137,7 +137,7 @@ fn join_paths(files: &[PathBuf]) -> String {
 /// The task's checkout directory, when it has one.
 pub fn slot_path(primary: &Path, task: &Task) -> Option<PathBuf> {
     let checkout = task.checkout.as_ref()?;
-    let path = primary.join(WORKTREES_DIRECTORY).join(checkout.as_str());
+    let path = checkout.directory(primary);
     path.is_dir().then_some(path)
 }
 

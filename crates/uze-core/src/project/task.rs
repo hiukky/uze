@@ -26,6 +26,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BTreeSet,
     fmt, fs,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -340,11 +341,10 @@ impl AgentRecord<'_> {
     /// for a task whose checkout is gone: nowhere is its own any more.
     pub fn own_directory(&self, project_root: &Path) -> Option<PathBuf> {
         match self {
-            Self::Task(task) => task.checkout.as_ref().map(|checkout| {
-                project_root
-                    .join(crate::worktree::WORKTREES_DIRECTORY)
-                    .join(checkout.as_str())
-            }),
+            Self::Task(task) => task
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.directory(project_root)),
             Self::Tenant(_) => Some(project_root.to_path_buf()),
         }
     }
@@ -353,6 +353,27 @@ impl AgentRecord<'_> {
 impl TaskStore {
     pub fn get(&self, id: &AgentId) -> Option<&Task> {
         self.tasks.iter().find(|task| &task.id == id)
+    }
+
+    /// The task standing in `checkout` now: the newest to have been given
+    /// it. A slot outlives the tasks that ran in it and each went on naming
+    /// it; anything older is history, and answering for it would hand the
+    /// current agent's work to a task long gone.
+    pub fn slot_owner(&self, checkout: &CheckoutId) -> Option<&Task> {
+        self.tasks
+            .iter()
+            .filter(|task| task.checkout.as_ref() == Some(checkout))
+            .max_by_key(|task| task.created_at_unix)
+    }
+
+    /// Every task that is the [`slot_owner`](Self::slot_owner) of its own
+    /// checkout.
+    pub fn slot_owners(&self) -> BTreeSet<AgentId> {
+        self.tasks
+            .iter()
+            .filter_map(|task| self.slot_owner(task.checkout.as_ref()?))
+            .map(|owner| owner.id.clone())
+            .collect()
     }
 
     /// The record an identifier names, of whichever kind.
