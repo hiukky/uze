@@ -21,6 +21,7 @@ use uze_core::{
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
     },
+    manifest::BUILT_IN_MARKETPLACE,
     preference::PreferencePort,
     provisioning::{ProcessRunner, ProvisionStatus, SystemProcessRunner},
     reconciliation::{
@@ -251,14 +252,14 @@ impl UzeApplication {
             .store
             .package_ids()?
             .iter()
-            .any(|package_id| package_id.as_str() == format!("{id}@uze-official"));
+            .any(|package_id| package_id.as_str() == format!("{id}@{BUILT_IN_MARKETPLACE}"));
         if already_installed {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
         match self.plugins().install_materialized(
             materialized,
-            "uze-official",
+            BUILT_IN_MARKETPLACE,
             None,
             &trust::NoTrustAuthority,
             &uze_core::naming::NoNameCollisionAuthority,
@@ -273,8 +274,9 @@ impl UzeApplication {
                 // itself can fail, all of them before a byte is written. Ask
                 // the Store instead of assuming.
                 let installed = self.store.package_ids().is_ok_and(|ids| {
-                    ids.iter()
-                        .any(|package_id| package_id.as_str() == format!("{id}@uze-official"))
+                    ids.iter().any(|package_id| {
+                        package_id.as_str() == format!("{id}@{BUILT_IN_MARKETPLACE}")
+                    })
                 });
                 tracing::warn!(
                     plugin = id,

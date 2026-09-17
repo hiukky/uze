@@ -183,8 +183,8 @@ impl Marketplace<'_> {
         let mut out = Vec::new();
         let official = bootstrap::entries()?;
         out.push(MarketplaceSummary {
-            name: "uze-official".to_owned(),
-            source: "embedded:uze-official".to_owned(),
+            name: BUILT_IN_MARKETPLACE.to_owned(),
+            source: format!("embedded:{BUILT_IN_MARKETPLACE}"),
             homepage: official.homepage,
             plugin_count: official.plugins.len(),
         });
@@ -292,11 +292,12 @@ impl Marketplace<'_> {
             // qualified id it would have installed under — matching by bare
             // name alone would (and did) also match a same-named plugin
             // installed from an entirely different marketplace.
-            let installed_package = installed.get(format!("{}@uze-official", entry.name).as_str());
+            let installed_package =
+                installed.get(format!("{}@{BUILT_IN_MARKETPLACE}", entry.name).as_str());
             let update_available = installed_package
                 .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
             MarketplacePluginSummary {
-                marketplace: "uze-official".to_owned(),
+                marketplace: BUILT_IN_MARKETPLACE.to_owned(),
                 name: entry.name.clone(),
                 description: entry.description,
                 keywords: entry.keywords,
@@ -336,7 +337,7 @@ impl Marketplace<'_> {
             .into_iter()
             .find(|plugin| plugin.marketplace == marketplace && plugin.name == name)
             .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))?;
-        let materialized = if marketplace == "uze-official" {
+        let materialized = if marketplace == BUILT_IN_MARKETPLACE {
             bootstrap::materialize(name)?
         } else {
             // Read from the catalogue's own checkout: what is on offer is a

@@ -5,6 +5,7 @@
 use uze_core::{
     PackageSource, Result, UzeError,
     integration::AttachmentState,
+    manifest::BUILT_IN_MARKETPLACE,
     reconciliation::{PackageRemovalPlan, plan_remove},
     state,
     store::StoredPackage,
@@ -25,27 +26,15 @@ impl Plugins<'_> {
         self.detach_and_remove(id, false)
     }
 
+    /// Whether an installed package is protected from removal. Only the
+    /// verified official origin is: an embedded provenance, not a
+    /// marketplace name — a local/Git package that merely shares the name
+    /// `uze` remains removable, so protection cannot be spoofed by naming.
     pub(crate) fn is_protected_package(package: &StoredPackage) -> bool {
-        // Only the verified official origin is protected: an embedded
-        // provenance whose id appears in the compiled marketplace snapshot.
-        // A local/git package that merely shares the name `uze` is not
-        // official and remains removable — prevents spoofing by name alone.
-        let embedded_id = match &package.provenance.requested {
-            PackageSource::Embedded { id } => id,
-            _ => return false,
-        };
-        if bootstrap::DEFAULT_PLUGIN_IDS.contains(&embedded_id.as_str()) {
-            return true;
-        }
-        if let Ok(official) = bootstrap::entries()
-            && official
-                .plugins
-                .iter()
-                .any(|entry| entry.name == *embedded_id)
-        {
-            return true;
-        }
-        false
+        matches!(
+            &package.provenance.requested,
+            PackageSource::Embedded { id } if is_protected_plugin(BUILT_IN_MARKETPLACE, id)
+        )
     }
 
     pub(crate) fn detach_and_remove(
@@ -133,4 +122,13 @@ impl Plugins<'_> {
             already_missing_receipts,
         })
     }
+}
+
+/// Whether `plugin`, offered by `marketplace`, belongs to the official set
+/// compiled into this binary — which re-seeds itself, so removing a member
+/// of it is not an operation that means anything.
+pub(crate) fn is_protected_plugin(marketplace: &str, plugin: &str) -> bool {
+    marketplace == BUILT_IN_MARKETPLACE
+        && bootstrap::entries()
+            .is_ok_and(|official| official.plugins.iter().any(|entry| entry.name == plugin))
 }

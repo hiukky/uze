@@ -109,7 +109,10 @@ fn contained_relative_path(source: &str) -> Result<PathBuf> {
             std::path::Component::CurDir => {}
             _ => {
                 return Err(UzeError::UnsafePathReference {
-                    path: PathBuf::from("embedded:uze-official"),
+                    path: PathBuf::from(format!(
+                        "embedded:{}",
+                        uze_core::manifest::BUILT_IN_MARKETPLACE
+                    )),
                     reference: source.to_owned(),
                 });
             }
@@ -140,8 +143,6 @@ fn embedded_manifest() -> Result<marketplace::MarketplaceManifest> {
 /// Application facade turns this into product-facing read models, and
 /// nothing below `uze-core::acquisition` ever sees it.
 pub struct OfficialCatalog {
-    /// The manifest's own declared name.
-    pub name: String,
     /// Where a reader goes to see this marketplace for themselves
     /// (`owner.url`). `None` when the manifest names no owner: the
     /// embedded snapshot has no source URL of its own to fall back on.
@@ -152,7 +153,6 @@ pub struct OfficialCatalog {
 pub fn entries() -> Result<OfficialCatalog> {
     let manifest = embedded_manifest()?;
     Ok(OfficialCatalog {
-        name: manifest.name,
         homepage: manifest.owner.and_then(|owner| owner.url),
         plugins: manifest.plugins,
     })

@@ -16,6 +16,7 @@
 use serde::Serialize;
 use uze_keys::Action;
 
+use super::lifecycle::remove::is_protected_plugin;
 use super::profile::ProfileSummary;
 use super::read_models::{HarnessHealth, MarketplacePluginSummary};
 
@@ -63,12 +64,6 @@ impl ActionOffer {
     }
 }
 
-/// The marketplace the embedded official snapshot is served from. Anything
-/// from it re-seeds on the next run, so removing it is not an operation
-/// that means anything — a fact about the catalogue, kept here rather than
-/// in whatever happens to be drawing a row.
-const OFFICIAL_MARKETPLACE: &str = "uze-official";
-
 impl MarketplacePluginSummary {
     pub fn offers(&self) -> Vec<ActionOffer> {
         vec![
@@ -90,7 +85,7 @@ impl MarketplacePluginSummary {
             },
             if !self.installed {
                 ActionOffer::unavailable(Action::RemovePlugin, "not installed")
-            } else if self.marketplace == OFFICIAL_MARKETPLACE {
+            } else if is_protected_plugin(&self.marketplace, &self.name) {
                 ActionOffer::unavailable(
                     Action::RemovePlugin,
                     "part of the official set, which re-seeds itself",
@@ -167,7 +162,7 @@ mod tests {
     ) -> MarketplacePluginSummary {
         MarketplacePluginSummary {
             marketplace: marketplace.to_owned(),
-            name: "flow".to_owned(),
+            name: "uze".to_owned(),
             description: None,
             keywords: Vec::new(),
             installed,
@@ -220,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_official_set_is_not_removable_and_the_row_says_so() {
-        let official = plugin(true, Some(false), "uze-official");
+        let official = plugin(true, Some(false), uze_core::manifest::BUILT_IN_MARKETPLACE);
         assert_eq!(
             offer(&official, Action::RemovePlugin).reason(),
             Some("part of the official set, which re-seeds itself")
