@@ -10,12 +10,12 @@ use serde::Serialize;
 
 use uze_core::{
     harness_runtime,
-    integration::{AttachmentState, ManagedArtifact, PublicationStatus},
+    integration::{AttachmentState, ManagedArtifact},
     persistence::MutationLock,
-    reconciliation::{PackageRemovalPlan, plan_remove},
     state,
 };
 
+use super::lifecycle::remove::ReceiptTeardown;
 use super::services::Health;
 
 #[derive(Clone, Debug, Serialize)]
@@ -32,7 +32,7 @@ pub enum MaintenanceOutcome {
     /// renamed out from under them, e.g. this project's own
     /// marketplace-qualification: `flow` became `flow@ai`, orphaning
     /// every `flow`-keyed receipt). Detached and forgotten the same way
-    /// `remove_plugin` would, and only when that path is fully `Safe`
+    /// `Plugins::remove` would, and only when that path is fully `Safe`
     /// (see `reconcile_orphaned_receipts`) — never for a foreign or
     /// ambiguous state.
     OrphanCleaned {
@@ -165,24 +165,21 @@ impl Health<'_> {
         report.outcomes.extend(self.reconcile_orphaned_receipts());
         let packages = self.0.installed_packages();
 
-        for integration in &self.0.integrations {
-            if let PublicationStatus::Unpublished(_) = integration.publication(&packages)
-                && let Err(error) = integration.republish_packages(&packages)
-            {
-                report.outcomes.push(MaintenanceOutcome::Unavailable {
-                    integration: integration.id().to_owned(),
-                    reason: error.to_string(),
-                });
-            }
-        }
+        report.outcomes.extend(
+            self.0
+                .republish_unpublished(&packages)
+                .into_iter()
+                .filter_map(|outcome| {
+                    Some(MaintenanceOutcome::Unavailable {
+                        reason: outcome.error?,
+                        integration: outcome.integration,
+                    })
+                }),
+        );
 
         for package in &packages {
-            if self
-                .0
-                .plugin_summary(package)
-                .ok()
-                .and_then(|summary| summary.update_available)
-                == Some(true)
+            if let uze_core::PackageSource::Embedded { id } = &package.provenance.requested
+                && crate::bootstrap::has_update(id, &package.root).unwrap_or(false)
             {
                 report.outcomes.push(MaintenanceOutcome::UpdateAvailable {
                     plugin: package.id.as_str().to_owned(),
@@ -300,7 +297,7 @@ impl Health<'_> {
     /// lets that resolve itself instead of requiring a person to notice
     /// and hand-clean the ledger.
     ///
-    /// Reuses exactly the safety rule `remove_plugin` enforces: an orphan
+    /// Reuses exactly the safety rule `Plugins::remove` enforces: an orphan
     /// is only ever touched when every one of its receipts reconciles as
     /// cleanly `Safe` to remove (see `plan_remove`) — `Drifted`,
     /// `Conflict`, `Blocked`, or an unrecoverable ledger all fall through
@@ -333,55 +330,31 @@ impl Health<'_> {
             .collect();
 
         for package_id in orphan_ids {
-            let report = self.0.reconcile(&package_id);
-            if !matches!(plan_remove(&report), PackageRemovalPlan::Safe { .. }) {
-                outcomes.push(MaintenanceOutcome::NeedsHumanAction {
-                    plugin: package_id,
-                    integration: None,
-                    receipt: None,
-                    state: None,
-                    reason: "orphaned receipts exist for a package no longer installed, \
-                             and are not all safely removable automatically"
-                        .to_owned(),
-                });
-                continue;
-            }
-            let mut blocked = false;
-            for reconciled in &report.receipts {
-                if reconciled.inspection.state != AttachmentState::Matched {
+            let final_report = match self.0.detach_owned_receipts(&package_id) {
+                Ok(ReceiptTeardown::Detached { final_report, .. }) => final_report,
+                Ok(ReceiptTeardown::Refused { .. }) => {
+                    outcomes.push(MaintenanceOutcome::NeedsHumanAction {
+                        plugin: package_id,
+                        integration: None,
+                        receipt: None,
+                        state: None,
+                        reason: "orphaned receipts exist for a package no longer installed, \
+                                 and are not all safely removable automatically"
+                            .to_owned(),
+                    });
                     continue;
                 }
-                let Some(integration) = self
-                    .0
-                    .integrations
-                    .iter()
-                    .find(|integration| integration.id() == reconciled.receipt.integration)
-                else {
-                    blocked = true;
-                    break;
-                };
-                match integration.detach_receipt(&reconciled.receipt) {
-                    Ok(inspection) if inspection.state == AttachmentState::Missing => {}
-                    _ => {
-                        blocked = true;
-                        break;
-                    }
+                Ok(ReceiptTeardown::Incomplete { .. }) | Err(_) => {
+                    outcomes.push(MaintenanceOutcome::NeedsHumanAction {
+                        plugin: package_id,
+                        integration: None,
+                        receipt: None,
+                        state: None,
+                        reason: "orphaned receipts did not fully detach".to_owned(),
+                    });
+                    continue;
                 }
-            }
-            // Re-reconcile after detaching, exactly like `detach_and_remove`:
-            // the ledger is only ever forgotten against a fresh, live-verified
-            // Missing state, never the pre-detach snapshot.
-            let final_report = self.0.reconcile(&package_id);
-            if blocked || !matches!(plan_remove(&final_report), PackageRemovalPlan::Safe { .. }) {
-                outcomes.push(MaintenanceOutcome::NeedsHumanAction {
-                    plugin: package_id,
-                    integration: None,
-                    receipt: None,
-                    state: None,
-                    reason: "orphaned receipts did not fully detach".to_owned(),
-                });
-                continue;
-            }
+            };
             let ledger_keys: Vec<String> = final_report
                 .receipts
                 .iter()

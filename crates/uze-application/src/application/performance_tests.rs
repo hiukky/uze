@@ -94,7 +94,7 @@ impl World {
 
         let market = root.join("market");
         let plugin_dir = market.join("plugins").join(PLUGIN);
-        copy_tree(&uze_testkit::fixtures::canonical(PLUGIN), &plugin_dir);
+        uze_testkit::fixtures::copy_tree(&uze_testkit::fixtures::canonical(PLUGIN), &plugin_dir);
         fs::write(
             market.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME),
             serde_json::json!({
@@ -196,19 +196,6 @@ fn assert_best_within_budget(label: &str, runs: &[Duration]) {
 impl Drop for World {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
-    }
-}
-
-fn copy_tree(source: &Path, destination: &Path) {
-    fs::create_dir_all(destination).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
     }
 }
 

@@ -4,7 +4,7 @@
 //! This is the read model behind the workspace's per-agent support popup
 //! and the Harnesses drawer. It exists because the older answer was
 //! assembled at the call site out of three unrelated pieces — a
-//! project-scoped `context_inspect` resolved at whatever root the TUI
+//! project-scoped `Context::inspect` resolved at whatever root the TUI
 //! happened to attach to, a machine-scoped `HarnessHealth`, and a bridge
 //! `needed` flag that actually meant "some installed package contributed a
 //! managed region". A harness could be receiving `AGENTS.md` perfectly
@@ -28,7 +28,10 @@ use uze_core::{
     project_context, text_region,
 };
 
-use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, services::Workspace};
+use super::{
+    ContextMechanism, INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, RuntimeProjection,
+    UzeApplication, services::Workspace,
+};
 
 /// The mechanism actually carrying one portable resource into one harness.
 /// Every variant names a mechanism or a specific reason there is none —
@@ -100,7 +103,7 @@ impl Workspace<'_> {
             .collect()
     }
 
-    /// The single-harness slice of [`UzeApplication::agent_context`] — what
+    /// The single-harness slice of [`Workspace::agent_context`] — what
     /// an agent pane running one known harness needs, without paying for
     /// the others.
     #[tracing::instrument(name = "workspace.agent_context_for", skip_all, fields(integration_id = %integration_id, cwd = %cwd.display()), err)]
@@ -109,16 +112,11 @@ impl Workspace<'_> {
         integration_id: &str,
         cwd: &Path,
     ) -> Result<AgentContextStatus> {
-        let integration = self
-            .0
-            .integrations
-            .iter()
-            .find(|integration| integration.id() == integration_id)
-            .ok_or_else(|| {
-                UzeError::UnknownPackage(format!("harness `{integration_id}` not found"))
-            })?;
+        let integration = self.0.integration_named(integration_id).ok_or_else(|| {
+            UzeError::UnknownPackage(format!("harness `{integration_id}` not found"))
+        })?;
         let context = project_context::resolve(cwd);
-        Ok(self.resolve_agent_context(integration.as_ref(), cwd, &context))
+        Ok(self.resolve_agent_context(integration, cwd, &context))
     }
 
     fn resolve_agent_context(
@@ -128,86 +126,79 @@ impl Workspace<'_> {
         context: &project_context::ProjectContext,
     ) -> AgentContextStatus {
         let present = self.0.detect_cached(integration).present;
-        // Asked at the caller's `cwd`, not at the resolved root: this is
-        // the same question the shim answers when it actually execs the
-        // harness from that directory, so the status can never claim a
-        // projection the next real launch would not perform.
-        let shim_active = self.0.runtime_shim_is_active(integration);
-        let projection_active = present
-            && shim_active
-            && integration.supports_runtime_integration()
-            && integration.runtime_projects_project_context()
-            && integration.runtime_contribution_would_activate(&RuntimeContext {
-                cwd,
-                home: &self.0.home,
-            });
-        // Only a harness that opted into the runtime shim can be shadowed
-        // on PATH; for every other one `runtime_shim_is_active` is
-        // vacuously true and this reason must never be reachable.
-        let shim_shadowed = present && integration.supports_runtime_integration() && !shim_active;
-
+        let projection = self.0.runtime_projection_at(integration, cwd);
         AgentContextStatus {
             integration: integration.id().to_owned(),
             display_name: integration.display_name().to_owned(),
             present,
             root: context.root.clone(),
-            instructions: self.instruction_delivery(
-                integration,
-                context,
-                present,
-                projection_active,
-                shim_shadowed,
-            ),
-            agents_directory: agents_directory_delivery(
-                integration,
-                context,
-                present,
-                projection_active,
-                shim_shadowed,
-            ),
+            instructions: instruction_delivery(integration, context, present, projection),
+            agents_directory: agents_directory_delivery(integration, context, present, projection),
         }
     }
+}
 
-    fn instruction_delivery(
+impl UzeApplication {
+    /// The runtime projection a launch of `integration` from `cwd` gets.
+    ///
+    /// Asked at the caller's `cwd`, not at a resolved root: this is the same
+    /// question the shim answers when it actually execs the harness from
+    /// that directory, so a status can never claim a projection the next
+    /// real launch would not perform.
+    pub(super) fn runtime_projection_at(
         &self,
         integration: &dyn IntegrationPort,
-        context: &project_context::ProjectContext,
-        present: bool,
-        projection_active: bool,
-        shim_shadowed: bool,
-    ) -> ResourceDelivery {
-        if context.agents_md.is_none() {
-            return ResourceDelivery::AbsentFromProject;
+        cwd: &Path,
+    ) -> RuntimeProjection {
+        match RuntimeProjection::of(integration, self.runtime_shim_is_active(integration)) {
+            RuntimeProjection::Active
+                if !integration.runtime_contribution_would_activate(&RuntimeContext {
+                    cwd,
+                    home: &self.home,
+                }) =>
+            {
+                RuntimeProjection::Inactive
+            }
+            projection => projection,
         }
-        if !present {
-            return ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent);
-        }
-        match integration.context_delivery() {
-            ContextDelivery::Native { .. } => ResourceDelivery::Native,
-            ContextDelivery::None => ResourceDelivery::Undelivered(UndeliveredReason::Unsupported),
-            ContextDelivery::Bridge { file_name } => {
-                // The runtime projection outranks the persistent bridge:
-                // when the shim is delivering, a project-root bridge file
-                // is redundant, and reporting its absence as a gap is
-                // exactly the false alarm this model exists to end.
-                if projection_active {
-                    return ResourceDelivery::Projected;
-                }
-                let state = text_region::inspect(
-                    &context.root.join(file_name),
-                    INSTRUCTION_BRIDGE_IDENTITY,
-                    INSTRUCTION_BRIDGE_CONTENT,
-                )
-                .state;
-                if state == AttachmentState::Matched {
-                    ResourceDelivery::Bridged
-                } else if shim_shadowed {
-                    ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed)
-                } else {
-                    ResourceDelivery::Undelivered(UndeliveredReason::Bridge(state))
-                }
+    }
+}
+
+fn instruction_delivery(
+    integration: &dyn IntegrationPort,
+    context: &project_context::ProjectContext,
+    present: bool,
+    projection: RuntimeProjection,
+) -> ResourceDelivery {
+    if context.agents_md.is_none() {
+        return ResourceDelivery::AbsentFromProject;
+    }
+    if !present {
+        return ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent);
+    }
+    let mechanism = ContextMechanism::for_instructions(integration, projection);
+    match (mechanism, integration.context_delivery()) {
+        (ContextMechanism::Native, _) => ResourceDelivery::Native,
+        (ContextMechanism::RuntimeShim, _) => ResourceDelivery::Projected,
+        (
+            ContextMechanism::Bridge | ContextMechanism::ShimShadowed,
+            ContextDelivery::Bridge { file_name },
+        ) => {
+            let state = text_region::inspect(
+                &context.root.join(file_name),
+                INSTRUCTION_BRIDGE_IDENTITY,
+                INSTRUCTION_BRIDGE_CONTENT,
+            )
+            .state;
+            if state == AttachmentState::Matched {
+                ResourceDelivery::Bridged
+            } else if mechanism == ContextMechanism::ShimShadowed {
+                ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed)
+            } else {
+                ResourceDelivery::Undelivered(UndeliveredReason::Bridge(state))
             }
         }
+        _ => ResourceDelivery::Undelivered(UndeliveredReason::Unsupported),
     }
 }
 
@@ -215,8 +206,7 @@ fn agents_directory_delivery(
     integration: &dyn IntegrationPort,
     context: &project_context::ProjectContext,
     present: bool,
-    projection_active: bool,
-    shim_shadowed: bool,
+    projection: RuntimeProjection,
 ) -> ResourceDelivery {
     if context.agents_directory.is_none() {
         return ResourceDelivery::AbsentFromProject;
@@ -224,13 +214,14 @@ fn agents_directory_delivery(
     if !present {
         return ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent);
     }
-    if integration.discovers_project_agents_directory() {
-        ResourceDelivery::Native
-    } else if projection_active {
-        ResourceDelivery::Projected
-    } else if shim_shadowed {
-        ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed)
-    } else {
-        ResourceDelivery::Undelivered(UndeliveredReason::Unsupported)
+    match ContextMechanism::for_agents_directory(integration, projection) {
+        ContextMechanism::Native => ResourceDelivery::Native,
+        ContextMechanism::RuntimeShim => ResourceDelivery::Projected,
+        ContextMechanism::ShimShadowed => {
+            ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed)
+        }
+        ContextMechanism::Bridge | ContextMechanism::Unsupported => {
+            ResourceDelivery::Undelivered(UndeliveredReason::Unsupported)
+        }
     }
 }

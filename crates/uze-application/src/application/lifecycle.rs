@@ -1,5 +1,5 @@
-#![allow(clippy::empty_line_after_doc_comments)]
-//! Lifecycle — install/update/remove/attach — extracted without semantic change.
+//! A plugin's lifecycle on this machine: install, update, remove, and
+//! delivery to the detected harnesses.
 
 pub mod attach;
 pub mod install;

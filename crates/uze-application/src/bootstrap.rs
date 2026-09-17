@@ -12,7 +12,7 @@
 //! default, which is product policy, not a marketplace fact.
 //!
 //! Every default plugin goes through the exact same lifecycle a normal
-//! `uze add` uses (`UzeApplication::install_materialized`) — Store, Engine,
+//! `uze add` uses (`Plugins::install_materialized`) — Store, Engine,
 //! Router and every `IntegrationPort` never learn a plugin's bytes came
 //! from the binary rather than disk or Git.
 
@@ -38,32 +38,24 @@ include!(concat!(env!("OUT_DIR"), "/embedded_marketplace.rs"));
 pub const DEFAULT_PLUGIN_IDS: &[&str] = &["uze"];
 
 /// Materializes `plugin_name` from the embedded official marketplace
-/// snapshot: extracts the whole snapshot into a fresh scratch directory,
-/// reads its `marketplace.json`, and resolves the plugin the same way any
-/// marketplace root would. `Err(UnknownPackage)` if the snapshot's manifest
+/// snapshot: extracts the whole snapshot into a fresh scratch directory and
+/// resolves the plugin against the snapshot's `marketplace.json` the same
+/// way any marketplace root would. `Err(UnknownPackage)` if the snapshot's manifest
 /// does not list `plugin_name`.
 pub fn materialize(plugin_name: &str) -> Result<MaterializedPackage> {
-    let (root, manifest) = extract_and_parse()?;
-    let plugin_root = marketplace::resolve_plugin_source(&manifest, plugin_name, &root)?;
-
-    let provenance = |resolved| Provenance {
+    let manifest = embedded_manifest()?;
+    let provenance = || Provenance {
         requested: PackageSource::Embedded {
             id: plugin_name.to_owned(),
         },
-        resolved,
+        resolved: ResolvedSource::Embedded {
+            id: plugin_name.to_owned(),
+        },
     };
-    let mut materialized = MaterializedPackage::owned(
-        root,
-        provenance(ResolvedSource::Embedded {
-            id: plugin_name.to_owned(),
-        }),
-    );
-    materialized.retarget(
-        plugin_root,
-        provenance(ResolvedSource::Embedded {
-            id: plugin_name.to_owned(),
-        }),
-    );
+    let root = extract_embedded_snapshot()?;
+    let mut materialized = MaterializedPackage::owned(root.clone(), provenance());
+    let plugin_root = marketplace::resolve_plugin_source(&manifest, plugin_name, &root)?;
+    materialized.retarget(plugin_root, provenance());
     Ok(materialized)
 }
 
@@ -117,7 +109,10 @@ fn contained_relative_path(source: &str) -> Result<PathBuf> {
             std::path::Component::CurDir => {}
             _ => {
                 return Err(UzeError::UnsafePathReference {
-                    path: PathBuf::from("embedded:uze-official"),
+                    path: PathBuf::from(format!(
+                        "embedded:{}",
+                        uze_core::manifest::BUILT_IN_MARKETPLACE
+                    )),
                     reference: source.to_owned(),
                 });
             }
@@ -148,8 +143,6 @@ fn embedded_manifest() -> Result<marketplace::MarketplaceManifest> {
 /// Application facade turns this into product-facing read models, and
 /// nothing below `uze-core::acquisition` ever sees it.
 pub struct OfficialCatalog {
-    /// The manifest's own declared name.
-    pub name: String,
     /// Where a reader goes to see this marketplace for themselves
     /// (`owner.url`). `None` when the manifest names no owner: the
     /// embedded snapshot has no source URL of its own to fall back on.
@@ -160,24 +153,9 @@ pub struct OfficialCatalog {
 pub fn entries() -> Result<OfficialCatalog> {
     let manifest = embedded_manifest()?;
     Ok(OfficialCatalog {
-        name: manifest.name,
         homepage: manifest.owner.and_then(|owner| owner.url),
         plugins: manifest.plugins,
     })
-}
-
-/// Extracts a fresh copy of the embedded snapshot and parses its
-/// `marketplace.json`. The returned root is the scratch directory the
-/// manifest and every plugin subtree live under.
-fn extract_and_parse() -> Result<(PathBuf, marketplace::MarketplaceManifest)> {
-    let root = extract_embedded_snapshot()?;
-    let manifest_path = root.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-    let manifest_bytes = fs::read(&manifest_path).map_err(|source| UzeError::Read {
-        path: manifest_path,
-        source,
-    })?;
-    let manifest = marketplace::parse_manifest(&manifest_bytes)?;
-    Ok((root, manifest))
 }
 
 fn extract_embedded_snapshot() -> Result<PathBuf> {
@@ -275,22 +253,9 @@ mod tests {
     fn a_stored_copy_with_different_content_reports_an_update() {
         let root = uze_testkit::temp::scratch("bootstrap-drift");
         let materialized = materialize("uze").unwrap();
-        copy_tree(materialized.root(), &root);
+        uze_testkit::fixtures::copy_tree(materialized.root(), &root);
         fs::write(root.join("plugin.json"), "{}").unwrap();
         assert!(has_update("uze", &root).unwrap());
         fs::remove_dir_all(root).unwrap();
-    }
-
-    fn copy_tree(source: &Path, destination: &Path) {
-        fs::create_dir_all(destination).unwrap();
-        for entry in fs::read_dir(source).unwrap() {
-            let entry = entry.unwrap();
-            let target = destination.join(entry.file_name());
-            if entry.path().is_dir() {
-                copy_tree(&entry.path(), &target);
-            } else {
-                fs::copy(entry.path(), target).unwrap();
-            }
-        }
     }
 }

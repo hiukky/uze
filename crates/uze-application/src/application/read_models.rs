@@ -1,16 +1,13 @@
 //! The product-facing read models `UzeApplication` hands to the CLI and the
 //! TUI, and the queries that build them.
 //!
-//! These types are the crate's public vocabulary — every one of them is
-//! re-exported from `application` and named by `src/`. They lived inline in
-//! `application.rs` until they were half of it, which buried the
-//! orchestration surface the file exists for.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! These types are the crate's public vocabulary: re-exported from
+//! `application` for `src/` to name.
 
 use uze_core::{
     Result,
     integration::{ContextDelivery, IntegrationPort},
+    provisioning::ProvisioningResult,
 };
 
 use super::services::Plugins;
@@ -127,7 +124,7 @@ pub struct MarketplacePluginSummary {
     /// Which registered marketplace this plugin came from (`uze-official`
     /// for the embedded snapshot, or the name it was registered under via
     /// `marketplace add`). Needed once more than one marketplace can
-    /// contribute plugins to the same list — see `list_marketplace_plugins`.
+    /// contribute plugins to the same list — see `Marketplace::plugins`.
     pub marketplace: String,
     pub name: String,
     pub description: Option<String>,
@@ -385,32 +382,70 @@ pub struct HarnessContextSupport {
 impl HarnessContextSupport {
     /// Derives the declaration from the integration's own answers plus the
     /// one environment fact that can defeat them (`runtime_shim_active`).
-    /// Mirrors the mechanism precedence `AgentContextStatus` applies per
-    /// project: a runtime projection outranks a persistent bridge.
     pub fn declared(integration: &dyn IntegrationPort, runtime_shim_active: bool) -> Self {
-        let projects = integration.supports_runtime_integration()
-            && integration.runtime_projects_project_context();
-        let projected = if runtime_shim_active {
-            ContextMechanism::RuntimeShim
-        } else {
-            ContextMechanism::ShimShadowed
-        };
-        let instructions = match integration.context_delivery() {
-            ContextDelivery::Native { .. } => ContextMechanism::Native,
-            ContextDelivery::Bridge { .. } if projects => projected,
-            ContextDelivery::Bridge { .. } => ContextMechanism::Bridge,
-            ContextDelivery::None => ContextMechanism::Unsupported,
-        };
-        let agents_directory = if integration.discovers_project_agents_directory() {
-            ContextMechanism::Native
-        } else if projects {
-            projected
-        } else {
-            ContextMechanism::Unsupported
-        };
+        let projection = RuntimeProjection::of(integration, runtime_shim_active);
         Self {
-            instructions,
-            agents_directory,
+            instructions: ContextMechanism::for_instructions(integration, projection),
+            agents_directory: ContextMechanism::for_agents_directory(integration, projection),
+        }
+    }
+}
+
+/// Whether UZE's runtime shim carries project context into a launch of one
+/// harness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeProjection {
+    /// Nothing is projected: the harness has no runtime projection of
+    /// project context, or it has nothing to project here.
+    Inactive,
+    /// A launch goes through the shim, which projects the context.
+    Active,
+    /// The harness would be projected, but a real binary resolves ahead of
+    /// the shim on this process's `PATH`.
+    Shadowed,
+}
+
+impl RuntimeProjection {
+    pub(crate) fn of(integration: &dyn IntegrationPort, runtime_shim_active: bool) -> Self {
+        if !(integration.supports_runtime_integration()
+            && integration.runtime_projects_project_context())
+        {
+            Self::Inactive
+        } else if runtime_shim_active {
+            Self::Active
+        } else {
+            Self::Shadowed
+        }
+    }
+}
+
+/// The one precedence every context read model applies: what the harness
+/// reads itself, then a runtime projection, then a persistent bridge.
+impl ContextMechanism {
+    pub(crate) fn for_instructions(
+        integration: &dyn IntegrationPort,
+        projection: RuntimeProjection,
+    ) -> Self {
+        match (integration.context_delivery(), projection) {
+            (ContextDelivery::Native { .. }, _) => Self::Native,
+            (ContextDelivery::None, _) => Self::Unsupported,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Active) => Self::RuntimeShim,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Shadowed) => Self::ShimShadowed,
+            (ContextDelivery::Bridge { .. }, RuntimeProjection::Inactive) => Self::Bridge,
+        }
+    }
+
+    pub(crate) fn for_agents_directory(
+        integration: &dyn IntegrationPort,
+        projection: RuntimeProjection,
+    ) -> Self {
+        if integration.discovers_project_agents_directory() {
+            return Self::Native;
+        }
+        match projection {
+            RuntimeProjection::Active => Self::RuntimeShim,
+            RuntimeProjection::Shadowed => Self::ShimShadowed,
+            RuntimeProjection::Inactive => Self::Unsupported,
         }
     }
 }
@@ -443,6 +478,9 @@ pub enum HarnessContextDelivery {
         needed: bool,
         state: AttachmentState,
     },
+    /// UZE's runtime shim projects `AGENTS.md` into every launch from here,
+    /// so a missing bridge is not a gap.
+    Projected,
     /// This harness was not found on the machine at all; nothing here is
     /// evaluated as a gap.
     NotDetected,
@@ -467,8 +505,8 @@ pub enum Portability {
     /// No recognized instructions file exists at all.
     NoContext,
     /// A shared `AGENTS.md` exists and every detected harness that needs
-    /// something from it currently has it (natively, or via a matched
-    /// bridge).
+    /// something from it currently has it (natively, through the runtime
+    /// shim, or via a matched bridge).
     Portable,
     /// A shared `AGENTS.md` exists, but at least one detected harness that
     /// needs a bridge does not currently have a working one.
@@ -619,6 +657,19 @@ pub struct EnvironmentDrift {
     pub stale_projection: bool,
 }
 
+/// The plan's answer, as `uze status` and the overview carry it: both read
+/// the one plan, so the two surfaces cannot disagree about what is owed.
+impl From<&ProjectEnvironmentPlan> for EnvironmentDrift {
+    fn from(plan: &ProjectEnvironmentPlan) -> Self {
+        Self {
+            unresolved: plan.unresolved.clone(),
+            surplus: plan.surplus.clone(),
+            missing: plan.missing.clone(),
+            stale_projection: plan.stale_projection.is_some(),
+        }
+    }
+}
+
 impl EnvironmentDrift {
     pub fn is_clear(&self) -> bool {
         self.unresolved.is_empty()
@@ -738,76 +789,8 @@ pub(crate) fn managed_state(report: &ReconciliationReport) -> ManagedStateSummar
     summary
 }
 
-pub(crate) fn integration_status(status: IntegrationStatus) -> String {
-    match status {
-        IntegrationStatus::NotConfigured => "not configured",
-        IntegrationStatus::InstalledUnverified => "installed / unverified",
-        IntegrationStatus::InstalledVerified => "installed / verified",
-    }
-    .to_owned()
-}
-
-/// Idempotently points `link` at `target`, refusing to overwrite anything
-/// at `link` that is not already a UZE-created symlink to something else —
-/// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
-/// helper uses.
-pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
-    match fs::symlink_metadata(link) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let current = fs::read_link(link).map_err(|source| UzeError::Read {
-                path: link.to_path_buf(),
-                source,
-            })?;
-            if current == target {
-                return Ok(());
-            }
-            fs::remove_file(link).map_err(|source| UzeError::Write {
-                path: link.to_path_buf(),
-                source,
-            })?;
-        }
-        Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: link.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    uze_core::persistence::create_symlink(target, link)
-}
-
-pub(crate) fn package_receipt_key(package: &str, integration: &str) -> String {
-    format!("{package}:{integration}:package")
-}
-
-pub(crate) fn resource_receipt_key(
-    package: &str,
-    integration: &str,
-    resource: &uze_core::Resource,
-) -> String {
-    format!("{package}:{integration}:{}", resource.identity())
-}
-
-pub(crate) fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
-    if !package.root.is_dir() {
-        return Some(format!(
-            "package `{}` store directory is missing",
-            package.id.as_str()
-        ));
-    }
-    if !package.manifest.is_file() {
-        return Some(format!(
-            "package `{}` plugin.json is missing",
-            package.id.as_str()
-        ));
-    }
-    None
-}
-
 /// What one plugin's automatic update attempt did, from
-/// [`UzeApplication::auto_update_plugins`].
+/// [`Plugins::auto_update`].
 #[derive(Clone, Debug, Serialize)]
 pub struct AutoUpdateOutcome {
     pub plugin: String,

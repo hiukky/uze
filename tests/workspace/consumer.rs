@@ -755,7 +755,6 @@ fn malformed_lock_is_reported_not_panicked_on() {
     .unwrap();
 
     let app = fx.app();
-    assert!(app.project().environment(&fx.project_root).is_err());
     assert!(app.project().plan(&fx.project_root).is_err());
     assert!(
         app.project()
@@ -781,7 +780,7 @@ fn unsupported_lock_version_is_reported_not_panicked_on() {
     )
     .unwrap();
     let app = fx.app();
-    assert!(app.project().environment(&fx.project_root).is_err());
+    assert!(app.project().plan(&fx.project_root).is_err());
 }
 
 #[test]

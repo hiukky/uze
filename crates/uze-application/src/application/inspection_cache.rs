@@ -1,7 +1,7 @@
 //! Cache for per-receipt attachment inspection on READ paths — the
 //! mechanism behind ADR 018.
 //!
-//! The expensive half of `doctor()` is per-receipt
+//! The expensive half of `Health::report` is per-receipt
 //! `IntegrationPort::inspect_receipt`: several integrations verify their
 //! attachments by running vendor CLIs (`codex plugin list`, `claude
 //! plugin list`, …), each a subprocess of a slow install-managed binary.
@@ -30,8 +30,6 @@
 //! Deliberately scoped to read paths. Removal planning and detach keep
 //! calling the live `reconcile_package` — a stale `Matched` must never
 //! authorize destroying a vendor artifact that drifted.
-
-#![allow(clippy::empty_line_after_doc_comments)]
 
 use std::{
     cell::RefCell,

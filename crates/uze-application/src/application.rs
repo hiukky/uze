@@ -3,10 +3,7 @@
 //! CLI, TUI, and future presentation layers call this facade rather than
 //! reaching into Store, integrations, vendor files, or lifecycle mechanics.
 
-#![allow(clippy::empty_line_after_doc_comments)]
-
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -22,8 +19,9 @@ use uze_core::{
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
     },
+    manifest::BUILT_IN_MARKETPLACE,
     preference::PreferencePort,
-    provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
+    provisioning::{ProcessRunner, ProvisionStatus, SystemProcessRunner},
     reconciliation::{
         PackageRemovalPlan, ReconciliationReport, reconcile_package, reconcile_package_with,
     },
@@ -57,18 +55,13 @@ pub use profile::{HarnessPreview, ProfileApplyResult, ProfilePreview, ProfileSum
 pub use read_models::*;
 pub use theme::{GlyphSetSummary, ThemeSummary};
 
-// Re-export project environment types for CLI access.
-pub use project_environment::{
-    InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, ProjectLockStatus,
-    ProjectPluginHealth, RemoveProjectPluginReport, StaleProjection,
-};
-
-// Re-export overview read models for TUI/CLI access.
 pub use maintenance::{MaintenanceOutcome, MaintenanceReport};
 pub use overview::{
-    MachineSnapshot, MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+    MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview,
 };
+use project_environment::ProjectEnvironmentPlan;
+pub use project_environment::{InstallReport, ProjectLockStatus, RemoveProjectPluginReport};
 pub use uze_core::workspace::WorkspaceKind;
 
 /// `PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
@@ -164,7 +157,7 @@ impl UzeApplication {
     }
 
     /// Like `new_with_runner`, additionally wiring preference adapters for
-    /// the Profiles feature's `apply_profile`.
+    /// the Profiles feature's `Profiles::apply`.
     pub fn new_with_runner_and_preferences(
         home: UzeHome,
         integrations: Vec<Box<dyn IntegrationPort>>,
@@ -205,11 +198,11 @@ impl UzeApplication {
     }
 
     /// Ensures every plugin `bootstrap::DEFAULT_PLUGIN_IDS` names is present
-    /// in the Store, then attached to every detected harness. Each default
-    /// plugin's *first install* goes through the exact same lifecycle a
-    /// normal `uze add` would (`install_materialized`), so Store, Engine,
-    /// Router and every `IntegrationPort` stay unaware any of this is a
-    /// "default" rather than an ordinary installed plugin.
+    /// in the Store. Each default plugin's *first install* goes through the
+    /// exact same lifecycle any other install does
+    /// (`Plugins::install_materialized`), so Store, Engine, Router and every
+    /// `IntegrationPort` stay unaware any of this is a "default" rather than
+    /// an ordinary installed plugin.
     ///
     /// This is BOOTSTRAP, not UPDATE: an already-installed default plugin is
     /// never touched here, no matter how its content compares to the
@@ -217,112 +210,32 @@ impl UzeApplication {
     /// (including read-only ones like `doctor`/`list`), and an observational
     /// command must not mutate installed plugin content. A newer snapshot is
     /// surfaced as `PluginSummary::update_available` (a pure read) for an
-    /// explicit `update_plugin` to act on later, not applied silently. See
+    /// explicit `Plugins::update` to act on later, not applied silently. See
     /// `docs/architecture/invariants.md`'s "Official marketplace" section.
     ///
-    /// Idempotent: nothing changes on a repeat call once every default
-    /// plugin is installed and attached. Returns `true` if it installed at
-    /// least one Store entry.
+    /// Idempotent. Returns `true` if it installed at least one Store entry.
     ///
     /// This is deliberately not called from `from_env`/`new` so contract
     /// tests can construct isolated worlds with no default plugins. The CLI
-    /// (`src/main.rs`) and `setup` call this explicitly; `add`/`remove` do
-    /// not need to because `setup` already covers the attach path.
+    /// (`src/main.rs`) and `setup` call this explicitly.
     pub fn ensure_default_plugins(&self) -> Result<bool> {
         let _span = tracing::info_span!("bootstrap.ensure_default_plugins").entered();
         let mut installed_any = false;
         for &id in bootstrap::DEFAULT_PLUGIN_IDS {
             installed_any |= self.ensure_default_plugin_installed(id)?;
         }
-        // Attach every default plugin — freshly installed or already
-        // present — to every currently detected harness. Kept as its own
-        // pass, unconditional, because a harness detected since the last
-        // run should not wait for an explicit `uze setup` before seeing the
-        // fallback delivery; also prepares detected harnesses (creating
-        // `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the plugin
-        // without a prior `uze setup`. Idempotent via ledger receipt keys,
-        // so re-attaching a plugin `install_materialized` just attached is
-        // harmless. This does not touch plugin *content*, only exposure —
-        // distinct from the update question above.
-        let _ = self.prepare_detected_integrations(None);
-        // Derived views refresh before attachment, same ordering `add_plugin`
-        // already relies on (`install_materialized`): a Generated Native
-        // Package's own catalogue (e.g. Claude's `generated/.claude-plugin/
-        // marketplace.json`) is written by republishing, and native
-        // delivery below reads that view. Attaching first on a fresh/
-        // catalogue-less `UZE_HOME` made the vendor CLI's own `marketplace
-        // add` fail outright (`Marketplace file not found at .../
-        // marketplace.json`) — real-host dogfood caught this. Only a view
-        // that no longer matches the installed set is rewritten: this runs
-        // before every command, and rewriting four catalogues (each a
-        // synced atomic write) to say what they already said was most of
-        // what a read-only command cost.
-        self.republish_unpublished();
-        let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
-        for package_id in self.store.package_ids().unwrap_or_default() {
-            if !installed_ids.contains(package_id.as_str()) {
-                continue;
-            }
-            let Ok(package) = self.store.package(&package_id) else {
-                continue;
-            };
-            for integration in &self.integrations {
-                let effective = self
-                    .attachment_effective(package.id.as_str(), integration.as_ref())
-                    .unwrap_or(false);
-                if self.detect_cached(integration.as_ref()).present && !effective {
-                    // Production resilience: a single harness's foreign state
-                    // (e.g. Antigravity `uze` already imported outside UZE)
-                    // must not abort bootstrap for other harnesses. Attach
-                    // failures are best-effort here; `setup`/`doctor` will
-                    // surface them as warnings. This intentionally swallows
-                    // the error — the method's contract is "best-effort attach",
-                    // not "all harnesses must succeed".
-                    if let Err(err) = self.attach_package_to(&package, integration.as_ref()) {
-                        // Swallow foreign-state errors silently in bootstrap;
-                        // explicit `setup` will surface them per-harness.
-                        let _ = err;
-                    }
-                }
-            }
-        }
+        // Prepares detected harnesses (creating `~/.claude/skills` etc.) so a
+        // harness detected since the last run does not wait for an explicit
+        // `uze setup`. Best-effort: `setup`/`doctor` surface a failure.
+        let _ = self.prepare_detected_integrations();
+        // A Generated Native Package's own catalogue is written by
+        // republishing, and a vendor CLI reading a missing one fails
+        // outright. Only a view that no longer matches the installed set is
+        // rewritten: this runs before every command, and rewriting every
+        // catalogue (each a synced atomic write) to say what it already said
+        // was most of what a read-only command cost.
+        let _ = self.republish_unpublished(&self.installed_packages());
         Ok(installed_any)
-    }
-
-    /// Whether the bootstrap can consider `integration`'s delivery of
-    /// `package_id` already effective:
-    ///
-    /// - no receipt for this integration → not effective (attach);
-    /// - stat-able artifacts (skill symlinks) must still be physically in
-    ///   place — a vanished link is healed by a cheap re-attach (no
-    ///   vendor CLI involved);
-    /// - non-stat-able artifacts (vendor-native catalogues recorded
-    ///   through the vendor CLIs) are effective by receipt: re-running
-    ///   `codex/claude plugin add` on every invocation was the
-    ///   steady-state cost this guard removes, and a vendor-side loss is
-    ///   surfaced by the read-time inspection (anomalies are always
-    ///   re-inspected live) and healed by the explicit setup path.
-    fn attachment_effective(
-        &self,
-        package_id: &str,
-        integration: &dyn IntegrationPort,
-    ) -> Result<bool> {
-        let receipts = state::receipts(&self.home, Some(package_id))?;
-        let for_integration: Vec<_> = receipts
-            .into_iter()
-            .filter(|(_, receipt)| receipt.integration == integration.id())
-            .collect();
-        if for_integration.is_empty() {
-            return Ok(false);
-        }
-        for (_, receipt) in &for_integration {
-            if receipt.artifact.fingerprint().is_some() && !receipt.artifact.is_in_place() {
-                // A stat-able artifact that is not in place (or
-                // re-pointed): not effective, re-attach to heal.
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 
     /// Installs default plugin `id` if it is not already in the Store.
@@ -332,17 +245,16 @@ impl UzeApplication {
             .store
             .package_ids()?
             .iter()
-            .any(|package_id| package_id.as_str() == format!("{id}@uze-official"));
+            .any(|package_id| package_id.as_str() == format!("{id}@{BUILT_IN_MARKETPLACE}"));
         if already_installed {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
-        match self.plugins().install_materialized_from_marketplace(
+        match self.plugins().install_materialized(
             materialized,
-            "uze-official",
+            BUILT_IN_MARKETPLACE,
+            None,
             &trust::NoTrustAuthority,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         ) {
             Ok(_) => Ok(true),
@@ -355,8 +267,9 @@ impl UzeApplication {
                 // itself can fail, all of them before a byte is written. Ask
                 // the Store instead of assuming.
                 let installed = self.store.package_ids().is_ok_and(|ids| {
-                    ids.iter()
-                        .any(|package_id| package_id.as_str() == format!("{id}@uze-official"))
+                    ids.iter().any(|package_id| {
+                        package_id.as_str() == format!("{id}@{BUILT_IN_MARKETPLACE}")
+                    })
                 });
                 tracing::warn!(
                     plugin = id,
@@ -368,233 +281,6 @@ impl UzeApplication {
             }
         }
     }
-
-    /// Resolves a `PackageSource` into local bytes. `Embedded` sources are
-    /// resolved through the embedded default marketplace snapshot this
-    /// composition root carries (`uze-core`'s generic acquisition cannot
-    /// reach bytes `include_str!` compiled a layer up); every other source
-    /// goes through the normal acquisition mechanism.
-
-    /// Every marketplace this composition root knows how to read from.
-    /// Exactly one today — the official embedded snapshot — but the return
-    /// shape does not assume that stays true. Read-only; parses no product
-    /// content beyond `marketplace.json`'s own name and plugin count.
-
-    pub(crate) fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
-        let looks_remote = source_str.starts_with("https://")
-            || source_str.starts_with("http://")
-            || source_str.starts_with("git://")
-            || source_str.starts_with("ssh://")
-            || source_str.starts_with("file://");
-        if !looks_remote {
-            let path = PathBuf::from(source_str)
-                .canonicalize()
-                .map_err(|_| UzeError::MissingPath(PathBuf::from(source_str)))?;
-            let manifest_path = path.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-            if !manifest_path.is_file() {
-                return Err(UzeError::MissingManifest(manifest_path));
-            }
-            return Ok(PackageSource::Local { path });
-        }
-        let (locator, subdirectory) = match source_str.split_once('#') {
-            Some((locator, sub)) => (locator, Some(PathBuf::from(sub))),
-            None => (source_str, None),
-        };
-        let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
-        let (url, reference) = match locator[scheme_end..].rfind('@') {
-            Some(at) => {
-                let at = scheme_end + at;
-                (&locator[..at], Some(locator[at + 1..].to_owned()))
-            }
-            None => (locator, None),
-        };
-        Ok(PackageSource::Git {
-            url: url.to_owned(),
-            reference,
-            subdirectory,
-        })
-    }
-
-    /// The marketplace's catalog, and the checkout it was read from.
-    ///
-    /// The checkout is returned rather than its path: a Git marketplace is
-    /// materialized into scratch that `MaterializedPackage`'s own `Drop`
-    /// removes, so handing back a bare `PathBuf` gave every caller a path
-    /// to a directory that no longer existed by the time they used it.
-    /// Holding the value is what keeps the bytes alive.
-    pub(crate) fn load_marketplace_manifest(
-        source: &PackageSource,
-    ) -> Result<(
-        uze_core::acquisition::MaterializedPackage,
-        uze_core::acquisition::marketplace::MarketplaceManifest,
-    )> {
-        let checkout = match source {
-            PackageSource::Local { path } => uze_core::acquisition::MaterializedPackage::borrowed(
-                path.clone(),
-                uze_core::acquisition::Provenance {
-                    requested: source.clone(),
-                    resolved: uze_core::acquisition::ResolvedSource::Local { path: path.clone() },
-                },
-            ),
-            PackageSource::Git { .. } => uze_core::acquisition::acquire(source)?,
-            PackageSource::Embedded { .. } => {
-                return Err(UzeError::ExposureUnavailable(
-                    "embedded marketplace cannot be used as marketplace source".to_owned(),
-                ));
-            }
-        };
-        let manifest_path = checkout
-            .root()
-            .join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-        let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
-            path: manifest_path.clone(),
-            source: e,
-        })?;
-        let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
-        Ok((checkout, manifest))
-    }
-
-    /// One plugin's bytes, taken from a *clone* of the marketplace at a
-    /// commit — for a local marketplace exactly as for a remote one.
-    ///
-    /// Reading a local checkout in place was the alternative, and it is
-    /// what made a local marketplace unpinnable: the bytes on disk are
-    /// whatever their author last saved, so nothing could say they are the
-    /// bytes that were installed, and nothing could say whether something
-    /// newer exists. A clone at a commit answers both, and a local clone
-    /// is cheap (Git hardlinks it).
-    ///
-    /// `identity` is what the lock will record — the URL another machine
-    /// resolves this repository by — which is not always where these bytes
-    /// were fetched from. The returned package is the checkout narrowed to
-    /// the plugin's directory, so cleanup still owns the whole checkout
-    /// (`MaterializedPackage::retarget`) and the bytes live until the Store
-    /// has ingested them.
-    pub(crate) fn materialize_marketplace_plugin_at(
-        repository: &uze_core::acquisition::marketplace::MarketplaceRepository,
-        reference: Option<&str>,
-        subdirectory: Option<&Path>,
-        plugin: &str,
-    ) -> Result<uze_core::acquisition::MaterializedPackage> {
-        use uze_core::acquisition::{Provenance, ResolvedSource};
-
-        let fetch = PackageSource::Git {
-            url: repository.fetch.clone(),
-            reference: reference.map(str::to_owned),
-            subdirectory: subdirectory.map(Path::to_path_buf),
-        };
-        let mut checkout = uze_core::acquisition::acquire(&fetch)?;
-        let ResolvedSource::Git { commit, .. } = checkout.provenance().resolved.clone() else {
-            return Err(UzeError::AcquisitionFailed(
-                "a marketplace clone must resolve to a commit".to_owned(),
-            ));
-        };
-        let manifest_path = checkout
-            .root()
-            .join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-        let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
-            path: manifest_path.clone(),
-            source: e,
-        })?;
-        let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
-        let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
-            &manifest,
-            plugin,
-            checkout.root(),
-        )?;
-        let within_marketplace = plugin_root
-            .strip_prefix(checkout.root())
-            .map(Path::to_path_buf)
-            .ok();
-        checkout.retarget(
-            plugin_root,
-            Provenance {
-                requested: PackageSource::Git {
-                    url: repository.identity.clone(),
-                    reference: reference.map(str::to_owned),
-                    subdirectory: within_marketplace.clone(),
-                },
-                resolved: ResolvedSource::Git {
-                    url: repository.identity.clone(),
-                    commit,
-                    subdirectory: within_marketplace,
-                },
-            },
-        );
-        Ok(checkout)
-    }
-
-    /// The same, for a caller holding only a marketplace source: resolves
-    /// the repository behind it first, which is also where a source that
-    /// is not a repository is refused.
-    pub(crate) fn materialize_marketplace_plugin(
-        source: &PackageSource,
-        plugin: &str,
-    ) -> Result<uze_core::acquisition::MaterializedPackage> {
-        let repository = uze_core::acquisition::marketplace::repository_of(source)?;
-        let (reference, subdirectory) = match source {
-            PackageSource::Git {
-                reference,
-                subdirectory,
-                ..
-            } => (reference.clone(), subdirectory.clone()),
-            _ => (None, None),
-        };
-        Self::materialize_marketplace_plugin_at(
-            &repository,
-            reference.as_deref(),
-            subdirectory.as_deref(),
-            plugin,
-        )
-    }
-
-    /// Every plugin the official marketplace lists, cross-referenced against
-    /// what's actually installed. `update_available` is computed the same
-    /// pure, offline way `PluginSummary`'s is — never re-applied here.
-
-    /// One marketplace plugin's full detail, including capabilities read
-    /// straight off the manifest snapshot — no install required. Capability
-    /// inspection materializes a scratch copy that is discarded before this
-    /// returns; nothing is written to the Store.
-
-    /// Installs a marketplace plugin by name through the exact same
-    /// lifecycle any other `add` uses — trust included. A thin, named
-    /// convenience over `add_plugin(PackageSource::Embedded { .. })` so
-    /// callers never need to know `Embedded` is the mechanism.
-
-    /// Installs once, chooses package-native delivery first, attaches only
-    /// remaining resources, and records every persistent side effect.
-
-    /// The half of installation that runs once bytes exist locally.
-    ///
-    /// Deliberately takes no lock: both public entry points hold one already,
-    /// and `MutationLock` is not reentrant. Sharing this body is what lets
-    /// `update_plugin` reuse installation without re-entering it.
-
-    /// Re-resolves a package's original request and replaces the installed
-    /// copy with the result.
-    ///
-    /// The order is most of the safety story. Everything that can fail
-    /// without consequence happens first — re-resolve, materialize, validate,
-    /// ask about any execution the installed revision did not already have,
-    /// and prepare the detected harnesses — and only then is the current
-    /// package detached. A network failure, an invalid package, a refused
-    /// trust question or a vendor configuration that will not be prepared
-    /// therefore mutates nothing at all.
-    ///
-    /// What remains can still fail after the removal: the ingest itself, and
-    /// the environment the new revision composes. For those the previous
-    /// revision's bytes are kept aside and reinstalled — bytes, registration
-    /// and attachments — and the failure is reported as blocked, because a
-    /// Git- or path-sourced plugin that vanished has nothing on the machine
-    /// to heal it.
-    ///
-    /// There is deliberately no rollback across integrations. If one fails to
-    /// re-attach, the Store stays consistent, the others keep what they got,
-    /// and the partial state is reported rather than papered over — `doctor`
-    /// reconciles it and a repeat `update` finishes the job. Blind rollback
-    /// would mean detaching artifacts UZE had just proven it owns, on the
-    /// word of an unrelated failure.
 
     /// Runs only selected, detected setup routines. No integration knowledge
     /// leaks to the caller beyond stable ids and reported facts.
@@ -796,39 +482,19 @@ impl UzeApplication {
 
     /// Prepares integrations only when their real executable is present.
     /// This is the shared bridge between explicit `setup` and implicit
-    /// preparation during `add`; neither presentation layer needs to know
-    /// which directories/configuration an integration owns.
-    pub(crate) fn prepare_detected_integrations(
-        &self,
-        requested: Option<&str>,
-    ) -> Result<Vec<SetupResult>> {
-        self.integrations
-            .iter()
-            .filter(|integration| requested.is_none_or(|id| integration.id() == id))
-            .map(|integration| {
-                let detection = self.detect_cached(integration.as_ref());
-                let configured = detection.present;
-                if detection.present {
-                    let _span =
-                        tracing::debug_span!("integration.install", integration = integration.id())
-                            .entered();
-                    integration.install(&self.home, &detection)?;
-                }
-                Ok(SetupResult {
-                    integration: integration.id().to_owned(),
-                    detection: detection.clone(),
-                    configured,
-                    provisioning: ProvisioningResult::verified(
-                        uze_core::provisioning::ProvisionAction::None,
-                        "implicit-existing-executable",
-                        detection,
-                    ),
-                    runtime_shim: None,
-                    attach_error: None,
-                    shim_error: None,
-                })
-            })
-            .collect()
+    /// preparation during an install; neither presentation layer needs to
+    /// know which directories/configuration an integration owns.
+    pub(crate) fn prepare_detected_integrations(&self) -> Result<()> {
+        for integration in &self.integrations {
+            let detection = self.detect_cached(integration.as_ref());
+            if detection.present {
+                let _span =
+                    tracing::debug_span!("integration.install", integration = integration.id())
+                        .entered();
+                integration.install(&self.home, &detection)?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
@@ -900,19 +566,32 @@ impl UzeApplication {
     }
 
     /// `republish_all`, for the integrations whose derived view no longer
-    /// matches the installed package set. Failures are dropped: this is
-    /// the best-effort bootstrap path, and `doctor` reports an unpublished
-    /// view on its own.
-    fn republish_unpublished(&self) {
-        let packages = self.installed_packages();
-        for integration in &self.integrations {
-            if let PublicationStatus::Unpublished(_) = integration.publication(&packages) {
+    /// matches `packages`: one outcome per view it rebuilt.
+    pub(crate) fn republish_unpublished(
+        &self,
+        packages: &[StoredPackage],
+    ) -> Vec<PublicationOutcome> {
+        self.integrations
+            .iter()
+            .filter(|integration| {
+                matches!(
+                    integration.publication(packages),
+                    PublicationStatus::Unpublished(_)
+                )
+            })
+            .map(|integration| {
                 let _span =
                     tracing::info_span!("integration.republish", integration = integration.id())
                         .entered();
-                let _ = integration.republish_packages(&packages);
-            }
-        }
+                PublicationOutcome {
+                    integration: integration.id().to_owned(),
+                    error: integration
+                        .republish_packages(packages)
+                        .err()
+                        .map(|error| error.to_string()),
+                }
+            })
+            .collect()
     }
 
     /// What the marketplace registered as `name` at `source` offers, from
@@ -934,28 +613,33 @@ impl UzeApplication {
             .collect()
     }
 
-    /// Resolves a requested harness name against the integrations actually
-    /// registered in this composition root. There is deliberately no central
-    /// list of vendors: an integration declares its own id and aliases, so
-    /// registering one is the only step needed to make it selectable.
-    pub(crate) fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+    /// The registered integration a person or a record names: by its stable
+    /// id (`claude-code`), an alias people type (`claude`), or the label UZE
+    /// shows back (`Claude Code`). There is deliberately no central list of
+    /// vendors: an integration declares its own names, so registering one is
+    /// the only step needed to make it selectable.
+    pub(crate) fn integration_named(&self, name: &str) -> Option<&dyn IntegrationPort> {
         self.integrations
             .iter()
+            .map(|integration| integration.as_ref())
             .find(|integration| {
-                integration.id() == requested || integration.aliases().contains(&requested)
+                integration.id() == name
+                    || integration.aliases().contains(&name)
+                    || integration.display_name() == name
             })
+    }
+
+    pub(crate) fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+        self.integration_named(requested)
             .map(|integration| integration.id())
-            .ok_or_else(|| {
-                let known = self
+            .ok_or_else(|| UzeError::UnknownHarness {
+                requested: requested.to_owned(),
+                known: self
                     .integrations
                     .iter()
                     .map(|integration| integration.id())
                     .collect::<Vec<_>>()
-                    .join(", ");
-                UzeError::UnknownHarness {
-                    requested: requested.to_owned(),
-                    known,
-                }
+                    .join(", "),
             })
     }
 
@@ -1061,6 +745,38 @@ impl UzeApplication {
         )
     }
 }
+
+/// Idempotently points `link` at `target`, refusing to overwrite anything
+/// at `link` that is not already a UZE-created symlink to something else —
+/// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
+/// helper uses.
+fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
+    match fs::symlink_metadata(link) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(link).map_err(|source| UzeError::Read {
+                path: link.to_path_buf(),
+                source,
+            })?;
+            if current == target {
+                return Ok(());
+            }
+            fs::remove_file(link).map_err(|source| UzeError::Write {
+                path: link.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: link.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    uze_core::persistence::create_symlink(target, link)
+}
+
 #[cfg(test)]
 mod performance_tests;
 #[cfg(test)]

@@ -1,6 +1,6 @@
-//! Lifecycle — attach — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Delivering an installed package to one harness: the package-native plan
+//! first, then each remaining resource, each artifact recorded by a
+//! receipt.
 
 use std::collections::BTreeSet;
 
@@ -366,4 +366,12 @@ fn artifact_owned_target(receipt: &AttachmentReceipt) -> PathBuf {
 
         _ => receipt.artifact.location(),
     }
+}
+
+fn package_receipt_key(package: &str, integration: &str) -> String {
+    format!("{package}:{integration}:package")
+}
+
+fn resource_receipt_key(package: &str, integration: &str, resource: &uze_core::Resource) -> String {
+    format!("{package}:{integration}:{}", resource.identity())
 }
