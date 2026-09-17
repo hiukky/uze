@@ -3,6 +3,13 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Frame cost measured: no work warranted
+
+- **Measurement:** a whole workspace frame rendered through `TestBackend`, in release mode. Averaged over 300 frames after a 20-frame warm-up.
+  - Workload: 10 spaces (worktree and workspace kinds), 80 agent tabs, 80 panes at 200×60, and a 260×70 screen.
+  - Result: **0.73 ms per frame**, about 22× under a 16 ms budget. Frames are drawn only when the model is dirty.
+- **Decision:** no rendering optimization. The benchmark was a local probe and is not committed, since it asserts nothing.
+
 ## 2026-09-17 — Appearance no longer freezes; naming journey runs on macOS
 
 - **Bug (UI freeze):** the Appearance list opens with a heading. Moving up from the first choice clamped the index back onto that heading at every step and never left the loop.
