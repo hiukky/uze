@@ -57,18 +57,13 @@ pub use profile::{HarnessPreview, ProfileApplyResult, ProfilePreview, ProfileSum
 pub use read_models::*;
 pub use theme::{GlyphSetSummary, ThemeSummary};
 
-// Re-export project environment types for CLI access.
-pub use project_environment::{
-    InstallReport, ProjectEnvironmentPlan, ProjectLockStatus, ProjectPluginHealth,
-    RemoveProjectPluginReport, StaleProjection,
-};
-
-// Re-export overview read models for TUI/CLI access.
 pub use maintenance::{MaintenanceOutcome, MaintenanceReport};
 pub use overview::{
-    MachineSnapshot, MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+    MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview,
 };
+use project_environment::ProjectEnvironmentPlan;
+pub use project_environment::{InstallReport, ProjectLockStatus, RemoveProjectPluginReport};
 pub use uze_core::workspace::WorkspaceKind;
 
 /// `PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a

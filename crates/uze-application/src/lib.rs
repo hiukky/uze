@@ -3,7 +3,6 @@
 pub mod application;
 pub mod bootstrap;
 
-pub use application::StaleProjection;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
@@ -17,7 +16,7 @@ pub use application::services::{
 /// making the caller find it elsewhere is what put `uze_core::` in the
 /// TUI's imports.
 pub use uze_core::{
-    ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
+    Result, UzeError, UzeHome,
     capability::CapabilityKind,
     client_layout::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
@@ -40,9 +39,7 @@ pub use uze_core::{
     store::parse_plugin_marketplace_spec,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
-    worktree::{
-        BranchPreset, BranchVocabulary, CompletionBehavior, IsolatedCheckout, isolated_checkout,
-    },
+    worktree::{CompletionBehavior, isolated_checkout},
 };
 
 /// The repository a directory's tasks hang off, resolved lexically.
