@@ -3,6 +3,16 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Audit: shells, channels, panic restore (no change needed)
+
+- **Shell invocations:** `run_shell_bounded` runs only the project's own `setup`/`gate` steps, verbatim from `agents.yaml`. No agent-, branch- or task-derived value is interpolated into a shell. Git calls separate refs with `--`. The installers' `sh -c` strings are constants.
+- **Unbounded channels left in production:**
+  - `damage` carries pane ids to a broadcaster that no longer waits on anything.
+  - The UI's socket-reader channel stops with the whole process when the TUI is suspended, which fills the socket; the server's outbox then bounds that client.
+  - The terminal's reply channel carries answers to a program's own queries.
+  None can grow without a thread that is already stuck, so they stay unbounded.
+- **Panic restore:** the TUI's hook restores the terminal before the previous hook prints, including for background threads.
+
 ## 2026-09-17 — Frame cost measured: no work warranted
 
 - **Measurement:** a whole workspace frame rendered through `TestBackend`, in release mode. Averaged over 300 frames after a 20-frame warm-up.
