@@ -345,7 +345,7 @@ impl AgentRecord<'_> {
                 .checkout
                 .as_ref()
                 .map(|checkout| checkout.directory(project_root)),
-            Self::Tenant(_) => Some(project_root.to_path_buf()),
+            Self::Tenant(tenant) => Some(tenant.root.clone()),
         }
     }
 }
