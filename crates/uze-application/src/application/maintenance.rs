@@ -178,12 +178,8 @@ impl Health<'_> {
         );
 
         for package in &packages {
-            if self
-                .0
-                .plugin_summary(package)
-                .ok()
-                .and_then(|summary| summary.update_available)
-                == Some(true)
+            if let uze_core::PackageSource::Embedded { id } = &package.provenance.requested
+                && crate::bootstrap::has_update(id, &package.root).unwrap_or(false)
             {
                 report.outcomes.push(MaintenanceOutcome::UpdateAvailable {
                     plugin: package.id.as_str().to_owned(),

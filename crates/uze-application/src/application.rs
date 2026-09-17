@@ -752,6 +752,38 @@ impl UzeApplication {
         )
     }
 }
+
+/// Idempotently points `link` at `target`, refusing to overwrite anything
+/// at `link` that is not already a UZE-created symlink to something else —
+/// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
+/// helper uses.
+fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
+    match fs::symlink_metadata(link) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(link).map_err(|source| UzeError::Read {
+                path: link.to_path_buf(),
+                source,
+            })?;
+            if current == target {
+                return Ok(());
+            }
+            fs::remove_file(link).map_err(|source| UzeError::Write {
+                path: link.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: link.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    uze_core::persistence::create_symlink(target, link)
+}
+
 #[cfg(test)]
 mod performance_tests;
 #[cfg(test)]

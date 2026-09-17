@@ -305,6 +305,31 @@ fn missing_plugins(status: &ProjectLockStatus) -> Vec<String> {
     }
 }
 
+fn integration_status(status: IntegrationStatus) -> String {
+    match status {
+        IntegrationStatus::NotConfigured => "not configured",
+        IntegrationStatus::InstalledUnverified => "installed / unverified",
+        IntegrationStatus::InstalledVerified => "installed / verified",
+    }
+    .to_owned()
+}
+
+fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
+    if !package.root.is_dir() {
+        return Some(format!(
+            "package `{}` store directory is missing",
+            package.id.as_str()
+        ));
+    }
+    if !package.manifest.is_file() {
+        return Some(format!(
+            "package `{}` plugin.json is missing",
+            package.id.as_str()
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

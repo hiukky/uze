@@ -253,22 +253,9 @@ mod tests {
     fn a_stored_copy_with_different_content_reports_an_update() {
         let root = uze_testkit::temp::scratch("bootstrap-drift");
         let materialized = materialize("uze").unwrap();
-        copy_tree(materialized.root(), &root);
+        uze_testkit::fixtures::copy_tree(materialized.root(), &root);
         fs::write(root.join("plugin.json"), "{}").unwrap();
         assert!(has_update("uze", &root).unwrap());
         fs::remove_dir_all(root).unwrap();
-    }
-
-    fn copy_tree(source: &Path, destination: &Path) {
-        fs::create_dir_all(destination).unwrap();
-        for entry in fs::read_dir(source).unwrap() {
-            let entry = entry.unwrap();
-            let target = destination.join(entry.file_name());
-            if entry.path().is_dir() {
-                copy_tree(&entry.path(), &target);
-            } else {
-                fs::copy(entry.path(), target).unwrap();
-            }
-        }
     }
 }

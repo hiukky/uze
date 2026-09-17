@@ -185,18 +185,11 @@ impl Plugins<'_> {
             .0
             .installed_packages()
             .into_iter()
-            .filter(|package| {
-                matches!(
-                    package.provenance.requested,
-                    uze_core::PackageSource::Embedded { .. }
-                )
-            })
-            .filter(|package| {
-                self.0
-                    .plugin_summary(package)
-                    .ok()
-                    .and_then(|summary| summary.update_available)
-                    == Some(true)
+            .filter(|package| match &package.provenance.requested {
+                uze_core::PackageSource::Embedded { id } => {
+                    crate::bootstrap::has_update(id, &package.root).unwrap_or(false)
+                }
+                _ => false,
             })
             .map(|package| package.id.as_str().to_owned())
             .collect();
