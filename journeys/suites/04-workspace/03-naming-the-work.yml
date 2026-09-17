@@ -60,6 +60,9 @@ scenes:
           set -e
           slot=$(ls -d {project}/.worktrees/*/ | head -1)
           cd "$slot"
+          # Run as the agent: identity is the stamp its launch carried,
+          # read from the agent's own process rather than from any record.
+          export UZE_AGENT=$(tr '\0' '\n' < /proc/$(pgrep -f bin/claude | head -1)/environ | sed -n 's/^UZE_AGENT=//p')
           {uze} agent task name fix/branch-naming
         say: the agent names its work from inside its own checkout
       - wait: screen
@@ -89,6 +92,9 @@ scenes:
           set -e
           slot=$(ls -d {project}/.worktrees/*/ | head -1)
           cd "$slot"
+          # Run as the agent: identity is the stamp its launch carried,
+          # read from the agent's own process rather than from any record.
+          export UZE_AGENT=$(tr '\0' '\n' < /proc/$(pgrep -f bin/claude | head -1)/environ | sed -n 's/^UZE_AGENT=//p')
           {uze} agent task name fix/second-thoughts || true
         say: the agent tries to rename its own work again
     then:

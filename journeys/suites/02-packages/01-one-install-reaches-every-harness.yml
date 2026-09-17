@@ -43,9 +43,21 @@ scenes:
         check: false
     then:
       - json: "{uze_home}/state/integrations.json"
-        at: "*.*.harness"
-        includes: [claude-code, codex, opencode, antigravity]
-        about: every harness is recorded as provisioned
+        at: integrations.claude-code.version
+        exists: true
+        about: claude-code is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.codex.version
+        exists: true
+        about: codex is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.opencode.version
+        exists: true
+        about: opencode is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.antigravity.version
+        exists: true
+        about: antigravity is recorded with the version it reported
       - dir: "{uze_home}/store/plugins/demo"
         exists: false
         about: provisioning delivers nothing on its own
@@ -56,8 +68,8 @@ scenes:
         say: register the staged marketplace
     then:
       - json: "{uze_home}/state/marketplaces.json"
-        at: "*.*.name"
-        includes: [demo]
+        at: marketplaces.demo
+        exists: true
         about: the marketplace is recorded by name
       - dir: "{uze_home}/store/plugins/demo"
         exists: false

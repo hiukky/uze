@@ -1950,6 +1950,10 @@ struct Remembered {
     /// The slot directories a pane still holds. A checkout that leaves this
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,
+    /// The agents a tab still echoes. An agent that leaves this set lost
+    /// its last tab, which is what ends a tenant: it holds no checkout, so
+    /// nothing in `occupied_checkouts` would say so.
+    echoed_agents: BTreeSet<String>,
     /// Panes whose checkout is gone from under them — removed outside UZE
     /// while the agent ran. The process is still there, standing in a
     /// directory that no longer exists; its row says so instead of
@@ -3818,13 +3822,22 @@ fn sync_slot_occupancy(
     let sweeping = !model.remembered.slots_swept;
     model.remembered.slots_swept = true;
     model.remembered.occupied_checkouts = occupied.clone();
-    if !sweeping && vanished.is_empty() {
+    let still_echoed: BTreeSet<String> = echoed.iter().cloned().collect();
+    let agent_left = model
+        .remembered
+        .echoed_agents
+        .difference(&still_echoed)
+        .next()
+        .is_some();
+    model.remembered.echoed_agents = still_echoed;
+    if !sweeping && !agent_left && vanished.is_empty() {
         return;
     }
     // A repository is named by any path inside it: the checkout a pane just
-    // left, or — for the sweep — every space's own root.
+    // left, or every space's own root — for the sweep, and for a tenant,
+    // which is keyed by the root it works in.
     let mut look_in: Vec<PathBuf> = vanished;
-    if sweeping {
+    if sweeping || agent_left {
         look_in.extend(space_roots);
     }
     model.occupancy_pending = true;

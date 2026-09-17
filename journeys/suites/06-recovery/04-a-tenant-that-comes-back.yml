@@ -33,7 +33,7 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: '\+ new'
+      - click: '+ new'
         say: open the picker for a new space
         in: sidebar
         expect: ' at '

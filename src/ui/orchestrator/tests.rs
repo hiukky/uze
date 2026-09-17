@@ -2541,6 +2541,37 @@ mod workspace_tests {
         assert!(model.lost_task(tab).is_none());
     }
 
+    /// A tenant holds no checkout, so no slot is released when its tab
+    /// closes: the agent leaving the tabs is the only sign it has ended,
+    /// and it must reconcile the space roots the tenant is keyed by.
+    #[test]
+    fn an_agent_losing_its_last_tab_reconciles_the_space_roots() {
+        let mut model = model_of(session("/plain", uze_terminal::SpaceKind::Workspace));
+        stamp_first_tab(&mut model, "ten4nt");
+        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-tenant-left"));
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let (evaluations, _answers) = std::sync::mpsc::channel();
+
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        model.occupancy_pending = false;
+
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        assert!(
+            !model.occupancy_pending,
+            "nothing changed, so nothing is reconciled"
+        );
+
+        first_tab_mut(&mut model).env.clear();
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        assert!(
+            model.occupancy_pending,
+            "the tenant's roots are reconciled once its agent has no tab"
+        );
+    }
+
     /// A checkout removed from under a live pane is the one change to a
     /// repository nothing else asks about: the pane is still there, so no
     /// slot was released and no reconciliation is due. Unasked, the row
@@ -3028,7 +3059,6 @@ mod workspace_tests {
         &mut model.session.as_mut().expect("a session").workspace.spaces[0].tabs[0]
     }
 
-    /// A one-agent session whose only tab runs in `cwd`.
     /// Marks the first tab as launched for `id`: what the server echoes
     /// back for a tab the client created with that identity stamped.
     fn stamp_first_tab(model: &mut WorkspaceModel, id: &str) {
@@ -3039,6 +3069,7 @@ mod workspace_tests {
         )];
     }
 
+    /// A one-agent session whose only tab runs in `cwd`.
     fn agent_session_in(cwd: &str) -> WorkspaceModel {
         let mut session = session("/repo", uze_terminal::SpaceKind::Worktree);
         let tab = &mut session.workspace.spaces[0].tabs[0];
