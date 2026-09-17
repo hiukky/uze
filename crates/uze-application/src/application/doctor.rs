@@ -272,12 +272,7 @@ impl Health<'_> {
             .0
             .project()
             .plan(project_root)
-            .map(|plan| EnvironmentDrift {
-                unresolved: plan.unresolved,
-                surplus: plan.surplus,
-                missing: missing_plugins(&project_lock),
-                stale_projection: plan.stale_projection.is_some(),
-            })
+            .map(|plan| EnvironmentDrift::from(&plan))
             .unwrap_or_default();
         Ok(StatusReport {
             root: context.canonical.clone(),
@@ -289,19 +284,6 @@ impl Health<'_> {
             project_lock,
             issues,
         })
-    }
-}
-
-/// The locked plugins this machine's Store does not hold, by name. The
-/// lock status already answers this per plugin; drift only re-reads it.
-fn missing_plugins(status: &ProjectLockStatus) -> Vec<String> {
-    match status {
-        ProjectLockStatus::Present { plugins } => plugins
-            .iter()
-            .filter(|plugin| !plugin.installed)
-            .map(|plugin| plugin.plugin.clone())
-            .collect(),
-        _ => Vec::new(),
     }
 }
 

@@ -1,12 +1,8 @@
-//! Project environment use cases — project-scoped desired state.
-//!
-//! Provides `project_environment()`, `plan_project_environment()`,
-//! `add_project_plugin()`, `remove_project_plugin()`, `install_project_environment()`.
+//! A project's declared agent environment: `agents.yaml`, the `agents.lock`
+//! resolving it produced, and what it takes for this machine to satisfy
+//! both.
 
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, path::Path};
 
 use serde::Serialize;
 
@@ -15,7 +11,7 @@ use uze_core::{
     manifest::{self, DeclaredMarketplace},
     project_lock::{self, LockedMarketplace, LockedPlugin, ProjectLock},
     project_root,
-    trust::{self, TrustAuthority},
+    trust::TrustAuthority,
 };
 
 use super::marketplace::MarketplaceRequest;
@@ -39,93 +35,29 @@ fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMa
 }
 
 impl Project<'_> {
-    /// Read-only: observes the project's current state (lock + diagnostics).
-    #[tracing::instrument(name = "project.environment", skip_all, fields(root = %root.display()), err)]
-    pub fn environment(&self, root: &Path) -> Result<ProjectEnvironment> {
-        let canonical = project_root::resolve_project_root(root)?;
-        let _lock_path = project_lock::lock_path_for(&canonical);
-        let lock = project_lock::load_lock(&canonical)?;
-        let mut diagnostics = Vec::new();
-
-        if let Some(lock) = &lock {
-            for name in lock.marketplaces.keys() {
-                if uze_core::state::marketplace_get(&self.0.home, name)?.is_none() {
-                    diagnostics.push(format!(
-                        "marketplace `{name}` in lock but not in global registry (will be \
-                         resolved from lock source on install)"
-                    ));
-                }
-            }
-            for (plugin, locked) in &lock.plugins {
-                if !lock.marketplaces.contains_key(&locked.marketplace) {
-                    diagnostics.push(format!(
-                        "plugin `{plugin}` references marketplace `{}` not declared in lock",
-                        locked.marketplace
-                    ));
-                }
-            }
-        }
-
-        Ok(ProjectEnvironment {
-            root: root.to_path_buf(),
-            canonical,
-            lock,
-            diagnostics,
-        })
-    }
-
-    /// Read-only: computes what `install_project_environment` would do.
-    ///
-    /// `trust_required`, `delivery_changes`, and `offline_unavailable` are
-    /// deliberately left empty rather than faked: each would require
-    /// materializing a missing package just to *inspect* it (executable
-    /// capabilities, delivery routes, offline availability) without
-    /// installing it — a real feature this pass does not implement. Left
-    /// as future work rather than reported as done; see
-    /// `openspec/changes/project-agent-environment/tasks.md`.
+    /// Read-only: what `install` would do — every link of the chain from
+    /// `agents.yaml` to the projection that has not caught up.
     #[tracing::instrument(name = "project.plan", skip_all, fields(root = %root.display()), err)]
     pub fn plan(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
-        let env = self.environment(root)?;
-        let canonical = env.canonical.clone();
+        let canonical = project_root::resolve_project_root(root)?;
         // The manifest is the head of the chain, not the lock. A plan
         // founded on `agents.lock` cannot see the edit a person just made
         // to `agents.yaml`, which is the most common reason to ask for one
         // at all. Both documents are read; nothing is resolved.
         let manifest = manifest::load(&canonical)?.unwrap_or_default();
-        let lock = env.lock.unwrap_or_default();
+        let lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
         let unresolved: Vec<String> = project_lock::stale_against(&manifest, &lock)
             .into_iter()
             .map(|stale| stale.plugin)
             .collect();
         let surplus = project_lock::surplus_against(&manifest, &lock);
         let stale_projection = self.stale_projection(&canonical);
-
-        let installed_ids = self.installed_plugin_ids();
-        let dependencies: Vec<LockedPlugin> = lock.plugins.values().cloned().collect();
-        let installed: Vec<String> = lock
-            .plugins
-            .iter()
-            .filter(|(name, locked)| {
-                installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        let missing: Vec<LockedPlugin> = Self::missing_locked_plugins(&lock, &installed_ids)
+        let missing: Vec<String> = self
+            .0
+            .locked_plugins_missing(&lock)
             .into_iter()
-            .map(|(_, locked)| locked.clone())
+            .map(|(name, _)| name.to_owned())
             .collect();
-
-        // Deliberately deferred (see doc comment above): none of these
-        // compare an *installed* package's provenance against what the
-        // lock expects, which is what a real `conflicts` check would
-        // need. `project_environment()`'s own `diagnostics` already
-        // surfaces the one related, weaker signal available today (a
-        // plugin referencing a marketplace not declared in the lock) —
-        // not duplicated here as a false "conflict".
-        let trust_required = Vec::new();
-        let delivery_changes = Vec::new();
-        let offline_unavailable = Vec::new();
-        let conflicts = Vec::new();
 
         let has_changes = !missing.is_empty()
             || !unresolved.is_empty()
@@ -133,16 +65,10 @@ impl Project<'_> {
             || stale_projection.is_some();
 
         Ok(ProjectEnvironmentPlan {
-            dependencies,
-            installed,
             missing,
             unresolved,
             surplus,
             stale_projection,
-            trust_required,
-            delivery_changes,
-            conflicts,
-            offline_unavailable,
             has_changes,
         })
     }
@@ -170,32 +96,6 @@ impl Project<'_> {
             declared: policy.completion.abi_name().to_owned(),
             projected_identity: found.unwrap_or_else(|| "none".to_owned()),
         })
-    }
-
-    fn installed_plugin_ids(&self) -> BTreeSet<String> {
-        self.0
-            .installed_packages()
-            .into_iter()
-            .map(|p| p.id.as_str().to_owned())
-            .collect()
-    }
-
-    /// Locked plugins not yet present in the Store, paired with their
-    /// name — `LockedPlugin` itself carries no name (it's the `BTreeMap`
-    /// key), and both `plan_project_environment` (reporting) and
-    /// `install_project_environment` (acting) need it, so this is the one
-    /// place that walks the lock and keeps the two in sync.
-    fn missing_locked_plugins<'lock>(
-        lock: &'lock ProjectLock,
-        installed_ids: &BTreeSet<String>,
-    ) -> Vec<(&'lock str, &'lock LockedPlugin)> {
-        lock.plugins
-            .iter()
-            .filter(|(name, locked)| {
-                !installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
-            })
-            .map(|(name, locked)| (name.as_str(), locked))
-            .collect()
     }
 
     /// Reproduces one locked plugin: the recorded commit, never the
@@ -408,17 +308,15 @@ impl Project<'_> {
 
         // Reproduction second: what the lock records and the Store does
         // not hold yet — the fresh machine cloning a project.
-        let installed_ids = self.installed_plugin_ids();
-        let missing: Vec<(String, LockedPlugin)> =
-            Self::missing_locked_plugins(&lock, &installed_ids)
-                .into_iter()
-                .map(|(name, locked)| (name.to_owned(), locked.clone()))
-                .collect();
+        let missing: Vec<(String, LockedPlugin)> = self
+            .0
+            .locked_plugins_missing(&lock)
+            .into_iter()
+            .map(|(name, locked)| (name.to_owned(), locked.clone()))
+            .collect();
         for (name, locked) in missing {
             // A fresh machine reproducing a cloned `agents.lock` has never
-            // run `market add` — `project_environment()`'s own diagnostics
-            // already promise "(will be resolved from lock source on
-            // install)" for exactly this case, so this registers the
+            // run `market add`, so this registers the
             // locked marketplace globally (from the source the lock itself
             // carries) before ingesting from it. Idempotent for a
             // same-source re-run; a genuinely different source already
@@ -656,29 +554,26 @@ impl Project<'_> {
                 };
             }
         };
-        let installed_ids = self.installed_plugin_ids();
+        let missing: BTreeSet<&str> = self
+            .0
+            .locked_plugins_missing(&lock)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
         let plugins = lock
             .plugins
-            .iter()
-            .map(|(name, locked)| ProjectPluginHealth {
+            .keys()
+            .map(|name| ProjectPluginHealth {
                 plugin: name.clone(),
-                installed: installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked)),
+                installed: !missing.contains(name.as_str()),
             })
             .collect();
         ProjectLockStatus::Present { plugins }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct ProjectEnvironment {
-    pub root: PathBuf,
-    pub canonical: PathBuf,
-    pub lock: Option<ProjectLock>,
-    pub diagnostics: Vec<String>,
-}
-
 /// `uze status`'s view of this project's `agents.lock` — deliberately
-/// smaller than `ProjectEnvironment`/`ProjectEnvironmentPlan` (which
+/// smaller than `ProjectEnvironmentPlan` (which
 /// `context inspect`-equivalent commands already cover in full): just
 /// enough to answer "is there a lock, and does it match what's installed."
 #[derive(Clone, Debug, Serialize)]
@@ -697,19 +592,14 @@ pub struct ProjectPluginHealth {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectEnvironmentPlan {
-    pub dependencies: Vec<LockedPlugin>,
-    pub installed: Vec<String>, // Package IDs
-    pub missing: Vec<LockedPlugin>,
+    /// Recorded in the lock, and absent from this machine's Store.
+    pub missing: Vec<String>,
     /// Declared in `agents.yaml`, and the lock does not answer for it.
     pub unresolved: Vec<String>,
     /// In the lock, and the manifest no longer declares it.
     pub surplus: Vec<String>,
     /// The projected instruction region has fallen behind the policy.
     pub stale_projection: Option<StaleProjection>,
-    pub trust_required: Vec<trust::TrustRequest>,
-    pub delivery_changes: Vec<PublicationOutcome>,
-    pub conflicts: Vec<String>,
-    pub offline_unavailable: Vec<String>,
     pub has_changes: bool,
 }
 
@@ -750,10 +640,26 @@ pub enum InstallReport {
     },
 }
 
-/// Read by both the project environment and the workspace overview, so it
-/// belongs to the type that owns the state rather than to either view.
+/// Read by the project environment, `uze status` and the workspace
+/// overview, so it belongs to the type that owns the state rather than to
+/// any one view.
 impl UzeApplication {
-    pub(crate) fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
-        format!("{name}@{}", locked.marketplace)
+    /// The plugins `lock` records that this machine's Store does not hold,
+    /// with their names — `LockedPlugin` itself carries none (it is the
+    /// map's key).
+    pub(crate) fn locked_plugins_missing<'lock>(
+        &self,
+        lock: &'lock ProjectLock,
+    ) -> Vec<(&'lock str, &'lock LockedPlugin)> {
+        let installed: BTreeSet<String> = self
+            .installed_packages()
+            .into_iter()
+            .map(|package| package.id.as_str().to_owned())
+            .collect();
+        lock.plugins
+            .iter()
+            .filter(|(name, locked)| !installed.contains(&format!("{name}@{}", locked.marketplace)))
+            .map(|(name, locked)| (name.as_str(), locked))
+            .collect()
     }
 }

@@ -620,6 +620,19 @@ pub struct EnvironmentDrift {
     pub stale_projection: bool,
 }
 
+/// The plan's answer, as `uze status` and the overview carry it: both read
+/// the one plan, so the two surfaces cannot disagree about what is owed.
+impl From<&ProjectEnvironmentPlan> for EnvironmentDrift {
+    fn from(plan: &ProjectEnvironmentPlan) -> Self {
+        Self {
+            unresolved: plan.unresolved.clone(),
+            surplus: plan.surplus.clone(),
+            missing: plan.missing.clone(),
+            stale_projection: plan.stale_projection.is_some(),
+        }
+    }
+}
+
 impl EnvironmentDrift {
     pub fn is_clear(&self) -> bool {
         self.unresolved.is_empty()

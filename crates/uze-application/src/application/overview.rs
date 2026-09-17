@@ -20,10 +20,7 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -134,20 +131,12 @@ impl Workspace<'_> {
         let loaded = declares_project.then(|| project_lock::load_lock(root));
         let (environment, declared, installed, missing) = match loaded {
             Some(Ok(Some(lock))) => {
-                let installed_ids: BTreeSet<String> = self
-                    .0
-                    .installed_packages()
-                    .into_iter()
-                    .map(|package| package.id.as_str().to_owned())
-                    .collect();
                 let declared = lock.plugins.len();
-                let missing: Vec<String> = lock
-                    .plugins
-                    .iter()
-                    .filter(|(name, locked)| {
-                        !installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
-                    })
-                    .map(|(name, _)| name.clone())
+                let missing: Vec<String> = self
+                    .0
+                    .locked_plugins_missing(&lock)
+                    .into_iter()
+                    .map(|(name, _)| name.to_owned())
                     .collect();
                 let environment = if missing.is_empty() {
                     // Nothing declared, nothing required — or everything
@@ -181,7 +170,7 @@ impl Workspace<'_> {
             .0
             .project()
             .plan(root)
-            .map(drift_of)
+            .map(|plan| EnvironmentDrift::from(&plan))
             .unwrap_or_default();
         let environment = if environment == ProjectEnvironmentState::Ready && !drift.is_clear() {
             ProjectEnvironmentState::InstallRequired
@@ -244,18 +233,6 @@ pub struct OverviewWorkspaceSummary {
     pub project: ProjectOverview,
     /// Present for `Marketplace`/`Hybrid` kinds.
     pub marketplace: Option<OverviewMarketplace>,
-}
-
-/// The plan's answer, as the overview carries it. Read from the same plan
-/// `uze status` reads, so the two surfaces cannot disagree about what is
-/// owed.
-fn drift_of(plan: crate::application::ProjectEnvironmentPlan) -> EnvironmentDrift {
-    EnvironmentDrift {
-        unresolved: plan.unresolved,
-        surplus: plan.surplus,
-        missing: Vec::new(),
-        stale_projection: plan.stale_projection.is_some(),
-    }
 }
 
 /// The user-facing state of the project half — derived here, rendered

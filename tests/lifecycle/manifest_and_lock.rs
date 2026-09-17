@@ -34,7 +34,6 @@ fn a_project_that_has_declared_nothing_is_left_untouched_by_reading_it() {
         .collect();
 
     application.context().inspect(&root).unwrap();
-    application.project().environment(&root).unwrap();
     application.project().plan(&root).unwrap();
 
     let after: Vec<_> = fs::read_dir(&root)

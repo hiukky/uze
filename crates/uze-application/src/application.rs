@@ -59,8 +59,8 @@ pub use theme::{GlyphSetSummary, ThemeSummary};
 
 // Re-export project environment types for CLI access.
 pub use project_environment::{
-    InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, ProjectLockStatus,
-    ProjectPluginHealth, RemoveProjectPluginReport, StaleProjection,
+    InstallReport, ProjectEnvironmentPlan, ProjectLockStatus, ProjectPluginHealth,
+    RemoveProjectPluginReport, StaleProjection,
 };
 
 // Re-export overview read models for TUI/CLI access.
