@@ -992,16 +992,16 @@ pub(crate) fn render_section(
     } else {
         Symbol::ChevronExpanded
     });
-    // Bold on a filled row: the one section header in a column of tree
-    // rows, so it reads as a heading rather than as one more item.
+    // Bold only while open, over its filled row: a heading over the content
+    // beneath it. Folded there is nothing under it to head, and bold titles
+    // stacked at the foot of the column shouted over the tree above.
+    let mut title_style = Style::default().fg(theme::color(Token::TextSecondary));
+    if !section.collapsed {
+        title_style = title_style.add_modifier(Modifier::BOLD);
+    }
     let mut spans = vec![
         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
-        TextSpan::styled(
-            section.title.clone(),
-            Style::default()
-                .fg(theme::color(Token::TextSecondary))
-                .add_modifier(Modifier::BOLD),
-        ),
+        TextSpan::styled(section.title.clone(), title_style),
     ];
     crate::ui::push_trailing(
         &mut spans,

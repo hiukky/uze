@@ -140,23 +140,20 @@ interleaved concerns of `render_sidebar`. Instead a per-agent `AgentRow`
 (tab, cwd, status, selection, current-ness, mark, rename state, lost
 checkout) is built by one function from `AgentRow::{Task(TaskView),
 Tenant(TenantView)}`, the application's read model, reached through one
-`tab_agent(tab)`; and two layouts, `Tree` and `Flat`, each with
-`measure()` and `draw()` in the same `impl`, so `tree_rows` and the
-drawing loop cannot disagree. The rule is the code extension's: the mode
-decides who is asked, never what the state means. Flat measures
-`1 + max(agents, 1) + 1`. The extraction lands first, behaviour-preserving.
+`tab_agent(tab)`; and one two-row item drawn for both kinds, measured by
+the one function the drawing loop's rows come from, so `tree_rows` and the
+drawing cannot disagree. The extraction lands first, behaviour-preserving.
 
-**Selection in the flat layout is the bar, and only the bar.** The bar
-replaces the `Selected` glyph rather than joining it: two encodings of
-one fact is the drift `agent_tab_status` exists to prevent. `Working` and
-`Completed` keep the status column. The drag drop-indicator, which today
-draws a bar in the same column, becomes an insertion hairline between
-rows in the flat layout (`Symbol::TreeDivider` in `Token::Accent`): a
-one-row item wants a line where it will land, not a mark on its edge, and
-a token named *selected* is not spent on a drop target. The comment in
-`render.rs` that chose block fill over a bar is extended with the
-per-kind rule. `Symbol::BarMedium` and `Token::Accent` over
-`Token::SurfaceRaised` are the management modal's exact vocabulary; no
+**One look, two shapes.** A first cut gave a workspace space one row per
+agent, the harness at its edge and the branch on the header. In use it
+read as a different product: the tenant lost its status and its caption,
+the two things an operator scans the column for. Both kinds now draw the
+same item — status and label over the branch or directory, the header
+lighter than the block beneath it. What differs is only what the kind
+means: a worktree space hangs its items on a tree, one branch each; a
+workspace space's tenants all run in the root, so they are drawn flat,
+and with no tree to anchor them the selected one carries a vertical
+accent bar (`Symbol::BarMedium` in `Token::Accent`) down both rows. No
 token or symbol is added.
 
 **A tenant's row reads label then harness.** In a slot the label names
@@ -224,7 +221,5 @@ existing store.
 - [The sidebar extraction moves the foot-section tests] → Three tests
   budget the foot from `tree_rows`; they are re-derived from `measure()`
   in the extraction PR, before any behaviour changes.
-- [`caption_color_of` in the sidebar tests assumes a caption row] →
-  Flat rows have none; the helper takes the layout's row offset.
 - [Old task-state files and old terminal state] → Pre-1.0: versions bump,
   stale state is cleaned, no compatibility path is written.

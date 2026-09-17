@@ -30,9 +30,9 @@
 ## 5. The sidebar
 
 - [x] 5.1 Extraction, behaviour-preserving: `AgentRow::{Task(TaskView), Tenant(TenantView)}` read model in `uze-application` with one `tab_agent(tab)` replacing every caller of `tab_task`; per-agent layout rows built once; `Tree` layout with `measure()` and `draw()` in one `impl`; the scroll bound derived from `measure()`. Every existing sidebar test passes unchanged except the scroll-bound test, re-derived from `measure()`.
-- [x] 5.2 `Flat` layout: one row per agent carrying the tab's label and the harness id at the right edge; the root's branch and `⇣⇡` once on the header, with the root toggle; `measure()` is `1 + max(agents, 1) + 1`.
-- [x] 5.3 Selection in `Flat`: `Symbol::BarMedium` in `Token::Accent` over `Token::SurfaceRaised` replaces the `Selected` glyph; the drag drop-indicator in `Flat` is an insertion hairline between rows (`Symbol::TreeDivider` in `Token::Accent`); the comment in `render.rs` that chose block fill records the per-kind rule.
-- [x] 5.4 `caption_color_of` takes the layout's row offset; TestBackend tests for the flat layout: one row per agent; bar on the selected row only and nowhere else in the sidebar; two tenants of one harness told apart; no task mark and no deliver button; hits land; `step_agent` walks the flat rows; scrolling measures flat rows; the foot budget with a flat space among the spaces; the insertion hairline while dragging in a flat space; the header toggle flipping label and root in a flat space; the account counting tenants; an empty workspace space's caption row; a tenant whose harness exited is not an agent row.
+- [x] 5.2 One two-row item for both kinds — status and label over the branch or directory, the header lighter than the block; a worktree space draws it on a tree, a workspace space flat with no connectors, and the header toggle swaps the caption for the harness id in both.
+- [x] 5.3 Selection in a flat space: `Symbol::BarMedium` in `Token::Accent` down both rows of the selected agent, beside its status glyph.
+- [x] 5.4 TestBackend tests for the flat shape: two rows per agent over the root's branch, no connector, no branch on the header; a directory caption outside a repository; the status glyphs; the bar on the selected item only; no task mark and no deliver button; hits land; `step_agent` walks the agents; the header toggle naming each harness; an empty workspace space's caption row; a tenant whose harness exited is not an agent row.
 
 ## 6. The projected text and the Skill
 

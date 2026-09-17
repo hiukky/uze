@@ -117,7 +117,9 @@ scenes:
       - click: Close tab
         in: sidebar
         say: confirm close
-        expect: '0 agents'
+        # Nothing on screen appears when a row goes, so the gate is the
+        # tenant's row no longer being drawn anywhere.
+        expect: '\A(?![\s\S]*agent 1)'
         expect_timeout: 20
         pause: 2.0
     then:

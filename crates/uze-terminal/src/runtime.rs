@@ -1226,6 +1226,16 @@ impl Server {
                         self.broadcast_session();
                     }
                 }
+                ClientRequest::ReorderSpace { space, before } => {
+                    let changed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .reorder_space(space, before);
+                    if changed {
+                        self.broadcast_session();
+                    }
+                }
                 ClientRequest::CreateSpace {
                     label,
                     seat,

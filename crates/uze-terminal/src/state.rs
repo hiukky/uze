@@ -437,6 +437,37 @@ impl Session {
         true
     }
 
+    /// Moves `space` to sit immediately before `before` in the sidebar's
+    /// order (`before: None` moves it to the end), reporting whether the
+    /// order changed — the same contract as [`Session::reorder_tab`].
+    pub fn reorder_space(&mut self, space: SpaceId, before: Option<SpaceId>) -> bool {
+        let spaces = &mut self.workspace.spaces;
+        let Some(from) = spaces.iter().position(|candidate| candidate.id == space) else {
+            return false;
+        };
+        let insert_at = match before {
+            Some(before) if before == space => return false,
+            Some(before) => match spaces.iter().position(|candidate| candidate.id == before) {
+                Some(index) => index,
+                None => return false,
+            },
+            None => spaces.len(),
+        };
+        // An index into the order before `space` leaves it, as in
+        // `reorder_tab`.
+        let landing = if insert_at > from {
+            insert_at - 1
+        } else {
+            insert_at
+        };
+        if landing == from {
+            return false;
+        }
+        let moved = spaces.remove(from);
+        spaces.insert(landing, moved);
+        true
+    }
+
     /// Selects `space` if it exists, reporting whether the selection
     /// actually moved.
     pub fn select_space(&mut self, space: SpaceId) -> bool {
@@ -1358,6 +1389,39 @@ mod tests {
             !session.reorder_tab(TabId(1), Some(TabId(1))),
             "before itself"
         );
+    }
+
+    #[test]
+    fn reorder_space_moves_before_a_target_or_to_the_end() {
+        let mut session = Session::new(seat("/tmp/a", SpaceKind::Worktree), 80, 24);
+        session.add_space("b".into(), seat("/tmp/b", SpaceKind::Workspace), 80, 24);
+        session.add_space("c".into(), seat("/tmp/c", SpaceKind::Worktree), 80, 24);
+        let order = |session: &Session| -> Vec<u64> {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .map(|space| space.id.0)
+                .collect()
+        };
+        let [a, b, c] = [SpaceId(1), SpaceId(2), SpaceId(3)];
+        assert_eq!(order(&session), vec![1, 2, 3]);
+
+        assert!(session.reorder_space(c, Some(a)));
+        assert_eq!(order(&session), vec![3, 1, 2]);
+
+        assert!(session.reorder_space(c, None));
+        assert_eq!(order(&session), vec![1, 2, 3]);
+
+        assert!(!session.reorder_space(a, Some(b)), "already before it");
+        assert!(!session.reorder_space(c, None), "already last");
+        assert!(!session.reorder_space(a, Some(a)), "before itself");
+        assert!(!session.reorder_space(SpaceId(9), None), "no such space");
+        assert!(
+            !session.reorder_space(a, Some(SpaceId(9))),
+            "no such target"
+        );
+        assert_eq!(order(&session), vec![1, 2, 3]);
     }
 
     #[test]

@@ -31,12 +31,10 @@ than an exception in the existing one.
   in a worktree space either gets a slot or is not started, with the
   reason stated; the "no checkout" fallback that opened a tab in the
   operator's tree is removed.
-- **The sidebar draws each kind its own way.** A worktree space keeps the
-  tree. A workspace space lists its agents flat, one row each, carrying
-  the tab's label and the harness running at the row's edge, with the
-  selected row marked by a vertical accent bar in place of the selection
-  glyph; the branch and its upstream sync appear once, on the space's
-  header.
+- **The sidebar draws both kinds alike, shaped by the kind.** Every agent
+  is the same two-row item — status and label over its branch or
+  directory. A worktree space hangs them on a tree; a workspace space
+  draws them flat and marks the selected one with a vertical accent bar.
 - **A space can be created from the keyboard.** The `new-space` action
   gains a default chord and a handler; today it exists in the vocabulary
   and only the mouse reaches it.
@@ -79,7 +77,7 @@ than an exception in the existing one.
   returns an error instead of a fallback; `AgentRow::{Task, Tenant}` as the
   sidebar's read model; tenant occupancy in the per-repository sweep.
 - **CLI/TUI** — the sidebar's per-space body extracted into rows built once
-  and two layouts; the flat layout; the picker's kind choice; the
+  and one item drawn for both kinds; the flat shape; the picker's kind choice; the
   keyboard `new-space` action.
 - **Docs, spec and Lab** — the worktree-policy design and spec edited in
   place; `docs/architecture/invariants.md`; the `worktree` Skill;

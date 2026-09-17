@@ -1504,6 +1504,16 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
+            _ if self.model.dragging_space.is_some() => {
+                let (Some(mut dragging), Some(session)) =
+                    (self.model.dragging_space, self.model.session.as_ref())
+                else {
+                    return Flow::Continue;
+                };
+                dragging.follow(mouse.row, &self.model.hits, session, layout.sidebar);
+                self.model.dragging_space = Some(dragging);
+                self.model.dirty = true;
+            }
             _ if self.model.dragging_tab.is_some() => {
                 let Some(mut dragging) = self.model.dragging_tab else {
                     unreachable!("guarded by the match arm above");
@@ -1543,6 +1553,7 @@ impl Attach<'_> {
                 && self.model.code_edge_drag.is_none()
                 && !self.model.dragging_timeline
                 && self.model.dragging_tab.is_none()
+                && self.model.dragging_space.is_none()
                 && self.model.no_modal_open() =>
             {
                 forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
@@ -1568,9 +1579,22 @@ impl Attach<'_> {
             && !self.model.dragging_code_content
             && !self.model.dragging_timeline
             && self.model.dragging_tab.is_none()
+            && self.model.dragging_space.is_none()
             && self.model.no_modal_open()
         {
             forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
+        }
+        if let Some(dragging) = self.model.dragging_space.take() {
+            if let Some(pending) = dragging.pending {
+                let _ = send_request(
+                    &mut self.stream,
+                    &ClientRequest::ReorderSpace {
+                        space: dragging.space,
+                        before: pending.as_before(),
+                    },
+                );
+            }
+            self.model.dirty = true;
         }
         if let Some(dragging) = self.model.dragging_tab.take()
             && let Some(pending) = dragging.pending
@@ -1646,7 +1670,15 @@ impl Attach<'_> {
                 // the action replaces it with a plain shell. A space can
                 // always close: the last one is replaced by a space at
                 // home. Renaming a lone shell remains its only action.
-                if let Some(WorkspaceHit::SelectSpace(space)) = hit {
+                // Anywhere on a space's header is the space, its fold and
+                // its `⇄` included: they are the header's own controls,
+                // not targets of a menu of their own.
+                if let Some(
+                    WorkspaceHit::SelectSpace(space)
+                    | WorkspaceHit::ToggleSpaceCollapsed(space)
+                    | WorkspaceHit::ToggleSpaceRoot(space),
+                ) = hit
+                {
                     let items = vec![Action::RenameSelection, Action::CloseTab];
                     self.model.context_menu = Some(ContextMenu {
                         target: MenuTarget::Space(space),
@@ -1860,6 +1892,9 @@ impl Attach<'_> {
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
             }
+            WorkspaceHit::ToggleSpaceCollapsed(space) => {
+                toggle_space_collapsed(&mut self.model, space);
+            }
             WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ToggleSection)) => {
                 toggle_timeline(&mut self.model);
             }
@@ -2056,6 +2091,10 @@ impl Attach<'_> {
                 {
                     resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
                 }
+                // The header is also the handle a space is carried by;
+                // nothing moves until the pointer does (see
+                // `DraggingSpace`).
+                self.model.dragging_space = Some(DraggingSpace::armed_at(space, mouse.row));
             }
             WorkspaceHit::ContextMenuAction(_) => {
                 // Only reachable while the context menu is
@@ -2085,6 +2124,9 @@ impl Attach<'_> {
             }
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
+            }
+            WorkspaceHit::ToggleSpaceCollapsed(space) => {
+                toggle_space_collapsed(&mut self.model, space);
             }
             WorkspaceHit::ResumeLostCheckout(tab) => {
                 let resume = self

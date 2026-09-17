@@ -962,24 +962,26 @@ mod workspace_tests {
             pending: Some(PendingDrop::Before(second)),
         });
 
-        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
         let second_row = hits
             .iter()
             .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == second))
             .map(|(rect, _)| rect.y)
             .expect("the drop target's own row");
+        let column = gutter_column(&hits);
         assert!(
-            rows[second_row as usize].contains('▍'),
-            "indicator on the target row: {:?}",
-            rows[second_row as usize]
+            lit_gutter_rows(&buffer, column).contains(&second_row),
+            "indicator on the target row: {rows:?}"
         );
 
         model.dragging_tab = model
             .dragging_tab
             .map(|d| DraggingTab { armed: false, ..d });
-        let rows = sidebar(&model, &identities_fixture()).rows;
+        let buffer = sidebar(&model, &identities_fixture()).buffer;
         assert!(
-            rows.iter().all(|row| !row.contains('▍')),
+            !lit_gutter_rows(&buffer, column).contains(&second_row),
             "no indicator before the drag is armed"
         );
     }
@@ -1765,9 +1767,9 @@ mod workspace_tests {
         model
     }
 
-    /// The two harnesses the tenants above run — the flat rows name the
-    /// harness at their edge, so the sidebar is drawn among these rather
-    /// than the one-identity fixture the tree tests share.
+    /// The two harnesses the tenants above run, so the sidebar is drawn
+    /// among these rather than the one-identity fixture the tree tests
+    /// share.
     fn tenant_identities() -> Vec<AgentIdentity> {
         vec![
             AgentIdentity {
@@ -1799,118 +1801,86 @@ mod workspace_tests {
         rows
     }
 
+    /// A tenant is the same two-row item a worktree agent is: its name, and
+    /// beneath it the branch the root is on.
     #[test]
-    fn a_workspace_space_lists_its_agents_flat_with_the_branch_on_the_header() {
+    fn a_workspace_space_draws_each_agent_over_its_branch() {
         let model = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
+        let agents = agent_rows(&hits);
+        assert_eq!(agents.len(), 4, "two rows per agent: {rows:?}");
+        for (label, row) in [("agent 1", agents[0]), ("agent 2", agents[2])] {
+            assert!(rows[row as usize].contains(label), "{rows:?}");
+            assert!(
+                rows[row as usize + 1].contains("main"),
+                "the branch beneath {label}: {rows:?}"
+            );
+        }
+        assert_eq!(
+            agents[2],
+            agents[1] + 2,
+            "a spacer row between siblings: {rows:?}"
+        );
+        let branch = theme::glyph(theme::Symbol::TreeBranch);
+        assert!(
+            !rows.iter().any(|row| row.contains(&branch)),
+            "flat: nothing branches off the gutter: {rows:?}"
+        );
         let header = rows
             .iter()
             .find(|row| row.contains("repo"))
             .expect("the space header");
         assert!(
-            header.contains("main"),
-            "the shared branch sits on the header: {header:?}"
+            !header.contains("main"),
+            "the branch is on each agent, not repeated on the header: {header:?}"
         );
+    }
+
+    /// Outside a Git repository there is no branch to name, so the caption
+    /// says where the agent runs instead.
+    #[test]
+    fn a_tenant_outside_a_repository_is_captioned_by_its_directory() {
+        let mut model = workspace_space_session();
+        model.remembered.branches.clear();
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let agents = agent_rows(&hits);
-        assert_eq!(agents.len(), 2, "one row per agent: {rows:?}");
-        assert_eq!(
-            agents[1],
-            agents[0] + 1,
-            "and nothing between them: {rows:?}"
-        );
-        assert!(
-            !rows.iter().any(|row| row.contains("agent/")),
-            "no branch row under a tenant: {rows:?}"
-        );
-        let first = &rows[agents[0] as usize];
-        assert!(
-            first.contains("agent 1") && first.contains("claude"),
-            "{first:?}"
-        );
-        let second = &rows[agents[1] as usize];
-        assert!(
-            second.contains("agent 2") && second.contains("codex"),
-            "{second:?}"
-        );
+        assert!(rows[agents[1] as usize].contains("/repo"), "{rows:?}");
     }
 
     #[test]
-    fn two_tenants_of_one_harness_are_told_apart_by_their_labels() {
-        let mut model = workspace_space_session();
-        model.session.as_mut().unwrap().update_pane_status(
-            PaneId(3),
-            "/repo".into(),
-            "claude".into(),
-        );
-        let rows = sidebar(&model, &tenant_identities()).rows;
-        assert!(
-            rows.iter()
-                .any(|row| row.contains("agent 1") && row.contains("claude"))
-        );
-        assert!(
-            rows.iter()
-                .any(|row| row.contains("agent 2") && row.contains("claude"))
-        );
-    }
-
-    #[test]
-    fn the_selected_tenant_carries_the_bar_and_no_other_row_does() {
+    fn tenants_wear_the_same_status_glyphs_as_worktree_agents() {
         let model = workspace_space_session();
-        let buffer = sidebar(&model, &tenant_identities()).buffer;
-        let rows = sidebar(&model, &tenant_identities()).rows;
-        let bar = theme::glyph(crate::ui::theme::Symbol::BarMedium);
-        let marked: Vec<usize> = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| row.contains(&bar))
-            .map(|(index, _)| index)
-            .collect();
-        assert_eq!(marked.len(), 1, "exactly one row carries the bar: {rows:?}");
-        assert!(
-            rows[marked[0]].contains("agent 2"),
-            "the agent receiving keystrokes: {:?}",
-            rows[marked[0]]
-        );
-        let column = rows[marked[0]]
-            .chars()
-            .position(|glyph| bar.starts_with(glyph))
-            .expect("the bar's column") as u16;
-        assert_eq!(
-            buffer[(column, marked[0] as u16)].fg,
-            theme::color(crate::ui::theme::Token::Accent),
-            "in the accent hue"
-        );
-        assert!(
-            !rows[marked[0]].contains('●'),
-            "the bar replaces the selection glyph: {:?}",
-            rows[marked[0]]
-        );
-
-        // The tree keeps its own encoding: no bar anywhere in a worktree space.
-        let tree = agent_with_task(TaskStateView::Ready, 1);
-        let rows = sidebar(&tree, &tenant_identities()).rows;
-        assert!(rows.iter().all(|row| !row.contains(&bar)), "{rows:?}");
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
+        let agents = agent_rows(&hits);
+        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        let selected = theme::glyph(crate::ui::theme::Symbol::StatusSelected);
+        assert!(rows[agents[0] as usize].contains(&idle), "{rows:?}");
+        assert!(rows[agents[2] as usize].contains(&selected), "{rows:?}");
     }
 
+    /// The agent receiving keystrokes lights its stretch of the gutter —
+    /// both of its rows, and nothing else — in either kind of space.
     #[test]
-    fn the_account_counts_tenants_and_the_kinds_alike() {
-        let mut model = workspace_space_session();
-        model.session.as_mut().unwrap().create_space(
-            Some("tree".into()),
-            uze_terminal::SpaceSeat {
-                root: "/tree".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
+    fn the_selected_agent_lights_its_stretch_of_the_gutter_and_nothing_else() {
+        let model = workspace_space_session();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &tenant_identities());
+        let agents = agent_rows(&hits);
+        assert_eq!(
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
+            vec![agents[2], agents[3]],
+            "{rows:?}"
         );
-        let session = model.session.as_mut().unwrap();
-        let tab = session.add_tab(SpaceId(2), "agent 3".into(), None, 80, 24, "/tree".into());
-        session.update_pane_status(tab, "/tree/.worktrees/x".into(), "claude".into());
-        session.workspace.selected_space = SpaceId(1);
-        let rows = sidebar(&model, &tenant_identities()).rows;
-        assert!(
-            rows.iter().any(|row| row.contains("3 agents in 2 spaces")),
+
+        let tree = agent_with_task(TaskStateView::Ready, 1);
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&tree, &identities_fixture());
+        let agents = agent_rows(&hits);
+        assert_eq!(
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
+            vec![agents[0], agents[1]],
             "{rows:?}"
         );
     }
@@ -1922,7 +1892,7 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
             rows.iter()
-                .any(|row| row.trim_end_matches('│').trim() == "/repo"),
+                .any(|row| row.trim_matches(|c: char| c == '│' || c == ' ') == "/repo"),
             "{rows:?}"
         );
         assert!(
@@ -1943,105 +1913,29 @@ mod workspace_tests {
             "bash".into(),
         );
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
-        assert_eq!(agent_rows(&hits).len(), 1, "{rows:?}");
-        assert!(
-            rows.iter().any(|row| row.contains("1 agent in 1 space")),
-            "{rows:?}"
-        );
+        assert_eq!(agent_rows(&hits).len(), 2, "one two-row item: {rows:?}");
     }
 
     #[test]
-    fn a_flat_space_measures_one_row_per_agent() {
-        let mut flat = workspace_space_session();
-        let mut tree = workspace_space_session();
-        tree.session.as_mut().unwrap().workspace.spaces[0].kind = uze_terminal::SpaceKind::Worktree;
-        for model in [&mut flat, &mut tree] {
-            let session = model.session.as_mut().unwrap();
-            for index in 2..9 {
-                session.create_space(
-                    Some(format!("space {index}")),
-                    uze_terminal::SpaceSeat {
-                        root: format!("/tmp/{index}").into(),
-                        kind: session.workspace.spaces[0].kind,
-                    },
-                    80,
-                    24,
-                );
-                let tab = session.add_tab(
-                    SpaceId(index as u64),
-                    "agent".into(),
-                    None,
-                    80,
-                    24,
-                    format!("/tmp/{index}").into(),
-                );
-                session.update_pane_status(tab, format!("/tmp/{index}").into(), "claude".into());
-            }
-        }
-        let flat_metrics = sidebar(&flat, &tenant_identities()).metrics;
-        let tree_metrics = sidebar(&tree, &tenant_identities()).metrics;
-        assert!(
-            flat_metrics.tree_overflow > 0,
-            "the flat tree still outgrows the column"
-        );
-        // Eight spaces: the first with two agents, seven with one. A tree
-        // item is two rows plus a connector between siblings (five rows
-        // for two agents, two for one); a flat item is one row — the
-        // difference is exactly the rows the flat list saves.
-        let saved_by_the_pair = 5 - 2;
-        let saved_by_each_single = 2 - 1;
-        let saved = saved_by_the_pair + 7 * saved_by_each_single;
-        assert_eq!(
-            tree_metrics.tree_overflow - flat_metrics.tree_overflow,
-            saved as u16,
-            "the scroll bound is measured by the same layout that draws"
-        );
-    }
-
-    #[test]
-    fn dragging_in_a_flat_space_marks_the_drop_row_with_a_hairline_not_a_bar() {
-        let mut model = workspace_space_session();
-        let space = model.session.as_ref().unwrap().workspace.selected_space;
-        model.dragging_tab = Some(DraggingTab {
-            tab: TabId(3),
-            group: TabDragGroup::Agents(space),
-            origin: 1,
-            armed: true,
-            pending: Some(PendingDrop::Before(TabId(2))),
-        });
-        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
-        let target = agent_rows(&hits)[0] as usize;
-        let hairline = theme::glyph(crate::ui::theme::Symbol::TreeDivider).repeat(2);
-        assert!(
-            rows[target].trim_start().starts_with(&hairline),
-            "the drop row leads with the hairline: {:?}",
-            rows[target]
-        );
-        assert!(
-            !rows[target].contains('▍'),
-            "and never the tree's bar, which would read as selection"
-        );
-    }
-
-    #[test]
-    fn the_root_toggle_flips_a_flat_spaces_header_and_leaves_its_rows() {
+    fn the_root_toggle_names_each_tenants_harness_beneath_it() {
         let mut model = workspace_space_session();
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.remembered.roots_shown.insert(space);
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
-            rows.iter()
-                .any(|row| row.contains("/repo") && row.contains("main")),
-            "the header shows the root with the branch: {rows:?}"
+            rows.iter().any(|row| row.contains("/repo")),
+            "the header shows the root: {rows:?}"
         );
         let agents = agent_rows(&hits);
         assert!(rows[agents[0] as usize].contains("agent 1"), "{rows:?}");
+        assert!(rows[agents[1] as usize].contains("claude"), "{rows:?}");
+        assert!(rows[agents[3] as usize].contains("codex"), "{rows:?}");
     }
 
     /// A tenant has no task, so its row has nothing to deliver and no state
     /// to mark; and every row selects the agent it names.
     #[test]
-    fn a_flat_row_selects_its_own_agent_and_offers_no_delivery() {
+    fn a_tenant_row_selects_its_own_agent_and_offers_no_delivery() {
         let model = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
@@ -2074,18 +1968,21 @@ mod workspace_tests {
                 .find(|candidate| candidate.id == *tab)
                 .expect("the hit names a tab of the space")
                 .label;
+            // The label row, or the caption row beneath it.
+            let item = [rect.y, rect.y.saturating_sub(1)];
             assert!(
-                rows[rect.y as usize].contains(label.as_str()),
+                item.iter()
+                    .any(|row| rows[*row as usize].contains(label.as_str())),
                 "the row at {} selects {label}: {rows:?}",
                 rect.y
             );
         }
     }
 
-    /// The agent chords walk a flat space's rows in the order they are
-    /// drawn, wrapping at the ends.
+    /// The agent chords walk a workspace space's agents in the order they
+    /// are drawn, wrapping at the ends.
     #[test]
-    fn the_agent_chords_walk_a_flat_spaces_rows() {
+    fn the_agent_chords_walk_a_workspace_spaces_agents() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-flat-step"));
         let model = workspace_space_session();
         let Sidebar {
@@ -2117,13 +2014,13 @@ mod workspace_tests {
     }
 
     #[test]
-    fn the_first_steps_keep_the_foot_beside_a_flat_space() {
+    fn the_first_steps_keep_the_foot_beside_a_workspace_space() {
         let mut model = workspace_space_session();
         model.first_steps_collapsed = false;
         let rows = sidebar(&model, &tenant_identities()).rows;
         assert!(
             rows.iter().any(|row| row.contains("first steps")),
-            "the foot is budgeted from the flat measure: {rows:?}"
+            "the foot is budgeted from the measure: {rows:?}"
         );
     }
 
@@ -3664,6 +3561,31 @@ mod workspace_tests {
         assert_ne!(commit.bg, theme::color(Token::SurfaceRaised));
     }
 
+    /// A folded section's title is plain: bold is for a heading over
+    /// content, and folded there is none under it.
+    #[test]
+    fn a_folded_sections_title_is_not_bold() {
+        let mut model = session_with_timeline(&["feat: only"]);
+        let title_is_bold = |model: &WorkspaceModel| {
+            let Sidebar { rows, buffer, .. } = sidebar(model, &identities_fixture());
+            let header = rows
+                .iter()
+                .position(|row| row.contains("timeline"))
+                .expect("the header is drawn");
+            let column = rows[header]
+                .find("timeline")
+                .map(|byte| rows[header][..byte].chars().count())
+                .unwrap() as u16;
+            buffer[(column, header as u16)]
+                .modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        };
+        model.timeline_collapsed = false;
+        assert!(title_is_bold(&model), "open, it heads its rows");
+        model.timeline_collapsed = true;
+        assert!(!title_is_bold(&model), "folded, it is plain");
+    }
+
     /// Both sections stack at the foot of the column, the steps on the
     /// history, and each takes its rows before the tree is laid out — so
     /// opening one pushes the other rather than being drawn over it.
@@ -4200,7 +4122,7 @@ mod workspace_tests {
     }
 
     /// The sidebar opens with the surface's name and the way into the other
-    /// one, then the column's account beside the way to grow it.
+    /// one, then the way to grow it.
     #[test]
     fn the_sidebar_header_names_the_column_and_offers_the_modal() {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
@@ -4218,9 +4140,10 @@ mod workspace_tests {
             "a hairline closes the header: {:?}",
             rows[1]
         );
-        assert!(
-            rows[2].contains("agent in 1 space") && rows[2].contains("+ new"),
-            "the account and creation share the row under it: {:?}",
+        assert_eq!(
+            rows[2].split('│').next().unwrap_or_default().trim(),
+            "+ new",
+            "creation alone on the row under it: {:?}",
             rows[2]
         );
     }
@@ -4595,6 +4518,25 @@ mod workspace_tests {
             hits,
             metrics,
         }
+    }
+
+    /// The rows whose gutter is lit — drawn in the accent in the sidebar's
+    /// leading column, `column`, which every space's gutter runs down.
+    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16) -> Vec<u16> {
+        (0..buffer.area.height)
+            .filter(|row| {
+                let cell = &buffer[(column, *row)];
+                cell.symbol() != " " && cell.fg == theme::color(Token::Accent)
+            })
+            .collect()
+    }
+
+    /// The column every space's gutter runs down, by the first header drawn.
+    fn gutter_column(hits: &[(Rect, WorkspaceHit)]) -> u16 {
+        hits.iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
+            .map(|(rect, _)| rect.x)
+            .expect("a space header is drawn")
     }
 
     fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
@@ -5945,7 +5887,7 @@ mod workspace_tests {
                     _ => None,
                 })
                 .expect("the space row is a target");
-            driven.press(row.x + 1, row.y);
+            driven.press(row.x + 4, row.y);
             let sent = driven.sent();
             (space, sent)
         };
@@ -5979,6 +5921,378 @@ mod workspace_tests {
                 .any(|request| matches!(request, ClientRequest::SelectSpace { space: selected } if *selected == space)),
             "a space of agents alone was not switched to: {sent:?}"
         );
+    }
+
+    /// Three worktree spaces, `one`, `two` and `three`, one agent each; the
+    /// last one created is selected.
+    fn three_spaces() -> WorkspaceModel {
+        let mut session = session("/one", uze_terminal::SpaceKind::Worktree);
+        let pane = session.selected_tab().pane.id;
+        session.update_pane_status(pane, "/one".into(), "agent".into());
+        for name in ["two", "three"] {
+            let root = PathBuf::from(format!("/{name}"));
+            session.create_space(
+                Some(name.into()),
+                uze_terminal::SpaceSeat {
+                    root: root.clone(),
+                    kind: uze_terminal::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            );
+            let pane = session.selected_tab().pane.id;
+            session.update_pane_status(pane, root, "agent".into());
+        }
+        model_of(session)
+    }
+
+    /// The header row a space was drawn at, by the frame's own hits.
+    fn space_header(hits: &[(Rect, WorkspaceHit)], wanted: SpaceId) -> Rect {
+        hits.iter()
+            .filter(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(space) if *space == wanted))
+            .map(|(rect, _)| *rect)
+            .min_by_key(|rect| rect.y)
+            .expect("the space has a header")
+    }
+
+    fn agent_rows_of(
+        model: &WorkspaceModel,
+        hits: &[(Rect, WorkspaceHit)],
+        space: SpaceId,
+    ) -> usize {
+        let session = model.session.as_ref().unwrap();
+        let space = session
+            .workspace
+            .spaces
+            .iter()
+            .find(|candidate| candidate.id == space)
+            .unwrap();
+        hits.iter()
+            .filter(|(_, hit)| {
+                matches!(hit, WorkspaceHit::SelectTab(tab) if space.tabs.iter().any(|candidate| candidate.id == *tab))
+            })
+            .count()
+    }
+
+    /// Every row of a space hangs off one muted gutter down its leading
+    /// column, and a worktree space's items branch straight off it, at no
+    /// level of indent; only the selected agent's stretch of it is heavier
+    /// and in the accent.
+    #[test]
+    fn a_space_is_one_block_down_its_gutter() {
+        let model = three_spaces();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        use crate::ui::theme::{Symbol, Token};
+        let muted = theme::color(Token::TextMuted);
+        let accent = theme::color(Token::Accent);
+        // Space 1 is in the background; space 3 is selected, on its agent.
+        for (space, branch, caption, hues) in [
+            (
+                SpaceId(1),
+                Symbol::TreeBranch,
+                Symbol::TreeVertical,
+                [muted, muted, muted],
+            ),
+            (
+                SpaceId(3),
+                Symbol::TreeBranch,
+                Symbol::TreeVertical,
+                [muted, accent, accent],
+            ),
+        ] {
+            let header = space_header(&hits, space);
+            let (column, span) = (header.x, header.y..header.y + 3);
+            for (row, hue) in span.clone().zip(hues) {
+                assert_eq!(
+                    buffer[(column, row)].fg,
+                    hue,
+                    "row {row} of {space:?}: {rows:?}"
+                );
+            }
+            let item = &rows[span.start as usize + 1];
+            assert!(
+                item.trim_start().starts_with(&theme::glyph(branch)),
+                "the agent branches off the gutter: {item:?}"
+            );
+            let below = &rows[span.start as usize + 2];
+            assert!(
+                below.trim_start().starts_with(&theme::glyph(caption)),
+                "and its caption runs down it: {below:?}"
+            );
+            assert_eq!(
+                buffer[(column, span.end)].symbol(),
+                " ",
+                "the blank row after the space is outside its gutter: {rows:?}"
+            );
+        }
+    }
+
+    /// The column reads space > agent: an agent's status glyph under the
+    /// space's name, the agent's name one step in, and its caption under
+    /// that name — the same columns in either kind of space.
+    #[test]
+    fn agents_sit_one_step_inside_their_space() {
+        let column_of = |row: &str, text: &str| {
+            let byte = row
+                .find(text)
+                .unwrap_or_else(|| panic!("{text:?} in {row:?}"));
+            row[..byte].chars().count()
+        };
+        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        let tree = three_spaces();
+        let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
+        let header = space_header(&hits, SpaceId(1)).y as usize;
+        let name = column_of(&rows[header], "one");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let agent = column_of(&rows[header + 1], "shell");
+        assert_eq!(agent, name + 2, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "/one"), agent, "{rows:?}");
+
+        let flat = workspace_space_session();
+        let Sidebar { rows, hits, .. } = sidebar(&flat, &tenant_identities());
+        let header = space_header(&hits, SpaceId(1)).y as usize;
+        let name = column_of(&rows[header], "repo");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        assert_eq!(
+            column_of(&rows[header + 1], "agent 1"),
+            name + 2,
+            "{rows:?}"
+        );
+        assert_eq!(column_of(&rows[header + 2], "main"), name + 2, "{rows:?}");
+    }
+
+    /// The fold minimizes a space to its header and opens it again, on this
+    /// client alone: nothing is asked of the server.
+    #[test]
+    fn the_fold_minimizes_a_space_to_its_header_and_opens_it_again() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-fold"));
+        let mut driven = driven(three_spaces(), &home);
+        driven.frame();
+        let one = SpaceId(1);
+        assert_eq!(
+            agent_rows_of(&driven.attach.model, &driven.attach.model.hits, one),
+            2
+        );
+        let fold = driven
+            .hit(|hit| matches!(hit, WorkspaceHit::ToggleSpaceCollapsed(space) if *space == one));
+
+        driven.press(fold.x, fold.y);
+        driven.frame();
+        let hits = driven.attach.model.hits.clone();
+        assert_eq!(
+            agent_rows_of(&driven.attach.model, &hits, one),
+            0,
+            "the agent rows are folded away"
+        );
+        let two = space_header(&hits, SpaceId(2));
+        assert_eq!(
+            two.y,
+            space_header(&hits, one).y + 3,
+            "the next space follows the header, its one caption and its blank row"
+        );
+        assert!(
+            driven.sent().is_empty(),
+            "folding is this client's own view"
+        );
+
+        driven.press(fold.x, fold.y);
+        driven.frame();
+        let hits = driven.attach.model.hits.clone();
+        assert_eq!(
+            agent_rows_of(&driven.attach.model, &hits, one),
+            2,
+            "and back"
+        );
+    }
+
+    /// Folded, a space still says that something in it wants a look, and
+    /// its header — all there is of it — carries the selection.
+    #[test]
+    fn a_folded_space_says_through_its_header_what_its_agents_did() {
+        let mut model = three_spaces();
+        let three = model.session.as_ref().unwrap().workspace.selected_space;
+        let pane = model.session.as_ref().unwrap().selected_tab().pane.id;
+        model.remembered.completed_agent_panes.insert(pane);
+        let completed = theme::glyph(crate::ui::theme::Symbol::StatusCompleted);
+        let header_row = |model: &WorkspaceModel| {
+            let Sidebar {
+                rows, hits, buffer, ..
+            } = sidebar(model, &identities_fixture());
+            let header = space_header(&hits, three).y;
+            let lit = lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header);
+            (rows[header as usize].clone(), lit)
+        };
+        let (open, lit) = header_row(&model);
+        assert!(
+            !open.contains(&completed),
+            "open, the agent row says it: {open:?}"
+        );
+        assert!(!lit, "and the agent carries the selection: {open:?}");
+
+        model.remembered.collapsed_spaces.insert(three);
+        let (folded, lit) = header_row(&model);
+        assert!(folded.contains(&completed), "{folded:?}");
+        assert!(lit, "{folded:?}");
+    }
+
+    /// Minimized, a space is still a two-row item: under its header, the
+    /// agent it is on, else the branch its root is on, else the root.
+    #[test]
+    fn a_folded_space_names_its_agent_else_its_branch_else_its_root() {
+        let caption = |model: &WorkspaceModel, space: SpaceId| {
+            let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
+            let header = space_header(&hits, space).y as usize;
+            rows[header + 1].clone()
+        };
+        let mut model = three_spaces();
+        let one = SpaceId(1);
+        model.remembered.collapsed_spaces.insert(one);
+        assert!(caption(&model, one).contains("shell"), "the agent it is on");
+
+        let session = model.session.as_mut().unwrap();
+        let pane = session.workspace.spaces[0].tabs[0].pane.id;
+        session.update_pane_status(pane, "/one".into(), "bash".into());
+        let row = caption(&model, one);
+        assert!(
+            row.contains("/one"),
+            "no agent, no branch: the root: {row:?}"
+        );
+
+        model
+            .remembered
+            .branches
+            .insert(PathBuf::from("/one"), "main".into());
+        let row = caption(&model, one);
+        assert!(row.contains("main"), "no agent: the branch: {row:?}");
+    }
+
+    /// The scroll bound is measured with the folds, so a column of folded
+    /// spaces does not scroll past rows that are no longer drawn.
+    #[test]
+    fn a_folded_space_measures_its_header_alone() {
+        let mut model = three_spaces();
+        let session = model.session.as_mut().unwrap();
+        for index in 4..12 {
+            let root = PathBuf::from(format!("/{index}"));
+            session.create_space(
+                None,
+                uze_terminal::SpaceSeat {
+                    root: root.clone(),
+                    kind: uze_terminal::SpaceKind::Worktree,
+                },
+                80,
+                24,
+            );
+            let pane = session.selected_tab().pane.id;
+            session.update_pane_status(pane, root, "agent".into());
+        }
+        let open = sidebar(&model, &identities_fixture()).metrics.tree_overflow;
+        model.remembered.collapsed_spaces.insert(SpaceId(1));
+        let folded = sidebar(&model, &identities_fixture()).metrics.tree_overflow;
+        assert!(open > 2, "the column overflows: {open}");
+        assert_eq!(open - folded, 1, "two agent rows give way to one caption");
+    }
+
+    /// A space is carried by its header: while it moves, a line shows where
+    /// it lands, and letting go there asks the server to put it there.
+    #[test]
+    fn a_space_dragged_by_its_header_lands_where_the_line_said() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-drag"));
+        let mut driven = driven(three_spaces(), &home);
+        driven.frame();
+        let hits = driven.attach.model.hits.clone();
+        let one = space_header(&hits, SpaceId(1));
+        let three = space_header(&hits, SpaceId(3));
+
+        driven.press(three.x + 4, three.y);
+        let _ = driven.sent();
+        driven.mouse(three.x + 4, one.y, MouseEventKind::Drag(MouseButton::Left));
+        let rows = frame_rows(&mut driven.attach.model);
+        let line = theme::glyph(crate::ui::theme::Symbol::TreeDivider).repeat(8);
+        assert!(
+            rows[one.y as usize - 1].contains(&line),
+            "the line is drawn above the space it lands before: {rows:?}"
+        );
+
+        driven.mouse(three.x + 4, one.y, MouseEventKind::Up(MouseButton::Left));
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::ReorderSpace { space, before: Some(before) }
+                    if *space == SpaceId(3) && *before == SpaceId(1)
+            )),
+            "{sent:?}"
+        );
+        assert!(driven.attach.model.dragging_space.is_none());
+    }
+
+    /// A header clicked, or barely moved, stays a click.
+    #[test]
+    fn a_click_on_a_space_header_moves_no_space() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-click"));
+        let mut driven = driven(three_spaces(), &home);
+        driven.frame();
+        let three = space_header(&driven.attach.model.hits.clone(), SpaceId(3));
+
+        driven.press(three.x + 4, three.y);
+        driven.mouse(
+            three.x + 4,
+            three.y - 1,
+            MouseEventKind::Drag(MouseButton::Left),
+        );
+        driven.mouse(
+            three.x + 4,
+            three.y - 1,
+            MouseEventKind::Up(MouseButton::Left),
+        );
+
+        let sent = driven.sent();
+        assert!(
+            !sent
+                .iter()
+                .any(|request| matches!(request, ClientRequest::ReorderSpace { .. })),
+            "{sent:?}"
+        );
+    }
+
+    /// The space row is a context of its own — its shells — so while the
+    /// operator is there its gutter is lit, in either kind, and
+    /// gives it up once an agent of the space is selected.
+    #[test]
+    fn the_space_row_carries_the_bar_while_its_own_shells_are_selected() {
+        let header_lit = |model: &WorkspaceModel| {
+            let Sidebar { hits, buffer, .. } = sidebar(model, &tenant_identities());
+            let header = hits
+                .iter()
+                .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
+                .map(|(rect, _)| rect.y)
+                .expect("the space header");
+            lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header)
+        };
+        for kind in [
+            uze_terminal::SpaceKind::Worktree,
+            uze_terminal::SpaceKind::Workspace,
+        ] {
+            let mut on_shell = session("/repo", kind);
+            let space = on_shell.selected_space().id;
+            let shell = on_shell.selected_tab().id;
+            let agent = on_shell.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
+            on_shell.update_pane_status(agent, "/repo".into(), "claude".into());
+            on_shell.workspace.spaces[0].selected_tab = shell;
+            assert!(header_lit(&model_of(on_shell.clone())), "{kind:?}");
+
+            let agent_tab = on_shell.workspace.spaces[0]
+                .tabs
+                .iter()
+                .find(|tab| tab.pane.id == agent)
+                .expect("the agent's tab")
+                .id;
+            on_shell.workspace.spaces[0].selected_tab = agent_tab;
+            assert!(!header_lit(&model_of(on_shell)), "{kind:?}");
+        }
     }
 
     /// The context menu answers the keyboard like the agent picker does:

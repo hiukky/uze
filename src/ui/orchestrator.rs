@@ -1205,6 +1205,9 @@ pub(super) enum WorkspaceHit {
     /// The `⇄` behind a space's name — flips that header between its label
     /// and its root (see `WorkspaceModel::roots_shown`).
     ToggleSpaceRoot(SpaceId),
+    /// The fold in front of a space's name — minimizes the space to its
+    /// header, or opens it again (see `Remembered::collapsed_spaces`).
+    ToggleSpaceCollapsed(SpaceId),
     /// The "resume" behind an agent row whose checkout was removed from
     /// under it (see `WorkspaceModel::lost_checkouts`) — opens the agent
     /// picker to put the task it was running back into a slot of its own.
@@ -1404,17 +1407,17 @@ mod edge_drag_tests {
     }
 }
 
-/// A pending tab-reorder drop position, in exactly the shape
-/// [`ClientRequest::ReorderTab`] expects it: before a specific tab, or at
-/// the end of the group.
+/// A pending reorder drop position, in exactly the shape
+/// [`ClientRequest::ReorderTab`] and [`ClientRequest::ReorderSpace`] expect
+/// it: before a specific item, or at the end of the list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PendingDrop {
-    Before(TabId),
+enum PendingDrop<Id = TabId> {
+    Before(Id),
     End,
 }
 
-impl PendingDrop {
-    fn as_before(self) -> Option<TabId> {
+impl<Id: Copy> PendingDrop<Id> {
+    fn as_before(self) -> Option<Id> {
         match self {
             PendingDrop::Before(tab) => Some(tab),
             PendingDrop::End => None,
@@ -1465,6 +1468,94 @@ impl DraggingTab {
 /// click — small enough that dragging still feels immediate, large enough
 /// to rule out an ordinary click's own jitter.
 const TAB_DRAG_THRESHOLD: u16 = 2;
+
+/// A space being dragged by its header to another place in the sidebar.
+/// Armed, like [`DraggingTab`], only once the pointer has travelled
+/// [`TAB_DRAG_THRESHOLD`] rows, so a click on the header stays a click.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DraggingSpace {
+    space: SpaceId,
+    /// The row the press started at.
+    origin: u16,
+    armed: bool,
+    pending: Option<PendingDrop<SpaceId>>,
+}
+
+impl DraggingSpace {
+    fn armed_at(space: SpaceId, row: u16) -> Self {
+        Self {
+            space,
+            origin: row,
+            armed: false,
+            pending: None,
+        }
+    }
+
+    /// Where this drag would land with the pointer on `row`, among the
+    /// space blocks the last frame drew.
+    fn follow(
+        &mut self,
+        row: u16,
+        hits: &[(Rect, WorkspaceHit)],
+        session: &Session,
+        sidebar: Rect,
+    ) {
+        if !self.armed {
+            self.armed = row.abs_diff(self.origin) >= TAB_DRAG_THRESHOLD;
+        }
+        self.pending = self
+            .armed
+            .then(|| {
+                let members: Vec<(u16, u16, SpaceId)> = space_blocks(hits, session, sidebar)
+                    .into_iter()
+                    .filter(|(_, space)| *space != self.space)
+                    .map(|(rect, space)| (rect.y, rect.bottom(), space))
+                    .collect();
+                pending_drop(&members, 2, row, self.origin)
+            })
+            .flatten();
+    }
+}
+
+/// Each space's block in the sidebar as the last frame drew it — its
+/// header and every row under it that selects the space or one of its
+/// agents — top to bottom. Read off the frame's own hits, like
+/// `tab_drag_group_members`, so a drop can never be offered where
+/// nothing was drawn: a minimized space is its header alone.
+fn space_blocks(
+    hits: &[(Rect, WorkspaceHit)],
+    session: &Session,
+    sidebar: Rect,
+) -> Vec<(Rect, SpaceId)> {
+    let mut blocks: std::collections::BTreeMap<SpaceId, Rect> = std::collections::BTreeMap::new();
+    for (rect, hit) in hits {
+        if rect.x >= sidebar.right() {
+            continue;
+        }
+        let space = match hit {
+            WorkspaceHit::SelectSpace(space) => Some(*space),
+            WorkspaceHit::SelectTab(tab) => session
+                .workspace
+                .spaces
+                .iter()
+                .find(|space| space.tabs.iter().any(|candidate| candidate.id == *tab))
+                .map(|space| space.id),
+            _ => None,
+        };
+        if let Some(space) = space {
+            blocks
+                .entry(space)
+                .and_modify(|merged| *merged = merged.union(*rect))
+                .or_insert(*rect);
+        }
+    }
+    let mut blocks: Vec<(Rect, SpaceId)> = blocks
+        .into_iter()
+        .map(|(space, rect)| (rect, space))
+        .collect();
+    blocks.sort_by_key(|(rect, _)| rect.y);
+    blocks
+}
 
 /// A second `Down(Left)` on the same hit within this window counts as a
 /// double-click (enters tab rename); slower than this, it's just another
@@ -1968,6 +2059,10 @@ struct Remembered {
     /// length. Remembered across attaches like any other sidebar
     /// resolution, so an attach does not flip it back.
     roots_shown: BTreeSet<SpaceId>,
+    /// The spaces minimized to their header row, flipped by the fold in
+    /// front of the name. A view of the column, not of the work: the
+    /// space's agents keep running and the chords still reach them.
+    collapsed_spaces: BTreeSet<SpaceId>,
     /// Which tab each agent was last left on: the agent's own tab, or one
     /// of the shells opened beside it in its strip.
     ///
@@ -2086,6 +2181,9 @@ struct WorkspaceModel {
     /// dragged. Client-local presentation state — nothing is sent to the
     /// server until release (see `TabDragGroup`/`DraggingTab`).
     dragging_tab: Option<DraggingTab>,
+    /// An in-progress space-reorder drag, begun on a space's header row;
+    /// sent to the server on release, like `dragging_tab`.
+    dragging_space: Option<DraggingSpace>,
     /// The commit a background `git show` is out for; see
     /// [`CommitDetailResolution`] for why the answer names it back.
     commit_detail_pending: Option<String>,
@@ -2301,6 +2399,7 @@ impl WorkspaceModel {
                 self.session = Some(session);
                 self.note_strip_selection(identities);
                 self.prune_dragging_tab();
+                self.prune_dragging_space();
                 self.occupancy_stale = true;
             }
             ClientEvent::Damage(damage) => {
@@ -2334,6 +2433,22 @@ impl WorkspaceModel {
     /// — closed by another client, or by a concurrent `CloseTab`, while
     /// this one was mid-drag. Called on every `SessionUpdated`; leaves an
     /// unrelated drag (or none at all) alone.
+    fn prune_dragging_space(&mut self) {
+        let Some(dragging) = self.dragging_space else {
+            return;
+        };
+        let still_exists = self.session.as_ref().is_some_and(|session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .any(|space| space.id == dragging.space)
+        });
+        if !still_exists {
+            self.dragging_space = None;
+        }
+    }
+
     fn prune_dragging_tab(&mut self) {
         let Some(dragging) = self.dragging_tab else {
             return;
@@ -3338,16 +3453,9 @@ fn pending_tab_drop(
     pointer: u16,
     origin: u16,
 ) -> Option<PendingDrop> {
-    if members.is_empty() {
-        return None;
-    }
-    let position = |rect: Rect| match group {
-        TabDragGroup::Agents(_) => rect.y,
-        TabDragGroup::Strip(..) => rect.x,
-    };
-    let extent = |rect: Rect| match group {
-        TabDragGroup::Agents(_) => rect.y + rect.height,
-        TabDragGroup::Strip(..) => rect.x + rect.width,
+    let along = |rect: Rect| match group {
+        TabDragGroup::Agents(_) => (rect.y, rect.y + rect.height),
+        TabDragGroup::Strip(..) => (rect.x, rect.x + rect.width),
     };
     // A little slack past either end: dragging just above the first row,
     // or just past the last tab, still means "put it there" rather than
@@ -3356,24 +3464,43 @@ fn pending_tab_drop(
         TabDragGroup::Agents(_) => 2,
         TabDragGroup::Strip(..) => 4,
     };
-    let first = position(members[0].0);
-    let last = extent(members[members.len() - 1].0);
+    let members: Vec<(u16, u16, TabId)> = members
+        .iter()
+        .map(|&(rect, tab)| {
+            let (start, end) = along(rect);
+            (start, end, tab)
+        })
+        .collect();
+    pending_drop(&members, slack, pointer, origin)
+}
+
+/// [`pending_tab_drop`] on one axis, for any list whose members are
+/// `(start, end, id)` spans in drawing order — the dragged item itself
+/// excluded, `origin` where it started.
+fn pending_drop<Id: Copy>(
+    members: &[(u16, u16, Id)],
+    slack: u16,
+    pointer: u16,
+    origin: u16,
+) -> Option<PendingDrop<Id>> {
+    let (first, _, _) = *members.first()?;
+    let (_, last, _) = *members.last()?;
     if pointer + slack < first || pointer > last + slack {
         return None;
     }
     let mut passed_origin = false;
-    for &(rect, tab) in members {
-        let is_moot_successor = !passed_origin && position(rect) > origin;
-        passed_origin = passed_origin || position(rect) > origin;
+    for &(start, end, id) in members {
+        let is_moot_successor = !passed_origin && start > origin;
+        passed_origin = passed_origin || start > origin;
         if is_moot_successor {
-            if pointer < position(rect) {
-                return Some(PendingDrop::Before(tab));
+            if pointer < start {
+                return Some(PendingDrop::Before(id));
             }
             continue;
         }
-        let midpoint = position(rect) + (extent(rect) - position(rect)) / 2;
+        let midpoint = start + (end - start) / 2;
         if pointer < midpoint {
-            return Some(PendingDrop::Before(tab));
+            return Some(PendingDrop::Before(id));
         }
     }
     Some(PendingDrop::End)
@@ -3886,6 +4013,15 @@ fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
         .iter()
         .find_map(|space| space.tabs.iter().find(|candidate| candidate.id == tab))?;
     Some(tab.pane.cwd.clone())
+}
+
+/// Minimizes one space to its header, or opens it again. Local state, like
+/// [`toggle_space_root`].
+fn toggle_space_collapsed(model: &mut WorkspaceModel, space: SpaceId) {
+    if !model.remembered.collapsed_spaces.remove(&space) {
+        model.remembered.collapsed_spaces.insert(space);
+    }
+    model.dirty = true;
 }
 
 /// Flips one space's header between its label and its root. Purely local

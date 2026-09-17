@@ -169,7 +169,9 @@ scenes:
       - click: Close tab
         in: sidebar
         say: confirm close
-        expect: "2 agents"
+        # Nothing on screen appears when a row goes, so the gate is the
+        # third agent's row no longer being drawn anywhere.
+        expect: '\A(?![\s\S]*─ \S+ agent 3)'
         expect_timeout: 20
         pause: 2.0
     then:

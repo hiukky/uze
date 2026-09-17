@@ -78,7 +78,9 @@ scenes:
       - click: Close tab
         in: sidebar
         say: confirm close
-        expect: "0 agents"
+        # Nothing on screen appears when a row goes, so the gate is no
+        # agent item being left on the tree.
+        expect: '\A(?![\s\S]*[├└]─ )'
         expect_timeout: 25
         pause: 2.5
     then:

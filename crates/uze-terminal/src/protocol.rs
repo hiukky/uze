@@ -11,7 +11,7 @@ use crate::{PaneId, Session, SpaceId, TabId};
 /// [`crate::attach`] replaces a server of another build before connecting;
 /// this is what a client that connects without it — a `uze` nested in a
 /// pane, a test — still meets.
-pub const PROTOCOL_VERSION: u16 = 13;
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
 /// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
@@ -137,6 +137,13 @@ pub enum ClientRequest {
         tab: TabId,
         before: Option<TabId>,
     },
+    /// Moves `space` to sit immediately before `before` in the workspace's
+    /// order (`before: None` moves it to the end) — see
+    /// `Session::reorder_space`.
+    ReorderSpace {
+        space: SpaceId,
+        before: Option<SpaceId>,
+    },
     CreateSpace {
         /// `None` derives the label from the root.
         label: Option<String>,
@@ -179,6 +186,7 @@ impl ClientRequest {
             Self::CloseTab { .. } => "close_tab",
             Self::RenameTab { .. } => "rename_tab",
             Self::ReorderTab { .. } => "reorder_tab",
+            Self::ReorderSpace { .. } => "reorder_space",
             Self::CreateSpace { .. } => "create_space",
             Self::SelectSpace { .. } => "select_space",
             Self::CloseSpace { .. } => "close_space",

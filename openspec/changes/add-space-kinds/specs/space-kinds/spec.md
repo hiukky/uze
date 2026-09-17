@@ -104,43 +104,42 @@ work.
 - **WHEN** a tenant of a workspace space over a directory that is not a repository has its tab closed and panes are reconciled
 - **THEN** the tenant is recorded as ended
 
-### Requirement: Each kind is drawn its own way
-The workspace client SHALL draw a worktree space as it draws spaces today:
-a tree of agents with a row for the agent and a row for its branch and
-state. It SHALL draw a workspace space as a flat list: one row per agent
-carrying the tab's label and, at the row's right edge, the id of the
-harness running in it, with the branch the root is on and its upstream
-sync shown once on the space's header; the header's root toggle SHALL
-behave as it does in a worktree space. In the flat list the selected agent
-SHALL be marked by a vertical accent bar at the row's edge, which replaces
-the selection glyph; the working and completed glyphs SHALL still appear.
-Selection, keyboard movement between agents, pointer hits, scrolling and
-the sidebar's account of agents and spaces SHALL behave identically in
-both kinds.
+### Requirement: Both kinds share one look, shaped differently
+The workspace client SHALL draw every agent, in either kind, as the same
+two-row item: its status glyph and label, and beneath them the branch it
+works on or, outside a repository, its directory; the space's header row
+SHALL be drawn lighter than the block of agents beneath it, and the
+header's root toggle SHALL swap each agent's caption for the id of the
+harness running it in both kinds. A worktree space SHALL hang its items on
+a tree, each on a branch of its own. A workspace space SHALL draw its items
+flat, with no tree connectors, and SHALL mark the selected agent with a
+vertical accent bar down both of its rows. Selection, keyboard movement
+between agents, pointer hits and scrolling SHALL behave identically in both
+kinds.
 
 #### Scenario: A workspace space lists agents flat
 - **WHEN** a workspace space with two agents is drawn
-- **THEN** each agent occupies one row, no branch row is drawn beneath it, and the header carries the root's branch
+- **THEN** each agent occupies a label row and a caption row naming the root's branch, no tree connector is drawn, and the header does not repeat the branch
 
-#### Scenario: Two tenants of one harness are told apart
-- **WHEN** two agents of the same harness run in one workspace space
-- **THEN** each row carries its own label and both carry the harness id
+#### Scenario: A tenant outside a repository
+- **WHEN** a workspace space over a directory that is not a repository is drawn
+- **THEN** each agent's caption row names that directory
+
+#### Scenario: Tenants carry the agent status
+- **WHEN** a workspace space holds an idle agent and the selected agent
+- **THEN** each wears the same status glyph a worktree agent in that state wears
 
 #### Scenario: The selected tenant carries the bar
 - **WHEN** an agent of a workspace space is selected
-- **THEN** its row carries the accent bar and no selection glyph, and no other row in the sidebar carries a bar
+- **THEN** both of its rows carry the accent bar, and no other row in the sidebar carries a bar
 
 #### Scenario: An empty workspace space
 - **WHEN** a workspace space has no agent
 - **THEN** it draws one caption row with its root, as an empty worktree space does
 
-#### Scenario: The account counts both kinds
-- **WHEN** a workspace space holds two tenants and a worktree space holds one task
-- **THEN** the sidebar's account reads three agents in two spaces
-
 #### Scenario: A flat list scrolls by its rows
 - **WHEN** a workspace space holds more agents than the column shows
-- **THEN** the tree scrolls by flat rows and the foot sections keep their place
+- **THEN** the tree scrolls by the same rows a worktree space's items take and the foot sections keep their place
 
 #### Scenario: A tenant whose harness exited is no longer an agent row
 - **WHEN** a tenant's harness exits leaving a shell in its pane
