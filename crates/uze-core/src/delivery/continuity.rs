@@ -185,38 +185,6 @@ pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPo
     conversation::save(home, &owner.project_root, &record).is_ok()
 }
 
-/// Records a conversation an authoritative source named for a claim — a
-/// harness stating its own identifier, which needs no observation and no
-/// guessing at all.
-///
-/// Nothing calls this today: the one authoritative source UZE had was the
-/// hook dispatch it ran itself, and hooks now run a generated wrapper with
-/// no UZE on the path (ADR-040, amended). Kept because the channel is the
-/// harness's to offer, not UZE's to invent — [`refresh`] above is the
-/// observing route, and it is the one in use.
-pub fn record_observed(
-    home: &UzeHome,
-    claim: Claim<'_>,
-    integration_id: &str,
-    session: SessionId,
-) -> bool {
-    let Some(owner) = conversation::owner_of(home, claim) else {
-        return false;
-    };
-    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
-    let Some(entry) = record.get(integration_id) else {
-        return false;
-    };
-    if entry.conversation.as_ref() == Some(&session) {
-        return false;
-    }
-    let launched_at = entry.launched_at_unix;
-    if !record.observed(integration_id, launched_at, session) {
-        return false;
-    }
-    conversation::save(home, &owner.project_root, &record).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,37 +510,5 @@ mod tests {
             vec![OsString::from("--resume"), OsString::from("moved-to")]
         );
         assert_ne!(recorded(&home, &primary), Some(started_in));
-    }
-
-    #[test]
-    fn an_identifier_an_authoritative_source_named_is_recorded_without_observing() {
-        let (home, primary, slot, id) = managed("continuity-authoritative");
-        plan(
-            &home,
-            claim(&id, &slot),
-            &Harness::new(SessionContinuity::Observed),
-        );
-
-        assert!(record_observed(
-            &home,
-            claim(&id, &slot),
-            "harness",
-            SessionId::new("from-a-hook")
-        ));
-        assert_eq!(
-            recorded(&home, &primary),
-            Some(SessionId::new("from-a-hook"))
-        );
-    }
-
-    #[test]
-    fn an_identifier_for_a_launch_that_never_happened_is_not_recorded() {
-        let (home, _primary, slot, id) = managed("continuity-no-launch");
-        assert!(!record_observed(
-            &home,
-            claim(&id, &slot),
-            "harness",
-            SessionId::new("out-of-nowhere")
-        ));
     }
 }
