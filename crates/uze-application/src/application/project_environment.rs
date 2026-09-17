@@ -261,7 +261,7 @@ impl Project<'_> {
     /// whichever plugins came before the failure) partially applied with
     /// the failure surfaced, never silently partial. Plugins already
     /// installed are left untouched; already-successful ones are not
-    /// rolled back on a later failure, matching `add_project_plugin`'s own
+    /// rolled back on a later failure, matching `Project::add`'s own
     /// no-transaction model (the Store has no all-or-nothing multi-package
     /// primitive to build one on).
     #[tracing::instrument(name = "project.install", skip_all, fields(root = %root.display()), err)]

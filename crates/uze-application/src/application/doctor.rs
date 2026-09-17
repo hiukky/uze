@@ -1,6 +1,5 @@
-//! Doctor/status — extracted without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Machine health: `uze doctor`'s report, each harness's detail, and
+//! `uze status` for one project.
 
 use uze_core::{Result, integration::AttachmentState, state};
 

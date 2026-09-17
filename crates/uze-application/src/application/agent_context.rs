@@ -4,7 +4,7 @@
 //! This is the read model behind the workspace's per-agent support popup
 //! and the Harnesses drawer. It exists because the older answer was
 //! assembled at the call site out of three unrelated pieces — a
-//! project-scoped `context_inspect` resolved at whatever root the TUI
+//! project-scoped `Context::inspect` resolved at whatever root the TUI
 //! happened to attach to, a machine-scoped `HarnessHealth`, and a bridge
 //! `needed` flag that actually meant "some installed package contributed a
 //! managed region". A harness could be receiving `AGENTS.md` perfectly

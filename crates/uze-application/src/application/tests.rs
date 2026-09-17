@@ -495,7 +495,7 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
     fs::remove_dir_all(root).unwrap();
 }
 
-/// ADR-038: `update_plugin` re-resolves the source and reinstalls under
+/// ADR-038: `Plugins::update` re-resolves the source and reinstalls under
 /// the same marketplace-qualified id, but must never silently revert an
 /// aliased plugin back to its bare plugin name — the alias is a fact
 /// about *this* installation, not something an update should erase.
@@ -790,7 +790,7 @@ pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown(
     assert_eq!(by_alias.integration, "named");
     let by_label = app.health().harness("Named Tool").unwrap();
     assert_eq!(by_label.integration, "named");
-    // `harness_list` must return exactly the same data `harness_inspect`
+    // `Health::harnesses` must return exactly the same data `Health::harness`
     // filters down to one entry from — same underlying computation.
     let listed = app.health().harnesses();
     assert_eq!(listed.len(), 2);

@@ -1,6 +1,5 @@
-//! Lifecycle — remove — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Removing a plugin, and tearing down the harness artifacts its receipts
+//! own.
 
 use uze_core::{
     PackageSource, Result, UzeError,

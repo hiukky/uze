@@ -1,6 +1,5 @@
-//! Lifecycle — update — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Replacing an installed plugin with what its original request resolves
+//! to now, and applying the updates this machine can settle on its own.
 
 use std::fs;
 
@@ -164,7 +163,7 @@ impl Plugins<'_> {
     ///   that shipped inside the binary already being run. Nothing here
     ///   reaches the network, so a Git- or path-sourced plugin is never
     ///   re-resolved behind the operator's back; those still update only
-    ///   through an explicit `update_plugin`.
+    ///   through an explicit `Plugins::update`.
     /// - **Only under `NoTrustAuthority`.** A revision that introduces new
     ///   executable capability is refused and reported, exactly as a
     ///   non-interactive bootstrap refuses one (see
@@ -174,7 +173,7 @@ impl Plugins<'_> {
     ///
     /// Best-effort per plugin: one failure never stops the rest, and a
     /// blocked or refused update leaves the installed revision untouched —
-    /// `update_plugin` already inspects before it detaches.
+    /// `Plugins::update` already inspects before it detaches.
     ///
     /// This is not called from the CLI dispatch path: `ensure_default_plugins`
     /// runs before every command, read-only ones included, and a diagnostic

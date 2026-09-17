@@ -12,7 +12,7 @@
 //! default, which is product policy, not a marketplace fact.
 //!
 //! Every default plugin goes through the exact same lifecycle a normal
-//! `uze add` uses (`UzeApplication::install_materialized`) — Store, Engine,
+//! `uze add` uses (`Plugins::install_materialized`) — Store, Engine,
 //! Router and every `IntegrationPort` never learn a plugin's bytes came
 //! from the binary rather than disk or Git.
 

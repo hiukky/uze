@@ -3,8 +3,6 @@
 //! CLI, TUI, and future presentation layers call this facade rather than
 //! reaching into Store, integrations, vendor files, or lifecycle mechanics.
 
-#![allow(clippy::empty_line_after_doc_comments)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -159,7 +157,7 @@ impl UzeApplication {
     }
 
     /// Like `new_with_runner`, additionally wiring preference adapters for
-    /// the Profiles feature's `apply_profile`.
+    /// the Profiles feature's `Profiles::apply`.
     pub fn new_with_runner_and_preferences(
         home: UzeHome,
         integrations: Vec<Box<dyn IntegrationPort>>,

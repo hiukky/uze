@@ -1,12 +1,8 @@
 //! The product-facing read models `UzeApplication` hands to the CLI and the
 //! TUI, and the queries that build them.
 //!
-//! These types are the crate's public vocabulary — every one of them is
-//! re-exported from `application` and named by `src/`. They lived inline in
-//! `application.rs` until they were half of it, which buried the
-//! orchestration surface the file exists for.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! These types are the crate's public vocabulary: re-exported from
+//! `application` for `src/` to name.
 
 use uze_core::{
     Result,
@@ -128,7 +124,7 @@ pub struct MarketplacePluginSummary {
     /// Which registered marketplace this plugin came from (`uze-official`
     /// for the embedded snapshot, or the name it was registered under via
     /// `marketplace add`). Needed once more than one marketplace can
-    /// contribute plugins to the same list — see `list_marketplace_plugins`.
+    /// contribute plugins to the same list — see `Marketplace::plugins`.
     pub marketplace: String,
     pub name: String,
     pub description: Option<String>,
@@ -794,7 +790,7 @@ pub(crate) fn managed_state(report: &ReconciliationReport) -> ManagedStateSummar
 }
 
 /// What one plugin's automatic update attempt did, from
-/// [`UzeApplication::auto_update_plugins`].
+/// [`Plugins::auto_update`].
 #[derive(Clone, Debug, Serialize)]
 pub struct AutoUpdateOutcome {
     pub plugin: String,

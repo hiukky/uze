@@ -217,8 +217,8 @@ impl Marketplace<'_> {
 
     /// One marketplace's own detail (source, plugin count) — distinct from
     /// inspecting one plugin *within* a marketplace
-    /// (`inspect_marketplace_plugin`). Filters the same per-entry
-    /// computation `marketplace_list` already does down to one named entry;
+    /// (`Marketplace::inspect_plugin`). Filters the same per-entry
+    /// computation `Marketplace::list` already does down to one named entry;
     /// no new state or invariant.
     #[tracing::instrument(name = "marketplace.inspect", skip_all, fields(name = %name), err)]
     pub fn inspect(&self, name: &str) -> Result<MarketplaceSummary> {
@@ -237,9 +237,9 @@ impl Marketplace<'_> {
         self.install_plugin_resolving(spec, authority, &uze_core::naming::NoNameCollisionAuthority)
     }
 
-    /// `plugin_install`, with an explicit answer for a bare-plugin-name
+    /// `Marketplace::install_plugin`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
-    /// (ADR-038) — see `add_plugin_resolving`.
+    /// (ADR-038) — see `Marketplace::install_plugin_resolving`.
     #[tracing::instrument(name = "marketplace.install_plugin_resolving", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin_resolving(
         &self,
@@ -274,7 +274,7 @@ impl Marketplace<'_> {
     /// via `marketplace add` (`uze_core::state::marketplace_list`). A
     /// marketplace whose manifest can no longer be read (moved/deleted
     /// source) is skipped rather than failing the whole listing, mirroring
-    /// `marketplace_list`'s own `plugin_count: 0` fallback.
+    /// `Marketplace::list`'s own `plugin_count: 0` fallback.
     #[tracing::instrument(name = "marketplace.plugins", skip_all, err)]
     pub fn plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
         let installed_packages = self.0.installed_packages();

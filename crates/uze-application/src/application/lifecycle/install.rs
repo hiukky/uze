@@ -1,6 +1,5 @@
-//! Lifecycle — install — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Installing a plugin: its bytes, the trust question they raise, the Store
+//! entry and the delivery to every detected harness.
 
 use std::collections::BTreeSet;
 
@@ -94,7 +93,7 @@ impl Plugins<'_> {
         // a real conflict a person must see" as it is with "a plain
         // rename/removal, safe to clean" — the two are indistinguishable
         // from here, and only the second is safe to resolve without a
-        // person looking. `uze doctor` (`maintain_environment`) is the
+        // person looking. `uze doctor` (`Health::maintain`) is the
         // explicit, narrower place that reconciliation belongs; a blocked
         // install's `ProjectionConflict` is the correct, honest outcome
         // when the ambiguity can't be resolved silently.
@@ -171,7 +170,7 @@ impl Plugins<'_> {
     /// differently-marketplaced package instead of failing outright
     /// (ADR-038). `Alias` retries the ingest under the chosen local name.
     /// `Replace` removes the existing active package first — only once that
-    /// is proven `Safe`, exactly the rule `remove_plugin` enforces, so a
+    /// is proven `Safe`, exactly the rule `Plugins::remove` enforces, so a
     /// `Blocked` removal aborts the whole replace with the existing package
     /// left exactly as it was — then retries the ingest under the name it
     /// just freed. Any other ingest error (an unrelated `PackageConflict`, a

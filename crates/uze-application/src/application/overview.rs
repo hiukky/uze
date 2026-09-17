@@ -6,7 +6,7 @@
 //! - `agents.lock` parsing (`uze_core::project_lock`) for the consumer side
 //! - `marketplace.json` parsing (`acquisition::marketplace`) for the marketplace side
 //! - Store package ids (`installed_packages`) for installed vs required
-//! - `context_inspect` for the memory/portability half
+//! - `Context::inspect` for the memory/portability half
 //!
 //! This is deliberately a *projection*: files (agents.lock, marketplace.json,
 //! `.agents/`, paths, counts-by-inspection) are evidence used *here* to
@@ -17,8 +17,6 @@
 //! field is computable from the cwd + the current Store index in
 //! milliseconds (full per-receipt vendor inspection stays on the Doctor
 //! report, where it is served by the inspection cache — see ADR 018).
-
-#![allow(clippy::empty_line_after_doc_comments)]
 
 use std::path::{Path, PathBuf};
 
@@ -329,7 +327,7 @@ pub enum MarketplaceState {
 }
 
 /// The `MemoryState` truth table, pure and testable: `AGENTS.md` presence
-/// plus the portability verdict `context_inspect` produced (or `None` when
+/// plus the portability verdict `Context::inspect` produced (or `None` when
 /// inspection was unavailable). `Issue` means "context exists but is not
 /// portable everywhere" — a bridge gap behind a present `AGENTS.md`, or
 /// vendor-specific files carrying content with no shared `AGENTS.md`.
@@ -449,10 +447,10 @@ mod tests {
         }
 
         /// Installs as though acquired through marketplace `marketplace` —
-        /// what a real `add_project_plugin` install does — so the Store's
+        /// what a real `Project::add` install does — so the Store's
         /// package id agrees with what `write_lock` declared, matching
         /// production behavior instead of the always-`local` shortcut
-        /// `add_plugin` takes for a bare `uze add <path>`.
+        /// `Plugins::add` takes for a bare `uze add <path>`.
         fn install_from(&self, source: &Path, marketplace: &str) {
             let materialized = self
                 .app

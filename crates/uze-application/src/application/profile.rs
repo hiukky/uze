@@ -1,5 +1,5 @@
 //! Profiles/Preferences orchestration: `TUI -> UzeApplication -> Preferences
-//! -> PreferencePort -> integration adapters`. Mirrors `harness_health()`'s
+//! -> PreferencePort -> integration adapters`. Mirrors `Health::harnesses`'s
 //! "iterate `self.integrations`/adapters, no second detection loop" pattern
 //! and `setup()`'s per-harness partial-failure isolation.
 

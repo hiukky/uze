@@ -1,6 +1,6 @@
-//! Lifecycle — attach — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Delivering an installed package to one harness: the package-native plan
+//! first, then each remaining resource, each artifact recorded by a
+//! receipt.
 
 use std::collections::BTreeSet;
 

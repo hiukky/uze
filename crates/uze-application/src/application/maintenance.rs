@@ -32,7 +32,7 @@ pub enum MaintenanceOutcome {
     /// renamed out from under them, e.g. this project's own
     /// marketplace-qualification: `flow` became `flow@ai`, orphaning
     /// every `flow`-keyed receipt). Detached and forgotten the same way
-    /// `remove_plugin` would, and only when that path is fully `Safe`
+    /// `Plugins::remove` would, and only when that path is fully `Safe`
     /// (see `reconcile_orphaned_receipts`) — never for a foreign or
     /// ambiguous state.
     OrphanCleaned {
@@ -297,7 +297,7 @@ impl Health<'_> {
     /// lets that resolve itself instead of requiring a person to notice
     /// and hand-clean the ledger.
     ///
-    /// Reuses exactly the safety rule `remove_plugin` enforces: an orphan
+    /// Reuses exactly the safety rule `Plugins::remove` enforces: an orphan
     /// is only ever touched when every one of its receipts reconciles as
     /// cleanly `Safe` to remove (see `plan_remove`) — `Drifted`,
     /// `Conflict`, `Blocked`, or an unrecoverable ledger all fall through
