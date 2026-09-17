@@ -3142,15 +3142,18 @@ mod tests {
 
         pane.stop().join().expect("the reaper finished");
 
-        let mut poll = libc::pollfd {
-            fd: std::os::fd::AsRawFd::as_raw_fd(&reader),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: one valid `pollfd` for an fd `reader` keeps open.
-        let ready = unsafe { libc::poll(&mut poll, 1, 10_000) };
+        // A read that ends is the worker's end of the FIFO closing, which
+        // only its death does. On a thread, so a survivor fails the test
+        // instead of hanging it; not `poll`, which macOS does not answer
+        // for a FIFO.
+        let (ended, hung_up) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = reader;
+            let _ = std::io::Read::read_to_end(&mut reader, &mut Vec::new());
+            let _ = ended.send(());
+        });
         assert!(
-            ready == 1 && poll.revents & libc::POLLHUP != 0,
+            hung_up.recv_timeout(Duration::from_secs(10)).is_ok(),
             "the worker outlived its pane"
         );
         let _ = std::fs::remove_dir_all(&scratch);
