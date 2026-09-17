@@ -123,7 +123,7 @@ does nothing with it, and nothing here anticipates that it should.
 | Skill symlink | `SymlinkReference` (standard) | Standard | Standard |
 | MCP entry | `VendorConfigEntry` | `codex mcp get --json`; absence = exit 1 + stable stderr string, any other non-zero stays `Blocked` | `codex mcp remove` |
 | Native plugin (explicit) | `IntegrationOwned{kind:"marketplace-plugin"}` | `codex plugin marketplace list --json` + `codex plugin list --json`, checked before every destructive call (ADR-009) | `codex plugin remove` |
-| Native plugin (generated) | `IntegrationOwned{kind:"marketplace-plugin-generated"}` | Same `inspect_codex_plugin` (marketplace-root-agnostic) | Same `remove_plugin`, plus `remove_generated_package_by_id` (Derived Artifact) |
+| Native plugin (generated) | `IntegrationOwned{kind:"marketplace-plugin-generated"}` | Same `inspect_codex_plugin` (marketplace-root-agnostic) | Same `CodexMarketplace::remove_plugin`, plus `shared::marketplace::remove_generated_package` (Derived Artifact) |
 
 MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
 — a genuine advantage of Codex's CLI surface.

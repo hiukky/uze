@@ -19,6 +19,7 @@
 
 pub(crate) mod agent;
 pub(crate) mod json_config;
+pub(crate) mod marketplace;
 pub(crate) mod mcp;
 pub(crate) mod path;
 pub(crate) mod plan;

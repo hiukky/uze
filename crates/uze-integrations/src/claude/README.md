@@ -114,9 +114,9 @@ explicit-envelope content. All of this is unit-tested
 (`claude::plugin::claude_native_coverage_tests`).
 
 The marketplace/install/list/uninstall CLI-shelling functions themselves
-(`claude_marketplace_exists`, `run_claude_marketplace_add`,
-`claude_plugin_installed`, `attach_package`, `inspect_claude_plugin`,
-`remove_claude_plugin`) are **not** unit-tested — they shell out to the
+(`ClaudeMarketplace::marketplace_exists`, `ClaudeMarketplace::add_marketplace`,
+`ClaudeMarketplace::install_plugin`, `attach_package`, `inspect_claude_plugin`,
+`ClaudeMarketplace::remove_plugin`) are **not** unit-tested — they shell out to the
 resolved `claude` executable directly (via `provisioning_executable()`,
 never a bare `Command::new("claude")` — see Runtime shim boundary below)
 rather than through the crate's injectable `ProcessRunner` trait, so only a
@@ -181,7 +181,7 @@ long-term is explicitly undecided (ADR-014 Consequences).
 | Receipt | Inspect | Detach | Drift-safe |
 |---|---|---|---|
 | `IntegrationOwned{kind:"claude-plugin"}` (explicit) | `inspect_claude_plugin` — `claude plugin marketplace list --json` + `plugin list --json`, checks marketplace root + installed + enabled | `claude plugin uninstall <selector>` | Yes — MATCHED only when marketplace root, installed, and enabled all agree |
-| `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `remove_claude_plugin`, plus `remove_generated_package_by_id` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
+| `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `ClaudeMarketplace::remove_plugin`, plus `shared::marketplace::remove_generated_package` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
 | `SymlinkReference` (Skill shim) | standard receipt inspection (`ManagedArtifact::inspect_standard`) | standard detach + `cleanup_unused_wrapper` GC if the shim is now unreferenced | Yes |
 | `VendorConfigEntry` (MCP) | `inspect_claude_mcp` — read-only `~/.claude.json` parse, exact command+args match | `claude mcp remove <name>` | Yes — Blocked (not silently accepted) if the receipt requests cwd/env/enabled state this integration can't verify |
 

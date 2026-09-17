@@ -1,176 +1,179 @@
-//! Claude Code's native plugin marketplace: the derived, UZE-owned
-//! `.claude-plugin/marketplace.json` catalogue every installed package with
-//! its own external `.claude-plugin/plugin.json` is republished through,
-//! and the exact-coverage computation that tells UZE which resources that
-//! native envelope already accounts for.
+//! Claude Code's native plugin marketplaces: the dialect UZE's derived
+//! `.claude-plugin/marketplace.json` catalogues are written in, the
+//! exact-coverage computation that tells UZE which resources a package's
+//! own envelope already accounts for, and the `claude plugin` verbs.
 
-use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
+    fs,
+    path::Path,
+    path::PathBuf,
+};
 
 use uze_core::{
-    Result, UzeError,
+    Result,
     capability::Resource,
-    integration::{AttachmentInspection, AttachmentReceipt, AttachmentState, ManagedArtifact},
+    integration::{AttachmentInspection, AttachmentState},
+    skill::SkillInvocationPolicy,
     store::StoredPackage,
 };
 
+use crate::shared::marketplace::{
+    MarketplaceDialect, Origin, manifest_fields, marketplace_entries,
+};
 use crate::shared::path::normalize_declared_relative_path;
+use crate::shared::plan::blocked;
 use crate::shared::process::{json, run_quiet};
 
-use super::{CLAUDE_MARKETPLACE_NAME, MARKETPLACE_OWNER_URL};
-use crate::shared::plan::blocked;
+/// The owner every catalogue UZE writes into Claude's marketplace UI
+/// declares. Named once so the two documents that carry it cannot drift
+/// into attributing UZE's local marketplace to someone else.
+const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
 
-pub(super) fn claude_marketplace_exists(
-    executable: &Path,
-    command_home: &Path,
-    root: &Path,
-) -> bool {
-    let Ok(value) = json(
-        executable,
-        command_home,
-        &["plugin", "marketplace", "list", "--json"],
-        "claude",
-    ) else {
-        return false;
-    };
-    let entries = value.as_array().or_else(|| {
-        value
-            .get("marketplaces")
-            .and_then(serde_json::Value::as_array)
-    });
-    let Some(entries) = entries else {
-        return false;
-    };
-    entries.iter().any(|entry| {
-        entry
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|candidate| Path::new(candidate) == root)
-            || entry
-                .get("installLocation")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|candidate| Path::new(candidate) == root)
-    })
-}
+pub(super) struct ClaudeMarketplace;
 
-pub(super) fn run_claude_marketplace_add(
-    executable: &Path,
-    command_home: &Path,
-    root: &Path,
-) -> Result<()> {
-    let label = format!("claude plugin marketplace add {}", root.display());
-    let args: Vec<&OsStr> = vec![
-        OsStr::new("plugin"),
-        OsStr::new("marketplace"),
-        OsStr::new("add"),
-        root.as_os_str(),
-    ];
-    run_quiet(executable, command_home, &label, &args)
-}
+impl MarketplaceDialect for ClaudeMarketplace {
+    const VENDOR: &'static str = "claude";
+    const SETUP_NAME: &'static str = "claude";
+    const CATALOGUE_NOUN: &'static str = "Claude marketplace";
+    const ENVELOPE_DIR: &'static str = ".claude-plugin";
+    const CATALOGUE_PATH: &'static str = ".claude-plugin/marketplace.json";
+    const EXPLICIT_KIND: &'static str = "claude-plugin";
+    const GENERATED_KIND: &'static str = "claude-plugin-generated";
+    const EXPLICIT_EVIDENCE: &'static str = "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time.";
+    const GENERATED_EVIDENCE: &'static str = "No .claude-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Claude marketplace.";
 
-pub(super) fn claude_plugin_installed(
-    executable: &Path,
-    command_home: &Path,
-    selector: &str,
-) -> bool {
-    let Ok(value) = json(
-        executable,
-        command_home,
-        &["plugin", "list", "--json"],
-        "claude",
-    ) else {
-        return false;
-    };
-    value.as_array().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|id| id == selector)
+    fn catalogue_document(
+        name: &str,
+        display_name: &str,
+        plugins: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "owner": { "name": display_name, "url": MARKETPLACE_OWNER_URL },
+            "plugins": plugins
         })
-    })
-}
+    }
 
-pub(super) fn claude_package_receipt(
-    integration_id: &str,
-    package: &StoredPackage,
-    catalogue_root: &Path,
-    selector: &str,
-) -> AttachmentReceipt {
-    AttachmentReceipt {
-        package_id: package.id.as_str().to_owned(),
-        resource_identity: None,
-        integration: integration_id.to_owned(),
-        artifact: ManagedArtifact::IntegrationOwned {
-            kind: "claude-plugin".to_owned(),
-            selector: selector.to_owned(),
-            detail: [
-                (
-                    "marketplace_root".to_owned(),
-                    serde_json::json!(catalogue_root),
-                ),
-                ("package_root".to_owned(), serde_json::json!(package.root)),
-            ]
-            .into_iter()
-            .collect(),
-        },
+    fn catalogue_entry(
+        package: &StoredPackage,
+        source: String,
+        origin: Origin,
+    ) -> serde_json::Value {
+        let (description, version) = match origin {
+            Origin::Explicit => manifest_fields(
+                &package.root.join(".claude-plugin/plugin.json"),
+                "UZE-managed Claude plugin",
+            ),
+            Origin::Generated => {
+                manifest_fields(&package.manifest, super::generate::GENERATED_DESCRIPTION)
+            }
+        };
+        serde_json::json!({
+            "name": package.active_name.as_str(),
+            "source": source,
+            "description": description,
+            "version": version
+        })
+    }
+
+    fn explicit_coverage(package: &StoredPackage, resources: &[&Resource]) -> BTreeSet<String> {
+        claude_exact_coverage(package, resources)
+    }
+
+    /// Claude's own frontmatter markers carry every valid combination, so
+    /// only the invalid policy is left out.
+    fn envelope_preserves(policy: SkillInvocationPolicy) -> bool {
+        !policy.is_invalid()
+    }
+
+    fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Result<()> {
+        super::generate::materialize_envelope(package, dir)
+    }
+
+    fn generated_receipt_root(package: &StoredPackage, _envelope_dir: &Path) -> PathBuf {
+        package.root.clone()
+    }
+
+    fn marketplace_exists(executable: &Path, home: &Path, root: &Path) -> bool {
+        let Ok(listing) = json(
+            executable,
+            home,
+            &["plugin", "marketplace", "list", "--json"],
+            "claude",
+        ) else {
+            return false;
+        };
+        marketplace_entries(&listing).is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                ["path", "installLocation"].iter().any(|key| {
+                    entry
+                        .get(*key)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|candidate| Path::new(candidate) == root)
+                })
+            })
+        })
+    }
+
+    fn add_marketplace(executable: &Path, home: &Path, root: &Path) -> Result<()> {
+        let label = format!("claude plugin marketplace add {}", root.display());
+        let args: Vec<&OsStr> = vec![
+            OsStr::new("plugin"),
+            OsStr::new("marketplace"),
+            OsStr::new("add"),
+            root.as_os_str(),
+        ];
+        run_quiet(executable, home, &label, &args)
+    }
+
+    /// Installed only when absent: Claude's behavior for re-installing an
+    /// installed plugin is not relied on.
+    fn install_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
+        let installed = json(executable, home, &["plugin", "list", "--json"], "claude")
+            .is_ok_and(|listing| installed_entry(&listing, selector).is_some());
+        if installed {
+            return Ok(());
+        }
+        run_quiet(
+            executable,
+            home,
+            &format!("claude plugin install `{selector}`"),
+            &["plugin", "install", selector],
+        )
+    }
+
+    fn inspect_plugin(
+        executable: &Path,
+        home: &Path,
+        selector: &str,
+        marketplace_root: &Path,
+        _detail: &BTreeMap<String, serde_json::Value>,
+    ) -> AttachmentInspection {
+        inspect_claude_plugin(executable, home, selector, marketplace_root)
+    }
+
+    fn remove_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
+        run_quiet(
+            executable,
+            home,
+            &format!("claude plugin uninstall {selector}"),
+            &["plugin", "uninstall", selector],
+        )
     }
 }
 
-pub(super) fn claude_publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
-    packages
-        .iter()
-        .filter(|package| package.root.join(".claude-plugin/plugin.json").is_file())
-        .collect()
-}
-
-pub(super) fn claude_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
-    let plugins: Vec<serde_json::Value> = claude_publishable(packages)
-        .into_iter()
-        .map(|package| {
-            let manifest_path = package.root.join(".claude-plugin/plugin.json");
-            let (description, version) = fs::read(&manifest_path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .map(|value| {
-                    let desc = value
-                        .get("description")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("UZE-managed Claude plugin")
-                        .to_owned();
-                    let ver = value
-                        .get("version")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("0.1.0")
-                        .to_owned();
-                    (desc, ver)
-                })
-                .unwrap_or_else(|| ("UZE-managed Claude plugin".to_owned(), "0.1.0".to_owned()));
-            serde_json::json!({
-                "name": package.active_name.as_str(),
-                "source": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()),
-                "description": description,
-                "version": version
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": CLAUDE_MARKETPLACE_NAME,
-        "owner": { "name": "UZE Local", "url": MARKETPLACE_OWNER_URL },
-        "plugins": plugins
+fn installed_entry<'a>(
+    listing: &'a serde_json::Value,
+    selector: &str,
+) -> Option<&'a serde_json::Value> {
+    listing.as_array()?.iter().find(|entry| {
+        entry
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id == selector)
     })
-}
-
-pub(super) fn write_claude_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
-    let parent = path.parent().expect("catalogue path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    uze_core::persistence::write_atomic(
-        path,
-        &serde_json::to_vec_pretty(&claude_catalogue_document(packages))
-            .expect("catalogue is serializable"),
-    )
 }
 
 pub(super) fn claude_exact_coverage(
@@ -273,7 +276,7 @@ pub(super) fn claude_exact_coverage(
     provided
 }
 
-pub(super) fn inspect_claude_plugin(
+fn inspect_claude_plugin(
     executable: &Path,
     command_home: &Path,
     selector: &str,
@@ -293,12 +296,7 @@ pub(super) fn inspect_claude_plugin(
     let Some(marketplace_name) = marketplace_name else {
         return blocked("plugin receipt selector has no marketplace identity");
     };
-    let entries = marketplace_list.as_array().or_else(|| {
-        marketplace_list
-            .get("marketplaces")
-            .and_then(serde_json::Value::as_array)
-    });
-    let Some(entries) = entries else {
+    let Some(entries) = marketplace_entries(&marketplace_list) else {
         return blocked("Claude marketplace JSON has no marketplaces array");
     };
     let matching = entries.iter().find(|entry| {
@@ -334,15 +332,10 @@ pub(super) fn inspect_claude_plugin(
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
-    let Some(installed) = plugins.as_array() else {
+    if !plugins.is_array() {
         return blocked("Claude plugin JSON is not an array");
-    };
-    let Some(plugin) = installed.iter().find(|entry| {
-        entry
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|id| id == selector)
-    }) else {
+    }
+    let Some(plugin) = installed_entry(&plugins, selector) else {
         return AttachmentInspection {
             state: AttachmentState::Missing,
             reason: "Claude plugin is not installed".to_owned(),
@@ -365,29 +358,6 @@ pub(super) fn inspect_claude_plugin(
     }
 }
 
-pub(super) fn remove_claude_plugin(
-    executable: &Path,
-    command_home: &Path,
-    selector: &str,
-) -> Result<()> {
-    run_quiet(
-        executable,
-        command_home,
-        &format!("claude plugin uninstall {selector}"),
-        &["plugin", "uninstall", selector],
-    )
-}
-
-pub(super) fn detail_path(
-    detail: &std::collections::BTreeMap<String, serde_json::Value>,
-    key: &str,
-) -> Option<PathBuf> {
-    detail
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(PathBuf::from)
-}
-
 #[cfg(test)]
 mod claude_native_coverage_tests {
     use std::collections::BTreeSet;
@@ -400,7 +370,12 @@ mod claude_native_coverage_tests {
     use uze_core::integration::IntegrationPort;
 
     use super::super::ClaudeIntegration;
-    use super::claude_catalogue_document;
+    use super::ClaudeMarketplace;
+    use crate::shared::marketplace::{Origin, catalogue_document};
+
+    fn claude_catalogue_document(packages: &[uze_core::store::StoredPackage]) -> serde_json::Value {
+        catalogue_document::<ClaudeMarketplace>(packages, Origin::Explicit)
+    }
     use super::claude_exact_coverage;
 
     fn temp_root(label: &str) -> PathBuf {

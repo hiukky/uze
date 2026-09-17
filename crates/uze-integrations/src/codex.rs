@@ -12,7 +12,7 @@
 
 use std::{fs, path::Path, path::PathBuf};
 
-use crate::shared::plan::{blocked, unsupported};
+use crate::shared::plan::unsupported;
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
@@ -44,20 +44,12 @@ pub use mcp::detach_mcp_entry;
 
 use crate::hooks::{HookEntry, HookTarget};
 use crate::shared::agent::agent_name;
-use crate::shared::process::{VersionToken, detect_version, real_executable, run_quiet};
+use crate::shared::marketplace;
+use crate::shared::process::{VersionToken, detect_version, real_executable};
 use crate::shared::provision::provision_cli;
 use crate::shared::skill::{head_value, split_frontmatter};
-use generate::{
-    GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
-    generated_exact_coverage, generated_package_receipt, generated_packages_present,
-    generated_root, materialize_generated_package, remove_generated_package_by_id,
-    write_generated_catalogue,
-};
 use mcp::attach_mcp_entry;
-use plugin::{
-    MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
-    marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
-};
+use plugin::CodexMarketplace;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
@@ -78,21 +70,6 @@ pub struct CodexIntegration {
 }
 
 impl CodexIntegration {
-    /// Root Codex is pointed at. It must contain the package tree: Codex
-    /// resolves a catalogue entry's `source.path` relative to this root and
-    /// rejects both absolute paths and relative paths escaping it —
-    /// confirmed empirically against Codex 0.148.0. That constraint is why
-    /// the catalogue sits beside the packages rather than in a directory of
-    /// its own; the layout is UZE's, the file is Codex's.
-    fn catalogue_root(&self) -> PathBuf {
-        self.uze_home.store_dir()
-    }
-
-    fn catalogue_path(&self) -> PathBuf {
-        self.catalogue_root()
-            .join(".agents/plugins/marketplace.json")
-    }
-
     pub fn new(agents_home: PathBuf, uze_home: UzeHome) -> Self {
         let command_home = agents_home
             .parent()
@@ -142,88 +119,6 @@ impl CodexIntegration {
 
     fn provisioning_executable(&self) -> String {
         real_executable("codex", &self.uze_home.shims_dir(), None)
-    }
-
-    /// Installs a package whose source ships its own
-    /// `.codex-plugin/plugin.json`, through the existing `uze-local`
-    /// marketplace rooted at the Store itself. Unchanged behavior —
-    /// extracted verbatim from the pre-generation `attach_package`.
-    fn attach_explicit_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let catalogue_root = self.catalogue_root();
-        if !marketplace_exists(executable, &self.command_home, &catalogue_root) {
-            run_codex(
-                executable,
-                &self.command_home,
-                ["plugin", "marketplace", "add"],
-                Some(&catalogue_root),
-            )?;
-        }
-        let selector = format!("{}@{MARKETPLACE_NAME}", package.active_name.as_str());
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("codex plugin add `{selector}`"),
-            &["plugin", "add", selector.as_str()],
-        )?;
-        Ok(Some(AttachmentReceipt {
-            package_id: package.id.as_str().to_owned(),
-            resource_identity: None,
-            integration: self.id().to_owned(),
-            artifact: ManagedArtifact::IntegrationOwned {
-                kind: "marketplace-plugin".to_owned(),
-                selector,
-                detail: [
-                    (
-                        "marketplace_root".to_owned(),
-                        serde_json::json!(catalogue_root),
-                    ),
-                    ("package_root".to_owned(), serde_json::json!(package.root)),
-                ]
-                .into_iter()
-                .collect(),
-            },
-        }))
-    }
-
-    /// Installs a package with no author-provided envelope through the
-    /// second, UZE-owned `uze-store` marketplace, materializing
-    /// (or refreshing) its generated envelope directory first.
-    fn attach_generated_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let generated_dir = materialize_generated_package(&self.uze_home, package)?;
-        let marketplace_root = generated_root(&self.uze_home);
-        if !marketplace_exists(executable, &self.command_home, &marketplace_root) {
-            run_codex(
-                executable,
-                &self.command_home,
-                ["plugin", "marketplace", "add"],
-                Some(&marketplace_root),
-            )?;
-        }
-        let selector = format!(
-            "{}@{GENERATED_MARKETPLACE_NAME}",
-            package.active_name.as_str()
-        );
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("codex plugin add `{selector}`"),
-            &["plugin", "add", selector.as_str()],
-        )?;
-        Ok(Some(generated_package_receipt(
-            self.id(),
-            package,
-            &marketplace_root,
-            &generated_dir,
-            &selector,
-        )))
     }
 
     fn materialize_agent(&self, resource: &Resource) -> Result<PathBuf> {
@@ -423,29 +318,7 @@ impl IntegrationPort for CodexIntegration {
         package: &StoredPackage,
         resources: &[&Resource],
     ) -> Option<PackageExposurePlan> {
-        if package.root.join(".codex-plugin/plugin.json").is_file() {
-            let provided = codex_exact_coverage(package, resources);
-            return Some(PackageExposurePlan {
-                package_id: package.id.clone(),
-                route: CompatibilityRoute::Native,
-                provided_resource_identities: provided,
-                evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.".to_owned(),
-            });
-        }
-        // No author-provided envelope. Check whether UZE can safely
-        // synthesize one (ADR-013 §3: Explicit
-        // Native Package > Generated Native Package > Native Capability >
-        // Safe Adaptation > Unsupported). Stays read-only either way.
-        if !generatable(package) {
-            return None;
-        }
-        let provided = generated_exact_coverage(package, resources);
-        Some(PackageExposurePlan {
-            package_id: package.id.clone(),
-            route: CompatibilityRoute::Native,
-            provided_resource_identities: provided,
-            evidence: "No .codex-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Codex marketplace.".to_owned(),
-        })
+        marketplace::package_plan::<CodexMarketplace>(package, resources)
     }
 
     fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
@@ -516,53 +389,22 @@ impl IntegrationPort for CodexIntegration {
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
-        let executable = Path::new(&executable);
-        if package.root.join(".codex-plugin/plugin.json").is_file() {
-            return self.attach_explicit_package(executable, package);
-        }
-        self.attach_generated_package(executable, package)
+        marketplace::attach_package::<CodexMarketplace>(
+            Path::new(&executable),
+            &self.command_home,
+            &self.uze_home,
+            self.id(),
+            package,
+        )
+        .map(Some)
     }
 
     fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
-        write_catalogue(&self.catalogue_path(), packages)?;
-        write_generated_catalogue(&self.uze_home, packages)
+        marketplace::republish::<CodexMarketplace>(&self.uze_home, packages)
     }
 
     fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
-        let expected = catalogue_document(packages);
-        let explicit_published = match fs::read(self.catalogue_path()) {
-            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(actual) if actual == expected => Ok(()),
-                Ok(_) => Err(
-                    "the Codex catalogue does not match the installed package set; re-run `uze setup codex`".to_owned(),
-                ),
-                Err(error) => Err(format!(
-                    "the Codex catalogue is unreadable ({error}); re-run `uze setup codex`"
-                )),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if publishable(packages).is_empty() {
-                    Ok(())
-                } else {
-                    Err(
-                        "no Codex catalogue has been written for the installed packages; re-run `uze setup codex`".to_owned(),
-                    )
-                }
-            }
-            Err(error) => Err(error.to_string()),
-        };
-        if let Err(reason) = explicit_published {
-            return PublicationStatus::Unpublished(reason);
-        }
-        if !generated_catalogue_matches(&self.uze_home, packages)
-            || !generated_packages_present(&self.uze_home, packages)
-        {
-            return PublicationStatus::Unpublished(
-                "the generated Codex catalogue does not match the installed package set; re-run `uze setup codex`"
-                    .to_owned(),
-            );
-        }
-        PublicationStatus::Published
+        marketplace::publication::<CodexMarketplace>(&self.uze_home, packages)
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -606,20 +448,13 @@ impl IntegrationPort for CodexIntegration {
                 kind,
                 selector,
                 detail,
-            } if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND => {
-                let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
-                    return blocked("plugin receipt has no marketplace root");
-                };
-                let Some(package_root) = detail_path(detail, "package_root") else {
-                    return blocked("plugin receipt has no package root");
-                };
+            } if marketplace::receipt_origin::<CodexMarketplace>(kind).is_some() => {
                 let executable = self.provisioning_executable();
-                inspect_codex_plugin(
+                marketplace::inspect_package::<CodexMarketplace>(
                     Path::new(&executable),
                     &self.command_home,
                     selector,
-                    &marketplace_root,
-                    &package_root,
+                    detail,
                 )
             }
             _ => receipt.artifact.inspect_standard(),
@@ -656,17 +491,17 @@ impl IntegrationPort for CodexIntegration {
                 );
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
-                if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>
+                if let Some(origin) = marketplace::receipt_origin::<CodexMarketplace>(kind) =>
             {
                 let executable = self.provisioning_executable();
-                remove_plugin(Path::new(&executable), &self.command_home, selector)?;
-                if kind == GENERATED_PLUGIN_KIND {
-                    // The generated envelope directory is a Derived Artifact
-                    // (ADR-013 §5): non-authoritative, rebuildable, and
-                    // never the canonical Store — safe to remove outright
-                    // now that Codex no longer references it.
-                    remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
-                }
+                marketplace::detach_package::<CodexMarketplace>(
+                    Path::new(&executable),
+                    &self.command_home,
+                    &self.uze_home,
+                    receipt,
+                    selector,
+                    origin,
+                )?;
             }
             _ => {
                 let detached = receipt.artifact.detach_standard()?;
