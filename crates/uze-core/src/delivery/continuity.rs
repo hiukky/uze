@@ -48,7 +48,7 @@ impl LaunchPlan {
     }
 }
 
-/// Resume this task's conversation, or start one and record it.
+/// Resume this agent's conversation, or start one and record it.
 ///
 /// `None` of the interesting cases is an error: a claim no record backs, a
 /// harness that declares no continuity, a record that no longer resolves —
@@ -64,7 +64,6 @@ pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort)
     let Some(owner) = conversation::owner_of(home, claim) else {
         return LaunchPlan::nothing();
     };
-    let cwd = claim.cwd;
     let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
 
@@ -79,7 +78,7 @@ pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort)
     if let Some(entry) = record.get(id)
         && entry.conversation.is_none()
         && let Some(observed) = integration.observe_session(&ObservationContext {
-            cwd,
+            cwd: claim.cwd,
             since_unix: entry.launched_at_unix,
             preceded_by: entry.preceded_by.as_ref(),
         })
@@ -91,18 +90,18 @@ pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort)
     }
 
     if let Some(recorded) = record.get(id).and_then(|entry| entry.conversation.clone()) {
-        if integration.session_exists(&recorded, cwd) {
+        if integration.session_exists(&recorded, claim.cwd) {
             return LaunchPlan::args(integration.resume_session_args(&recorded));
         }
         record.forget_harness(id);
-        let mut plan = start(home, cwd, integration, &mut record, &owner);
+        let mut plan = start(home, claim.cwd, integration, &mut record, &owner);
         plan.note = Some(format!(
             "the recorded conversation ({recorded}) is no longer there; starting a new one"
         ));
         return plan;
     }
 
-    start(home, cwd, integration, &mut record, &owner)
+    start(home, claim.cwd, integration, &mut record, &owner)
 }
 
 fn start(
@@ -160,7 +159,6 @@ pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPo
     let Some(owner) = conversation::owner_of(home, claim) else {
         return false;
     };
-    let cwd = claim.cwd;
     let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
     let Some(entry) = record.get(id) else {
@@ -169,7 +167,7 @@ pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPo
     let launched_at = entry.launched_at_unix;
     let known = entry.conversation.clone();
     let observed = integration.observe_session(&ObservationContext {
-        cwd,
+        cwd: claim.cwd,
         since_unix: launched_at,
         preceded_by: entry.preceded_by.as_ref(),
     });

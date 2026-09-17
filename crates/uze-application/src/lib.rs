@@ -77,8 +77,5 @@ pub fn is_isolated_checkout(cwd: &std::path::Path) -> bool {
 /// repository, rooted inside `.worktrees`. An agent's checkout belongs to
 /// the space its repository already has.
 pub fn space_root(cwd: &std::path::Path) -> std::path::PathBuf {
-    let base = isolated_checkout(cwd)
-        .map(|checkout| checkout.primary.to_path_buf())
-        .unwrap_or_else(|| cwd.to_path_buf());
-    workspace_root_or_self(&base)
+    workspace_root_or_self(&slot_key(cwd))
 }
