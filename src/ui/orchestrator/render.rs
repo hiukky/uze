@@ -221,7 +221,7 @@ pub(super) fn render(
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
     }
     if let Some(dropdown) = &model.support_dropdown
-        && let Some(resolution) = &model.agent_support
+        && let Some(resolution) = &model.remembered.agent_support
         && resolution.key == dropdown.key
         && let Some(support) = &resolution.support
     {
@@ -635,6 +635,7 @@ pub(super) fn render_sidebar(
     // is short is no place to go looking for one. Its rows are reserved
     // before the spaces are laid out, and handed back to them below.
     let timeline = model
+        .remembered
         .git_badge
         .as_ref()
         .and_then(|badge| badge.timeline.as_ref());
@@ -694,7 +695,7 @@ pub(super) fn render_sidebar(
     // wheel to stay inside (see `scroll_tree`).
     let overflow = tree_rows(session, identities).saturating_sub(rows.remaining());
     metrics.tree_overflow = overflow;
-    rows.scroll_past(model.tree_scroll.min(overflow));
+    rows.scroll_past(model.remembered.tree_scroll.min(overflow));
 
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
@@ -919,7 +920,7 @@ impl<'a> SidebarAgent<'a> {
         // the kernel's `(deleted)` path: the process cannot work there any
         // more, and the task it was running is what the preserved list now
         // holds.
-        let lost = model.lost_checkouts.contains(&tab.pane.id);
+        let lost = model.remembered.lost_checkouts.contains(&tab.pane.id);
         let resumable = lost && model.lost_task(tab.id).is_some();
         // A tab-reorder drag in this exact space, resolved to drop right
         // before (or, on the last row, at the end after) this one.
@@ -937,7 +938,7 @@ impl<'a> SidebarAgent<'a> {
         // the header, and what each agent runs on here — named by its id
         // (`claude`, `codex`), the same word the picker launches and the
         // process reports.
-        let showing_runtime = model.roots_shown.contains(&space.id);
+        let showing_runtime = model.remembered.roots_shown.contains(&space.id);
         let detail = if lost {
             "checkout removed".to_owned()
         } else if let Some(harness) = harness.filter(|_| showing_runtime) {
@@ -1643,7 +1644,7 @@ pub(super) fn render_space_header(
             // root in the dimmest text, no brackets: it only says where.
             // Not while renaming: the buffer being typed is the only thing
             // that row should say.
-            if model.roots_shown.contains(&space.id) {
+            if model.remembered.roots_shown.contains(&space.id) {
                 spans.push(Span::styled(
                     crate::ui::display_project_path(&space.root),
                     theme::fg(Token::TextDim),
@@ -1655,7 +1656,7 @@ pub(super) fn render_space_header(
             // so the branch and what a pull or a push would move sit here,
             // once, rather than repeated on every row beneath.
             if space.kind == uze_terminal::SpaceKind::Workspace {
-                if let Some(branch) = model.branches.get(&evaluation_key(&space.root)) {
+                if let Some(branch) = model.remembered.branches.get(&evaluation_key(&space.root)) {
                     spans.push(Span::styled(
                         format!(" · {branch}"),
                         theme::fg(Token::TextDim),
@@ -1939,7 +1940,7 @@ fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
     if !is_unisolated(cwd) {
         return None;
     }
-    model.branches.get(&evaluation_key(cwd)).cloned()
+    model.remembered.branches.get(&evaluation_key(cwd)).cloned()
 }
 
 /// What a pull and a push would move for an agent outside any slot, when
@@ -1960,7 +1961,7 @@ fn unisolated_sync_caption(model: &WorkspaceModel, cwd: &Path) -> Vec<(String, C
 /// The pull and push counts for the directory evaluated at `key`, in the
 /// shape `unisolated_sync_caption` gives them.
 fn sync_caption(model: &WorkspaceModel, key: &Path) -> Vec<(String, Color)> {
-    let Some(sync) = model.upstream_syncs.get(&evaluation_key(key)) else {
+    let Some(sync) = model.remembered.upstream_syncs.get(&evaluation_key(key)) else {
         return Vec::new();
     };
     [
@@ -2899,7 +2900,12 @@ pub(super) fn render_tab_strip(
     // says nothing rather than saying zero. That costs no reachability,
     // because the diff is one mode switch away inside the surface the
     // other chip opens, and the shortcut that lands on it never moves.
-    if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
+    if let Some(summary) = model
+        .remembered
+        .git_badge
+        .as_ref()
+        .and_then(|badge| badge.summary)
+    {
         // The one chip whose label is two-hued, so it draws its own spans
         // rather than taking a single colour: the additions and the
         // deletions are two numbers, not one label.

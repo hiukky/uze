@@ -232,7 +232,7 @@ mod workspace_tests {
     fn agent_with_task(state: TaskStateView, ahead: usize) -> WorkspaceModel {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         stamp_first_tab(&mut model, "t1");
-        model.tasks.insert(
+        model.remembered.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
                 "/repo/.worktrees/ai",
@@ -614,7 +614,7 @@ mod workspace_tests {
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
 
-        model.git_badge = None;
+        model.remembered.git_badge = None;
         full_frame(&mut model);
         assert!(
             model
@@ -631,7 +631,7 @@ mod workspace_tests {
             "and says nothing about changes rather than saying zero"
         );
 
-        model.git_badge = Some(GitBadge {
+        model.remembered.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo/.worktrees/a"),
             summary: Some(uze_extensions::code::ChangeSummary {
                 additions: 3,
@@ -1132,7 +1132,7 @@ mod workspace_tests {
     fn the_delivery_button_names_the_ending_the_project_asked_for() {
         let ending = |completion| {
             let mut model = agent_with_task(TaskStateView::Ready, 3);
-            for task in model.tasks.values_mut().flatten() {
+            for task in model.remembered.tasks.values_mut().flatten() {
                 task.completion = completion;
             }
             let (rows, _) = tab_strip(&model);
@@ -1189,7 +1189,7 @@ mod workspace_tests {
     #[test]
     fn a_published_request_turns_the_delivery_button_into_a_sync() {
         let mut model = agent_with_task(TaskStateView::Ready, 4);
-        for task in model.tasks.values_mut().flatten() {
+        for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
         }
         let (before, _) = tab_strip(&model);
@@ -1202,7 +1202,7 @@ mod workspace_tests {
             "the button's words say what a press does; no mark in front of them: {before}"
         );
 
-        for task in model.tasks.values_mut().flatten() {
+        for task in model.remembered.tasks.values_mut().flatten() {
             task.published_request = Some(11);
         }
         let (after, _) = tab_strip(&model);
@@ -1221,7 +1221,7 @@ mod workspace_tests {
     #[test]
     fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
         let mut model = agent_with_task(TaskStateView::Published, 6);
-        for task in model.tasks.values_mut().flatten() {
+        for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
             task.published_as = Some("fix-auth-redirect".into());
             task.published_request = Some(20);
@@ -1242,7 +1242,7 @@ mod workspace_tests {
 
         // Two commits later the button counts those two, not the six the
         // request has carried since the last sync.
-        for task in model.tasks.values_mut().flatten() {
+        for task in model.remembered.tasks.values_mut().flatten() {
             task.state = TaskStateView::Ready;
             task.unsynced = Some(2);
         }
@@ -1259,7 +1259,7 @@ mod workspace_tests {
     #[test]
     fn a_published_task_is_marked_as_gone_not_as_waiting_to_be_delivered() {
         let mut model = agent_with_task(TaskStateView::Published, 6);
-        for task in model.tasks.values_mut().flatten() {
+        for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
             task.published_request = Some(20);
             task.unsynced = Some(0);
@@ -1286,6 +1286,7 @@ mod workspace_tests {
     fn a_delivery_in_flight_is_drawn_from_the_client_that_started_it() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
         let task = model
+            .remembered
             .tasks
             .values()
             .flatten()
@@ -1294,7 +1295,7 @@ mod workspace_tests {
             .clone();
         assert_eq!(model.drawn_state(&task), TaskStateView::Ready);
 
-        model.delivery_pending.insert(task.id.clone());
+        model.remembered.delivery_pending.insert(task.id.clone());
         assert_eq!(model.drawn_state(&task), TaskStateView::Integrating);
 
         let (delivering, _) = task_mark(&TaskStateView::Integrating).expect("delivering is marked");
@@ -1333,6 +1334,7 @@ mod workspace_tests {
         let task = driven
             .attach
             .model
+            .remembered
             .tasks
             .values()
             .flatten()
@@ -1340,7 +1342,12 @@ mod workspace_tests {
             .expect("the fixture has a task")
             .clone();
 
-        driven.attach.model.delivery_pending.insert(task.id.clone());
+        driven
+            .attach
+            .model
+            .remembered
+            .delivery_pending
+            .insert(task.id.clone());
         assert_eq!(
             driven.attach.model.drawn_state(&task),
             TaskStateView::Integrating
@@ -1365,7 +1372,7 @@ mod workspace_tests {
             "the task is drawn from its record again"
         );
         assert!(
-            driven.attach.model.delivery_pending.is_empty(),
+            driven.attach.model.remembered.delivery_pending.is_empty(),
             "and nothing is left holding the spinner on"
         );
     }
@@ -1392,6 +1399,7 @@ mod workspace_tests {
         );
         parked.id = "t2".into();
         model
+            .remembered
             .tasks
             .get_mut(Path::new("/repo"))
             .unwrap()
@@ -1417,7 +1425,7 @@ mod workspace_tests {
         }
 
         assert_eq!(
-            driven.attach.model.task_mutation_pending.len(),
+            driven.attach.model.remembered.task_mutation_pending.len(),
             1,
             "the second confirmation starts no second removal"
         );
@@ -1425,6 +1433,7 @@ mod workspace_tests {
             driven
                 .attach
                 .model
+                .remembered
                 .notice
                 .as_ref()
                 .is_some_and(|notice| notice.busy),
@@ -1437,7 +1446,13 @@ mod workspace_tests {
         // in whichever order the scheduler picks, and the last one drawn
         // is the notice.
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !driven.attach.model.task_mutation_pending.is_empty() {
+        while !driven
+            .attach
+            .model
+            .remembered
+            .task_mutation_pending
+            .is_empty()
+        {
             assert!(
                 Instant::now() < deadline,
                 "the mutation thread must answer, whatever it found"
@@ -1445,7 +1460,13 @@ mod workspace_tests {
             std::thread::sleep(Duration::from_millis(10));
             driven.pump();
         }
-        let notice = driven.attach.model.notice.as_ref().expect("an ending");
+        let notice = driven
+            .attach
+            .model
+            .remembered
+            .notice
+            .as_ref()
+            .expect("an ending");
         assert!(
             notice.text.contains("t2") || notice.text.contains("yesterday"),
             "the ending names the task it was about: {}",
@@ -1502,6 +1523,7 @@ mod workspace_tests {
         let notice = driven
             .attach
             .model
+            .remembered
             .notice
             .as_ref()
             .expect("it says why it left");
@@ -1524,11 +1546,12 @@ mod workspace_tests {
         driven.press(rect.x, rect.y);
 
         assert!(
-            driven.attach.model.notice.is_none(),
+            driven.attach.model.remembered.notice.is_none(),
             "the button already says it: {:?}",
             driven
                 .attach
                 .model
+                .remembered
                 .notice
                 .as_ref()
                 .map(|notice| &notice.text)
@@ -1557,7 +1580,7 @@ mod workspace_tests {
     #[test]
     fn a_task_that_acquired_a_name_renames_its_tab() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].branch = "fix/branch-naming".to_owned();
             tasks[0].label = "branch naming".to_owned();
         }
@@ -1587,7 +1610,7 @@ mod workspace_tests {
     #[test]
     fn a_task_renamed_again_carries_the_tab_it_already_named() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].label = "branch naming".to_owned();
         }
         label_every_tab(&mut model, "agent 1");
@@ -1595,7 +1618,7 @@ mod workspace_tests {
         assert_eq!(first.len(), 1);
         label_every_tab(&mut model, "branch naming");
 
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].label = "renamed by hand".to_owned();
         }
         let second = super::super::adopt_task_names(&mut model);
@@ -1614,7 +1637,7 @@ mod workspace_tests {
     #[test]
     fn a_tab_the_user_named_is_never_renamed_by_its_task() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].label = "branch naming".to_owned();
         }
         label_every_tab(&mut model, "my own name");
@@ -1626,7 +1649,7 @@ mod workspace_tests {
     #[test]
     fn an_unnamed_task_renames_nothing() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             let id = tasks[0].id.clone();
             tasks[0].label = id;
         }
@@ -1642,7 +1665,7 @@ mod workspace_tests {
     #[test]
     fn a_named_task_reads_as_its_name_in_the_sidebar() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].branch = "fix/branch-naming".to_owned();
             tasks[0].label = "branch naming".to_owned();
         }
@@ -1667,7 +1690,7 @@ mod workspace_tests {
     fn a_long_branch_is_elided_rather_than_run_off_the_sidebar() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
         let long = "agent/a-branch-name-longer-than-any-sidebar-column-could-hold";
-        for tasks in model.tasks.values_mut() {
+        for tasks in model.remembered.tasks.values_mut() {
             tasks[0].branch = long.to_owned();
         }
 
@@ -1720,6 +1743,7 @@ mod workspace_tests {
             ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
         };
         model
+            .remembered
             .tasks
             .insert(PathBuf::from("/repo"), vec![before, now]);
 
@@ -1765,7 +1789,10 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        model.branches.insert(PathBuf::from("/repo"), "main".into());
+        model
+            .remembered
+            .branches
+            .insert(PathBuf::from("/repo"), "main".into());
         model
     }
 
@@ -2077,7 +2104,7 @@ mod workspace_tests {
     fn the_root_toggle_flips_a_flat_spaces_header_and_leaves_its_rows() {
         let mut model = workspace_space_session();
         let space = model.session.as_ref().unwrap().workspace.selected_space;
-        model.roots_shown.insert(space);
+        model.remembered.roots_shown.insert(space);
         let mut hits = Vec::new();
         let rows = tenant_rows(&model, &mut hits);
         assert!(
@@ -2253,7 +2280,10 @@ mod workspace_tests {
                 2,
             )
         };
-        model.tasks.insert(PathBuf::from("/repo"), vec![before]);
+        model
+            .remembered
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![before]);
 
         assert!(
             model.tab_task(tab).is_none(),
@@ -2265,7 +2295,12 @@ mod workspace_tests {
             created_at_unix: 2,
             ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
         };
-        model.tasks.get_mut(Path::new("/repo")).unwrap().push(now);
+        model
+            .remembered
+            .tasks
+            .get_mut(Path::new("/repo"))
+            .unwrap()
+            .push(now);
         assert_eq!(
             model.tab_task(tab).map(|task| task.id.as_str()),
             Some("now")
@@ -2454,7 +2489,7 @@ mod workspace_tests {
             .unwrap_or_else(|| panic!("the branch is the caption: {rows:#?}"));
 
         let space = model.session.as_ref().unwrap().workspace.selected_space;
-        model.roots_shown.insert(space);
+        model.remembered.roots_shown.insert(space);
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(
             rows[caption].contains("agent")
@@ -2463,7 +2498,7 @@ mod workspace_tests {
             "the harness id in the branch's place: {rows:#?}"
         );
 
-        model.roots_shown.remove(&space);
+        model.remembered.roots_shown.remove(&space);
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(rows[caption].contains("agent/t1"), "{rows:#?}");
     }
@@ -2515,7 +2550,7 @@ mod workspace_tests {
             "the row itself still selects the space"
         );
 
-        model.roots_shown.insert(space);
+        model.remembered.roots_shown.insert(space);
         let rows = sidebar_rows(&model, &mut Vec::new());
         let row = header_row(&rows);
         assert!(row.contains("/repo") && !row.contains(&label), "{row}");
@@ -2539,11 +2574,14 @@ mod workspace_tests {
         sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
         assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
 
-        let mut orphaned = model.tasks[Path::new("/repo")][0].clone();
+        let mut orphaned = model.remembered.tasks[Path::new("/repo")][0].clone();
         orphaned.checkout = None;
         orphaned.state = TaskStateView::Parked;
-        model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
-        model.lost_checkouts.insert(pane);
+        model
+            .remembered
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![orphaned]);
+        model.remembered.lost_checkouts.insert(pane);
         assert_eq!(
             model.tab_task(tab).map(|task| task.id.as_str()),
             Some("t1"),
@@ -2568,6 +2606,7 @@ mod workspace_tests {
             .pane
             .id;
         model
+            .remembered
             .pane_checkouts
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
         let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-vanished"));
@@ -2576,11 +2615,14 @@ mod workspace_tests {
         model.occupancy_stale = true;
         sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
 
-        assert!(model.lost_checkouts.contains(&pane));
+        assert!(model.remembered.lost_checkouts.contains(&pane));
         assert!(
-            model.task_eval_pending.contains(Path::new("/repo")),
+            model
+                .remembered
+                .task_eval_pending
+                .contains(Path::new("/repo")),
             "the repository is re-read: {:?}",
-            model.task_eval_pending
+            model.remembered.task_eval_pending
         );
     }
 
@@ -2596,7 +2638,7 @@ mod workspace_tests {
             .pane
             .id;
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
-        model.tasks.insert(
+        model.remembered.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
                 "/repo/.worktrees/ai",
@@ -2613,7 +2655,7 @@ mod workspace_tests {
 
         assert_eq!(model.tab_task(tab).map(|task| task.id.as_str()), Some("t1"));
         assert!(
-            model.lost_checkouts.contains(&pane),
+            model.remembered.lost_checkouts.contains(&pane),
             "and the row still says the checkout is gone"
         );
     }
@@ -2635,7 +2677,10 @@ mod workspace_tests {
         // still named, the path no longer resolves.
         let mut orphaned = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Running, 1);
         orphaned.checkout = None;
-        model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
+        model
+            .remembered
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![orphaned]);
 
         assert_eq!(
             model.tab_task(tab).map(|task| task.id.as_str()),
@@ -2643,7 +2688,7 @@ mod workspace_tests {
             "the identity the launch carried is what ties the pane to it"
         );
 
-        model.lost_checkouts.insert(pane);
+        model.remembered.lost_checkouts.insert(pane);
         assert!(
             model.lost_task(tab).is_some(),
             "and so the row can offer the way back in"
@@ -2659,7 +2704,7 @@ mod workspace_tests {
         let tab = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0].id;
         assert!(model.tab_task(tab).is_none(), "nothing to bind to yet");
 
-        model.tasks.insert(
+        model.remembered.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
                 "/repo/.worktrees/ai",
@@ -2676,7 +2721,7 @@ mod workspace_tests {
     #[test]
     fn a_shell_beside_an_agent_binds_to_nothing() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
-        model.tasks.insert(
+        model.remembered.tasks.insert(
             PathBuf::from("/repo"),
             vec![task_in(
                 "/repo/.worktrees/ai",
@@ -2721,13 +2766,15 @@ mod workspace_tests {
             .pane
             .id;
         model
+            .remembered
             .pane_checkouts
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
         stamp_first_tab(&mut model, "t1");
-        model.lost_checkouts.insert(pane);
+        model.remembered.lost_checkouts.insert(pane);
         let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Parked, 2);
         parked.checkout = None;
         model
+            .remembered
             .tasks
             .insert(PathBuf::from("/repo"), vec![parked.clone()]);
 
@@ -2761,7 +2808,10 @@ mod workspace_tests {
         let mut resumed = parked;
         resumed.checkout = Some(PathBuf::from("/repo/.worktrees/b2"));
         resumed.state = TaskStateView::Running;
-        model.tasks.insert(PathBuf::from("/repo"), vec![resumed]);
+        model
+            .remembered
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![resumed]);
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
         assert!(
@@ -2914,7 +2964,7 @@ mod workspace_tests {
     #[test]
     fn a_message_never_moves_an_action() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        model.git_badge = Some(GitBadge {
+        model.remembered.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo/.worktrees/ai"),
             summary: Some(uze_extensions::code::ChangeSummary {
                 additions: 12,
@@ -2992,17 +3042,34 @@ mod workspace_tests {
             .attach
             .model
             .set_busy_notice("delivering all".to_owned());
-        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven
+            .attach
+            .model
+            .remembered
+            .notice
+            .as_mut()
+            .unwrap()
+            .since = aged;
         driven.pump();
         assert!(
-            driven.attach.model.notice.is_some(),
+            driven.attach.model.remembered.notice.is_some(),
             "work still in flight is not swept"
         );
 
         driven.attach.model.set_notice("nothing ready".to_owned());
-        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven
+            .attach
+            .model
+            .remembered
+            .notice
+            .as_mut()
+            .unwrap()
+            .since = aged;
         driven.pump();
-        assert!(driven.attach.model.notice.is_none(), "an ending ages out");
+        assert!(
+            driven.attach.model.remembered.notice.is_none(),
+            "an ending ages out"
+        );
     }
 
     #[test]
@@ -3068,6 +3135,7 @@ mod workspace_tests {
         );
         delivered.id = "t3".into();
         model
+            .remembered
             .tasks
             .get_mut(Path::new("/repo"))
             .unwrap()
@@ -3198,7 +3266,7 @@ mod workspace_tests {
     /// `subjects`, newest first, every commit landed `3h` ago.
     fn session_with_timeline(subjects: &[&str]) -> WorkspaceModel {
         let mut model = agent_session_in("/repo");
-        model.git_badge = Some(GitBadge {
+        model.remembered.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo"),
             summary: None,
             timeline: Some(uze_extensions::code::Timeline {
@@ -3234,22 +3302,25 @@ mod workspace_tests {
         model.schedule_git_read(&sender);
 
         assert_eq!(
-            model.git_pending.as_deref(),
+            model.remembered.git_pending.as_deref(),
             Some(Path::new("/repo")),
             "the checkout is reserved while its read is out"
         );
         assert!(
-            model.git_badge.is_none(),
+            model.remembered.git_badge.is_none(),
             "nothing is read on the caller's thread"
         );
         assert!(
-            receiver.try_recv().is_err() || model.git_pending.is_some(),
+            receiver.try_recv().is_err() || model.remembered.git_pending.is_some(),
             "the answer arrives on the channel, not from the call"
         );
 
         // A reservation is what stops the next tick asking again.
         model.schedule_git_read(&sender);
-        assert_eq!(model.git_pending.as_deref(), Some(Path::new("/repo")));
+        assert_eq!(
+            model.remembered.git_pending.as_deref(),
+            Some(Path::new("/repo"))
+        );
     }
 
     /// An answer about a checkout the selection has left is released and
@@ -3257,7 +3328,7 @@ mod workspace_tests {
     #[test]
     fn a_git_answer_for_another_checkout_is_released_and_dropped() {
         let mut model = agent_session_in("/repo");
-        model.git_pending = Some(PathBuf::from("/elsewhere"));
+        model.remembered.git_pending = Some(PathBuf::from("/elsewhere"));
 
         let changed = model.absorb_git_read(GitResolution {
             cwd: PathBuf::from("/elsewhere"),
@@ -3272,12 +3343,12 @@ mod workspace_tests {
 
         assert!(!changed, "nothing on screen changed");
         assert!(
-            model.git_pending.is_none(),
+            model.remembered.git_pending.is_none(),
             "the key is released whatever the answer, or the checkout is \
              never asked about again"
         );
         assert!(
-            model.git_badge.is_none(),
+            model.remembered.git_badge.is_none(),
             "no badge for a checkout nobody is on"
         );
     }
@@ -3289,6 +3360,7 @@ mod workspace_tests {
     fn a_summary_only_answer_keeps_the_history_already_read() {
         let mut model = session_with_timeline(&["landed"]);
         let read_at = model
+            .remembered
             .git_badge
             .as_ref()
             .map(|badge| badge.timeline_checked_at);
@@ -3302,7 +3374,7 @@ mod workspace_tests {
         });
 
         assert!(changed);
-        let badge = model.git_badge.as_ref().expect("a badge");
+        let badge = model.remembered.git_badge.as_ref().expect("a badge");
         assert_eq!(
             badge
                 .timeline
@@ -3445,7 +3517,14 @@ mod workspace_tests {
             "the tree keeps its rows: {rows:?}"
         );
 
-        let timeline = model.git_badge.as_ref().unwrap().timeline.as_ref().unwrap();
+        let timeline = model
+            .remembered
+            .git_badge
+            .as_ref()
+            .unwrap()
+            .timeline
+            .as_ref()
+            .unwrap();
         assert_eq!(
             timeline_height(timeline, false, Some(0), 24),
             3,
@@ -3683,6 +3762,7 @@ mod workspace_tests {
     fn a_commits_dot_wears_its_standing() {
         let mut model = session_with_timeline(&["feat: ahead", "fix: also ahead", "chore: landed"]);
         let commits = &mut model
+            .remembered
             .git_badge
             .as_mut()
             .unwrap()
@@ -4514,7 +4594,14 @@ mod workspace_tests {
         assert!(drawn[0].contains("commit 0"), "newest first: {rows:?}");
         assert_eq!(
             timeline_height(
-                model.git_badge.as_ref().unwrap().timeline.as_ref().unwrap(),
+                model
+                    .remembered
+                    .git_badge
+                    .as_ref()
+                    .unwrap()
+                    .timeline
+                    .as_ref()
+                    .unwrap(),
                 false,
                 None,
                 3
@@ -4625,13 +4712,16 @@ mod workspace_tests {
 
         scroll_tree(&mut model, ScrollDirection::Down);
         assert_eq!(
-            model.tree_scroll, metrics.tree_overflow,
+            model.remembered.tree_scroll, metrics.tree_overflow,
             "the wheel stops at the foot"
         );
         for _ in 0..=metrics.tree_overflow {
             scroll_tree(&mut model, ScrollDirection::Up);
         }
-        assert_eq!(model.tree_scroll, 0, "and comes back to the head");
+        assert_eq!(
+            model.remembered.tree_scroll, 0,
+            "and comes back to the head"
+        );
     }
 
     /// No history, no section — a checkout with nothing committed, or no
@@ -4774,6 +4864,7 @@ mod workspace_tests {
         );
 
         model
+            .remembered
             .branches
             .insert(PathBuf::from("/repo/src"), "main".into());
         assert_eq!(
@@ -4795,6 +4886,7 @@ mod workspace_tests {
         );
 
         model
+            .remembered
             .branches
             .insert(PathBuf::from("/repo/src"), "feature/x".into());
         let rows = sidebar_rows(&model, &mut Vec::new());
@@ -4813,7 +4905,10 @@ mod workspace_tests {
     #[test]
     fn a_slot_never_borrows_the_primary_branch() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
-        model.branches.insert(PathBuf::from("/repo"), "main".into());
+        model
+            .remembered
+            .branches
+            .insert(PathBuf::from("/repo"), "main".into());
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(
             !rows.iter().any(|row| row.contains("main")),
@@ -4829,8 +4924,12 @@ mod workspace_tests {
     #[test]
     fn an_agent_outside_any_slot_is_captioned_with_what_a_pull_and_a_push_would_move() {
         let mut model = agent_session_in("/repo");
-        model.branches.insert(PathBuf::from("/repo"), "main".into());
         model
+            .remembered
+            .branches
+            .insert(PathBuf::from("/repo"), "main".into());
+        model
+            .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
         let rows = sidebar_rows(&model, &mut Vec::new());
@@ -4856,6 +4955,7 @@ mod workspace_tests {
         );
 
         model
+            .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
         let rows = sidebar_rows(&model, &mut Vec::new());
@@ -4866,6 +4966,7 @@ mod workspace_tests {
         );
 
         model
+            .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync::default());
         let rows = sidebar_rows(&model, &mut Vec::new());
@@ -4882,6 +4983,7 @@ mod workspace_tests {
     fn a_slot_never_shows_the_primary_sync() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         model
+            .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 2, push: 2 });
         let rows = sidebar_rows(&model, &mut Vec::new());
@@ -4962,7 +5064,7 @@ mod workspace_tests {
         assert!(session.rename_tab(TabId(4), "agent 3".into()));
         assert!(adopt_agent_labels(&mut model, &identities_fixture()).is_empty());
         assert!(
-            model.label_adoptions.is_empty(),
+            model.remembered.label_adoptions.is_empty(),
             "a confirmed rename leaves the ledger"
         );
     }
@@ -5158,8 +5260,8 @@ mod workspace_tests {
             AgentTabStatus::Working
         );
 
-        model.agent_activity.remove(&PaneId(1));
-        model.completed_agent_panes.insert(PaneId(1));
+        model.remembered.agent_activity.remove(&PaneId(1));
+        model.remembered.completed_agent_panes.insert(PaneId(1));
         assert_eq!(
             model.agent_tab_status(PaneId(1), true),
             AgentTabStatus::Completed
@@ -5411,7 +5513,7 @@ mod workspace_tests {
         };
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         animate(&mut model, PaneId(1), Instant::now());
-        assert!(model.agent_activity.is_empty());
+        assert!(model.remembered.agent_activity.is_empty());
     }
 
     #[test]
@@ -5531,8 +5633,8 @@ mod workspace_tests {
             session.remove_tab(agent_tab);
         }
         model.expire_agent_activity(Instant::now());
-        assert!(model.agent_activity.is_empty());
-        assert!(model.completed_agent_panes.is_empty());
+        assert!(model.remembered.agent_activity.is_empty());
+        assert!(model.remembered.completed_agent_panes.is_empty());
         assert!(model.input_echo_until.is_empty());
     }
 
@@ -5944,25 +6046,30 @@ mod workspace_tests {
     fn memory_carries_what_the_client_resolved_across_attaches() {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
         model
+            .remembered
             .branches
             .insert(PathBuf::from("/repo"), "agent/ai".to_owned());
-        model.completed_agent_panes.insert(PaneId(1));
+        model.remembered.completed_agent_panes.insert(PaneId(1));
         model.error = Some("stale".to_owned());
         model
             .hits
             .push((Rect::new(0, 0, 1, 1), WorkspaceHit::NewSpace));
 
-        let model = WorkspaceModel::recall(model.remember());
+        let model = WorkspaceModel {
+            remembered: model.remembered,
+            ..WorkspaceModel::default()
+        };
 
-        assert_eq!(model.tasks[&PathBuf::from("/repo")].len(), 1);
+        assert_eq!(model.remembered.tasks[&PathBuf::from("/repo")].len(), 1);
         assert_eq!(
             model
+                .remembered
                 .branches
                 .get(&PathBuf::from("/repo"))
                 .map(String::as_str),
             Some("agent/ai")
         );
-        assert!(model.completed_agent_panes.contains(&PaneId(1)));
+        assert!(model.remembered.completed_agent_panes.contains(&PaneId(1)));
         assert!(model.session.is_none());
         assert!(model.error.is_none());
         assert!(model.hits.is_empty());
@@ -6227,10 +6334,16 @@ mod workspace_tests {
                 session.update_pane_status(opened, "/repo".into(), "agent".into());
             }
         }
-        model.pane_checkouts.insert(pane, checkout.to_path_buf());
+        model
+            .remembered
+            .pane_checkouts
+            .insert(pane, checkout.to_path_buf());
         stamp_first_tab(&mut model, &task.id);
-        model.lost_checkouts.insert(pane);
-        model.tasks.insert(primary.to_path_buf(), vec![task]);
+        model.remembered.lost_checkouts.insert(pane);
+        model
+            .remembered
+            .tasks
+            .insert(primary.to_path_buf(), vec![task]);
         model
     }
 
@@ -6376,6 +6489,7 @@ mod workspace_tests {
         let notice = driven
             .attach
             .model
+            .remembered
             .notice
             .as_ref()
             .expect("the refusal is said");
@@ -6519,6 +6633,7 @@ mod workspace_tests {
         let primary = root.canonicalize().unwrap();
         let mut model = agent_session_in("/elsewhere");
         model
+            .remembered
             .tasks
             .insert(primary.clone(), app.workspace().tasks(&primary));
         model.preserved = Some(PreservedOverlay {

@@ -879,7 +879,10 @@ impl Attach<'_> {
             }
             Action::DeliverTask => {
                 if let Some((cwd, task)) = preserved.get(overlay.selected) {
-                    self.model.delivery_pending.insert(task.id.clone());
+                    self.model
+                        .remembered
+                        .delivery_pending
+                        .insert(task.id.clone());
                     spawn_delivery(
                         self.home,
                         cwd.clone(),
@@ -939,7 +942,12 @@ impl Attach<'_> {
     /// no button drawn for this, so silence would read as the key doing
     /// nothing.
     fn mutate_task(&mut self, cwd: PathBuf, task: &TaskView, mutation: TaskMutation) {
-        if !self.model.task_mutation_pending.insert(task.id.clone()) {
+        if !self
+            .model
+            .remembered
+            .task_mutation_pending
+            .insert(task.id.clone())
+        {
             return;
         }
         self.model
@@ -1132,12 +1140,18 @@ impl Attach<'_> {
             let submitted = bytes.as_slice() == *b"\r";
             let cancelled = bytes.as_slice() == [3u8];
             let prompt = if submitted {
-                self.model.prompt_buffers.entry(pane).or_default().submit()
+                self.model
+                    .remembered
+                    .prompt_buffers
+                    .entry(pane)
+                    .or_default()
+                    .submit()
             } else {
                 if cancelled {
-                    self.model.prompt_buffers.remove(&pane);
+                    self.model.remembered.prompt_buffers.remove(&pane);
                 } else {
                     self.model
+                        .remembered
                         .prompt_buffers
                         .entry(pane)
                         .or_default()
@@ -1176,6 +1190,7 @@ impl Attach<'_> {
             _ if self.model.no_modal_open() => {
                 let pane = self.model.focused_pane();
                 self.model
+                    .remembered
                     .prompt_buffers
                     .entry(pane)
                     .or_default()
@@ -2138,7 +2153,7 @@ impl Attach<'_> {
                 // and this is the one moment the user is
                 // actually looking at the answer.
                 if let Some(dropdown) = &self.model.support_dropdown {
-                    self.model.agent_support_pending = Some(dropdown.key.clone());
+                    self.model.remembered.agent_support_pending = Some(dropdown.key.clone());
                     spawn_support_refresh(
                         self.home,
                         dropdown.key.clone(),
@@ -2224,7 +2239,13 @@ impl Attach<'_> {
         }
         self.model.placement_pending = true;
         self.model.set_busy_notice(format!("{label}: preparing"));
-        let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
+        let occupied: Vec<PathBuf> = self
+            .model
+            .remembered
+            .occupied_checkouts
+            .iter()
+            .cloned()
+            .collect();
         spawn_agent_placement(
             self.home,
             request,
@@ -2289,7 +2310,7 @@ impl Attach<'_> {
         match placement.warnings.first().cloned() {
             Some(text) => self.model.set_notice(format!("{label}: {text}")),
             None => {
-                self.model.notice = None;
+                self.model.remembered.notice = None;
                 self.model.dirty = true;
             }
         }
@@ -2400,14 +2421,17 @@ impl Attach<'_> {
             self.absorb_placement(resolution);
         }
         while let Ok(resolution) = self.channels.support.receiver.try_recv() {
-            if self.model.agent_support_pending.as_ref() == Some(&resolution.key) {
-                self.model.agent_support_pending = None;
+            if self.model.remembered.agent_support_pending.as_ref() == Some(&resolution.key) {
+                self.model.remembered.agent_support_pending = None;
             }
-            self.model.agent_support = Some(resolution);
+            self.model.remembered.agent_support = Some(resolution);
             self.model.dirty = true;
         }
         while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
-            self.model.task_eval_pending.remove(&resolution.key);
+            self.model
+                .remembered
+                .task_eval_pending
+                .remove(&resolution.key);
             let Some(EvaluationAnswer {
                 primary,
                 branch,
@@ -2419,19 +2443,28 @@ impl Attach<'_> {
                 continue;
             };
             match branch {
-                Some(branch) => self.model.branches.insert(resolution.key.clone(), branch),
-                None => self.model.branches.remove(&resolution.key),
+                Some(branch) => self
+                    .model
+                    .remembered
+                    .branches
+                    .insert(resolution.key.clone(), branch),
+                None => self.model.remembered.branches.remove(&resolution.key),
             };
             match target {
-                Some(target) => self.model.targets.insert(resolution.key.clone(), target),
-                None => self.model.targets.remove(&resolution.key),
+                Some(target) => self
+                    .model
+                    .remembered
+                    .targets
+                    .insert(resolution.key.clone(), target),
+                None => self.model.remembered.targets.remove(&resolution.key),
             };
             match sync {
                 Some(sync) => self
                     .model
+                    .remembered
                     .upstream_syncs
                     .insert(resolution.key.clone(), sync),
-                None => self.model.upstream_syncs.remove(&resolution.key),
+                None => self.model.remembered.upstream_syncs.remove(&resolution.key),
             };
             // A store that could not be read is not a repository without
             // tasks, and must never be drawn as one: replacing what the
@@ -2444,7 +2477,10 @@ impl Attach<'_> {
                     .set_notice(format!("tasks unreadable — {reason}"));
                 continue;
             }
-            self.model.tasks.insert(primary, evaluation.tasks);
+            self.model
+                .remembered
+                .tasks
+                .insert(primary, evaluation.tasks);
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
@@ -2462,10 +2498,13 @@ impl Attach<'_> {
             // empty one is exactly the case that used to leave the task
             // drawn as "delivering" with no way back.
             if let Some(reserved) = &resolution.reserved {
-                self.model.delivery_pending.remove(reserved);
+                self.model.remembered.delivery_pending.remove(reserved);
             }
             for report in &resolution.reports {
-                self.model.delivery_pending.remove(&report.task.id);
+                self.model
+                    .remembered
+                    .delivery_pending
+                    .remove(&report.task.id);
                 self.model.set_task_notice(
                     &report.task.id,
                     &report.task.label,
@@ -2501,7 +2540,10 @@ impl Attach<'_> {
             self.model.dirty = true;
         }
         while let Ok(resolution) = self.channels.mutations.receiver.try_recv() {
-            self.model.task_mutation_pending.remove(&resolution.task);
+            self.model
+                .remembered
+                .task_mutation_pending
+                .remove(&resolution.task);
             // Both endings are said. A finish whose store write failed
             // used to say nothing at all, and the re-evaluation right
             // behind it simply redrew the task unchanged — which reads as
@@ -2527,10 +2569,11 @@ impl Attach<'_> {
         }
         if self
             .model
+            .remembered
             .last_task_refresh
             .is_none_or(|last| last.elapsed() >= TASK_REFRESH)
         {
-            self.model.last_task_refresh = Some(Instant::now());
+            self.model.remembered.last_task_refresh = Some(Instant::now());
             // A checkout can be deleted with nothing to say so. Every other
             // trigger for the occupancy pass is an event the server sends,
             // and the server only speaks when a pane's cwd or process
@@ -2558,11 +2601,12 @@ impl Attach<'_> {
         // operator watching nothing while it ran.
         if self
             .model
+            .remembered
             .notice
             .as_ref()
             .is_some_and(|notice| !notice.busy && notice.since.elapsed() >= NOTICE_TTL)
         {
-            self.model.notice = None;
+            self.model.remembered.notice = None;
             self.model.dirty = true;
         }
         // Contextual resolution: whatever the selection currently is, that
@@ -2571,14 +2615,15 @@ impl Attach<'_> {
         // agent tab selected, or the server's live probe reporting the
         // pane moved — and never repeats for an answer already held.
         if let Some(key) = selected_agent_context(&self.model, &self.identities)
-            && self.model.agent_support_pending.as_ref() != Some(&key)
+            && self.model.remembered.agent_support_pending.as_ref() != Some(&key)
             && self
                 .model
+                .remembered
                 .agent_support
                 .as_ref()
                 .is_none_or(|resolution| resolution.key != key)
         {
-            self.model.agent_support_pending = Some(key.clone());
+            self.model.remembered.agent_support_pending = Some(key.clone());
             spawn_support_refresh(self.home, key, self.channels.support.sender.clone());
         }
         while let Ok(resolution) = self.channels.git.receiver.try_recv() {
@@ -2619,7 +2664,7 @@ impl Attach<'_> {
         // every agent idle.
         if workspace_has_active_agent_operation(&self.model, &self.identities)
             || self.model.notice_is_busy()
-            || !self.model.delivery_pending.is_empty()
+            || !self.model.remembered.delivery_pending.is_empty()
         {
             let now = Instant::now();
             if now >= self.next_tick {
