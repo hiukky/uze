@@ -289,7 +289,7 @@ impl IntegrationPort for ClaudeIntegration {
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
-            _ => unsupported(
+            CapabilityKind::Instruction => unsupported(
                 "Claude Code attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }

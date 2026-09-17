@@ -52,7 +52,7 @@ impl TuiModel {
             Overlay::ActionIndex { .. } => scopes.push(Scope::ActionIndex),
             Overlay::AddMarketplace(_) | Overlay::NewProfile(_) => scopes.push(Scope::TextPrompt),
             Overlay::ThemePicker { .. } => scopes.push(Scope::ThemePicker),
-            _ => scopes.push(Scope::Confirm),
+            Overlay::Confirm { .. } => scopes.push(Scope::Confirm),
         }
         scopes
     }

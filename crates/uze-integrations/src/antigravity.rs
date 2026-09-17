@@ -376,7 +376,7 @@ impl IntegrationPort for AntigravityIntegration {
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
-            _ => unsupported(
+            CapabilityKind::Instruction => unsupported(
                 "Antigravity attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }

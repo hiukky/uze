@@ -271,7 +271,7 @@ impl IntegrationPort for OpenCodeIntegration {
             CapabilityKind::Mcp => self.mcp_plan(resource),
             CapabilityKind::Agent => self.agent_plan(resource),
             CapabilityKind::Hook => self.hook_plan(resource),
-            _ => unsupported(
+            CapabilityKind::Instruction => unsupported(
                 "OpenCode portability is implemented only for Agent Skills, Agents, MCP, and portable Hooks in this slice.",
             ),
         }

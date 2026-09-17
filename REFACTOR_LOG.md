@@ -3,6 +3,21 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — `clippy::pedantic` evaluated; only defect-finding lints acted on
+
+- **Survey:** `-W clippy::pedantic` reports 1 220 warnings. The bulk are stylistic:
+  - `must_use_candidate` 106
+  - `missing_errors_doc` 59
+  - `doc_markdown` 19
+  - and similar.
+  Enabling pedantic workspace-wide would add noise without finding defects, so it stays off.
+- **Acted on:** `match_wildcard_for_single_variants` (6 sites).
+  - In the four integrations' `exposure_plan`, a `_` arm over `CapabilityKind` meant a new capability kind compiled straight into "unsupported" for every harness. Naming `Instruction` makes adding a kind a compile error in each integration, which is where the decision belongs.
+  - Same in `doctor.rs` and `input.rs`.
+- **Inspected, not changed:**
+  - 91 `usize→u16` casts are widths bounded by the terminal.
+  - The `clamp(0, len - 1)` selection movers, which would panic on an empty list, are each guarded. Their duplication is logged as BACKLOG #9.
+
 ## 2026-09-17 — Landing tests use the shared origin fixture
 
 - **Change:** the three bare-origin setups in `landing.rs` tests now use `Repository::with_origin`/`clone_origin` (−45 lines).

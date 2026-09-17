@@ -93,7 +93,7 @@ impl Health<'_> {
                                 ExposureMechanism::Unsupported { rationale } => {
                                     Some(rationale.clone())
                                 }
-                                _ => None,
+                                ExposureMechanism::Managed(_) => None,
                             }
                         }
                         _ => None,
