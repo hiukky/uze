@@ -981,8 +981,7 @@ mod workspace_tests {
             pending: Some(PendingDrop::Before(second)),
         });
 
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let second_row = hits
             .iter()
             .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == second))
@@ -997,8 +996,7 @@ mod workspace_tests {
         model.dragging_tab = model
             .dragging_tab
             .map(|d| DraggingTab { armed: false, ..d });
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().all(|row| !row.contains('▍')),
             "no indicator before the drag is armed"
@@ -1008,7 +1006,7 @@ mod workspace_tests {
     #[test]
     fn a_ready_task_names_its_row_marks_it_and_offers_delivery() {
         let model = agent_with_task(TaskStateView::Ready, 3);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
@@ -1169,7 +1167,7 @@ mod workspace_tests {
         let state = TaskStateView::Ready;
         let model = agent_with_task(state.clone(), 3);
         let (mark, _) = super::render::task_mark(&state).expect("ready is marked");
-        let sidebar = sidebar_rows(&model, &mut Vec::new());
+        let sidebar = sidebar(&model, &identities_fixture()).rows;
         assert!(
             sidebar.iter().any(|row| row.contains(mark.trim())),
             "{sidebar:#?}"
@@ -1264,7 +1262,7 @@ mod workspace_tests {
             task.published_request = Some(20);
             task.unsynced = Some(0);
         }
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
@@ -1299,7 +1297,7 @@ mod workspace_tests {
         assert_eq!(model.drawn_state(&task), TaskStateView::Integrating);
 
         let (delivering, _) = task_mark(&TaskStateView::Integrating).expect("delivering is marked");
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains(&delivering)),
             "the row says a delivery is running: {rows:?}"
@@ -1670,7 +1668,7 @@ mod workspace_tests {
             tasks[0].label = "branch naming".to_owned();
         }
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
 
         assert!(
             rows.iter().any(|row| row.contains("fix/branch-naming")),
@@ -1694,7 +1692,7 @@ mod workspace_tests {
             tasks[0].branch = long.to_owned();
         }
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows
             .iter()
             .find(|row| row.contains("agent/a-branch"))
@@ -1747,7 +1745,7 @@ mod workspace_tests {
             .tasks
             .insert(PathBuf::from("/repo"), vec![before, now]);
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("agent/now")),
             "the branch under the row is the one being written on: {rows:?}"
@@ -1818,35 +1816,6 @@ mod workspace_tests {
         ]
     }
 
-    fn tenant_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
-        tenant_rows_measured(model, hits, &mut FrameMetrics::default())
-    }
-
-    fn tenant_rows_measured(
-        model: &WorkspaceModel,
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-        metrics: &mut FrameMetrics,
-    ) -> Vec<String> {
-        buffer_rows(&sidebar_buffer_among(
-            model,
-            &tenant_identities(),
-            hits,
-            metrics,
-        ))
-    }
-
-    fn tenant_buffer(
-        model: &WorkspaceModel,
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-    ) -> ratatui::buffer::Buffer {
-        sidebar_buffer_among(
-            model,
-            &tenant_identities(),
-            hits,
-            &mut FrameMetrics::default(),
-        )
-    }
-
     /// The rows the tree draws for a space's agents, by the row each
     /// `SelectTab` hit was pushed for.
     fn agent_rows(hits: &[(Rect, WorkspaceHit)]) -> Vec<u16> {
@@ -1862,8 +1831,7 @@ mod workspace_tests {
     #[test]
     fn a_workspace_space_lists_its_agents_flat_with_the_branch_on_the_header() {
         let model = workspace_space_session();
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let header = rows
             .iter()
             .find(|row| row.contains("repo"))
@@ -1903,7 +1871,7 @@ mod workspace_tests {
             "/repo".into(),
             "claude".into(),
         );
-        let rows = tenant_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &tenant_identities()).rows;
         assert!(
             rows.iter()
                 .any(|row| row.contains("agent 1") && row.contains("claude"))
@@ -1917,9 +1885,8 @@ mod workspace_tests {
     #[test]
     fn the_selected_tenant_carries_the_bar_and_no_other_row_does() {
         let model = workspace_space_session();
-        let mut hits = Vec::new();
-        let buffer = tenant_buffer(&model, &mut hits);
-        let rows = tenant_rows(&model, &mut Vec::new());
+        let buffer = sidebar(&model, &tenant_identities()).buffer;
+        let rows = sidebar(&model, &tenant_identities()).rows;
         let bar = theme::glyph(crate::ui::theme::Symbol::BarMedium);
         let marked: Vec<usize> = rows
             .iter()
@@ -1950,7 +1917,7 @@ mod workspace_tests {
 
         // The tree keeps its own encoding: no bar anywhere in a worktree space.
         let tree = agent_with_task(TaskStateView::Ready, 1);
-        let rows = tenant_rows(&tree, &mut Vec::new());
+        let rows = sidebar(&tree, &tenant_identities()).rows;
         assert!(rows.iter().all(|row| !row.contains(&bar)), "{rows:?}");
     }
 
@@ -1970,7 +1937,7 @@ mod workspace_tests {
         let tab = session.add_tab(SpaceId(2), "agent 3".into(), None, 80, 24, "/tree".into());
         session.update_pane_status(tab, "/tree/.worktrees/x".into(), "claude".into());
         session.workspace.selected_space = SpaceId(1);
-        let rows = tenant_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &tenant_identities()).rows;
         assert!(
             rows.iter().any(|row| row.contains("3 agents in 2 spaces")),
             "{rows:?}"
@@ -1991,8 +1958,7 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
             rows.iter()
                 .any(|row| row.trim_end_matches('│').trim() == "/repo"),
@@ -2015,8 +1981,7 @@ mod workspace_tests {
             "/repo".into(),
             "bash".into(),
         );
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert_eq!(agent_rows(&hits).len(), 1, "{rows:?}");
         assert!(
             rows.iter().any(|row| row.contains("1 agent in 1 space")),
@@ -2052,10 +2017,8 @@ mod workspace_tests {
                 session.update_pane_status(tab, format!("/tmp/{index}").into(), "claude".into());
             }
         }
-        let mut flat_metrics = FrameMetrics::default();
-        tenant_rows_measured(&flat, &mut Vec::new(), &mut flat_metrics);
-        let mut tree_metrics = FrameMetrics::default();
-        tenant_rows_measured(&tree, &mut Vec::new(), &mut tree_metrics);
+        let flat_metrics = sidebar(&flat, &tenant_identities()).metrics;
+        let tree_metrics = sidebar(&tree, &tenant_identities()).metrics;
         assert!(
             flat_metrics.tree_overflow > 0,
             "the flat tree still outgrows the column"
@@ -2085,8 +2048,7 @@ mod workspace_tests {
             armed: true,
             pending: Some(PendingDrop::Before(TabId(2))),
         });
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let target = agent_rows(&hits)[0] as usize;
         let hairline = theme::glyph(crate::ui::theme::Symbol::TreeDivider).repeat(2);
         assert!(
@@ -2105,8 +2067,7 @@ mod workspace_tests {
         let mut model = workspace_space_session();
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.remembered.roots_shown.insert(space);
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
             rows.iter()
                 .any(|row| row.contains("/repo") && row.contains("main")),
@@ -2121,8 +2082,7 @@ mod workspace_tests {
     #[test]
     fn a_flat_row_selects_its_own_agent_and_offers_no_delivery() {
         let model = workspace_space_session();
-        let mut hits = Vec::new();
-        let rows = tenant_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
             !hits
                 .iter()
@@ -2167,8 +2127,9 @@ mod workspace_tests {
     fn the_agent_chords_walk_a_flat_spaces_rows() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-flat-step"));
         let model = workspace_space_session();
-        let mut drawn = Vec::new();
-        let rows = tenant_rows(&model, &mut drawn);
+        let Sidebar {
+            rows, hits: drawn, ..
+        } = sidebar(&model, &tenant_identities());
         let space = &model.session.as_ref().unwrap().workspace.spaces[0];
         let top = space
             .tabs
@@ -2198,7 +2159,7 @@ mod workspace_tests {
     fn the_first_steps_keep_the_foot_beside_a_flat_space() {
         let mut model = workspace_space_session();
         model.first_steps_collapsed = false;
-        let rows = tenant_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &tenant_identities()).rows;
         assert!(
             rows.iter().any(|row| row.contains("first steps")),
             "the foot is budgeted from the flat measure: {rows:?}"
@@ -2213,8 +2174,7 @@ mod workspace_tests {
         std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
         model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter()
                 .any(|row| row.contains("› worktree") && row.contains("workspace")),
@@ -2239,8 +2199,7 @@ mod workspace_tests {
                 slots_possible: false,
             },
         );
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("› workspace")),
             "a directory that is no repository lands on the tenancy: {rows:?}"
@@ -2315,7 +2274,8 @@ mod workspace_tests {
     fn an_agent_carries_its_own_name_in_both_the_sidebar_and_the_strip() {
         let model = agent_with_task(TaskStateView::Ready, 1);
         assert!(
-            sidebar_rows(&model, &mut Vec::new())
+            sidebar(&model, &identities_fixture())
+                .rows
                 .iter()
                 .any(|row| row.contains("Agent")),
             "the sidebar names the tab"
@@ -2415,8 +2375,7 @@ mod workspace_tests {
     #[test]
     fn only_the_task_mark_opens_the_catalog() {
         let model = agent_with_task(TaskStateView::Ready, 1);
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let anchors: Vec<Rect> = hits
             .iter()
             .filter_map(|(_, hit)| match hit {
@@ -2451,8 +2410,7 @@ mod workspace_tests {
     #[test]
     fn a_task_mark_is_pinned_to_the_sidebars_right_column() {
         let model = agent_with_task(TaskStateView::Ready, 1);
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let mark = hits
             .iter()
             .find_map(|(_, hit)| match hit {
@@ -2482,7 +2440,7 @@ mod workspace_tests {
     #[test]
     fn the_root_toggle_shows_each_agents_harness_in_place_of_its_branch() {
         let mut model = agent_with_task(TaskStateView::Running, 0);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows
             .iter()
             .position(|row| row.contains("agent/t1"))
@@ -2490,7 +2448,7 @@ mod workspace_tests {
 
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.remembered.roots_shown.insert(space);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows[caption].contains("agent")
                 && !rows[caption].contains("Agent")
@@ -2499,7 +2457,7 @@ mod workspace_tests {
         );
 
         model.remembered.roots_shown.remove(&space);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(rows[caption].contains("agent/t1"), "{rows:#?}");
     }
 
@@ -2524,8 +2482,7 @@ mod workspace_tests {
                 .expect("the space header is drawn")
         };
 
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let row = header_row(&rows);
         assert!(row.contains(&label) && !row.contains("/repo"), "{row}");
         let toggles: Vec<Rect> = hits
@@ -2551,7 +2508,7 @@ mod workspace_tests {
         );
 
         model.remembered.roots_shown.insert(space);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let row = header_row(&rows);
         assert!(row.contains("/repo") && !row.contains(&label), "{row}");
     }
@@ -2778,8 +2735,7 @@ mod workspace_tests {
             .tasks
             .insert(PathBuf::from("/repo"), vec![parked.clone()]);
 
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("checkout removed")),
             "{rows:?}"
@@ -2812,8 +2768,7 @@ mod workspace_tests {
             .remembered
             .tasks
             .insert(PathBuf::from("/repo"), vec![resumed]);
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             !hits
                 .iter()
@@ -3075,7 +3030,7 @@ mod workspace_tests {
     #[test]
     fn a_running_task_offers_no_delivery_and_carries_no_mark() {
         let model = agent_with_task(TaskStateView::Running, 0);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         assert!(
             !name_row.contains('\u{2713}') && !name_row.contains('\u{26a0}'),
@@ -3103,7 +3058,7 @@ mod workspace_tests {
             },
             2,
         );
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         let (conflict, _) = task_mark(&TaskStateView::Conflicted { files: Vec::new() })
             .expect("a conflict is marked");
@@ -3432,8 +3387,7 @@ mod workspace_tests {
     #[test]
     fn the_timeline_speaks_only_the_extensions_vocabulary() {
         let model = session_with_timeline(&["feat: newest", "chore: older"]);
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
 
         let header = timeline_hit(&hits).expect("the header folds the section");
         let divider = resize_hit(&hits).expect("the divider resizes it");
@@ -3500,16 +3454,16 @@ mod workspace_tests {
         let mut model = session_with_timeline(&subjects);
 
         model.timeline_rows = Some(2);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
         assert_eq!(drawn, 2, "{rows:?}");
 
         model.timeline_rows = None;
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let default = rows.iter().filter(|row| row.contains("commit ")).count();
 
         model.timeline_rows = Some(u16::MAX);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
         assert!(drawn > default, "past the half-column default: {rows:?}");
         assert!(
@@ -3547,8 +3501,7 @@ mod workspace_tests {
         let mut model = session_with_timeline(&subjects);
 
         model.timeline_scroll = 5;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let drawn: Vec<&String> = rows.iter().filter(|row| row.contains("commit ")).collect();
         assert!(drawn[0].contains("● commit 5"), "{rows:?}");
         assert!(
@@ -3568,7 +3521,7 @@ mod workspace_tests {
         assert_eq!(targets.len(), drawn.len());
 
         model.timeline_scroll = 100;
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(rows.last().unwrap().contains("commit 19"), "{rows:?}");
 
         model.timeline_scroll = 0;
@@ -3773,8 +3726,8 @@ mod workspace_tests {
         commits[0].ahead = true;
         commits[1].ahead = true;
 
-        let buffer = sidebar_buffer(&model, &mut Vec::new());
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let buffer = sidebar(&model, &identities_fixture()).buffer;
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let dot_of = |needle: &str| {
             let row = rows.iter().position(|row| row.contains(needle)).unwrap();
             let column = rows[row]
@@ -3802,8 +3755,8 @@ mod workspace_tests {
     #[test]
     fn the_timeline_header_stands_out_from_its_rows() {
         let model = session_with_timeline(&["feat: only"]);
-        let buffer = sidebar_buffer(&model, &mut Vec::new());
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let buffer = sidebar(&model, &identities_fixture()).buffer;
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let header = rows
             .iter()
             .position(|row| row.contains("timeline"))
@@ -3825,8 +3778,7 @@ mod workspace_tests {
         let mut model = session_with_timeline(&["feat: one", "fix: two", "chore: three"]);
         model.timeline_collapsed = true;
         model.first_steps_collapsed = true;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let rows = sidebar(&model, &identities_fixture()).rows;
 
         let steps = rows
             .iter()
@@ -3842,7 +3794,7 @@ mod workspace_tests {
         // Opening the steps pushes the history down the column, never over
         // it: both headers are still on screen, still in that order.
         model.first_steps_collapsed = false;
-        let rows = sidebar_rows(&model, &mut hits);
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let steps = rows
             .iter()
             .position(|row| row.contains("first steps"))
@@ -3980,8 +3932,7 @@ mod workspace_tests {
     fn a_release_notice_sits_on_the_sections_at_the_foot() {
         let mut model = session_with_timeline(&["feat: one"]);
         model.timeline_collapsed = true;
-        let mut hits = Vec::new();
-        sidebar_rows(&model, &mut hits);
+        let hits = sidebar(&model, &identities_fixture()).hits;
         assert!(
             !hits.iter().any(|(_, hit)| matches!(
                 hit,
@@ -3993,8 +3944,7 @@ mod workspace_tests {
         model.release = Some(crate::self_update::Notice::Installed(
             "0.0.0-alpha.14".to_owned(),
         ));
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let (mark, _) = hits
             .iter()
             .find(|(_, hit)| matches!(hit, WorkspaceHit::DismissRelease))
@@ -4026,8 +3976,7 @@ mod workspace_tests {
     fn the_first_steps_section_folds_to_its_header() {
         let mut model = session_with_timeline(&["feat: one"]);
         model.timeline_collapsed = true;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("first steps")),
             "{rows:?}"
@@ -4041,8 +3990,7 @@ mod workspace_tests {
         );
 
         model.first_steps_collapsed = true;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("first steps")),
             "the header stays: {rows:?}"
@@ -4069,8 +4017,7 @@ mod workspace_tests {
         model.timeline_collapsed = true;
         model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
 
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             !hits
                 .iter()
@@ -4082,8 +4029,7 @@ mod workspace_tests {
             .iter()
             .map(|action| action.name())
             .collect();
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let close = hits
             .iter()
             .find_map(|(rect, hit)| (*hit == WorkspaceHit::CloseFirstSteps).then_some(*rect))
@@ -4105,8 +4051,7 @@ mod workspace_tests {
         );
 
         model.first_steps_closed = true;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             !rows.iter().any(|row| row.contains("first steps")),
             "closed for good, header and all: {rows:?}"
@@ -4467,7 +4412,7 @@ mod workspace_tests {
         let mut model = session_with_timeline(&["feat: one"]);
         model.timeline_collapsed = true;
         model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
 
         let header = rows
             .iter()
@@ -4502,8 +4447,8 @@ mod workspace_tests {
 
         for (collapsed, banded) in [(false, true), (true, false)] {
             model.timeline_collapsed = collapsed;
-            let buffer = sidebar_buffer(&model, &mut Vec::new());
-            let rows = sidebar_rows(&model, &mut Vec::new());
+            let buffer = sidebar(&model, &identities_fixture()).buffer;
+            let rows = sidebar(&model, &identities_fixture()).rows;
             let header = rows
                 .iter()
                 .position(|row| row.contains("timeline"))
@@ -4526,8 +4471,7 @@ mod workspace_tests {
     #[test]
     fn the_timeline_keeps_the_foot_of_the_column() {
         let model = session_with_timeline(&["feat: third", "fix: second", "chore: first"]);
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let last = rows.len() - 1;
 
         assert!(rows[last].contains("● chore: first"), "{rows:?}");
@@ -4563,8 +4507,7 @@ mod workspace_tests {
     fn folding_the_timeline_keeps_only_its_header() {
         let mut model = session_with_timeline(&["feat: third", "fix: second"]);
         model.timeline_collapsed = true;
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let last = rows.len() - 1;
 
         assert!(rows[last].contains("▸ timeline"), "{rows:?}");
@@ -4586,7 +4529,7 @@ mod workspace_tests {
         let subjects: Vec<String> = (0..20).map(|index| format!("commit {index}")).collect();
         let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
         let model = session_with_timeline(&subjects);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
 
         let drawn: Vec<&String> = rows.iter().filter(|row| row.contains("commit ")).collect();
         assert!(drawn.len() < 20, "{rows:?}");
@@ -4618,7 +4561,7 @@ mod workspace_tests {
         let model = session_with_timeline(&[
             "feat(tui): a subject long enough to run past the sidebar's width",
         ]);
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let row = rows
             .iter()
             .find(|row| row.contains("◉"))
@@ -4688,8 +4631,7 @@ mod workspace_tests {
             ..WorkspaceModel::default()
         };
 
-        let mut metrics = FrameMetrics::default();
-        let rows = sidebar_rows_measured(&model, &mut Vec::new(), &mut metrics);
+        let Sidebar { rows, metrics, .. } = sidebar(&model, &identities_fixture());
         assert!(metrics.tree_overflow > 0, "the tree outgrows the column");
         assert!(
             !rows.iter().any(|row| row.contains("space 7")),
@@ -4700,7 +4642,7 @@ mod workspace_tests {
         for _ in 0..metrics.tree_overflow {
             scroll_tree(&mut model, ScrollDirection::Down);
         }
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("space 7")),
             "scrolled to the foot: {rows:?}"
@@ -4729,26 +4671,46 @@ mod workspace_tests {
     #[test]
     fn without_history_the_sidebar_ends_with_the_spaces() {
         let model = agent_session_in("/repo");
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
 
         assert!(rows.iter().all(|row| !row.contains("timeline")), "{rows:?}");
         assert_eq!(timeline_hit(&hits), None);
     }
 
-    /// The sidebar as text, one string per row.
-    fn sidebar_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
-        sidebar_rows_measured(model, hits, &mut FrameMetrics::default())
+    /// The sidebar drawn once, among `identities`: what it looks like, as
+    /// cells and as text, and what the frame recorded while drawing it —
+    /// the hits a click resolves against and the bounds only the render
+    /// knows, like the tree's own scroll overflow.
+    struct Sidebar {
+        buffer: ratatui::buffer::Buffer,
+        rows: Vec<String>,
+        hits: Vec<(Rect, WorkspaceHit)>,
+        metrics: FrameMetrics,
     }
 
-    /// The same rows, keeping what the frame measured — the tree's own
-    /// scroll bound, which only the render knows.
-    fn sidebar_rows_measured(
-        model: &WorkspaceModel,
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-        metrics: &mut FrameMetrics,
-    ) -> Vec<String> {
-        buffer_rows(&sidebar_buffer_measured(model, hits, metrics))
+    fn sidebar(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Sidebar {
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        let mut hits = Vec::new();
+        let mut metrics = FrameMetrics::default();
+        terminal
+            .draw(|frame| {
+                render_sidebar(
+                    frame,
+                    frame.area(),
+                    model,
+                    identities,
+                    &mut hits,
+                    &mut metrics,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        Sidebar {
+            rows: buffer_rows(&buffer),
+            buffer,
+            hits,
+            metrics,
+        }
     }
 
     fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
@@ -4761,39 +4723,10 @@ mod workspace_tests {
             .collect()
     }
 
-    fn sidebar_buffer(
-        model: &WorkspaceModel,
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-    ) -> ratatui::buffer::Buffer {
-        sidebar_buffer_measured(model, hits, &mut FrameMetrics::default())
-    }
-
-    fn sidebar_buffer_measured(
-        model: &WorkspaceModel,
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-        metrics: &mut FrameMetrics,
-    ) -> ratatui::buffer::Buffer {
-        sidebar_buffer_among(model, &identities_fixture(), hits, metrics)
-    }
-
-    fn sidebar_buffer_among(
-        model: &WorkspaceModel,
-        identities: &[AgentIdentity],
-        hits: &mut Vec<(Rect, WorkspaceHit)>,
-        metrics: &mut FrameMetrics,
-    ) -> ratatui::buffer::Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), model, identities, hits, metrics))
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
-
     /// The foreground the caption under the agent labelled `agent` — the
     /// row beneath its name — is drawn in, checked to be captioning `text`.
     fn caption_color_of(model: &WorkspaceModel, agent: &str, text: &str) -> Color {
-        let buffer = sidebar_buffer(model, &mut Vec::new());
-        let rows = sidebar_rows(model, &mut Vec::new());
+        let Sidebar { buffer, rows, .. } = sidebar(model, &identities_fixture());
         let row = rows
             .iter()
             .position(|row| row.contains(agent))
@@ -4814,7 +4747,7 @@ mod workspace_tests {
         // column this narrow, and every agent has a slot, so the caption
         // just stops spelling out the tail and the name row stays clean.
         let model = agent_session_in("/repo/.worktrees/ai");
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows
             .iter()
             .find(|row| row.contains("/repo"))
@@ -4833,7 +4766,7 @@ mod workspace_tests {
     #[test]
     fn the_agent_receiving_keystrokes_is_the_one_captioned_in_the_warning_hue() {
         let mut model = two_agent_session("/repo/.worktrees/ai", "/repo/src");
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
@@ -4879,7 +4812,7 @@ mod workspace_tests {
     #[test]
     fn an_agent_outside_any_slot_is_captioned_by_its_branch() {
         let mut model = agent_session_in("/repo/src");
-        let before = sidebar_rows(&model, &mut Vec::new());
+        let before = sidebar(&model, &identities_fixture()).rows;
         assert!(
             before.iter().any(|row| row.contains("/repo/src")),
             "the directory stands in until the branch is read: {before:?}"
@@ -4889,7 +4822,7 @@ mod workspace_tests {
             .remembered
             .branches
             .insert(PathBuf::from("/repo/src"), "feature/x".into());
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("feature/x")),
             "the branch captions the agent: {rows:?}"
@@ -4909,7 +4842,7 @@ mod workspace_tests {
             .remembered
             .branches
             .insert(PathBuf::from("/repo"), "main".into());
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             !rows.iter().any(|row| row.contains("main")),
             "no task, no branch: {rows:?}"
@@ -4932,7 +4865,7 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows
             .iter()
             .find(|row| row.contains("main"))
@@ -4958,7 +4891,7 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows.iter().find(|row| row.contains("main")).unwrap();
         assert!(
             !caption.contains('\u{21e3}') && caption.ends_with("\u{21e1}\u{2083} \u{2502}"),
@@ -4969,7 +4902,7 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync::default());
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let caption = rows.iter().find(|row| row.contains("main")).unwrap();
         assert!(
             !caption.contains('\u{21e1}') && !caption.contains('\u{21e3}'),
@@ -4986,7 +4919,7 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 2, push: 2 });
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             !rows
                 .iter()
@@ -5014,7 +4947,7 @@ mod workspace_tests {
         session.select_tab(shell);
         assert_eq!(session.selected_space().selected_tab, shell);
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
@@ -5084,7 +5017,7 @@ mod workspace_tests {
     #[test]
     fn an_agent_in_a_slot_carries_no_marker() {
         let model = agent_session_in("/repo/.worktrees/ai");
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter()
                 .any(|row| row.contains("/repo") && !row.contains(".worktrees")),
@@ -5104,8 +5037,7 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo");
         model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
 
-        let mut hits = Vec::new();
-        let rows = sidebar_rows(&model, &mut hits);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("engine"))
                 && rows.iter().any(|row| row.contains("docs")),
@@ -5122,7 +5054,7 @@ mod workspace_tests {
                 picker.typed(character);
             }
         }
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("extensions")),
             "what matches stays: {rows:?}"
@@ -5142,14 +5074,14 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-place");
         std::fs::create_dir_all(root.join("engine")).unwrap();
         let mut model = agent_session_in("/repo");
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let header_row = rows
             .iter()
             .position(|row| row.contains("repo"))
             .expect("the space header is drawn");
 
         model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let prompt_row = rows
             .iter()
             .position(|row| row.contains(" at "))
@@ -5179,7 +5111,7 @@ mod workspace_tests {
         picker.typed('/');
         model.root_picker = Some(picker);
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let prompt = rows
             .iter()
             .find(|row| row.contains(" at "))
@@ -5197,7 +5129,7 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo");
 
         model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("engine")),
             "the directories are what is on offer: {rows:?}"
@@ -5208,7 +5140,7 @@ mod workspace_tests {
         );
 
         model.root_picker = None;
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("Agent")),
             "and come back when it closes: {rows:?}"
@@ -5229,7 +5161,7 @@ mod workspace_tests {
         }
         model.root_picker = Some(picker);
 
-        let rows = sidebar_rows(&model, &mut Vec::new());
+        let rows = sidebar(&model, &identities_fixture()).rows;
         let prompt = rows
             .iter()
             .find(|row| row.contains(" at "))
