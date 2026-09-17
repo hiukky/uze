@@ -14,7 +14,7 @@
 
 use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use uze_core::{
     Result, UzeError,
+    integration::HarnessDetection,
     subprocess::{kill_process_group, read_bounded, wait_with_timeout, with_process_group},
 };
 
@@ -33,6 +34,20 @@ pub const VENDOR_CLI_TIMEOUT: Duration = Duration::from_secs(120);
 /// Per-stream cap for captured vendor output. A chatty vendor must not be
 /// able to exhaust memory; inspection only ever reads the tail anyway.
 const VENDOR_OUTPUT_CAP: usize = 256 * 1024;
+
+/// The vendor executable UZE runs itself, resolved past UZE's own runtime
+/// shims rather than through a bare PATH lookup. Once `uze setup` has run,
+/// `~/.uze/shims` sits ahead of the real binary on `PATH`, and the shim
+/// prepends `--add-dir <dir>` to whatever follows — for `["update"]` a
+/// variadic option swallows the subcommand and the CLI starts an
+/// interactive session instead. `fallback` names a documented install
+/// location to try before the bare name.
+pub(crate) fn real_executable(name: &str, shims_dir: &Path, fallback: Option<PathBuf>) -> String {
+    uze_core::harness_runtime::resolve_real_executable(&[name], shims_dir)
+        .or(fallback)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned())
+}
 
 /// A value is safe to pass as a bare positional argument to a vendor CLI
 /// only when it cannot be mistaken for a flag. Package-controlled strings
@@ -52,12 +67,81 @@ pub(crate) fn is_cli_safe_token(value: &str) -> bool {
 /// `VENDOR_CLI_TIMEOUT` and a per-stream output cap so a hung or chatty
 /// vendor cannot hang UZE or exhaust memory.
 pub fn capture<S: AsRef<OsStr>>(program: &Path, home: &Path, args: &[S]) -> io::Result<Output> {
-    capture_with_timeout(program, home, args, VENDOR_CLI_TIMEOUT)
+    run_captured(program, Some(home), args, VENDOR_CLI_TIMEOUT)
 }
 
+/// Runs a vendor's JSON-answering inspection verb. Anything but a successful
+/// exit with a JSON document is the reason inspection cannot answer — never
+/// read as absence. A document on stderr still answers when stdout carries
+/// nothing, in case a release moves it there.
+pub(crate) fn json<S: AsRef<OsStr>>(
+    program: &Path,
+    home: &Path,
+    args: &[S],
+    label: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    let output = capture(program, home, args)
+        .map_err(|error| format!("failed to run `{label}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{label}` inspection exited with {}",
+            output.status
+        ));
+    }
+    let payload = if output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()) {
+        &output.stdout
+    } else {
+        &output.stderr
+    };
+    serde_json::from_slice(payload).map_err(|error| format!("`{label}` JSON is invalid: {error}"))
+}
+
+/// Whether a vendor probe ran and exited successfully.
+pub(crate) fn succeeds<S: AsRef<OsStr>>(program: &Path, home: &Path, args: &[S]) -> bool {
+    capture(program, home, args).is_ok_and(|output| output.status.success())
+}
+
+/// Where a vendor's `--version` output puts the version.
+pub(crate) enum VersionToken {
+    First,
+    Last,
+}
+
+/// Detects a harness binary by its `--version`, run under the caller's own
+/// `HOME`: present only when that exits successfully.
+pub(crate) fn detect_version(program: &str, token: VersionToken) -> HarnessDetection {
+    let Ok(output) = run_captured(Path::new(program), None, &["--version"], VENDOR_CLI_TIMEOUT)
+    else {
+        return HarnessDetection::default();
+    };
+    if !output.status.success() {
+        return HarnessDetection::default();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut tokens = stdout.split_whitespace();
+    let version = match token {
+        VersionToken::First => tokens.next(),
+        VersionToken::Last => tokens.last(),
+    };
+    HarnessDetection {
+        present: true,
+        version: version.map(str::to_owned),
+    }
+}
+
+#[cfg(test)]
 fn capture_with_timeout<S: AsRef<OsStr>>(
     program: &Path,
     home: &Path,
+    args: &[S],
+    timeout: Duration,
+) -> io::Result<Output> {
+    run_captured(program, Some(home), args, timeout)
+}
+
+fn run_captured<S: AsRef<OsStr>>(
+    program: &Path,
+    home: Option<&Path>,
     args: &[S],
     timeout: Duration,
 ) -> io::Result<Output> {
@@ -69,8 +153,10 @@ fn capture_with_timeout<S: AsRef<OsStr>>(
     );
     let _entered = span.enter();
     let mut command = Command::new(program);
+    if let Some(home) = home {
+        command.env("HOME", home);
+    }
     command
-        .env("HOME", home)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

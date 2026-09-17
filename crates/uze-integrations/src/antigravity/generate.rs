@@ -14,7 +14,7 @@
 //! byte copy; see [`super::plugin`]'s module doc for why that stays a
 //! Derived Artifact).
 
-use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -67,13 +67,10 @@ pub(super) fn canonical_mcp_servers(package: &StoredPackage) -> Option<BTreeSet<
 /// The intersection ADR-013 §2 requires, computed against the SEMANTIC
 /// surface a generated plugin preserves: canonical `skills/` are carried
 /// verbatim, and the MCP servers declared in canonical `mcp.json` are
-/// translated into the generated `mcp_config.json`. Coverage is
-/// semantic-aware (ADR-030 §13): a Skill is covered only when its
-/// `invoke:` policy is the default — Antigravity has no explicit-only
-/// mechanism and cannot hide a Skill from the model or the user, so a
-/// non-default policy degrades and is never claimed; it falls through to
-/// capability-level delivery, which reports it honestly. Coverage and
-/// generation agree by construction.
+/// translated into the generated `mcp_config.json`. The `skills/` tree is
+/// carried unchanged, so only a package whose Skills all carry the default
+/// policy reaches here (`package_exposure_plan` decomposes any other).
+/// Coverage and generation agree by construction.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -83,9 +80,7 @@ pub(super) fn generated_exact_coverage(
     for resource in resources {
         match resource.capability.kind {
             uze_core::capability::CapabilityKind::AgentSkill => {
-                if under(package, &resource.capability.path, "skills")
-                    && resource.skill_invocation().is_default()
-                {
+                if super::plugin::under_skills_dir(package, &resource.capability.path) {
                     provided.insert(resource.identity());
                 }
             }
@@ -104,16 +99,6 @@ pub(super) fn generated_exact_coverage(
         }
     }
     provided
-}
-
-fn under(package: &StoredPackage, path: &Path, conventional: &str) -> bool {
-    let Ok(relative) = path.strip_prefix(&package.root) else {
-        return false;
-    };
-    let Some(parent) = relative.parent() else {
-        return false;
-    };
-    parent.starts_with(conventional)
 }
 
 /// The generated `plugin.json` document. Name is the canonical manifest's

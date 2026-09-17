@@ -31,51 +31,50 @@ impl IntegrationRegistry {
     /// Composition root: constructs every built-in integration from the
     /// environment. The one place that knows the harness set.
     pub fn builtin(home: &UzeHome) -> Result<Self> {
-        let claude = claude::ClaudeIntegration::from_env(home.clone())?;
-        let codex = codex::CodexIntegration::from_env(home.clone())?;
-        let opencode_integration = opencode::OpenCodeIntegration::from_env(home.clone())?;
-        let antigravity_integration = antigravity::AntigravityIntegration::from_env(home.clone())?;
-        Ok(Self {
-            integrations: vec![
-                Box::new(claude.clone()),
-                Box::new(codex.clone()),
-                Box::new(opencode_integration.clone()),
-                Box::new(antigravity_integration.clone()),
-            ],
-            preference_adapters: vec![
-                Box::new(claude),
-                Box::new(codex),
-                Box::new(opencode_integration),
-                Box::new(antigravity_integration),
-            ],
-        })
+        Ok(Self::from_integrations(
+            claude::ClaudeIntegration::from_env(home.clone())?,
+            codex::CodexIntegration::from_env(home.clone())?,
+            opencode::OpenCodeIntegration::from_env(home.clone())?,
+            antigravity::AntigravityIntegration::from_env(home.clone())?,
+        ))
     }
 
     /// Isolated composition for tooling and tests that must not touch the
     /// real machine: every harness home is rooted under `root` instead of
     /// `$HOME`, mirroring `builtin`'s environment construction exactly.
     pub fn isolated(root: &Path, home: &UzeHome) -> Self {
-        let claude = claude::ClaudeIntegration::new(root.join("claude"), home.clone());
-        let codex = codex::CodexIntegration::new(root.join("agents"), home.clone());
-        let opencode_integration = opencode::OpenCodeIntegration::new(
-            root.join("agents"),
-            root.join("opencode-config/opencode.json"),
-            home.clone(),
-        );
-        let antigravity_integration =
-            antigravity::AntigravityIntegration::new(root.join("agents"), home.clone());
+        Self::from_integrations(
+            claude::ClaudeIntegration::new(root.join("claude"), home.clone()),
+            codex::CodexIntegration::new(root.join("agents"), home.clone()),
+            opencode::OpenCodeIntegration::new(
+                root.join("agents"),
+                root.join("opencode-config/opencode.json"),
+                home.clone(),
+            ),
+            antigravity::AntigravityIntegration::new(root.join("agents"), home.clone()),
+        )
+    }
+
+    /// Every harness is both an integration and a preference adapter, so
+    /// both lists come from the one set of constructed values.
+    fn from_integrations(
+        claude: claude::ClaudeIntegration,
+        codex: codex::CodexIntegration,
+        opencode: opencode::OpenCodeIntegration,
+        antigravity: antigravity::AntigravityIntegration,
+    ) -> Self {
         Self {
             integrations: vec![
                 Box::new(claude.clone()),
                 Box::new(codex.clone()),
-                Box::new(opencode_integration.clone()),
-                Box::new(antigravity_integration.clone()),
+                Box::new(opencode.clone()),
+                Box::new(antigravity.clone()),
             ],
             preference_adapters: vec![
                 Box::new(claude),
                 Box::new(codex),
-                Box::new(opencode_integration),
-                Box::new(antigravity_integration),
+                Box::new(opencode),
+                Box::new(antigravity),
             ],
         }
     }

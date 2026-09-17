@@ -28,199 +28,48 @@
 //! `$UZE_HOME`, never the Store: only the physical representation of the
 //! Skill changed, not its ownership.
 
-use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
+use std::{fs, path::Path};
 
-use uze_core::{
-    Result, UzeError,
-    capability::Resource,
-    home::UzeHome,
-    integration::{AttachmentReceipt, ManagedArtifact},
-    store::{StoredPackage, is_valid_qualified_id},
-};
+use uze_core::{Result, UzeError, store::StoredPackage};
 
-/// The second, UZE-owned marketplace this module publishes into —
-/// deliberately distinct from `CLAUDE_MARKETPLACE_NAME` ("uze-local", which
-/// stays reserved for explicit envelopes and is never touched by this
-/// module) so a generated envelope can never be confused with, or silently
-/// override, an author-provided one. Named "uze-store" (shorter than the
-/// original "uze-local-generated", which cluttered Claude's `/plugin` UI
-/// with a namespace suffix on every generated plugin's display name).
-pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-store";
+use crate::shared::marketplace::{canonical_mcp_manifest_value, manifest_fields};
+use crate::shared::skill::{link_extras, link_or_repair, recreate_dir, write_file};
 
-/// The `kind` this module stamps on its own receipts. Distinct from
-/// `claude-plugin` (the explicit-envelope kind) even though both are
-/// installed the same way, so a receipt's own shape already announces
-/// which lifecycle owns it before `detail["origin"]` is even read.
-pub(super) const GENERATED_PLUGIN_KIND: &str = "claude-plugin-generated";
+/// The description a generated manifest declares when the package's own
+/// canonical `plugin.json` states none.
+pub(super) const GENERATED_DESCRIPTION: &str =
+    "UZE-managed Claude plugin, generated from a vendor-neutral package.";
 
-/// Root of every package's generated envelope directory. Lives under
-/// `$UZE_HOME/state/attachments/claude/` — the same convention already used
-/// by the per-Skill shim (`claude/skills.rs`'s `materialize_shim`) — never
-/// under the Store, so writing here can never mutate canonical package
-/// bytes.
-pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    crate::shared::path::attachment_root(uze_home, "claude").join("generated")
-}
-
-fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {
-    generated_root(uze_home).join(package_id)
-}
-
-/// Whether this package has anything UZE can safely represent as a
-/// generated native envelope: no explicit envelope of its own, and at
-/// least one of the two structural surfaces UZE synthesizes from (a
-/// conventional `skills/` directory, or a root `mcp.json`).
-pub(super) fn generatable(package: &StoredPackage) -> bool {
-    !package.root.join(".claude-plugin/plugin.json").is_file()
-        && (package.root.join("skills").is_dir() || package.root.join("mcp.json").is_file())
-}
-
-/// The intersection ADR-013 §2 requires (`provided = discovered ∩
-/// declared`), computed against the SEMANTIC surface a generated manifest
-/// can preserve — not by re-parsing a manifest this same module just
-/// wrote, so generation and coverage agree by construction.
-///
-/// A Skill is covered iff it lives under the package's conventional
-/// `skills/` directory AND its canonical `invoke:` policy can be preserved
-/// by the generated envelope (ADR-030 §13): every valid combination is
-/// preservable (the generated wrapper injects Claude's own
-/// `disable-model-invocation`/`user-invocable` markers), while the invalid
-/// combination is never silently claimed — it falls through to
-/// capability-level delivery, which refuses it honestly. An MCP server is
-/// covered iff its name appears in the package's own `mcp.json`.
-pub(super) fn generated_exact_coverage(
-    package: &StoredPackage,
-    resources: &[&Resource],
-) -> BTreeSet<String> {
-    let declared_mcp: BTreeSet<String> = fs::read(package.root.join("mcp.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("mcpServers")
-                .and_then(serde_json::Value::as_object)
-                .map(|servers| servers.keys().cloned().collect())
-        })
-        .unwrap_or_default();
-
-    let mut provided = BTreeSet::new();
-    for resource in resources {
-        match resource.capability.kind {
-            uze_core::capability::CapabilityKind::AgentSkill => {
-                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
-                else {
-                    continue;
-                };
-                let Some(parent) = relative.parent() else {
-                    continue;
-                };
-                if parent.starts_with("skills") && !resource.skill_invocation().is_invalid() {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Mcp => {
-                if let Some(name) = &resource.resource_name
-                    && declared_mcp.contains(name)
-                {
-                    provided.insert(resource.identity());
-                }
-            }
-            _ => {}
-        }
-    }
-    provided
-}
-
-/// The generated `.claude-plugin/plugin.json` document. Name/version/
-/// description come from the package's own canonical `plugin.json`
-/// (`package.manifest`) — the same fields Claude's explicit-envelope
-/// catalogue already surfaces (`claude_catalogue_document`), never
-/// invented. `skills`/`mcpServers` are declared only when the structural
-/// surface they describe actually exists on disk.
-fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
-    let (description, version) = read_name_fields(package);
-
-    let mut document = serde_json::json!({
+/// Writes the generated `.claude-plugin/plugin.json` and the `skills/`
+/// surface it declares into a fresh envelope directory. Name/version/
+/// description come from the package's own canonical `plugin.json`, never
+/// invented; `skills`/`mcpServers` are declared only when the structural
+/// surface they describe exists on disk, and `mcpServers` is carried inline
+/// verbatim.
+pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Result<()> {
+    let (description, version) = manifest_fields(&package.manifest, GENERATED_DESCRIPTION);
+    let mut manifest = serde_json::json!({
         "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
         "name": package.active_name.as_str(),
         "version": version,
         "description": description,
     });
-
     if package.root.join("skills").is_dir() {
-        document["skills"] = serde_json::json!(["./skills"]);
+        manifest["skills"] = serde_json::json!(["./skills"]);
     }
-
-    if let Some(servers) = fs::read(package.root.join("mcp.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| value.get("mcpServers").cloned())
-    {
-        document["mcpServers"] = servers;
-    }
-
-    document
-}
-
-fn read_name_fields(package: &StoredPackage) -> (String, String) {
-    fs::read(&package.manifest)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .map(|value| {
-            let description = value
-                .get("description")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("UZE-managed Claude plugin, generated from a vendor-neutral package.")
-                .to_owned();
-            let version = value
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("0.1.0")
-                .to_owned();
-            (description, version)
-        })
-        .unwrap_or_else(|| {
-            (
-                "UZE-managed Claude plugin, generated from a vendor-neutral package.".to_owned(),
-                "0.1.0".to_owned(),
-            )
-        })
-}
-
-/// Materializes (or refreshes) one package's generated envelope directory.
-/// Idempotent and deterministic: recreated wholesale from the Store package
-/// on every call, never incrementally patched, because the directory is
-/// entirely UZE-owned and non-authoritative (ADR-013 §5) — there is nothing
-/// here a partial rebuild could safely preserve that a full rebuild would
-/// lose.
-pub(super) fn materialize_generated_package(
-    uze_home: &UzeHome,
-    package: &StoredPackage,
-) -> Result<PathBuf> {
-    let dir = generated_package_dir_for_id(uze_home, package.id.as_str());
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write {
-            path: dir.clone(),
-            source,
-        })?;
+    if let Some(servers) = canonical_mcp_manifest_value(package) {
+        manifest["mcpServers"] = servers;
     }
     let plugin_dir = dir.join(".claude-plugin");
     fs::create_dir_all(&plugin_dir).map_err(|source| UzeError::Write {
         path: plugin_dir.clone(),
         source,
     })?;
-    let manifest = generated_manifest_document(package);
-    fs::write(
-        plugin_dir.join("plugin.json"),
-        serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
-    )
-    .map_err(|source| UzeError::Write {
-        path: plugin_dir.join("plugin.json"),
-        source,
-    })?;
-
-    materialize_generated_skills(package, &dir)?;
-    Ok(dir)
+    write_file(
+        &plugin_dir.join("plugin.json"),
+        &serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
+    )?;
+    materialize_generated_skills(package, dir)
 }
 
 /// Materializes the generated envelope's `skills/` surface.
@@ -238,6 +87,11 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
     if !package.root.join("skills").is_dir() {
         return Ok(());
     }
+    let skills_dir = envelope_dir.join("skills");
+    fs::create_dir_all(&skills_dir).map_err(|source| UzeError::Write {
+        path: skills_dir.clone(),
+        source,
+    })?;
     let resources = uze_core::engine::package_resources_at(&package.id, &package.root)?;
     for resource in resources.into_iter().filter(|resource| {
         resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill
@@ -254,247 +108,21 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
         let skill_name = resource
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
-        let target_dir = envelope_dir.join("skills").join(&skill_name);
-        fs::create_dir_all(target_dir.parent().expect("skill dir has a parent")).map_err(
-            |source_error| UzeError::Write {
-                path: target_dir
-                    .parent()
-                    .expect("skill dir has a parent")
-                    .to_path_buf(),
-                source: source_error,
-            },
-        )?;
+        let target_dir = skills_dir.join(&skill_name);
         if policy.is_default() {
-            materialize_byte_preserving_skill(canonical_dir, &target_dir)?;
+            link_or_repair(&target_dir, canonical_dir)?;
             continue;
         }
-        materialize_wrapped_skill(canonical_dir, &target_dir, policy, &skill_name)?;
-    }
-    Ok(())
-}
-
-/// Default-policy skills reference the whole canonical directory: no wrapper
-/// is generated, so the harness sees the author's own `SKILL.md` byte for
-/// byte.
-fn materialize_byte_preserving_skill(canonical_dir: &Path, target_dir: &Path) -> Result<()> {
-    match fs::symlink_metadata(target_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let current = fs::read_link(target_dir).map_err(|source_error| UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: source_error,
-            })?;
-            if current != canonical_dir {
-                fs::remove_dir_all(target_dir).map_err(|source_error| UzeError::Write {
-                    path: target_dir.to_path_buf(),
-                    source: source_error,
-                })?;
-                uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
-            }
-        }
-        Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
-        }
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Non-default-policy skills get a generated wrapper `SKILL.md` (the
-/// invocation policy baked into its frontmatter); everything else in the
-/// canonical skill directory stays referenced so the wrapper never silently
-/// drops scripts/references.
-fn materialize_wrapped_skill(
-    canonical_dir: &Path,
-    target_dir: &Path,
-    policy: uze_core::skill::SkillInvocationPolicy,
-    skill_name: &str,
-) -> Result<()> {
-    match fs::symlink_metadata(target_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            fs::remove_file(target_dir).map_err(|source_error| UzeError::Write {
-                path: target_dir.to_path_buf(),
-                source: source_error,
-            })?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    fs::create_dir_all(target_dir).map_err(|source_error| UzeError::Write {
-        path: target_dir.to_path_buf(),
-        source: source_error,
-    })?;
-    let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
-        path: canonical_dir.join("SKILL.md"),
-        source: error,
-    })?;
-    let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, skill_name);
-    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
-        path: target_dir.join("SKILL.md"),
-        source: source_error,
-    })?;
-    for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
-        path: canonical_dir.to_path_buf(),
-        source: error,
-    })? {
-        let entry = entry.map_err(|error| UzeError::Read {
-            path: canonical_dir.to_path_buf(),
+        recreate_dir(&target_dir)?;
+        let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
+            path: canonical_dir.join("SKILL.md"),
             source: error,
         })?;
-        let name = entry.file_name();
-        if name == "SKILL.md" {
-            continue;
-        }
-        let source = entry.path();
-        let target = target_dir.join(&name);
-        if !target.exists() && !target.is_symlink() {
-            uze_core::persistence::create_symlink(&source, &target)?;
-        }
+        let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, &skill_name);
+        write_file(&target_dir.join("SKILL.md"), document.as_bytes())?;
+        link_extras(canonical_dir, &target_dir, &[])?;
     }
     Ok(())
-}
-
-/// Removes one package's generated envelope directory by id alone — used at
-/// detach time, when only the receipt's `package_id` (not a full
-/// `StoredPackage`) is available. Safe unconditionally: this directory is
-/// never anything but a Derived Artifact (ADR-013 §5).
-pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
-    // The id comes from the receipt ledger, not a constructor: refuse one
-    // that could not have been a real package id instead of joining it into
-    // a path and removing whatever the traversal lands on.
-    if !is_valid_qualified_id(package_id) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "refusing to remove generated envelope for malformed package id `{package_id}`"
-        )));
-    }
-    let dir = generated_package_dir_for_id(uze_home, package_id);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write { path: dir, source })?;
-    }
-    Ok(())
-}
-
-/// Packages eligible for the generated marketplace's catalogue: no explicit
-/// envelope of their own, and something structurally safe to generate from.
-/// Mirrors `claude_publishable`'s role for the explicit marketplace.
-fn generated_publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
-    packages
-        .iter()
-        .filter(|package| generatable(package))
-        .collect()
-}
-
-fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
-    let plugins: Vec<serde_json::Value> = generated_publishable(packages)
-        .into_iter()
-        .map(|package| {
-            let (description, version) = read_name_fields(package);
-            serde_json::json!({
-                "name": package.active_name.as_str(),
-                "source": format!("./{}", package.id.as_str()),
-                "description": description,
-                "version": version,
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": GENERATED_MARKETPLACE_NAME,
-        "owner": { "name": "UZE Local (generated)", "url": super::MARKETPLACE_OWNER_URL },
-        "plugins": plugins
-    })
-}
-
-/// Rebuilds every generatable package's derived directory and the generated
-/// marketplace catalogue referencing them. Safe to call repeatedly: each
-/// package directory is rebuilt wholesale, and a package that stopped being
-/// `generatable` (e.g. it gained an explicit envelope) simply drops out of
-/// the catalogue — its now-orphaned directory is cleaned up at detach time
-/// by `remove_generated_package`, not by this function.
-pub(super) fn write_generated_catalogue(
-    uze_home: &UzeHome,
-    packages: &[StoredPackage],
-) -> Result<()> {
-    let root = generated_root(uze_home);
-    fs::create_dir_all(&root).map_err(|source| UzeError::Write {
-        path: root.clone(),
-        source,
-    })?;
-    for package in generated_publishable(packages) {
-        materialize_generated_package(uze_home, package)?;
-    }
-    let catalogue_path = root.join(".claude-plugin/marketplace.json");
-    let parent = catalogue_path
-        .parent()
-        .expect("catalogue path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    uze_core::persistence::write_atomic(
-        &catalogue_path,
-        &serde_json::to_vec_pretty(&generated_catalogue_document(packages))
-            .expect("catalogue is serializable"),
-    )
-}
-
-/// Whether every package the generated catalogue names still has its
-/// envelope on disk. The catalogue matching is not enough on its own once
-/// republishing is gated on it: a hand-removed envelope would otherwise
-/// stay missing until something else rewrote the view.
-pub(super) fn generated_packages_present(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
-    generated_publishable(packages).into_iter().all(|package| {
-        generated_package_dir_for_id(uze_home, package.id.as_str())
-            .join(".claude-plugin/plugin.json")
-            .is_file()
-    })
-}
-
-pub(super) fn generated_catalogue_matches(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
-    let catalogue_path = generated_root(uze_home).join(".claude-plugin/marketplace.json");
-    let expected = generated_catalogue_document(packages);
-    match fs::read(&catalogue_path) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
-            .is_ok_and(|actual| actual == expected),
-        Err(_) => generated_publishable(packages).is_empty(),
-    }
-}
-
-pub(super) fn generated_package_receipt(
-    integration_id: &str,
-    package: &StoredPackage,
-    marketplace_root: &Path,
-    selector: &str,
-) -> AttachmentReceipt {
-    AttachmentReceipt {
-        package_id: package.id.as_str().to_owned(),
-        resource_identity: None,
-        integration: integration_id.to_owned(),
-        artifact: ManagedArtifact::IntegrationOwned {
-            kind: GENERATED_PLUGIN_KIND.to_owned(),
-            selector: selector.to_owned(),
-            detail: [
-                (
-                    "marketplace_root".to_owned(),
-                    serde_json::json!(marketplace_root),
-                ),
-                ("package_root".to_owned(), serde_json::json!(package.root)),
-                ("origin".to_owned(), serde_json::json!("generated")),
-            ]
-            .into_iter()
-            .collect(),
-        },
-    }
 }
 
 #[cfg(test)]
@@ -509,7 +137,42 @@ mod generated_native_tests {
     use uze_core::integration::IntegrationPort;
 
     use super::super::ClaudeIntegration;
-    use super::*;
+    use super::super::plugin::ClaudeMarketplace;
+    use crate::shared::marketplace;
+    use uze_core::store::StoredPackage;
+
+    fn generatable(package: &StoredPackage) -> bool {
+        marketplace::generatable::<ClaudeMarketplace>(package)
+    }
+
+    fn generated_root(uze_home: &UzeHome) -> PathBuf {
+        marketplace::generated_root::<ClaudeMarketplace>(uze_home)
+    }
+
+    fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {
+        marketplace::generated_package_dir::<ClaudeMarketplace>(uze_home, package_id)
+    }
+
+    fn generated_exact_coverage(
+        package: &StoredPackage,
+        resources: &[&Resource],
+    ) -> BTreeSet<String> {
+        marketplace::generated_exact_coverage::<ClaudeMarketplace>(package, resources)
+    }
+
+    fn materialize_generated_package(
+        uze_home: &UzeHome,
+        package: &StoredPackage,
+    ) -> uze_core::Result<PathBuf> {
+        marketplace::materialize_generated_package::<ClaudeMarketplace>(uze_home, package)
+    }
+
+    fn remove_generated_package_by_id(
+        uze_home: &UzeHome,
+        package_id: &str,
+    ) -> uze_core::Result<()> {
+        marketplace::remove_generated_package::<ClaudeMarketplace>(uze_home, package_id)
+    }
 
     fn temp_root(label: &str) -> PathBuf {
         uze_testkit::temp::scratch(label)

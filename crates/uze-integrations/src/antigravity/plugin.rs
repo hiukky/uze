@@ -26,7 +26,7 @@ use uze_core::{
 };
 
 use super::AntigravityIntegration;
-use crate::shared::process::run_quiet;
+use crate::shared::process::{json, run_quiet};
 
 /// The `kind` stamped on explicit-plugin receipts. Only this module and its
 /// composition root interpret it.
@@ -80,13 +80,11 @@ pub(super) fn declared_servers(path: &Path) -> BTreeSet<String> {
 /// Antigravity plugin — the intersection ADR-013 §2 requires
 /// (`provided = discovered ∩ declared`), mirroring the other
 /// integrations' exact-coverage functions. Antigravity's schema declares
-/// no `skills` paths at all: coverage is structural, and semantic-aware
-/// (ADR-030 §13) — a Skill is covered iff its directory lives under the
-/// fixed `skills/` subdirectory AND its canonical `invoke:` policy is the
-/// default, because Antigravity has no explicit-only mechanism and Skills
-/// stay model-discoverable and slash-invocable; a non-default policy falls
-/// through to capability-level delivery, which reports the degradation
-/// honestly. An MCP server is covered iff its name is declared in the
+/// no `skills` paths at all: coverage is structural — a Skill is covered iff
+/// its directory lives under the fixed `skills/` subdirectory. Only a
+/// package whose Skills all carry the default policy reaches here
+/// (`package_exposure_plan` decomposes any other), because a plugin stages
+/// its `skills/` tree unchanged. An MCP server is covered iff its name is declared in the
 /// root `mcp_config.json` (a missing or malformed file contributes no
 /// coverage; it never errors).
 pub(super) fn exact_coverage(package: &StoredPackage, resources: &[&Resource]) -> BTreeSet<String> {
@@ -95,9 +93,7 @@ pub(super) fn exact_coverage(package: &StoredPackage, resources: &[&Resource]) -
     for resource in resources {
         match resource.capability.kind {
             uze_core::capability::CapabilityKind::AgentSkill => {
-                if under_conventional_dir(&resource.capability.path, &package.root, "skills")
-                    && resource.skill_invocation().is_default()
-                {
+                if under_skills_dir(package, &resource.capability.path) {
                     provided.insert(resource.identity());
                 }
             }
@@ -114,18 +110,14 @@ pub(super) fn exact_coverage(package: &StoredPackage, resources: &[&Resource]) -
     provided
 }
 
-/// Component-wise containment test: `relative` (resource path relative to
-/// `root`) must start with exactly the `conventional` directory — a
-/// `skills-extra` sibling is never mistaken for inside `skills`, the same
-/// discipline Codex's coverage function uses.
-fn under_conventional_dir(path: &Path, root: &Path, conventional: &str) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return false;
-    };
-    let Some(parent) = relative.parent() else {
-        return false;
-    };
-    parent.starts_with(conventional)
+/// Whether a resource lives under the package's conventional `skills/`
+/// directory, compared by component so a `skills-extra` sibling is never
+/// mistaken for inside it.
+pub(super) fn under_skills_dir(package: &StoredPackage, path: &Path) -> bool {
+    path.strip_prefix(&package.root)
+        .ok()
+        .and_then(Path::parent)
+        .is_some_and(|parent| parent.starts_with("skills"))
 }
 
 // --- CLI verbs ---------------------------------------------------------------
@@ -139,39 +131,19 @@ pub(super) fn run_agy(
     run_quiet(Path::new(executable), command_home, label, args)
 }
 
-/// `agy plugin list` writes its machine-readable JSON document to stdout
-/// and exits 0 (verified against 1.1.19; `{"imports":[...]}`). Falling back
-/// to stderr keeps this correct if a future release moves the payload — the
-/// same defensive stdout-first choice the other integrations make.
-pub(super) fn agy_json(
-    executable: &str,
-    command_home: &Path,
-    args: &[&str],
-) -> std::result::Result<serde_json::Value, String> {
-    use std::process::Command;
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run `agy`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("`agy` inspection exited with {}", output.status));
-    }
-    let payload = if output.stdout.iter().any(|byte| !byte.is_ascii_whitespace()) {
-        &output.stdout
-    } else {
-        &output.stderr
-    };
-    serde_json::from_slice(payload).map_err(|error| format!("agy JSON is invalid: {error}"))
-}
-
-/// The full `agy plugin list` document. An unreadable listing is an error
-/// — inspection must never guess about ownership from silence.
+/// The full `agy plugin list` document, which the CLI writes as JSON
+/// (verified against 1.1.19; `{"imports":[...]}`). An unreadable listing is
+/// an error — inspection must never guess about ownership from silence.
 pub(super) fn installed_plugins(
     executable: &str,
     command_home: &Path,
 ) -> std::result::Result<serde_json::Value, String> {
-    agy_json(executable, command_home, &["plugin", "list"])
+    json(
+        Path::new(executable),
+        command_home,
+        &["plugin", "list"],
+        "agy",
+    )
 }
 
 /// The ownership decision for one installed plugin, separated from the
@@ -492,26 +464,6 @@ mod plugin_tests {
         )
     }
 
-    fn policy_skill_resource(
-        pkg: &StoredPackage,
-        dir: &str,
-        name: &str,
-        payload: &str,
-    ) -> Resource {
-        let path = pkg.root.join(dir).join(name).join("SKILL.md");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, payload).unwrap();
-        Resource::from_package(
-            pkg.id.clone(),
-            pkg.root.clone(),
-            Capability {
-                kind: CapabilityKind::AgentSkill,
-                path,
-                payload: payload.as_bytes().to_vec(),
-            },
-        )
-    }
-
     fn mcp_resource(pkg: &StoredPackage, name: &str) -> Resource {
         let path = pkg.root.join("mcp_config.json");
         Resource::from_package_named(
@@ -554,9 +506,8 @@ mod plugin_tests {
         serde_json::json!({"imports":[{"name": name, "source":"antigravity", "components":["skills"]}]})
     }
 
-    /// A. Conventional default-policy skill + declared MCP → covered; skill
-    /// outside `skills/` → not covered; a non-default policy Skill → never
-    /// claimed (semantic degradation, ADR-030 §13).
+    /// A. Conventional skill + declared MCP → covered; skill outside
+    /// `skills/` → not covered.
     #[test]
     fn explicit_coverage_covers_exactly_the_conventional_and_declared_surface() {
         let (_root, pkg) = make_package("explicit-full", r#"{"name":"flow"}"#);
@@ -567,24 +518,14 @@ mod plugin_tests {
         .unwrap();
         let r_skill = skill_resource(&pkg, "skills", "commit");
         let r_out = skill_resource(&pkg, "extra", "outside");
-        let r_user_only = policy_skill_resource(
-            &pkg,
-            "skills",
-            "review",
-            "---\nname: review\ninvoke:\n  model: false\n  user: true\n---\nBody.\n",
-        );
         let r_mcp = mcp_resource(&pkg, "mcp-a");
-        let resources = vec![&r_skill, &r_out, &r_user_only, &r_mcp];
+        let resources = vec![&r_skill, &r_out, &r_mcp];
         let covered = exact_coverage(&pkg, &resources);
         assert_eq!(
             covered,
             BTreeSet::from([r_skill.identity(), r_mcp.identity()])
         );
         assert!(!covered.contains(&r_out.identity()));
-        assert!(
-            !covered.contains(&r_user_only.identity()),
-            "a non-default policy degrades on Antigravity and must never be claimed as native coverage"
-        );
         let _ = fs::remove_dir_all(_root);
     }
 

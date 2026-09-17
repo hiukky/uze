@@ -6,24 +6,23 @@
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir reference), [`plugin`] (the native
-//! `.agents/plugins/marketplace.json` catalogue), and [`provision`]
-//! (install/update via the official installer). This file is the
+//! `.agents/plugins/marketplace.json` catalogue). This file is the
 //! composition root: the `CodexIntegration` struct and its `IntegrationPort`
 //! impl, delegating to each submodule.
 
 use std::{fs, path::Path, path::PathBuf};
 
+use crate::shared::plan::unsupported;
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
-        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
-        default_exposure_name_candidates,
+        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -38,27 +37,19 @@ mod generate;
 mod mcp;
 mod plugin;
 mod preferences;
-mod provision;
 mod session;
 mod skills;
 
 pub use mcp::detach_mcp_entry;
 
-use crate::hooks as hook_projection;
-use crate::shared::process::run_quiet;
-use generate::{
-    GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
-    generated_exact_coverage, generated_package_receipt, generated_packages_present,
-    generated_root, materialize_generated_package, remove_generated_package_by_id,
-    write_generated_catalogue,
-};
+use crate::hooks::{HookEntry, HookTarget};
+use crate::shared::agent::agent_name;
+use crate::shared::marketplace;
+use crate::shared::process::{VersionToken, detect_version, real_executable};
+use crate::shared::provision::provision_cli;
+use crate::shared::skill::{head_value, split_frontmatter};
 use mcp::attach_mcp_entry;
-use plugin::{
-    MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
-    marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
-};
-use provision::{detect_binary, provision_cli};
-use skills::codex_skill_exposure_name_candidates;
+use plugin::CodexMarketplace;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
@@ -79,21 +70,6 @@ pub struct CodexIntegration {
 }
 
 impl CodexIntegration {
-    /// Root Codex is pointed at. It must contain the package tree: Codex
-    /// resolves a catalogue entry's `source.path` relative to this root and
-    /// rejects both absolute paths and relative paths escaping it —
-    /// confirmed empirically against Codex 0.148.0. That constraint is why
-    /// the catalogue sits beside the packages rather than in a directory of
-    /// its own; the layout is UZE's, the file is Codex's.
-    fn catalogue_root(&self) -> PathBuf {
-        self.uze_home.store_dir()
-    }
-
-    fn catalogue_path(&self) -> PathBuf {
-        self.catalogue_root()
-            .join(".agents/plugins/marketplace.json")
-    }
-
     pub fn new(agents_home: PathBuf, uze_home: UzeHome) -> Self {
         let command_home = agents_home
             .parent()
@@ -141,136 +117,12 @@ impl CodexIntegration {
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
     }
 
-    /// The real `codex` executable, resolved explicitly rather than through
-    /// a bare `Command::new("codex")` PATH lookup — same rationale, same
-    /// recursion hazard, as `ClaudeIntegration::provisioning_executable`:
-    /// once `uze setup codex` has ever succeeded, `~/.uze/shims/codex` can
-    /// sit ahead of the real binary on `PATH`, and an internal integration
-    /// call must never re-enter UZE's own runtime shim. Falls back to the
-    /// bare name (previous behavior) if no real binary can be found outside
-    /// the shims directory.
     fn provisioning_executable(&self) -> String {
-        resolve_real_executable(&["codex"], &self.uze_home.shims_dir())
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "codex".to_owned())
-    }
-
-    /// Installs a package whose source ships its own
-    /// `.codex-plugin/plugin.json`, through the existing `uze-local`
-    /// marketplace rooted at the Store itself. Unchanged behavior —
-    /// extracted verbatim from the pre-generation `attach_package`.
-    fn attach_explicit_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let catalogue_root = self.catalogue_root();
-        if !marketplace_exists(executable, &self.command_home, &catalogue_root) {
-            run_codex(
-                executable,
-                &self.command_home,
-                ["plugin", "marketplace", "add"],
-                Some(&catalogue_root),
-            )?;
-        }
-        let selector = format!("{}@{MARKETPLACE_NAME}", package.active_name.as_str());
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("codex plugin add `{selector}`"),
-            &["plugin", "add", selector.as_str()],
-        )?;
-        Ok(Some(AttachmentReceipt {
-            package_id: package.id.as_str().to_owned(),
-            resource_identity: None,
-            integration: self.id().to_owned(),
-            artifact: ManagedArtifact::IntegrationOwned {
-                kind: "marketplace-plugin".to_owned(),
-                selector,
-                detail: [
-                    (
-                        "marketplace_root".to_owned(),
-                        serde_json::json!(catalogue_root),
-                    ),
-                    ("package_root".to_owned(), serde_json::json!(package.root)),
-                ]
-                .into_iter()
-                .collect(),
-            },
-        }))
-    }
-
-    /// Installs a package with no author-provided envelope through the
-    /// second, UZE-owned `uze-store` marketplace, materializing
-    /// (or refreshing) its generated envelope directory first.
-    fn attach_generated_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let generated_dir = materialize_generated_package(&self.uze_home, package)?;
-        let marketplace_root = generated_root(&self.uze_home);
-        if !marketplace_exists(executable, &self.command_home, &marketplace_root) {
-            run_codex(
-                executable,
-                &self.command_home,
-                ["plugin", "marketplace", "add"],
-                Some(&marketplace_root),
-            )?;
-        }
-        let selector = format!(
-            "{}@{GENERATED_MARKETPLACE_NAME}",
-            package.active_name.as_str()
-        );
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("codex plugin add `{selector}`"),
-            &["plugin", "add", selector.as_str()],
-        )?;
-        Ok(Some(generated_package_receipt(
-            self.id(),
-            package,
-            &marketplace_root,
-            &generated_dir,
-            &selector,
-        )))
-    }
-
-    /// Materializes this Skill's wrapper when this resource owns the shared
-    /// entry; when the shared-root resolution reused another integration's
-    /// artifact, verifies that the reused artifact still carries Codex's own
-    /// invocation encoding for a user-only Skill — otherwise the canonical
-    /// `invoke.model=false` would silently degrade into model visibility.
-    fn materialize_or_verify_skill(&self, resource: &Resource) -> Result<()> {
-        let policy = resource.skill_invocation();
-        let Some(target) = &resource.resolved_artifact_target else {
-            return skills::materialize_generated_skill(&self.uze_home, resource).map(|_| ());
-        };
-        if policy.is_invalid() {
-            return Ok(());
-        }
-        if !policy.model && !target.join("agents/openai.yaml").is_file() {
-            let entry = resource
-                .resolved_exposure_name
-                .clone()
-                .map(|name| self.skills_dir.join(name))
-                .unwrap_or_else(|| target.to_path_buf());
-            return Err(crate::shared::projection::conflict(
-                resource,
-                &entry,
-                target,
-                "Codex needs agents/openai.yaml with policy.allow_implicit_invocation: false for a user-only Skill",
-                self.id(),
-            ));
-        }
-        Ok(())
+        real_executable("codex", &self.uze_home.shims_dir(), None)
     }
 
     fn materialize_agent(&self, resource: &Resource) -> Result<PathBuf> {
-        let name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
+        let name = agent_name(resource);
         let target = self.generated_agents_dir.join(format!("{name}.toml"));
         fs::create_dir_all(&self.generated_agents_dir).map_err(|source| UzeError::Write {
             path: self.generated_agents_dir.clone(),
@@ -364,7 +216,7 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
-        hook_projection::codex_capabilities()
+        HookTarget::Codex.capabilities()
     }
 
     fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
@@ -376,10 +228,6 @@ impl IntegrationPort for CodexIntegration {
         session: &uze_core::conversation::SessionId,
     ) -> Vec<std::ffi::OsString> {
         session::resume_args(session)
-    }
-
-    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
-        session::recorded_for(cwd)
     }
 
     fn observe_session(
@@ -394,7 +242,7 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary(&self.provisioning_executable())
+        codex_version(&self.provisioning_executable())
     }
 
     /// OpenCode also discovers Skills from this exact same
@@ -405,9 +253,11 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        let executable = self.provisioning_executable();
         provision_cli(
             runner,
-            "codex",
+            &executable,
+            "Codex",
             self.detect(),
             ProcessSpec::new(
                 "sh",
@@ -417,8 +267,9 @@ impl IntegrationPort for CodexIntegration {
             // Real-CLI dogfood against codex-cli 0.148.0 found `--upgrade` is not
             // a recognized flag — `codex --help` lists `update` as a
             // subcommand instead.
-            ProcessSpec::new("codex", ["update"]).with_inherited_output(),
+            ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
+            codex_version,
         )
     }
 
@@ -456,7 +307,8 @@ impl IntegrationPort for CodexIntegration {
     /// stays on the default fully-qualified policy.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return codex_skill_exposure_name_candidates(&self.uze_home, resource);
+            let active_name = active_plugin_name(&self.uze_home, resource);
+            return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
     }
@@ -466,29 +318,7 @@ impl IntegrationPort for CodexIntegration {
         package: &StoredPackage,
         resources: &[&Resource],
     ) -> Option<PackageExposurePlan> {
-        if package.root.join(".codex-plugin/plugin.json").is_file() {
-            let provided = codex_exact_coverage(package, resources);
-            return Some(PackageExposurePlan {
-                package_id: package.id.clone(),
-                route: CompatibilityRoute::Native,
-                provided_resource_identities: provided,
-                evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.".to_owned(),
-            });
-        }
-        // No author-provided envelope. Check whether UZE can safely
-        // synthesize one (ADR-013 §3: Explicit
-        // Native Package > Generated Native Package > Native Capability >
-        // Safe Adaptation > Unsupported). Stays read-only either way.
-        if !generatable(package) {
-            return None;
-        }
-        let provided = generated_exact_coverage(package, resources);
-        Some(PackageExposurePlan {
-            package_id: package.id.clone(),
-            route: CompatibilityRoute::Native,
-            provided_resource_identities: provided,
-            evidence: "No .codex-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Codex marketplace.".to_owned(),
-        })
+        marketplace::package_plan::<CodexMarketplace>(package, resources)
     }
 
     fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
@@ -525,8 +355,8 @@ impl IntegrationPort for CodexIntegration {
                     entry_name,
                     command,
                     args,
-                )?
-                .is_some()
+                )?;
+                true
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
@@ -535,14 +365,16 @@ impl IntegrationPort for CodexIntegration {
                 expected,
                 wrapper,
             } => {
-                hook_projection::attach_event_entry(
+                HookTarget::Codex.attach_entry(
                     &self.uze_home,
                     self.id(),
-                    config_file,
-                    *event,
-                    entry_name,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
                 )?;
                 true
             }
@@ -557,53 +389,22 @@ impl IntegrationPort for CodexIntegration {
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
-        let executable = Path::new(&executable);
-        if package.root.join(".codex-plugin/plugin.json").is_file() {
-            return self.attach_explicit_package(executable, package);
-        }
-        self.attach_generated_package(executable, package)
+        marketplace::attach_package::<CodexMarketplace>(
+            Path::new(&executable),
+            &self.command_home,
+            &self.uze_home,
+            self.id(),
+            package,
+        )
+        .map(Some)
     }
 
     fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
-        write_catalogue(&self.catalogue_path(), packages)?;
-        write_generated_catalogue(&self.uze_home, packages)
+        marketplace::republish::<CodexMarketplace>(&self.uze_home, packages)
     }
 
     fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
-        let expected = catalogue_document(packages);
-        let explicit_published = match fs::read(self.catalogue_path()) {
-            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(actual) if actual == expected => Ok(()),
-                Ok(_) => Err(
-                    "the Codex catalogue does not match the installed package set; re-run `uze setup codex`".to_owned(),
-                ),
-                Err(error) => Err(format!(
-                    "the Codex catalogue is unreadable ({error}); re-run `uze setup codex`"
-                )),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if publishable(packages).is_empty() {
-                    Ok(())
-                } else {
-                    Err(
-                        "no Codex catalogue has been written for the installed packages; re-run `uze setup codex`".to_owned(),
-                    )
-                }
-            }
-            Err(error) => Err(error.to_string()),
-        };
-        if let Err(reason) = explicit_published {
-            return PublicationStatus::Unpublished(reason);
-        }
-        if !generated_catalogue_matches(&self.uze_home, packages)
-            || !generated_packages_present(&self.uze_home, packages)
-        {
-            return PublicationStatus::Unpublished(
-                "the generated Codex catalogue does not match the installed package set; re-run `uze setup codex`"
-                    .to_owned(),
-            );
-        }
-        PublicationStatus::Published
+        marketplace::publication::<CodexMarketplace>(&self.uze_home, packages)
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -632,38 +433,28 @@ impl IntegrationPort for CodexIntegration {
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
-            } => {
-                // A damaged ledger entry must block inspection, never
-                // panic doctor/remove.
-                hook_projection::inspect_event_entry(
-                    config_file,
-                    *event,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
-                )
-            }
+            } => HookTarget::Codex.inspect_entry(&HookEntry {
+                config_file,
+                entry_name,
+                event: *event,
+                expected,
+                wrapper,
+            }),
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
                 detail,
-            } if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND => {
-                let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
-                    return plugin::blocked("plugin receipt has no marketplace root".to_owned());
-                };
-                let Some(package_root) = detail_path(detail, "package_root") else {
-                    return plugin::blocked("plugin receipt has no package root".to_owned());
-                };
+            } if marketplace::receipt_origin::<CodexMarketplace>(kind).is_some() => {
                 let executable = self.provisioning_executable();
-                inspect_codex_plugin(
+                marketplace::inspect_package::<CodexMarketplace>(
                     Path::new(&executable),
                     &self.command_home,
                     selector,
-                    &marketplace_root,
-                    &package_root,
+                    detail,
                 )
             }
             _ => receipt.artifact.inspect_standard(),
@@ -682,32 +473,35 @@ impl IntegrationPort for CodexIntegration {
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
             } => {
-                let detached = hook_projection::remove_event_entry(
-                    config_file,
-                    *event,
-                    expected,
-                    Some(("codex", wrapper.as_path())),
-                )?;
-                hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "codex");
-                return Ok(detached);
+                return HookTarget::Codex.detach_entry(
+                    &self.uze_home,
+                    self.id(),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
+                );
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
-                if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>
+                if let Some(origin) = marketplace::receipt_origin::<CodexMarketplace>(kind) =>
             {
                 let executable = self.provisioning_executable();
-                remove_plugin(Path::new(&executable), &self.command_home, selector)?;
-                if kind == GENERATED_PLUGIN_KIND {
-                    // The generated envelope directory is a Derived Artifact
-                    // (ADR-013 §5): non-authoritative, rebuildable, and
-                    // never the canonical Store — safe to remove outright
-                    // now that Codex no longer references it.
-                    remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
-                }
+                marketplace::detach_package::<CodexMarketplace>(
+                    Path::new(&executable),
+                    &self.command_home,
+                    &self.uze_home,
+                    receipt,
+                    selector,
+                    origin,
+                )?;
             }
             _ => {
                 let detached = receipt.artifact.detach_standard()?;
@@ -728,9 +522,7 @@ impl IntegrationPort for CodexIntegration {
 
 impl CodexIntegration {
     fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        let entry_name = resource
-            .logical_capability_name()
-            .unwrap_or_else(|| resource.name());
+        let entry_name = agent_name(resource);
         ExposurePlan {
             route: CompatibilityRoute::Native,
             mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.toml")), target: self.generated_agents_dir.join(format!("{entry_name}.toml")) }),
@@ -739,19 +531,18 @@ impl CodexIntegration {
     }
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        hook_projection::hook_exposure_plan(
+        HookTarget::Codex.entry_plan(
             &self.uze_home,
             resource,
-            &self.hook_capabilities(),
             self.hooks_config_path(),
-            "codex",
-            // Codex's hook entry carries a command string only, so the
-            // wrapper invocation is rendered as one quoted shell line.
-            false,
-            false,
             "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned.",
         )
     }
+}
+
+/// `codex --version` prints "codex-cli 0.148.0" — the version trails.
+fn codex_version(program: &str) -> HarnessDetection {
+    detect_version(program, VersionToken::Last)
 }
 
 impl PreferencePort for CodexIntegration {
@@ -774,10 +565,11 @@ impl PreferencePort for CodexIntegration {
 
 fn codex_agent_toml(resource: &Resource, fallback_name: &str) -> String {
     let markdown = String::from_utf8_lossy(&resource.capability.payload);
-    let (frontmatter, instructions) = markdown_frontmatter(&markdown);
-    let name = frontmatter_value(frontmatter, "name").unwrap_or(fallback_name);
-    let description =
-        frontmatter_value(frontmatter, "description").unwrap_or("Portable UZE custom agent.");
+    let (frontmatter, instructions) = split_frontmatter(&markdown).unwrap_or(("", &markdown));
+    let unquoted =
+        |key| head_value(frontmatter, key).map(|value| value.trim_matches('"').trim_matches('\''));
+    let name = unquoted("name").unwrap_or(fallback_name);
+    let description = unquoted("description").unwrap_or("Portable UZE custom agent.");
     format!(
         "name = {}\ndescription = {}\ndeveloper_instructions = {}\n",
         toml_string(name),
@@ -786,33 +578,6 @@ fn codex_agent_toml(resource: &Resource, fallback_name: &str) -> String {
     )
 }
 
-fn markdown_frontmatter(markdown: &str) -> (&str, &str) {
-    let Some(rest) = markdown.strip_prefix("---\n") else {
-        return ("", markdown);
-    };
-    let Some(end) = rest.find("\n---\n") else {
-        return ("", markdown);
-    };
-    (&rest[..end], &rest[end + 5..])
-}
-
-fn frontmatter_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
-    frontmatter.lines().find_map(|line| {
-        let (found, value) = line.split_once(':')?;
-        (found.trim() == key).then(|| value.trim().trim_matches('"').trim_matches('\''))
-    })
-}
-
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings are JSON serializable")
-}
-
-fn unsupported(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
 }

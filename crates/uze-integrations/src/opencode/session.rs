@@ -39,12 +39,6 @@ pub(super) fn resume_args(session: &SessionId) -> Vec<OsString> {
     ]
 }
 
-/// Not needed here: the listing timestamps every conversation, so the
-/// launch time is guard enough.
-pub(super) fn recorded_for(_cwd: &Path) -> Option<SessionId> {
-    None
-}
-
 /// One conversation as the harness lists it.
 struct Listed {
     id: String,

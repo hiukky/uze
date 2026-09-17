@@ -45,33 +45,10 @@ use uze_core::{
 };
 
 use super::CodexIntegration;
-
-/// Codex's official invocation-policy metadata: `agents/openai.yaml` beside
-/// `SKILL.md`, with `policy.allow_implicit_invocation: false`. Per Codex's
-/// Build skills documentation this makes the skill *not* implicitly
-/// invocable by the model while explicit `$skill` invocation still works.
-/// Deterministically verified against codex-cli 0.149.0 via
-/// `codex debug prompt-input`.
-pub(super) const EXPLICIT_ONLY_POLICY_YAML: &str = "policy:\n  allow_implicit_invocation: false\n";
-
-/// Root of every generated Skill wrapper directory. Under
-/// `$UZE_HOME/state/attachments/codex/skills/` — the same convention as
-/// every other integration's managed artifacts, never under the Store.
-pub(super) fn skill_wrapper_root(uze_home: &UzeHome) -> PathBuf {
-    crate::shared::path::attachment_root(uze_home, "codex").join("skills")
-}
-
-pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = resource
-        .package_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown");
-    let name = resource
-        .logical_capability_name()
-        .unwrap_or_else(|| resource.name());
-    skill_wrapper_root(uze_home).join(package_id).join(name)
-}
+use crate::shared::skill::{
+    SharedRootReader, entry_name, generated_skill_dir, invalid_policy_plan, setup_pending_plan,
+    skill_label, skill_wrapper_root, verify_reused_wrapper, write_superset_skill_wrapper,
+};
 
 /// Deterministically materializes (or refreshes) one Skill's delivered
 /// directory — the shared-root superset representation
@@ -83,23 +60,23 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 /// name from frontmatter (verified against codex-cli 0.149.0), so
 /// namespacing the directory alone is not enough; the generated wrapper is
 /// the only way to show `flow:review` without rewriting the canonical
-/// bytes. The wrapper also carries OpenCode's own invocation controls
+/// bytes. Codex accepts `:` in skill names (verified against codex-cli
+/// 0.149.0). The wrapper also carries OpenCode's own invocation controls
 /// because this directory lives in the shared `~/.agents/skills` root —
 /// Codex ignores those fields, and OpenCode needs them when it reuses the
-/// same physical entry (ADR-030 §25). Idempotent and rebuilt wholesale —
-/// the directory is entirely UZE-owned and non-authoritative (ADR-013 §5).
+/// same physical entry (ADR-030 §25).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
 ) -> Result<PathBuf> {
-    let dir = generated_skill_dir(uze_home, resource);
+    let dir = generated_skill_dir(uze_home, "codex", resource);
     let canonical_dir = resource
         .capability
         .path
         .parent()
         .expect("SKILL.md has a parent");
-    let label = codex_invocation_label(uze_home, resource).unwrap_or_else(|| resource.name());
-    crate::shared::skill::write_superset_skill_wrapper(
+    let label = skill_label(uze_home, resource).unwrap_or_else(|| resource.name());
+    write_superset_skill_wrapper(
         &dir,
         canonical_dir,
         &resource.capability.payload,
@@ -109,39 +86,32 @@ pub(super) fn materialize_generated_skill(
     Ok(dir)
 }
 
-/// Codex's physical invocation label — the UZE semantic label
-/// (`flow:review`) verbatim: Codex accepted colon-named skills in
-/// codex-cli 0.149.0 (verified: `flow:review` appears in the model-visible
-/// list exactly as named, and the explicit-only policy keeps working).
-pub(super) fn codex_invocation_label(uze_home: &UzeHome, resource: &Resource) -> Option<String> {
-    use uze_core::integration::{active_plugin_name, qualified_capability_name};
-    let active_name = active_plugin_name(uze_home, resource);
-    let logical = resource.logical_capability_name()?;
-    Some(qualified_capability_name(&active_name, &logical))
-}
-
-/// Codex derives a skill's user-facing identity from its `name` (verified:
-/// frontmatter `name` wins over the directory name), so the single
-/// candidate is the stable namespaced label itself — no bare alias, no
-/// collision-dependent qualification (ADR-026).
-pub(super) fn codex_skill_exposure_name_candidates(
-    uze_home: &UzeHome,
-    resource: &Resource,
-) -> Vec<String> {
-    codex_invocation_label(uze_home, resource)
-        .into_iter()
-        .collect()
-}
-
 impl CodexIntegration {
     pub(super) fn cleanup_unused_wrapper(&self, target: &Path) -> Result<()> {
         crate::shared::path::cleanup_unused_wrapper(
             target,
             &crate::shared::path::attachment_root(&self.uze_home, "codex"),
             &self.skills_dir,
-            &skill_wrapper_root(&self.uze_home),
+            &skill_wrapper_root(&self.uze_home, "codex"),
             &|wrapper| wrapper.join("SKILL.md").is_file(),
         )
+    }
+
+    /// Materializes this Skill's wrapper when this resource owns the shared
+    /// entry; when the shared-root resolution reused another integration's
+    /// artifact, that artifact is authoritative and nothing may replace it —
+    /// but it must still carry Codex's own encoding of the policy.
+    pub(super) fn materialize_or_verify_skill(&self, resource: &Resource) -> Result<()> {
+        match &resource.resolved_artifact_target {
+            Some(wrapper) => verify_reused_wrapper(
+                resource,
+                wrapper,
+                &self.skills_dir,
+                SharedRootReader::Codex,
+                self.id(),
+            ),
+            None => materialize_generated_skill(&self.uze_home, resource).map(|_| ()),
+        }
     }
 
     /// The single Skill route classification for one canonical invocation
@@ -156,58 +126,40 @@ impl CodexIntegration {
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return ExposurePlan {
-                route: CompatibilityRoute::Unsupported,
-                mechanism: ExposureMechanism::Unsupported {
-                    rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
-                },
-                evidence: "Invalid canonical invocation policy: a Skill that nobody may invoke is not a projectable capability (ADR-030 §1).".to_owned(),
-            };
+            return invalid_policy_plan();
         }
-        if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource
-                .resolved_exposure_name
-                .clone()
-                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
-        {
-            let source = resource
-                .resolved_artifact_target
-                .clone()
-                .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource));
-            // model-only (user cannot invoke) is the one combination Codex
-            // cannot preserve; every other valid combination is Native.
-            let route = if policy.model && !policy.user {
-                CompatibilityRoute::Degraded
-            } else {
-                CompatibilityRoute::Native
-            };
-            let mut evidence = String::from(
-                "UZE materializes a generated wrapper SKILL.md carrying the stable namespaced label as its `name` (Codex derives the model-visible name from frontmatter) and symlinks <agents_home>/skills/<label> once, per Codex's documented USER-scope, symlink-following discovery. The canonical Store bytes are never rewritten.",
+        if !state::is_installed(&self.uze_home, self.id()) {
+            return setup_pending_plan("Codex");
+        }
+        let Some(entry_name) = entry_name(self, resource) else {
+            return setup_pending_plan("Codex");
+        };
+        let source = resource
+            .resolved_artifact_target
+            .clone()
+            .unwrap_or_else(|| generated_skill_dir(&self.uze_home, "codex", resource));
+        let route = if policy.model && !policy.user {
+            CompatibilityRoute::Degraded
+        } else {
+            CompatibilityRoute::Native
+        };
+        let mut evidence = String::from(
+            "UZE materializes a generated wrapper SKILL.md carrying the stable namespaced label as its `name` (Codex derives the model-visible name from frontmatter) and symlinks <agents_home>/skills/<label> once, per Codex's documented USER-scope, symlink-following discovery. The canonical Store bytes are never rewritten.",
+        );
+        if !policy.model {
+            evidence.push_str(
+                " The canonical invoke.model=false is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false (explicit `$skill` invocation still works) — NATIVE.",
             );
-            if !policy.model {
-                evidence.push_str(
-                    " The canonical invoke.model=false is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false (explicit `$skill` invocation still works) — NATIVE.",
-                );
-            } else if !policy.user {
-                evidence.push_str(" Codex has no documented way to disable explicit `$skill` invocation, so the canonical invoke.user=false cannot be enforced — DEGRADED, reported honestly rather than invented.");
-            }
-            return ExposurePlan {
-                route,
-                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
-                    path: self.skills_dir.clone().join(entry_name),
-                    target: source,
-                }),
-                evidence,
-            };
+        } else if !policy.user {
+            evidence.push_str(" Codex has no documented way to disable explicit `$skill` invocation, so the canonical invoke.user=false cannot be enforced — DEGRADED, reported honestly rather than invented.");
         }
         ExposurePlan {
-            route: CompatibilityRoute::Unsupported,
-            mechanism: ExposureMechanism::Unsupported {
-                rationale: "Codex has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
-                    .to_owned(),
-            },
-            evidence: "Skills reach Codex through a managed user-scope attachment, which exists only once `uze setup` has completed."
-                .to_owned(),
+            route,
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                path: self.skills_dir.join(entry_name),
+                target: source,
+            }),
+            evidence,
         }
     }
 }
@@ -249,7 +201,7 @@ mod tests {
         // keeps the model from auto-selecting a user-only Skill.
         assert_eq!(
             fs::read_to_string(dir.join("agents/openai.yaml")).unwrap(),
-            EXPLICIT_ONLY_POLICY_YAML
+            crate::shared::skill::EXPLICIT_ONLY_POLICY_YAML
         );
         // This wrapper lives in the shared root Codex and OpenCode both
         // read, so it must carry OpenCode's own encoding too — Codex

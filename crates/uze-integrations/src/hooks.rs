@@ -26,103 +26,228 @@ use uze_core::{
         HookEvent, HookMatcher, PortableHook, ToolBinding,
     },
     integration::{AttachmentInspection, AttachmentState},
-    persistence::write_atomic,
     router::CompatibilityRoute,
 };
+
+use crate::shared::json_config;
+use crate::shared::plan::{blocked, unsupported};
 
 // ============================================================================
 // Capability profiles: the semantic axes each harness preserves
 // ============================================================================
 
-/// Claude Code's hook surface: documented `PreToolUse`/`PostToolUse`/`Stop`
-/// command hooks with per-group matchers; observations, approvals, and
-/// denials are expressible. Input rewriting is not yet claimed — a
-/// `transform` effect therefore degrades instead of silently attaching
-/// without its rewrite.
-pub(crate) fn claude_capabilities() -> HookCapabilities {
-    HookCapabilities {
-        events: [
-            HookEvent::PreToolUse,
-            HookEvent::PostToolUse,
-            HookEvent::Stop,
-        ]
-        .into_iter()
-        .collect(),
-        effects: [HookEffect::Observe, HookEffect::Allow, HookEffect::Deny]
-            .into_iter()
-            .collect(),
-        supports_native_matchers: true,
-        executes_handlers_in_order: true,
-        ..HookCapabilities::default()
+/// The harnesses a portable hook is projected into.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HookTarget {
+    Claude,
+    Codex,
+    Antigravity,
+    OpenCode,
+}
+
+#[cfg(test)]
+impl std::fmt::Display for HookTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.key())
     }
 }
 
-/// Codex's hook surface mirrors Claude's event names with its own `hooks.json`
-/// command form; the same conservative effect set is claimed.
-pub(crate) fn codex_capabilities() -> HookCapabilities {
-    HookCapabilities {
-        events: [
-            HookEvent::PreToolUse,
-            HookEvent::PostToolUse,
-            HookEvent::Stop,
-        ]
-        .into_iter()
-        .collect(),
-        effects: [HookEffect::Observe, HookEffect::Allow, HookEffect::Deny]
-            .into_iter()
-            .collect(),
-        supports_native_matchers: true,
-        executes_handlers_in_order: true,
-        ..HookCapabilities::default()
-    }
+/// One delivered hook entry, as its receipt records it.
+pub(crate) struct HookEntry<'a> {
+    pub config_file: &'a Path,
+    pub entry_name: &'a str,
+    pub event: HookEvent,
+    pub expected: &'a str,
+    pub wrapper: &'a Path,
 }
 
-/// Antigravity CLI's plugin hooks carry named entries, camelCase payloads,
-/// and native `allow`/`ask`/`deny` decisions. Hooks are delivered only
-/// through the generated native plugin (the plugin system reads
-/// `hooks.json`; there is no documented capability-level hook surface).
-pub(crate) fn antigravity_capabilities() -> HookCapabilities {
-    HookCapabilities {
-        events: [
-            HookEvent::PreToolUse,
-            HookEvent::PostToolUse,
-            HookEvent::Stop,
-        ]
-        .into_iter()
-        .collect(),
-        effects: [
-            HookEffect::Observe,
-            HookEffect::Allow,
-            HookEffect::Ask,
-            HookEffect::Deny,
-        ]
-        .into_iter()
-        .collect(),
-        supports_native_matchers: true,
-        executes_handlers_in_order: true,
-        ..HookCapabilities::default()
+impl HookTarget {
+    /// The harness's name in UZE's own state and in `HOOK_HARNESS`.
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
+            Self::OpenCode => "opencode",
+        }
     }
-}
 
-/// OpenCode's plugin API supplies pre/post tool callbacks that see the tool
-/// input but cannot block it; there is no declarative hook file, so UZE
-/// generates an owned, rebuildable plugin instead. `Stop` has no OpenCode
-/// equivalent and is never claimed. `deny`/`ask` live only on
-/// `permission.evaluate`, which carries the action and its resources rather
-/// than the tool input, so they are Unsupported until the Lab proves
-/// otherwise. `transform` needs a channel for the handler to answer on,
-/// which the exit-code contract does not have.
-pub(crate) fn opencode_capabilities() -> HookCapabilities {
-    HookCapabilities {
-        events: [HookEvent::PreToolUse, HookEvent::PostToolUse]
-            .into_iter()
-            .collect(),
-        effects: [HookEffect::Observe, HookEffect::Allow]
-            .into_iter()
-            .collect(),
-        supports_native_matchers: true,
-        executes_handlers_in_order: true,
-        ..HookCapabilities::default()
+    /// The semantic axes this harness preserves.
+    ///
+    /// Claude Code documents `PreToolUse`/`PostToolUse`/`Stop` command hooks
+    /// with per-group matchers, and Codex mirrors those event names in its
+    /// own `hooks.json` command form: observations, approvals and denials
+    /// are expressible on both. Input rewriting is not yet claimed — a
+    /// `transform` effect therefore degrades instead of silently attaching
+    /// without its rewrite.
+    ///
+    /// Antigravity CLI's named hooks carry camelCase payloads and native
+    /// `allow`/`ask`/`deny` decisions.
+    ///
+    /// OpenCode's plugin API supplies pre/post tool callbacks that see the
+    /// tool input but cannot block it; there is no declarative hook file, so
+    /// UZE generates an owned, rebuildable plugin instead. `Stop` has no
+    /// OpenCode equivalent and is never claimed. `deny`/`ask` live only on
+    /// `permission.evaluate`, which carries the action and its resources
+    /// rather than the tool input, so they are Unsupported until the Lab
+    /// proves otherwise. `transform` needs a channel for the handler to
+    /// answer on, which the exit-code contract does not have.
+    pub(crate) fn capabilities(self) -> HookCapabilities {
+        let (events, effects): (&[HookEvent], &[HookEffect]) = match self {
+            Self::Claude | Self::Codex => (
+                &[
+                    HookEvent::PreToolUse,
+                    HookEvent::PostToolUse,
+                    HookEvent::Stop,
+                ],
+                &[HookEffect::Observe, HookEffect::Allow, HookEffect::Deny],
+            ),
+            Self::Antigravity => (
+                &[
+                    HookEvent::PreToolUse,
+                    HookEvent::PostToolUse,
+                    HookEvent::Stop,
+                ],
+                &[
+                    HookEffect::Observe,
+                    HookEffect::Allow,
+                    HookEffect::Ask,
+                    HookEffect::Deny,
+                ],
+            ),
+            Self::OpenCode => (
+                &[HookEvent::PreToolUse, HookEvent::PostToolUse],
+                &[HookEffect::Observe, HookEffect::Allow],
+            ),
+        };
+        HookCapabilities {
+            events: events.iter().copied().collect(),
+            effects: effects.iter().copied().collect(),
+            supports_native_matchers: true,
+            executes_handlers_in_order: true,
+            ..HookCapabilities::default()
+        }
+    }
+
+    /// Where this harness keeps its shared wrapper: one file under UZE's own
+    /// state, never in the Store and never in the harness's own directories.
+    /// Byte-identical for every package, so one file serves them all.
+    pub(crate) fn wrapper_path(self, uze_home: &UzeHome) -> PathBuf {
+        crate::shared::path::attachment_root(uze_home, self.key()).join(WRAPPER_RELATIVE_PATH)
+    }
+
+    /// Whether a wrapper can be written and run for this harness here.
+    fn deliverable(self) -> bool {
+        cfg!(unix) && self.dialect().is_some()
+    }
+
+    /// Antigravity's shared `hooks.json` is a map of named hooks; the other
+    /// command-hook harnesses keep an array of group entries per event.
+    fn names_entries(self) -> bool {
+        self == Self::Antigravity
+    }
+
+    /// The plan for a command-hook harness: one entry in its shared config
+    /// file, running the generated wrapper, and receipt-owned by content.
+    pub(crate) fn entry_plan(
+        self,
+        uze_home: &UzeHome,
+        resource: &Resource,
+        config_file: PathBuf,
+        evidence: &str,
+    ) -> ExposurePlan {
+        hook_plan(resource, &self.capabilities(), false, evidence, |hook| {
+            if !self.deliverable() {
+                return None;
+            }
+            let wrapper = self.wrapper_path(uze_home);
+            let entry = if self.names_entries() {
+                agy_named_entry(hook, &wrapper, &resource.package_root)
+            } else {
+                self.event_entry(hook, &resource.package_root, &wrapper)
+            };
+            Some(ManagedArtifact::HookConfigEntry {
+                config_file,
+                entry_name: hook_entry_name(resource, hook),
+                event: hook.event,
+                expected: serde_json::to_string(&entry).expect("hook entry serializes"),
+                wrapper,
+            })
+        })
+    }
+
+    /// Writes the wrapper, then the entry that names it.
+    pub(crate) fn attach_entry(
+        self,
+        uze_home: &UzeHome,
+        integration_id: &str,
+        entry: &HookEntry,
+    ) -> Result<()> {
+        if let Some(source) = wrapper_source(self) {
+            materialize_wrapper(entry.wrapper, &source)?;
+        }
+        let expected: serde_json::Value =
+            serde_json::from_str(entry.expected).map_err(|source| UzeError::Json {
+                path: entry.config_file.to_path_buf(),
+                source,
+            })?;
+        if self.names_entries() {
+            merge_named_entry(entry.config_file, entry.entry_name, &expected)?;
+        } else {
+            let previous = previous_hook_entry_content(uze_home, integration_id, entry.entry_name)?;
+            merge_event_entry(entry.config_file, entry.event, &expected, &previous)?;
+        }
+        Ok(())
+    }
+
+    /// The delivered entry's state: its wrapper first, then the entry.
+    pub(crate) fn inspect_entry(self, entry: &HookEntry) -> AttachmentInspection {
+        inspect_wrapper(self, entry.wrapper).unwrap_or_else(|| self.entry_state(entry))
+    }
+
+    /// Removes a matched entry, then the shared wrapper once nothing runs it.
+    pub(crate) fn detach_entry(
+        self,
+        uze_home: &UzeHome,
+        integration_id: &str,
+        entry: &HookEntry,
+    ) -> Result<AttachmentInspection> {
+        let detached = if self.names_entries() {
+            remove_named_entry(entry.config_file, entry.entry_name, entry.expected)?
+        } else {
+            remove_event_entry(entry.config_file, entry.event, entry.expected)?
+        };
+        prune_shared_wrapper(uze_home, integration_id, self);
+        Ok(detached)
+    }
+
+    /// The entry alone, without the wrapper it names.
+    fn entry_state(self, entry: &HookEntry) -> AttachmentInspection {
+        if self.names_entries() {
+            inspect_named_entry(entry.config_file, entry.entry_name, entry.expected)
+        } else {
+            inspect_event_entry(entry.config_file, entry.event, entry.expected)
+        }
+    }
+
+    /// The group entry for an event-array harness. Claude's entries accept
+    /// `command` + `args`, so its wrapper is started directly with nothing
+    /// to quote; Codex's carry a command string only, one quoted shell line.
+    fn event_entry(
+        self,
+        hook: &PortableHook,
+        package_root: &Path,
+        wrapper: &Path,
+    ) -> serde_json::Value {
+        let invocation = if self == Self::Claude {
+            HookInvocation::Exec {
+                command: wrapper.display().to_string(),
+                args: wrapper_arguments(hook, package_root, &hook.handlers),
+            }
+        } else {
+            HookInvocation::Line(wrapper_command_line(wrapper, hook, package_root))
+        };
+        group_entry(self, hook, &invocation)
     }
 }
 
@@ -145,14 +270,13 @@ pub(crate) fn opencode_capabilities() -> HookCapabilities {
 /// in `also_matches` so an older payload still normalizes). OpenCode's
 /// field names follow its documented tool schema; a `--discovery` capture
 /// of that harness has not been taken yet.
-pub(crate) fn vocabulary(target: &str) -> HarnessToolVocabulary {
+pub(crate) fn vocabulary(target: HookTarget) -> HarnessToolVocabulary {
     HarnessToolVocabulary {
         bindings: match target {
-            "claude" => CLAUDE_TOOLS,
-            "codex" => CODEX_TOOLS,
-            "antigravity" => ANTIGRAVITY_TOOLS,
-            "opencode" => OPENCODE_TOOLS,
-            _ => &[],
+            HookTarget::Claude => CLAUDE_TOOLS,
+            HookTarget::Codex => CODEX_TOOLS,
+            HookTarget::Antigravity => ANTIGRAVITY_TOOLS,
+            HookTarget::OpenCode => OPENCODE_TOOLS,
         },
     }
 }
@@ -372,7 +496,7 @@ const OPENCODE_TOOLS: &[ToolBinding] = &[
 /// to the old name for a while and a hook must intercept both. An alias the
 /// harness binds to no tool falls back to the alias literal, which matches
 /// nothing — an honest no-op rather than a fabricated tool name.
-pub(crate) fn tool_names(target: &str, matcher: &HookMatcher) -> Vec<String> {
+pub(crate) fn tool_names(target: HookTarget, matcher: &HookMatcher) -> Vec<String> {
     match matcher {
         HookMatcher::Native(name) => vec![name.clone()],
         HookMatcher::Portable(alias) => match vocabulary(target).binding(alias) {
@@ -396,7 +520,7 @@ pub(crate) fn tool_names(target: &str, matcher: &HookMatcher) -> Vec<String> {
 
 /// Translates every matcher of a group for one target; `None` for an
 /// unmatch-all group (the entry then omits the matcher key).
-pub(crate) fn matcher(target: &str, hook: &PortableHook) -> Option<String> {
+pub(crate) fn matcher(target: HookTarget, hook: &PortableHook) -> Option<String> {
     (!hook.matchers.is_empty()).then(|| {
         // Two authored matchers can translate to one native tool (a
         // portable alias plus the `native:` name it already resolves to);
@@ -442,7 +566,7 @@ pub(crate) enum HookInvocation {
 /// one invocation. The matcher key is omitted entirely for an unmatch-all
 /// group.
 pub(crate) fn group_entry(
-    target: &str,
+    target: HookTarget,
     hook: &PortableHook,
     invocation: &HookInvocation,
 ) -> serde_json::Value {
@@ -483,58 +607,12 @@ fn handler_entry(hook: &PortableHook, invocation: &HookInvocation) -> serde_json
     serde_json::Value::Object(invoked)
 }
 
-/// One group's delivery: the native entry and the wrapper it needs on disk.
-pub(crate) struct HookDelivery {
-    pub entry: serde_json::Value,
-    pub wrapper: PathBuf,
-}
-
 /// Why a platform the `sh` template does not cover receives no hook at all.
 /// There is one implementation of the contract and it is the wrapper: a
 /// delivery that cannot write one has nothing honest to attach, so the hook
 /// is reported Unsupported rather than carried by something else.
 pub(crate) const NO_WRAPPER_TEMPLATE: &str =
     "no wrapper template for this platform, so the hook is not delivered";
-
-/// Whether a wrapper can be written and run for this harness here.
-fn deliverable(target: &str) -> bool {
-    cfg!(unix) && wrapper_source(target).is_some()
-}
-
-/// Renders one group's delivery, or nothing when this platform has no
-/// wrapper to deliver.
-///
-/// The generated wrapper is the only route: it is vendored beside the
-/// delivery with nothing of the packager on the execution path. Where the
-/// POSIX `sh` template does not reach, the answer is that the hook is not
-/// delivered — see [`NO_WRAPPER_TEMPLATE`].
-pub(crate) fn hook_delivery(
-    target: &str,
-    hook: &PortableHook,
-    package_root: &Path,
-    wrapper: Option<PathBuf>,
-    exec_form: bool,
-) -> Option<HookDelivery> {
-    let wrapper = wrapper.filter(|_| deliverable(target))?;
-    let arguments = wrapper_arguments(hook, package_root, &hook.handlers);
-    let invocation = if exec_form {
-        HookInvocation::Exec {
-            command: wrapper.display().to_string(),
-            args: arguments,
-        }
-    } else {
-        HookInvocation::Line(
-            std::iter::once(shell_quote(&wrapper.display().to_string()))
-                .chain(arguments.iter().map(|argument| shell_quote(argument)))
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
-    };
-    Some(HookDelivery {
-        entry: group_entry(target, hook, &invocation),
-        wrapper,
-    })
-}
 
 const fn hook_event_name(event: HookEvent) -> &'static str {
     match event {
@@ -575,7 +653,7 @@ pub(crate) fn agy_named_entry(
 ) -> serde_json::Value {
     let invocation = HookInvocation::Line(wrapper_command_line(wrapper, hook, package_root));
     let entries = if agy_event_is_grouped(hook.event) {
-        vec![group_entry(ANTIGRAVITY_TARGET, hook, &invocation)]
+        vec![group_entry(HookTarget::Antigravity, hook, &invocation)]
     } else {
         vec![handler_entry(hook, &invocation)]
     };
@@ -594,13 +672,13 @@ pub(crate) fn merge_named_entry(
     entry_name: &str,
     entry: &serde_json::Value,
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     config
         .as_object_mut()
-        .expect("read_config_object returns an object")
+        .expect("read_object returns an object")
         .insert(entry_name.to_owned(), entry.clone());
-    write_config(config_path, &config)?;
+    json_config::write_object(config_path, &config)?;
     Ok(config_path.to_path_buf())
 }
 
@@ -611,12 +689,8 @@ pub(crate) fn inspect_named_entry(
     config_path: &Path,
     entry_name: &str,
     expected: &str,
-    wrapper: Option<(&str, &Path)>,
 ) -> AttachmentInspection {
-    if let Some(inspection) = inspect_wrapper(wrapper) {
-        return inspection;
-    }
-    let Ok(config) = read_config_object(config_path) else {
+    let Ok(config) = json_config::read_object(config_path) else {
         return blocked("hook config is missing or unreadable");
     };
     let Ok(expected) = serde_json::from_str::<serde_json::Value>(expected) else {
@@ -645,17 +719,16 @@ pub(crate) fn remove_named_entry(
     config_path: &Path,
     entry_name: &str,
     expected: &str,
-    wrapper: Option<(&str, &Path)>,
 ) -> Result<AttachmentInspection> {
-    let inspection = inspect_named_entry(config_path, entry_name, expected, wrapper);
+    let inspection = inspect_named_entry(config_path, entry_name, expected);
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     config
         .as_object_mut()
-        .expect("read_config_object returns an object")
+        .expect("read_object returns an object")
         .remove(entry_name);
     // A file that now holds nothing was created by UZE and is safe to
     // remove entirely; anything else stays exactly as the user left it.
@@ -671,17 +744,13 @@ pub(crate) fn remove_named_entry(
             }
         }
     } else {
-        write_config(config_path, &config)?;
+        json_config::write_object(config_path, &config)?;
     }
     Ok(AttachmentInspection {
         state: AttachmentState::Missing,
         reason: "managed hook entry detached".to_owned(),
     })
 }
-
-/// The vocabulary/dialect key for Antigravity CLI, shared by its matcher
-/// translation, its generated wrapper and its runtime adapter.
-pub(crate) const ANTIGRAVITY_TARGET: &str = "antigravity";
 
 // ============================================================================
 // Generated wrapper: hooks/exec
@@ -690,8 +759,6 @@ pub(crate) const ANTIGRAVITY_TARGET: &str = "antigravity";
 /// How one harness's payload is read and how its decision is written — the
 /// only slots that differ between the generated `hooks/exec` wrappers.
 struct WrapperDialect {
-    /// The value the handler reads in `HOOK_HARNESS`.
-    harness: &'static str,
     /// `jq` filter selecting the native tool name from the payload.
     tool_filter: &'static str,
     /// `jq` filter selecting the tool input object.
@@ -713,58 +780,59 @@ struct WrapperDialect {
     deny_exit: &'static str,
 }
 
-fn wrapper_dialect(target: &str) -> Option<WrapperDialect> {
-    match target {
-        "claude" => Some(WrapperDialect {
-            harness: "claude",
-            tool_filter: ".tool_name // empty",
-            input_filter: ".tool_input // {}",
-            cwd_filter: ".cwd // .context.cwd // empty",
-            // The event name is echoed back in `hookEventName`, which the
-            // harness matches against the event it fired.
-            deny_document: concat!(
-                "case $HOOK_EVENT in\n",
-                "    pre_tool_use) name=PreToolUse ;;\n",
-                "    post_tool_use) name=PostToolUse ;;\n",
-                "    *) name=Stop ;;\n",
-                "  esac\n",
-                "  printf '{\"hookSpecificOutput\":{\"hookEventName\":\"%s\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$name\" \"$reason_json\"",
-            ),
-            allow_document: ":",
-            deny_exit: "2",
-        }),
-        "codex" => Some(WrapperDialect {
-            harness: "codex",
-            tool_filter: ".tool_name // empty",
-            input_filter: ".tool_input // {}",
-            cwd_filter: ".cwd // empty",
-            deny_document: "printf '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$reason_json\"",
-            // Stop is the one event whose stdout must parse as JSON even
-            // when nothing was decided.
-            allow_document: "[ \"$HOOK_EVENT\" = stop ] && printf '{}'",
-            deny_exit: "2",
-        }),
-        "antigravity" => Some(WrapperDialect {
-            harness: "antigravity",
-            tool_filter: ".toolCall.name // empty",
-            input_filter: ".toolCall.args // {}",
-            cwd_filter: ".workspacePaths[0] // empty",
-            deny_document: "printf '{\"decision\":\"deny\",\"reason\":%s}' \"$reason_json\"",
-            // Only the pre-tool event carries a decision; the others answer
-            // with the empty object the vendor's contract requires.
-            allow_document: "[ \"$HOOK_EVENT\" = pre_tool_use ] || printf '{}'",
-            // The decision is the stdout document; a non-zero exit is a
-            // failed hook here, not a block.
-            deny_exit: "0",
-        }),
-        _ => None,
+impl HookTarget {
+    /// How this harness's payload is read and its decision written; `None`
+    /// for OpenCode, whose generated plugin is its own runner.
+    fn dialect(self) -> Option<WrapperDialect> {
+        match self {
+            HookTarget::Claude => Some(WrapperDialect {
+                tool_filter: ".tool_name // empty",
+                input_filter: ".tool_input // {}",
+                cwd_filter: ".cwd // .context.cwd // empty",
+                // The event name is echoed back in `hookEventName`, which the
+                // harness matches against the event it fired.
+                deny_document: concat!(
+                    "case $HOOK_EVENT in\n",
+                    "    pre_tool_use) name=PreToolUse ;;\n",
+                    "    post_tool_use) name=PostToolUse ;;\n",
+                    "    *) name=Stop ;;\n",
+                    "  esac\n",
+                    "  printf '{\"hookSpecificOutput\":{\"hookEventName\":\"%s\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$name\" \"$reason_json\"",
+                ),
+                allow_document: ":",
+                deny_exit: "2",
+            }),
+            HookTarget::Codex => Some(WrapperDialect {
+                tool_filter: ".tool_name // empty",
+                input_filter: ".tool_input // {}",
+                cwd_filter: ".cwd // empty",
+                deny_document: "printf '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$reason_json\"",
+                // Stop is the one event whose stdout must parse as JSON even
+                // when nothing was decided.
+                allow_document: "[ \"$HOOK_EVENT\" = stop ] && printf '{}'",
+                deny_exit: "2",
+            }),
+            HookTarget::Antigravity => Some(WrapperDialect {
+                tool_filter: ".toolCall.name // empty",
+                input_filter: ".toolCall.args // {}",
+                cwd_filter: ".workspacePaths[0] // empty",
+                deny_document: "printf '{\"decision\":\"deny\",\"reason\":%s}' \"$reason_json\"",
+                // Only the pre-tool event carries a decision; the others answer
+                // with the empty object the vendor's contract requires.
+                allow_document: "[ \"$HOOK_EVENT\" = pre_tool_use ] || printf '{}'",
+                // The decision is the stdout document; a non-zero exit is a
+                // failed hook here, not a block.
+                deny_exit: "0",
+            }),
+            HookTarget::OpenCode => None,
+        }
     }
 }
 
 /// The `case` arm list translating this harness's native tool names into
 /// `HOOK_TOOL` and the matched alias's portable field variables, generated
 /// from the one vocabulary the matchers are generated from.
-fn wrapper_alias_table(target: &str) -> String {
+fn wrapper_alias_table(target: HookTarget) -> String {
     let mut arms = String::new();
     for (native, binding) in vocabulary(target).native_names() {
         let mut assignments = format!("HOOK_TOOL={};", binding.alias);
@@ -782,7 +850,7 @@ fn wrapper_alias_table(target: &str) -> String {
 /// Every portable field variable any alias of this harness can set. They are
 /// declared empty up front so an unmatched tool leaves a defined (and empty)
 /// variable rather than tripping `set -u` in the handler.
-fn wrapper_field_variables(target: &str) -> Vec<String> {
+fn wrapper_field_variables(target: HookTarget) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for binding in vocabulary(target).bindings {
         for (portable, _) in binding.fields {
@@ -812,8 +880,9 @@ fn wrapper_field_variables(target: &str) -> Vec<String> {
 /// The ABI's "bounded output" lives here too: the wrapper is the only route
 /// left, so the bound the removed in-binary runtime carried has to be the
 /// one [`HANDLER_REASON_LIMIT`] states.
-pub(crate) fn wrapper_source(target: &str) -> Option<String> {
-    let dialect = wrapper_dialect(target)?;
+pub(crate) fn wrapper_source(target: HookTarget) -> Option<String> {
+    let dialect = target.dialect()?;
+    let harness = target.key();
     let fields = wrapper_field_variables(target);
     let field_defaults = fields
         .iter()
@@ -825,7 +894,6 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
     let deny_exit_code = uze_core::hook::DENY_EXIT_CODE;
     let reason_limit = HANDLER_REASON_LIMIT;
     let WrapperDialect {
-        harness,
         tool_filter,
         input_filter,
         cwd_filter,
@@ -1012,18 +1080,6 @@ pub(crate) const WRAPPER_RELATIVE_PATH: &str = "hooks/exec";
 /// document that big, which the harness then has to parse.
 pub(crate) const HANDLER_REASON_LIMIT: usize = 4096;
 
-/// Where a harness whose hooks are merged into a shared config file keeps
-/// its wrapper: one file per harness under UZE's own state, never in the
-/// Store and never in the harness's own directories. Byte-identical for
-/// every package, so one file serves them all.
-pub(crate) fn shared_wrapper_path(uze_home: &UzeHome, target: &str) -> PathBuf {
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join(target)
-        .join(WRAPPER_RELATIVE_PATH)
-}
-
 /// Writes (or refreshes) a generated wrapper, executable. Idempotent: the
 /// content is a pure function of the harness.
 pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
@@ -1046,7 +1102,7 @@ pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
             source,
         })?;
     }
-    write_atomic(path, source.as_bytes())?;
+    uze_core::persistence::write_atomic(path, source.as_bytes())?;
     make_executable(path)
 }
 
@@ -1092,7 +1148,7 @@ fn make_executable(path: &Path) -> Result<()> {
 /// the ledger once every detach of the removal has returned — so the
 /// receipt being detached, and during `uze remove` each of its siblings, is
 /// still listed there while its entry is already gone from the config.
-pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: &str) {
+fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: HookTarget) {
     // A ledger that cannot be read has not said the wrapper is unused; it
     // has said nothing. Deleting on that answer is a destructive mutation
     // authorized by an unreadable ledger, which is exactly what receipts
@@ -1106,7 +1162,7 @@ pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, tar
     if still_used {
         return;
     }
-    let path = shared_wrapper_path(uze_home, target);
+    let path = target.wrapper_path(uze_home);
     let _ = fs::remove_file(&path);
     if let Some(parent) = path.parent() {
         let _ = fs::remove_dir(parent);
@@ -1129,7 +1185,10 @@ pub(crate) fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, tar
 /// each of those still fires the wrapper, and an event-array config reports
 /// an edited entry as absent, so the wrapper's own path in the file is the
 /// last word.
-fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt, target: &str) -> bool {
+fn entry_is_attached(
+    receipt: &uze_core::integration::AttachmentReceipt,
+    target: HookTarget,
+) -> bool {
     let uze_core::integration::ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
@@ -1140,11 +1199,13 @@ fn entry_is_attached(receipt: &uze_core::integration::AttachmentReceipt, target:
     else {
         return false;
     };
-    let inspection = if target == ANTIGRAVITY_TARGET {
-        inspect_named_entry(config_file, entry_name, expected, None)
-    } else {
-        inspect_event_entry(config_file, *event, expected, None)
-    };
+    let inspection = target.entry_state(&HookEntry {
+        config_file,
+        entry_name,
+        event: *event,
+        expected,
+        wrapper,
+    });
     if inspection.state != AttachmentState::Missing {
         return true;
     }
@@ -1197,50 +1258,6 @@ pub(crate) fn wrapper_command_line(
 // Event-array config merge (Claude settings.json, Codex hooks.json)
 // ============================================================================
 
-/// Reads a shared hook config as a JSON object; a missing file is an empty
-/// object. Malformed JSON or a non-object root is a blocked file, never
-/// something UZE rewrites.
-fn read_config_object(config_path: &Path) -> std::result::Result<serde_json::Value, String> {
-    match fs::read(config_path) {
-        Ok(bytes) if bytes.is_empty() => Ok(serde_json::json!({})),
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-            format!(
-                "hook config `{}` is not readable JSON: {error}",
-                config_path.display()
-            )
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
-        Err(error) => Err(format!(
-            "hook config `{}` cannot be read: {error}",
-            config_path.display()
-        )),
-    }
-    .and_then(|value| {
-        if value.is_object() {
-            Ok(value)
-        } else {
-            Err(format!(
-                "hook config `{}` root must be a JSON object",
-                config_path.display()
-            ))
-        }
-    })
-}
-
-/// Writes a config document with a trailing newline, creating missing
-/// parent directories for a UZE-created file. Atomic (temp+rename) so a
-/// crash mid-merge can never corrupt a vendor config file.
-fn write_config(config_path: &Path, config: &serde_json::Value) -> Result<()> {
-    let parent = config_path.parent().expect("hook config path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    let mut bytes = serde_json::to_vec_pretty(config).expect("hook config serializes");
-    bytes.push(b'\n');
-    write_atomic(config_path, &bytes)
-}
-
 /// The exact entries one integration already owns for one hook entry name
 /// in the receipt ledger — the "previous version" contents for idempotent
 /// re-attach, and the proof of ownership for a later replacement.
@@ -1271,36 +1288,6 @@ pub(crate) fn previous_hook_entry_content(
             _ => None,
         })
         .collect())
-}
-
-/// Merges the current rendered entry, first replacing any earlier version of
-/// the same group this integration already owns (an update may have changed
-/// the rendered entry), then pruning identical duplicates. Returns the
-/// config path the artifact claims, for the receipt.
-pub(crate) fn attach_event_entry(
-    uze_home: &UzeHome,
-    integration_id: &str,
-    config_file: &Path,
-    event: HookEvent,
-    entry_name: &str,
-    expected: &str,
-    wrapper: Option<(&str, &Path)>,
-) -> Result<PathBuf> {
-    // The wrapper is what the harness will actually run, so it lands before
-    // the entry that names it.
-    if let Some((target, path)) = wrapper
-        && let Some(source) = wrapper_source(target)
-    {
-        materialize_wrapper(path, &source)?;
-    }
-    let previous = previous_hook_entry_content(uze_home, integration_id, entry_name)?;
-    let expected: serde_json::Value =
-        serde_json::from_str(expected).map_err(|source| UzeError::Json {
-            path: config_file.to_path_buf(),
-            source,
-        })?;
-    merge_event_entry(config_file, event, &expected, &previous)?;
-    Ok(config_file.to_path_buf())
 }
 
 /// The event's group array inside `{"hooks": {...}}`, creating it when
@@ -1351,7 +1338,7 @@ pub(crate) fn merge_event_entry(
     entry: &serde_json::Value,
     previous: &[String],
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     let array = event_array(&mut config, event, config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
@@ -1363,7 +1350,7 @@ pub(crate) fn merge_event_entry(
     if !array.iter().any(|candidate| candidate == entry) {
         array.push(entry.clone());
     }
-    write_config(config_path, &config)?;
+    json_config::write_object(config_path, &config)?;
     Ok(config_path.to_path_buf())
 }
 
@@ -1373,12 +1360,8 @@ pub(crate) fn inspect_event_entry(
     config_path: &Path,
     event: HookEvent,
     expected: &str,
-    wrapper: Option<(&str, &Path)>,
 ) -> AttachmentInspection {
-    if let Some(inspection) = inspect_wrapper(wrapper) {
-        return inspection;
-    }
-    let Ok(config) = read_config_object(config_path) else {
+    let Ok(config) = json_config::read_object(config_path) else {
         return blocked("hook config is missing or unreadable");
     };
     let Some(entries) = config
@@ -1416,13 +1399,12 @@ pub(crate) fn remove_event_entry(
     config_path: &Path,
     event: HookEvent,
     expected: &str,
-    wrapper: Option<(&str, &Path)>,
 ) -> Result<AttachmentInspection> {
-    let inspection = inspect_event_entry(config_path, event, expected, wrapper);
+    let inspection = inspect_event_entry(config_path, event, expected);
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     let array = event_array(&mut config, event, config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
@@ -1462,7 +1444,7 @@ pub(crate) fn remove_event_entry(
             }
         }
     } else {
-        write_config(config_path, &config)?;
+        json_config::write_object(config_path, &config)?;
     }
     Ok(AttachmentInspection {
         state: AttachmentState::Missing,
@@ -1472,9 +1454,8 @@ pub(crate) fn remove_event_entry(
 
 /// The wrapper is the other half of every merged delivery: an entry
 /// pointing at a missing or edited wrapper is drift, not a match. `None`
-/// when the wrapper is what UZE writes (or when there is none to check).
-fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspection> {
-    let (target, path) = wrapper?;
+/// when the wrapper is what UZE writes.
+fn inspect_wrapper(target: HookTarget, path: &Path) -> Option<AttachmentInspection> {
     match fs::read_to_string(path) {
         Err(_) => Some(AttachmentInspection {
             state: AttachmentState::Missing,
@@ -1491,13 +1472,6 @@ fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspectio
             reason: "the generated hook wrapper is not executable".to_owned(),
         }),
         Ok(_) => None,
-    }
-}
-
-fn blocked(reason: &str) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason: reason.to_owned(),
     }
 }
 
@@ -1530,7 +1504,7 @@ fn bridge_hooks(hooks: &[&PortableHook], package_root: &Path) -> serde_json::Val
                     "id": hook.id,
                     "event": hook.event.abi_name(),
                     "effect": hook.effect.abi_name(),
-                    "matchers": hook.matchers.iter().flat_map(|m| tool_names("opencode", m)).collect::<Vec<_>>(),
+                    "matchers": hook.matchers.iter().flat_map(|m| tool_names(HookTarget::OpenCode, m)).collect::<Vec<_>>(),
                     "handlers": hook.handlers.iter().map(|handler| serde_json::json!({
                         "command": handler.command.replace(
                             "${PLUGIN_ROOT}",
@@ -1549,7 +1523,7 @@ fn bridge_hooks(hooks: &[&PortableHook], package_root: &Path) -> serde_json::Val
 /// values, each read from that harness's own input field.
 fn bridge_alias_table() -> String {
     let mut rows = Vec::new();
-    for (native, binding) in vocabulary("opencode").native_names() {
+    for (native, binding) in vocabulary(HookTarget::OpenCode).native_names() {
         let fields = binding
             .fields
             .iter()
@@ -1752,140 +1726,61 @@ pub(crate) fn groups_with_ids(
 }
 
 /// Parses a hook resource's payload into its portable group and computes the
-/// per-resource plan: semantic compatibility from the vendor profile, and a
-/// managed config entry carrying the exact rendered group (the receipt's
-/// content-identity fingerprint). A `degraded` or `unsupported` route never
-/// attaches — the mechanism carries the diagnostic instead.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn hook_exposure_plan(
-    uze_home: &UzeHome,
+/// per-resource plan: semantic compatibility from the vendor profile —
+/// `bridged` when UZE's own generated runner carries the hook — and the
+/// artifact `deliver` renders for it. A `degraded` or `unsupported` route
+/// never attaches, and neither does a group `deliver` has no artifact for
+/// on this platform: the mechanism carries the diagnostic instead.
+pub(crate) fn hook_plan(
     resource: &Resource,
     capabilities: &HookCapabilities,
-    config_file: PathBuf,
-    target: &str,
-    exec_form: bool,
     bridged: bool,
     evidence: &str,
+    deliver: impl FnOnce(&PortableHook) -> Option<ManagedArtifact>,
 ) -> ExposurePlan {
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan("hook resource payload is not a valid portable hook group");
+        return unsupported("hook resource payload is not a valid portable hook group");
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, bridged);
-    let mut undeliverable = None;
-    let mechanism = match compatibility.route {
-        CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
-            ExposureMechanism::Unsupported {
+    let with_compatibility = |reason: &str| format!("{evidence} Compatibility: {reason}");
+    if matches!(
+        compatibility.route,
+        CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded
+    ) {
+        return ExposurePlan {
+            route: compatibility.route,
+            mechanism: ExposureMechanism::Unsupported {
                 rationale: compatibility
                     .reason
                     .clone()
                     .unwrap_or_else(|| "no compatible hook route".to_owned()),
-            }
-        }
-        _ => {
-            match hook_delivery(
-                target,
-                &hook,
-                &resource.package_root,
-                Some(shared_wrapper_path(uze_home, target)),
-                exec_form,
-            ) {
-                Some(delivery) => ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
-                    config_file,
-                    entry_name: hook_entry_name(resource, &hook),
-                    event: hook.event,
-                    expected: serde_json::to_string(&delivery.entry)
-                        .expect("hook entry serializes"),
-                    wrapper: delivery.wrapper,
-                }),
-                None => {
-                    undeliverable = Some(NO_WRAPPER_TEMPLATE);
-                    ExposureMechanism::Unsupported {
-                        rationale: NO_WRAPPER_TEMPLATE.to_owned(),
-                    }
-                }
-            }
-        }
-    };
-    // A semantic route the delivery cannot take is not a route: a harness
-    // this platform has no wrapper for is Unsupported, and says why.
-    let route = match undeliverable {
-        Some(_) => CompatibilityRoute::Unsupported,
-        None => compatibility.route,
-    };
-    let evidence = match (&compatibility.reason, undeliverable) {
-        (Some(reason), _) => format!("{evidence} Compatibility: {reason}"),
-        (None, Some(reason)) => format!("{evidence} Delivery: {reason}."),
-        (None, None) => evidence.to_owned(),
-    };
-    ExposurePlan {
-        route,
-        mechanism,
-        evidence,
+            },
+            evidence: compatibility
+                .reason
+                .as_deref()
+                .map_or_else(|| evidence.to_owned(), with_compatibility),
+        };
     }
-}
-
-/// Antigravity's hook plan: the same assessment and the same wrapper as
-/// every merged delivery, but the entry is one *named* value
-/// (`{"<Event>": <entries>}`) rather than a member of an event array,
-/// because this harness's shared `hooks.json` is a map of named hooks.
-///
-/// The wrapper lives under UZE's own state (`$UZE_HOME/state/attachments/
-/// antigravity/hooks/exec`), not inside a plugin: a shared config file has
-/// no plugin root to resolve against, and the harness runs a hook with its
-/// cwd set to the directory holding `hooks.json`, so every path in the
-/// entry is absolute.
-pub(crate) fn antigravity_hook_exposure_plan(
-    uze_home: &UzeHome,
-    resource: &Resource,
-    capabilities: &HookCapabilities,
-    config_file: PathBuf,
-) -> ExposurePlan {
-    const EVIDENCE: &str = "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).";
-    let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan("hook resource payload is not a valid portable hook group");
-    };
-    let compatibility = uze_core::hook::assess(&hook, capabilities, false);
-    let mut undeliverable = false;
-    let mechanism = match compatibility.route {
-        CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
-            ExposureMechanism::Unsupported {
-                rationale: compatibility
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "no compatible hook route".to_owned()),
-            }
-        }
-        _ if !deliverable(ANTIGRAVITY_TARGET) => {
-            undeliverable = true;
-            ExposureMechanism::Unsupported {
-                rationale: NO_WRAPPER_TEMPLATE.to_owned(),
-            }
-        }
-        _ => {
-            let wrapper = shared_wrapper_path(uze_home, ANTIGRAVITY_TARGET);
-            let entry = agy_named_entry(&hook, &wrapper, &resource.package_root);
-            ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
-                config_file,
-                entry_name: hook_entry_name(resource, &hook),
-                event: hook.event,
-                expected: serde_json::to_string(&entry).expect("hook entry serializes"),
-                wrapper,
-            })
-        }
-    };
-    let evidence = match (&compatibility.reason, undeliverable) {
-        (Some(reason), _) => format!("{EVIDENCE} Compatibility: {reason}"),
-        (None, true) => format!("{EVIDENCE} Delivery: {NO_WRAPPER_TEMPLATE}."),
-        (None, false) => EVIDENCE.to_owned(),
-    };
-    ExposurePlan {
-        route: if undeliverable {
-            CompatibilityRoute::Unsupported
-        } else {
-            compatibility.route
+    match deliver(&hook) {
+        Some(artifact) => ExposurePlan {
+            route: compatibility.route,
+            mechanism: ExposureMechanism::Managed(artifact),
+            evidence: compatibility
+                .reason
+                .as_deref()
+                .map_or_else(|| evidence.to_owned(), with_compatibility),
         },
-        mechanism,
-        evidence,
+        // A semantic route the delivery cannot take is not a route.
+        None => ExposurePlan {
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: NO_WRAPPER_TEMPLATE.to_owned(),
+            },
+            evidence: compatibility.reason.as_deref().map_or_else(
+                || format!("{evidence} Delivery: {NO_WRAPPER_TEMPLATE}."),
+                with_compatibility,
+            ),
+        },
     }
 }
 
@@ -1893,16 +1788,6 @@ pub(crate) fn antigravity_hook_exposure_plan(
 /// qualified-capability naming policy (ADR-026): `<package>:<hook-id>`.
 pub(crate) fn hook_entry_name(resource: &Resource, hook: &PortableHook) -> String {
     format!("{}:{}", resource.package_id.as_str(), hook.id)
-}
-
-fn unsupported_plan(rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        route: CompatibilityRoute::Unsupported,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
 }
 
 #[cfg(test)]
@@ -1941,19 +1826,22 @@ mod tests {
     #[test]
     fn vendor_aliases_are_explicit() {
         assert_eq!(
-            tool_names("claude", &HookMatcher::Portable("shell".into())),
+            tool_names(HookTarget::Claude, &HookMatcher::Portable("shell".into())),
             ["Bash"]
         );
         assert_eq!(
-            tool_names("antigravity", &HookMatcher::Portable("shell".into())),
+            tool_names(
+                HookTarget::Antigravity,
+                &HookMatcher::Portable("shell".into())
+            ),
             ["run_command"]
         );
         assert_eq!(
-            tool_names("opencode", &HookMatcher::Native("Write".into())),
+            tool_names(HookTarget::OpenCode, &HookMatcher::Native("Write".into())),
             ["Write"]
         );
         assert_eq!(
-            vocabulary("claude")
+            vocabulary(HookTarget::Claude)
                 .binding_for_native("Bash")
                 .map(|binding| binding.alias),
             Some("shell"),
@@ -1961,7 +1849,12 @@ mod tests {
         );
     }
 
-    const TARGETS: [&str; 4] = ["claude", "codex", "antigravity", "opencode"];
+    const TARGETS: [HookTarget; 4] = [
+        HookTarget::Claude,
+        HookTarget::Codex,
+        HookTarget::Antigravity,
+        HookTarget::OpenCode,
+    ];
 
     #[test]
     fn every_alias_is_bound_on_every_harness_and_carries_its_portable_fields() {
@@ -1990,39 +1883,39 @@ mod tests {
 
     #[test]
     fn a_native_matcher_yields_no_portable_fields() {
-        let table = vocabulary("claude");
+        let table = vocabulary(HookTarget::Claude);
         assert!(table.binding_for_native("SomeVendorOnlyTool").is_none());
         assert_eq!(
-            tool_names("claude", &HookMatcher::Native("Write".into())),
+            tool_names(HookTarget::Claude, &HookMatcher::Native("Write".into())),
             ["Write"]
         );
     }
 
     #[test]
     fn the_shell_alias_reads_each_harnesss_own_command_field() {
-        let field = |target: &str| {
+        let field = |target: HookTarget| {
             vocabulary(target)
                 .binding("shell")
                 .and_then(|binding| binding.fields.first())
                 .map(|(_, native)| *native)
         };
-        assert_eq!(field("claude"), Some("command"));
-        assert_eq!(field("codex"), Some("cmd"));
-        assert_eq!(field("antigravity"), Some("CommandLine"));
-        assert_eq!(field("opencode"), Some("command"));
+        assert_eq!(field(HookTarget::Claude), Some("command"));
+        assert_eq!(field(HookTarget::Codex), Some("cmd"));
+        assert_eq!(field(HookTarget::Antigravity), Some("CommandLine"));
+        assert_eq!(field(HookTarget::OpenCode), Some("command"));
     }
 
     #[test]
     fn a_renamed_vendor_tool_still_normalizes_to_its_alias() {
         let alias = |native| {
-            vocabulary("codex")
+            vocabulary(HookTarget::Codex)
                 .binding_for_native(native)
                 .map(|binding| binding.alias)
         };
         assert_eq!(alias("exec_command"), Some("shell"));
         assert_eq!(alias("Bash"), Some("shell"));
         assert_eq!(
-            tool_names("codex", &HookMatcher::Portable("shell".into())),
+            tool_names(HookTarget::Codex, &HookMatcher::Portable("shell".into())),
             ["exec_command", "Bash"],
             "the matcher intercepts every name this harness's shell tool answers to"
         );
@@ -2033,33 +1926,47 @@ mod tests {
     /// contract, so a delivery that cannot write one has nothing honest to
     /// attach — an entry running something else would be a hook the author
     /// never wrote.
+    fn hook_resource(package: &Path) -> Resource {
+        Resource::from_package(
+            uze_core::store::PackageId::from_plugin_name("demo", &package.join("plugin.json"))
+                .unwrap(),
+            package.to_path_buf(),
+            uze_core::capability::Capability {
+                kind: uze_core::capability::CapabilityKind::Hook,
+                path: package.join(HOOKS_FILE_NAME),
+                payload: serde_json::to_vec(&hook()).unwrap(),
+            },
+        )
+    }
+
+    /// A platform the `sh` template does not cover gets no hook, and the
+    /// plan says so. The wrapper is the only implementation of the
+    /// contract, so a delivery that cannot write one has nothing honest to
+    /// attach — an entry running something else would be a hook the author
+    /// never wrote.
     #[test]
     fn a_platform_without_a_wrapper_template_delivers_no_hook() {
-        let delivered = hook_delivery(
-            "claude",
-            &hook(),
-            Path::new("/pkg"),
-            Some(PathBuf::from("/state/hooks/exec")),
-            true,
-        )
-        .expect("a harness with a template delivers");
-        assert_eq!(delivered.wrapper, Path::new("/state/hooks/exec"));
-        assert_eq!(delivered.entry["hooks"][0]["command"], "/state/hooks/exec");
+        let home = UzeHome::at(Path::new("/tmp/uze-home"));
+        let resource = hook_resource(Path::new("/pkg"));
+        let plan = HookTarget::Claude.entry_plan(
+            &home,
+            &resource,
+            PathBuf::from("/config/settings.json"),
+            "evidence.",
+        );
+        let ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
+            expected, wrapper, ..
+        }) = plan.mechanism
+        else {
+            panic!("a harness with a template delivers: {:?}", plan.mechanism);
+        };
+        assert_eq!(wrapper, HookTarget::Claude.wrapper_path(&home));
+        let entry: serde_json::Value = serde_json::from_str(&expected).unwrap();
+        assert_eq!(entry["hooks"][0]["command"], wrapper.display().to_string());
 
         assert!(
-            hook_delivery("claude", &hook(), Path::new("/pkg"), None, true).is_none(),
-            "no wrapper to run is no delivery"
-        );
-        assert!(
-            hook_delivery(
-                "a-harness-with-no-template",
-                &hook(),
-                Path::new("/pkg"),
-                Some(PathBuf::from("/state/hooks/exec")),
-                true,
-            )
-            .is_none(),
-            "a harness the template generator does not cover delivers nothing"
+            wrapper_source(HookTarget::OpenCode).is_none(),
+            "a harness the template generator does not cover has no wrapper"
         );
     }
 
@@ -2068,28 +1975,15 @@ mod tests {
     /// not there.
     #[test]
     fn a_hook_that_cannot_be_delivered_is_reported_unsupported() {
-        let home = UzeHome::at(Path::new("/tmp/uze-home"));
         let package = uze_testkit::temp::scratch("undeliverable");
         fs::create_dir_all(&package).unwrap();
-        let resource = Resource::from_package(
-            uze_core::store::PackageId::from_plugin_name("demo", &package.join("plugin.json"))
-                .unwrap(),
-            package.clone(),
-            uze_core::capability::Capability {
-                kind: uze_core::capability::CapabilityKind::Hook,
-                path: package.join(HOOKS_FILE_NAME),
-                payload: serde_json::to_vec(&hook()).unwrap(),
-            },
-        );
-        let plan = hook_exposure_plan(
-            &home,
+        let resource = hook_resource(&package);
+        let plan = hook_plan(
             &resource,
-            &claude_capabilities(),
-            PathBuf::from("/config/settings.json"),
-            "a-harness-with-no-template",
-            true,
+            &HookTarget::Claude.capabilities(),
             false,
             "evidence.",
+            |_| None,
         );
         assert_eq!(plan.route, CompatibilityRoute::Unsupported);
         assert!(
@@ -2107,7 +2001,7 @@ mod tests {
     #[test]
     fn group_entry_omits_matcher_for_unmatch_all_and_reserves_native_timeout() {
         let mut hook = hook();
-        let entry = group_entry("claude", &hook, &invocation(&hook));
+        let entry = group_entry(HookTarget::Claude, &hook, &invocation(&hook));
         assert_eq!(entry["matcher"], "Bash|Write");
         assert_eq!(entry["hooks"][0]["type"], "command");
         assert_eq!(
@@ -2115,7 +2009,7 @@ mod tests {
             "each handler's own bound plus its kill grace, plus 1s to render"
         );
         hook.matchers = Vec::new();
-        let entry = group_entry("claude", &hook, &invocation(&hook));
+        let entry = group_entry(HookTarget::Claude, &hook, &invocation(&hook));
         assert!(
             entry.get("matcher").is_none(),
             "no matcher key for a match-all group"
@@ -2142,7 +2036,7 @@ mod tests {
         .to_string();
         let hooks =
             uze_core::hook::parse_manifest(Path::new("hooks.json"), manifest.as_bytes()).unwrap();
-        let entry = group_entry("claude", &hooks[0], &invocation(&hooks[0]));
+        let entry = group_entry(HookTarget::Claude, &hooks[0], &invocation(&hooks[0]));
         let native = entry["hooks"][0]["timeout"].as_u64().unwrap();
         let spent: u64 = hooks[0]
             .handlers
@@ -2248,7 +2142,7 @@ mod tests {
 
         merge_named_entry(&config, name, &entry).unwrap();
         assert_eq!(
-            inspect_named_entry(&config, name, &expected, None).state,
+            inspect_named_entry(&config, name, &expected).state,
             AttachmentState::Matched
         );
         // Merging the same entry again changes nothing (idempotence).
@@ -2262,7 +2156,7 @@ mod tests {
         assert_eq!(after["notes"], "kept");
         assert_eq!(after[name], entry);
 
-        let detached = remove_named_entry(&config, name, &expected, None).unwrap();
+        let detached = remove_named_entry(&config, name, &expected).unwrap();
         assert_eq!(detached.state, AttachmentState::Missing);
         let survivors: serde_json::Value =
             serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
@@ -2291,20 +2185,18 @@ mod tests {
         edited[name]["PreToolUse"][0]["matcher"] = serde_json::json!("something-else");
         fs::write(&config, serde_json::to_vec_pretty(&edited).unwrap()).unwrap();
         assert_eq!(
-            inspect_named_entry(&config, name, &expected, None).state,
+            inspect_named_entry(&config, name, &expected).state,
             AttachmentState::Drifted
         );
         assert_eq!(
-            remove_named_entry(&config, name, &expected, None)
-                .unwrap()
-                .state,
+            remove_named_entry(&config, name, &expected).unwrap().state,
             AttachmentState::Drifted,
             "a drifted entry is reported, never removed"
         );
 
         fs::write(&config, "{not json").unwrap();
         assert_eq!(
-            inspect_named_entry(&config, name, &expected, None).state,
+            inspect_named_entry(&config, name, &expected).state,
             AttachmentState::Blocked
         );
         assert_eq!(fs::read_to_string(&config).unwrap(), "{not json");
@@ -2321,7 +2213,7 @@ mod tests {
         let entry = agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg"));
         let expected = serde_json::to_string(&entry).unwrap();
         merge_named_entry(&config, name, &entry).unwrap();
-        remove_named_entry(&config, name, &expected, None).unwrap();
+        remove_named_entry(&config, name, &expected).unwrap();
         assert!(!config.exists(), "UZE removes the file it alone created");
     }
 
@@ -2335,18 +2227,18 @@ mod tests {
             r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"foreign"}]}]},"theme":"dark"}"#,
         )
         .unwrap();
-        let entry = group_entry("claude", &hook(), &invocation(&hook()));
+        let entry = group_entry(HookTarget::Claude, &hook(), &invocation(&hook()));
         let expected = serde_json::to_string(&entry).unwrap();
         let path = merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
         assert_eq!(path, config);
         assert_eq!(
-            inspect_event_entry(&config, HookEvent::PreToolUse, &expected, None).state,
+            inspect_event_entry(&config, HookEvent::PreToolUse, &expected).state,
             AttachmentState::Matched
         );
         // Idempotence: a second merge changes nothing.
         merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
         assert_eq!(
-            inspect_event_entry(&config, HookEvent::PreToolUse, &expected, None).state,
+            inspect_event_entry(&config, HookEvent::PreToolUse, &expected).state,
             AttachmentState::Matched
         );
         let after: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
@@ -2358,12 +2250,12 @@ mod tests {
             "the foreign group stays and UZE's is appended"
         );
         assert_eq!(
-            inspect_event_entry(&config, HookEvent::PostToolUse, &expected, None).state,
+            inspect_event_entry(&config, HookEvent::PostToolUse, &expected).state,
             AttachmentState::Missing,
             "an entry in the wrong event array is not matched"
         );
         assert_eq!(
-            remove_event_entry(&config, HookEvent::PreToolUse, &expected, None)
+            remove_event_entry(&config, HookEvent::PreToolUse, &expected)
                 .unwrap()
                 .state,
             AttachmentState::Missing
@@ -2388,11 +2280,11 @@ mod tests {
         let config = root.join("hooks.json");
         let mut old = hook();
         old.handlers[0].timeout = 10;
-        let old_entry = group_entry("codex", &old, &invocation(&old));
+        let old_entry = group_entry(HookTarget::Codex, &old, &invocation(&old));
         merge_event_entry(&config, HookEvent::PreToolUse, &old_entry, &[]).unwrap();
         let mut updated = hook();
         updated.handlers[0].timeout = 20;
-        let new_entry = group_entry("codex", &updated, &invocation(&updated));
+        let new_entry = group_entry(HookTarget::Codex, &updated, &invocation(&updated));
         merge_event_entry(
             &config,
             HookEvent::PreToolUse,
@@ -2416,7 +2308,7 @@ mod tests {
         let root = uze_testkit::temp::scratch("hooks-drift");
         fs::create_dir_all(&root).unwrap();
         let config = root.join("hooks.json");
-        let entry = group_entry("codex", &hook(), &invocation(&hook()));
+        let entry = group_entry(HookTarget::Codex, &hook(), &invocation(&hook()));
         let expected = serde_json::to_string(&entry).unwrap();
         merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
         // A user rewrites the UZE group — removal must inspect first and refuse.
@@ -2429,7 +2321,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            remove_event_entry(&config, HookEvent::PreToolUse, &expected, None)
+            remove_event_entry(&config, HookEvent::PreToolUse, &expected)
                 .unwrap()
                 .state,
             AttachmentState::Missing,
@@ -2447,7 +2339,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            remove_event_entry(&config, HookEvent::PreToolUse, &expected, None)
+            remove_event_entry(&config, HookEvent::PreToolUse, &expected)
                 .unwrap()
                 .state,
             AttachmentState::Missing
@@ -2461,7 +2353,7 @@ mod tests {
         let solo = root.join("solo.json");
         merge_event_entry(&solo, HookEvent::PreToolUse, &entry, &[]).unwrap();
         assert_eq!(
-            remove_event_entry(&solo, HookEvent::PreToolUse, &expected, None)
+            remove_event_entry(&solo, HookEvent::PreToolUse, &expected)
                 .unwrap()
                 .state,
             AttachmentState::Missing
@@ -2565,7 +2457,7 @@ mod tests {
         )
         .unwrap();
 
-        let entry = group_entry("claude", &hook(), &invocation(&hook()));
+        let entry = group_entry(HookTarget::Claude, &hook(), &invocation(&hook()));
         merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
 
         let after = fs::read_to_string(&config).unwrap();
@@ -2597,12 +2489,12 @@ mod tests {
 
         let root = uze_testkit::temp::scratch("hooks-wrapper-mode");
         let wrapper = root.join("hooks").join("exec");
-        let source = wrapper_source("claude").unwrap();
+        let source = wrapper_source(HookTarget::Claude).unwrap();
         materialize_wrapper(&wrapper, &source).unwrap();
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o644)).unwrap();
 
         assert_eq!(
-            inspect_wrapper(Some(("claude", &wrapper))).map(|inspection| inspection.state),
+            inspect_wrapper(HookTarget::Claude, &wrapper).map(|inspection| inspection.state),
             Some(AttachmentState::Drifted),
             "a wrapper the harness cannot execute is drift, not a match"
         );
@@ -2612,7 +2504,7 @@ mod tests {
             0o755,
             "re-materializing repairs the mode even when the bytes match"
         );
-        assert!(inspect_wrapper(Some(("claude", &wrapper))).is_none());
+        assert!(inspect_wrapper(HookTarget::Claude, &wrapper).is_none());
         assert_eq!(fs::read_to_string(&wrapper).unwrap(), source);
         let _ = fs::remove_dir_all(root);
     }
@@ -2626,7 +2518,7 @@ mod tests {
         uze_core::integration::AttachmentReceipt {
             package_id: "pkg@market".to_owned(),
             resource_identity: None,
-            integration: ANTIGRAVITY_TARGET.to_owned(),
+            integration: "antigravity".to_owned(),
             artifact: uze_core::integration::ManagedArtifact::HookConfigEntry {
                 config_file: config.to_path_buf(),
                 entry_name: entry_name.to_owned(),
@@ -2647,8 +2539,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let home = UzeHome::at(root.join("home"));
         let config = root.join("hooks.json");
-        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
-        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+        let wrapper = HookTarget::Antigravity.wrapper_path(&home);
+        materialize_wrapper(&wrapper, &wrapper_source(HookTarget::Antigravity).unwrap()).unwrap();
 
         let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
         let expected = serde_json::to_string(&entry).unwrap();
@@ -2663,15 +2555,15 @@ mod tests {
             .unwrap();
         }
 
-        remove_named_entry(&config, names[0], &expected, None).unwrap();
-        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        remove_named_entry(&config, names[0], &expected).unwrap();
+        prune_shared_wrapper(&home, "antigravity", HookTarget::Antigravity);
         assert!(
             wrapper.exists(),
             "a wrapper another entry still runs is kept"
         );
 
-        remove_named_entry(&config, names[1], &expected, None).unwrap();
-        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        remove_named_entry(&config, names[1], &expected).unwrap();
+        prune_shared_wrapper(&home, "antigravity", HookTarget::Antigravity);
         assert!(
             !wrapper.exists(),
             "the last detached entry takes the shared wrapper with it"
@@ -2689,8 +2581,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let home = UzeHome::at(root.join("home"));
         let config = root.join("hooks.json");
-        let wrapper = shared_wrapper_path(&home, ANTIGRAVITY_TARGET);
-        materialize_wrapper(&wrapper, &wrapper_source(ANTIGRAVITY_TARGET).unwrap()).unwrap();
+        let wrapper = HookTarget::Antigravity.wrapper_path(&home);
+        materialize_wrapper(&wrapper, &wrapper_source(HookTarget::Antigravity).unwrap()).unwrap();
 
         let entry = agy_named_entry(&hook(), &wrapper, Path::new("/pkg"));
         let expected = serde_json::to_string(&entry).unwrap();
@@ -2706,7 +2598,7 @@ mod tests {
         assert!(ledger.exists(), "the receipt was recorded where it is read");
         fs::write(&ledger, b"{ this is not json").unwrap();
 
-        prune_shared_wrapper(&home, ANTIGRAVITY_TARGET, ANTIGRAVITY_TARGET);
+        prune_shared_wrapper(&home, "antigravity", HookTarget::Antigravity);
         assert!(
             wrapper.exists(),
             "an unreadable ledger blocks the destructive step, it does not authorize it"
@@ -2724,11 +2616,11 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let home = UzeHome::at(root.join("home"));
         let config = root.join("settings.json");
-        let wrapper = shared_wrapper_path(&home, "claude");
-        materialize_wrapper(&wrapper, &wrapper_source("claude").unwrap()).unwrap();
+        let wrapper = HookTarget::Claude.wrapper_path(&home);
+        materialize_wrapper(&wrapper, &wrapper_source(HookTarget::Claude).unwrap()).unwrap();
 
         let entry = group_entry(
-            "claude",
+            HookTarget::Claude,
             &hook(),
             &HookInvocation::Exec {
                 command: wrapper.display().to_string(),
@@ -2749,12 +2641,12 @@ mod tests {
         document["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = serde_json::json!(99);
         fs::write(&config, serde_json::to_string_pretty(&document).unwrap()).unwrap();
         assert_eq!(
-            inspect_event_entry(&config, HookEvent::PreToolUse, &expected, None).state,
+            inspect_event_entry(&config, HookEvent::PreToolUse, &expected).state,
             AttachmentState::Missing,
             "content identity reports an edited entry as absent — the reason this needs a second look"
         );
 
-        prune_shared_wrapper(&home, "claude", "claude");
+        prune_shared_wrapper(&home, "claude", HookTarget::Claude);
         assert!(
             wrapper.exists(),
             "a wrapper a live entry still names is never removed"
@@ -2774,7 +2666,11 @@ mod wrapper_tests {
     };
     use uze_core::hook::{CommandHandlerType, HookEvent};
 
-    const TARGETS: [&str; 3] = ["claude", "codex", "antigravity"];
+    const TARGETS: [HookTarget; 3] = [
+        HookTarget::Claude,
+        HookTarget::Codex,
+        HookTarget::Antigravity,
+    ];
 
     fn goldens_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2857,7 +2753,7 @@ mod wrapper_tests {
     /// harness happens to be in are separate because a stale entry is
     /// exactly the case where they differ.
     struct Run<'a> {
-        target: &'a str,
+        target: HookTarget,
         /// Where the wrapper itself is written.
         wrapper_root: &'a Path,
         /// The root the group's entry names — the wrapper's first argument.
@@ -2872,7 +2768,7 @@ mod wrapper_tests {
     /// Runs the generated wrapper exactly as the harness does: the payload
     /// on stdin, the group's own arguments on the command line.
     fn run_wrapper(
-        target: &str,
+        target: HookTarget,
         root: &Path,
         hook: &PortableHook,
         payload: &str,
@@ -2940,23 +2836,23 @@ mod wrapper_tests {
 
     /// A `stop` payload as each harness sends it: no tool at all, which is
     /// what the wrapper has to leave the handler seeing.
-    fn stop_payload(target: &str) -> String {
+    fn stop_payload(target: HookTarget) -> String {
         match target {
-            "antigravity" => serde_json::json!({"workspacePaths": ["/repo"]}).to_string(),
+            HookTarget::Antigravity => serde_json::json!({"workspacePaths": ["/repo"]}).to_string(),
             _ => serde_json::json!({"cwd": "/repo"}).to_string(),
         }
     }
 
-    fn payload(target: &str, command: &str) -> String {
+    fn payload(target: HookTarget, command: &str) -> String {
         match target {
-            "antigravity" => serde_json::json!({
+            HookTarget::Antigravity => serde_json::json!({
                 "toolCall": {"name": "run_command", "args": {"CommandLine": command, "Cwd": "/repo"}},
                 "workspacePaths": ["/repo"],
             })
             .to_string(),
             _ => serde_json::json!({
-                "tool_name": if target == "codex" { "exec_command" } else { "Bash" },
-                "tool_input": if target == "codex" {
+                "tool_name": if target == HookTarget::Codex { "exec_command" } else { "Bash" },
+                "tool_input": if target == HookTarget::Codex {
                     serde_json::json!({"cmd": command})
                 } else {
                     serde_json::json!({"command": command})
@@ -2971,8 +2867,12 @@ mod wrapper_tests {
     /// exit 2 as the block signal; Antigravity reads the decision from
     /// stdout and logs any non-zero exit as a *failed* hook, so a denial
     /// there exits 0 (measured on 1.1.24).
-    fn block_exit(target: &str) -> i32 {
-        if target == ANTIGRAVITY_TARGET { 0 } else { 2 }
+    fn block_exit(target: HookTarget) -> i32 {
+        if target == HookTarget::Antigravity {
+            0
+        } else {
+            2
+        }
     }
 
     #[test]
@@ -3027,7 +2927,7 @@ mod wrapper_tests {
                 "{target}: the reason reaches stderr"
             );
             let document: serde_json::Value = serde_json::from_str(answer.stdout.trim()).unwrap();
-            let (decision, reason) = if target == "antigravity" {
+            let (decision, reason) = if target == HookTarget::Antigravity {
                 (&document["decision"], &document["reason"])
             } else {
                 (
@@ -3135,7 +3035,7 @@ mod wrapper_tests {
             "tool_input": {"anything": "x"},
         })
         .to_string();
-        let answer = run_wrapper("claude", &root, &hook, &payload, None);
+        let answer = run_wrapper(HookTarget::Claude, &root, &hook, &payload, None);
         assert_eq!(answer.exit, 0);
         assert_eq!(
             fs::read_to_string(root.join("seen.txt")).unwrap(),
@@ -3311,7 +3211,7 @@ mod wrapper_tests {
     /// is what this costs when it is wrong.
     #[test]
     fn a_handler_that_ignores_term_does_not_outlive_its_deadline() {
-        let target = "claude";
+        let target = HookTarget::Claude;
         let root = package("wrapper-escalation");
         // `trap '' TERM` is SIG_IGN, which survives the `exec`: the
         // grandchild is a `sleep` that cannot be TERMed, only killed.
@@ -3489,7 +3389,7 @@ mod wrapper_tests {
     /// Runs one fixture through one harness's wrapper and records the
     /// answer, with the throwaway package root written back as the
     /// placeholder an author would have typed.
-    fn recorded_answer(target: &str, index: usize, fixture: &Fixture) -> serde_json::Value {
+    fn recorded_answer(target: HookTarget, index: usize, fixture: &Fixture) -> serde_json::Value {
         let root = package(&format!("recorded-{target}-{index}"));
         let hook = group_at(
             fixture.event,
@@ -3525,7 +3425,7 @@ mod wrapper_tests {
         };
         let stdout = portable(&answer.stdout);
         let mut case = serde_json::Map::new();
-        case.insert("harness".to_owned(), serde_json::json!(target));
+        case.insert("harness".to_owned(), serde_json::json!(target.key()));
         case.insert(
             "event".to_owned(),
             serde_json::json!(fixture.event.abi_name()),

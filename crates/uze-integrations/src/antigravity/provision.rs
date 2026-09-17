@@ -3,9 +3,11 @@
 //! shelled installer / `agy update` (wired in `super::provision`, not here
 //! — this module only owns the binary probe and the version parse).
 
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
 
 use uze_core::integration::HarnessDetection;
+
+use crate::shared::process::{VersionToken, detect_version};
 
 /// The official installer's documented Unix destination
 /// (`~/.local/bin/<program>`), used as a lookup fallback when the binary is
@@ -16,19 +18,10 @@ pub(super) fn documented_install_path(program: &str) -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".local/bin").join(program))
 }
 
+/// `agy --version` prints a bare "1.1.19" — one token either way (verified
+/// against 1.1.19).
 pub(super) fn detect_binary(program: &str) -> HarnessDetection {
-    match Command::new(program).arg("--version").output() {
-        // `agy --version` prints a bare "1.1.19" — one token either way
-        // (verified against 1.1.19).
-        Ok(output) if output.status.success() => HarnessDetection {
-            present: true,
-            version: String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .map(str::to_owned),
-        },
-        _ => HarnessDetection::default(),
-    }
+    detect_version(program, VersionToken::First)
 }
 
 #[cfg(test)]
