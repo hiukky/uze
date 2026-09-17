@@ -667,9 +667,7 @@ fn spawn_commit_detail(
 }
 
 /// The answer to a placement request: where the agent goes, or why it
-/// cannot. A new agent always goes somewhere — isolation that fails falls
-/// back to the directory it was asked from — but a resume that fails has
-/// nowhere to fall back to, and opens no tab.
+/// cannot — in which case no tab opens.
 struct PlacementResolution {
     label: String,
     command: Vec<String>,
