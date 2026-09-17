@@ -3,6 +3,25 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Conformance Lab green on the refactored integrations
+
+- **Why:** the integrations consolidation changed several things that only real harness binaries can check:
+  - probes, which now have a timeout and require `--version` to succeed;
+  - OpenCode MCP, which now has a single file route;
+  - the generated Claude/Codex marketplace;
+  - hook and skill plans.
+- **Setup:** the cached Lab image carried `uze 0.0.0-alpha.4`, so a first run tested old code. The image was rebuilt from this branch.
+- **Result:**
+
+  | Harness | Asserted PASS |
+  |---|---|
+  | Claude Code 2.1.274 | 38/38 |
+  | Codex 0.154.0 | 50/50 |
+  | OpenCode 2.0.5 | 44/44 (6 ADAPTED) |
+  | Antigravity 1.2.4 | 48/48 |
+
+- **Harness versions:** each is newer than the version the Lab recorded, which ADR-035 reports as an explicit event rather than a failure.
+
 ## 2026-09-17 — Audit: shells, channels, panic restore (no change needed)
 
 - **Shell invocations:** `run_shell_bounded` runs only the project's own `setup`/`gate` steps, verbatim from `agents.yaml`. No agent-, branch- or task-derived value is interpolated into a shell. Git calls separate refs with `--`. The installers' `sh -c` strings are constants.
