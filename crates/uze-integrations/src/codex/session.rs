@@ -32,13 +32,6 @@ pub(super) fn resume_args(session: &SessionId) -> Vec<OsString> {
     ]
 }
 
-/// Not needed here: rollouts carry their own start time, so the launch time
-/// is guard enough for telling this task's conversation from the one the
-/// previous occupant of the checkout left behind.
-pub(super) fn recorded_for(_cwd: &Path) -> Option<SessionId> {
-    None
-}
-
 /// The newest conversation Codex recorded for `ctx.cwd` since the launch.
 pub(super) fn observe(sessions_root: &Path, ctx: &ObservationContext) -> Option<SessionId> {
     let mut newest: Option<(u64, SessionId)> = None;

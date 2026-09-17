@@ -41,24 +41,33 @@ pub fn parse_skill_body(bytes: &[u8]) -> (Option<String>, String) {
     let Some(text) = is_utf8(bytes) else {
         return (None, String::new());
     };
-    let stripped = text.strip_prefix("\u{feff}").unwrap_or(text);
-    let Some(rest) = stripped.strip_prefix("---\n") else {
+    let Some((head, body)) = split_frontmatter(text.strip_prefix('\u{feff}').unwrap_or(text))
+    else {
         return (None, text.to_owned());
     };
-    let Some(end) = rest.find("\n---\n") else {
-        return (None, text.to_owned());
-    };
-    let head = &rest[..end];
-    let body = &rest[end + "\n---\n".len()..];
-    let mut description = None;
-    for line in head.lines() {
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim() == "description"
-        {
-            description = Some(value.trim().to_owned());
-        }
-    }
-    (description, body.to_owned())
+    let description = head
+        .lines()
+        .rev()
+        .find_map(|line| key_value(line, "description"));
+    (description.map(str::to_owned), body.to_owned())
+}
+
+/// Splits a document into its `---` frontmatter block and the body after
+/// it; `None` when the document does not open with a closed block.
+pub fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("---\n")?;
+    let end = rest.find("\n---\n")?;
+    Some((&rest[..end], &rest[end + "\n---\n".len()..]))
+}
+
+/// The first value `key` holds in a frontmatter block, trimmed.
+pub fn head_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    head.lines().find_map(|line| key_value(line, key))
+}
+
+fn key_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let (candidate, value) = line.split_once(':')?;
+    (candidate.trim() == key).then(|| value.trim())
 }
 
 /// Escapes `value` as the contents of a YAML double-quoted scalar, so it can
@@ -100,11 +109,11 @@ pub fn has_disable_model_invocation(bytes: &[u8]) -> bool {
 /// model may still load it automatically. Same strictness as
 /// [`has_disable_model_invocation`].
 pub fn has_user_invocable_false(bytes: &[u8]) -> bool {
-    frontmatter_key_value(bytes, "user-invocable").is_some_and(|value| value == "false")
+    frontmatter_value(bytes, "user-invocable").is_some_and(|value| value == "false")
 }
 
 fn frontmatter_is_true(bytes: &[u8], key: &str) -> bool {
-    frontmatter_key_value(bytes, key).is_some_and(|value| value == "true")
+    frontmatter_value(bytes, key).is_some_and(|value| value == "true")
 }
 
 /// Reads one top-level frontmatter value (e.g. `name`) from canonical
@@ -112,19 +121,9 @@ fn frontmatter_is_true(bytes: &[u8], key: &str) -> bool {
 /// identity instead of inventing one. `None` for absent/malformed
 /// frontmatter or non-UTF8 payload — never a guess.
 pub fn frontmatter_value(bytes: &[u8], key: &str) -> Option<String> {
-    frontmatter_key_value(bytes, key)
-}
-
-fn frontmatter_key_value(bytes: &[u8], key: &str) -> Option<String> {
     let text = is_utf8(bytes)?;
-    let stripped = text.strip_prefix("\u{feff}").unwrap_or(text);
-    let rest = stripped.strip_prefix("---\n")?;
-    let end = rest.find("\n---\n")?;
-    let head = &rest[..end];
-    head.lines().find_map(|line| {
-        let (candidate, value) = line.split_once(':')?;
-        (candidate.trim() == key).then(|| value.trim().to_owned())
-    })
+    let (head, _) = split_frontmatter(text.strip_prefix('\u{feff}').unwrap_or(text))?;
+    head_value(head, key).map(str::to_owned)
 }
 
 /// Whether the payload declares OpenCode's user-only control —

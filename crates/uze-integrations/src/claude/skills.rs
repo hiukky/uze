@@ -66,8 +66,10 @@ impl ClaudeIntegration {
                     " The canonical invoke policy is translated into Claude's own frontmatter (disable-model-invocation: true when model=false, user-invocable: false when user=false) without touching the canonical Store bytes.",
                 );
             }
+            // Every valid policy is carried by Claude's own frontmatter
+            // markers, on a shim UZE generates rather than the Store bytes.
             return ExposurePlan {
-                route: route_for_policy(policy),
+                route: CompatibilityRoute::Adaptable,
                 mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
                     path: self.skills_dir.clone().join(entry_name),
                     target: shim_root,
@@ -85,19 +87,6 @@ impl ClaudeIntegration {
                 .to_owned(),
         }
     }
-}
-
-/// Route classification for one canonical invocation policy on Claude Code.
-///
-/// Claude natively preserves every valid combination (ADR-030): a
-/// user-only Skill gets `disable-model-invocation: true`, a model-only
-/// Skill gets `user-invocable: false`, and the default needs nothing. An
-/// invalid declaration (nobody can invoke it) is never projected.
-pub(super) fn route_for_policy(policy: SkillInvocationPolicy) -> CompatibilityRoute {
-    if policy.is_invalid() {
-        return CompatibilityRoute::Unsupported;
-    }
-    CompatibilityRoute::Adaptable
 }
 
 fn unsupported_invalid_policy() -> ExposurePlan {

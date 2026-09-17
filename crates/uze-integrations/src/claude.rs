@@ -340,10 +340,6 @@ impl IntegrationPort for ClaudeIntegration {
         session::resume_args(session)
     }
 
-    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
-        session::recorded_for(cwd)
-    }
-
     fn observe_session(
         &self,
         ctx: &uze_core::integration::ObservationContext,

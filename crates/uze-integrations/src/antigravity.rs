@@ -326,14 +326,6 @@ impl IntegrationPort for AntigravityIntegration {
         vec!["agy"]
     }
 
-    /// Antigravity's global skills root (`~/.gemini/antigravity-cli/skills`)
-    /// is exclusive to this integration — unlike Codex/OpenCode it
-    /// does not read `~/.agents/skills` — so no shared-root awareness is
-    /// reported (and none is needed for naming resolution).
-    fn shared_agent_skill_root(&self) -> Option<PathBuf> {
-        None
-    }
-
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         // Install: the documented official Unix installer (curl | bash).
         // The installer appends its own PATH export to the user's shell

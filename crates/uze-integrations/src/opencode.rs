@@ -184,10 +184,6 @@ impl IntegrationPort for OpenCodeIntegration {
         session::resume_args(session)
     }
 
-    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
-        session::recorded_for(cwd)
-    }
-
     fn observe_session(
         &self,
         ctx: &uze_core::integration::ObservationContext,
@@ -559,10 +555,7 @@ impl OpenCodeIntegration {
             if receipt.integration != self.id() {
                 continue;
             }
-            if !matches!(
-                receipt.artifact,
-                ManagedArtifact::HookConfigEntry { .. } | ManagedArtifact::ManagedHookFile { .. }
-            ) {
+            if !matches!(receipt.artifact, ManagedArtifact::ManagedHookFile { .. }) {
                 continue;
             }
             let Some(identity) = &receipt.resource_identity else {

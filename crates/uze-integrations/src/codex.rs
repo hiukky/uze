@@ -46,6 +46,7 @@ pub use mcp::detach_mcp_entry;
 
 use crate::hooks as hook_projection;
 use crate::shared::process::run_quiet;
+use crate::shared::skill::{head_value, split_frontmatter};
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_packages_present,
@@ -376,10 +377,6 @@ impl IntegrationPort for CodexIntegration {
         session: &uze_core::conversation::SessionId,
     ) -> Vec<std::ffi::OsString> {
         session::resume_args(session)
-    }
-
-    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
-        session::recorded_for(cwd)
     }
 
     fn observe_session(
@@ -775,33 +772,17 @@ impl PreferencePort for CodexIntegration {
 
 fn codex_agent_toml(resource: &Resource, fallback_name: &str) -> String {
     let markdown = String::from_utf8_lossy(&resource.capability.payload);
-    let (frontmatter, instructions) = markdown_frontmatter(&markdown);
-    let name = frontmatter_value(frontmatter, "name").unwrap_or(fallback_name);
-    let description =
-        frontmatter_value(frontmatter, "description").unwrap_or("Portable UZE custom agent.");
+    let (frontmatter, instructions) = split_frontmatter(&markdown).unwrap_or(("", &markdown));
+    let unquoted =
+        |key| head_value(frontmatter, key).map(|value| value.trim_matches('"').trim_matches('\''));
+    let name = unquoted("name").unwrap_or(fallback_name);
+    let description = unquoted("description").unwrap_or("Portable UZE custom agent.");
     format!(
         "name = {}\ndescription = {}\ndeveloper_instructions = {}\n",
         toml_string(name),
         toml_string(description),
         toml_string(instructions.trim()),
     )
-}
-
-fn markdown_frontmatter(markdown: &str) -> (&str, &str) {
-    let Some(rest) = markdown.strip_prefix("---\n") else {
-        return ("", markdown);
-    };
-    let Some(end) = rest.find("\n---\n") else {
-        return ("", markdown);
-    };
-    (&rest[..end], &rest[end + 5..])
-}
-
-fn frontmatter_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
-    frontmatter.lines().find_map(|line| {
-        let (found, value) = line.split_once(':')?;
-        (found.trim() == key).then(|| value.trim().trim_matches('"').trim_matches('\''))
-    })
 }
 
 fn toml_string(value: &str) -> String {
