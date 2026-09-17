@@ -405,9 +405,10 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        let executable = self.provisioning_executable();
         provision_cli(
             runner,
-            "codex",
+            &executable,
             self.detect(),
             ProcessSpec::new(
                 "sh",
@@ -417,7 +418,7 @@ impl IntegrationPort for CodexIntegration {
             // Real-CLI dogfood against codex-cli 0.148.0 found `--upgrade` is not
             // a recognized flag — `codex --help` lists `update` as a
             // subcommand instead.
-            ProcessSpec::new("codex", ["update"]).with_inherited_output(),
+            ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
         )
     }

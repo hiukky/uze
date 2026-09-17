@@ -816,7 +816,7 @@ mod lifecycle_tests {
             "claude-test-does-not-exist",
             uze_core::integration::HarnessDetection::default(),
             ProcessSpec::new("sh", ["-c", "official-install"]),
-            ProcessSpec::new("claude", ["update"]),
+            ProcessSpec::new("claude-test-does-not-exist", ["update"]),
             "official-native-installer",
         )
         .unwrap();
