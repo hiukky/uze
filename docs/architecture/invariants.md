@@ -168,7 +168,7 @@ where it always was, and never gains a policy sidecar it did not declare.
 
 > `tests/integrations/policy.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
 > `tests/integrations/policy.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
-> `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
+> `crates/uze-core/src/capability.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
 
 ### A shared-root entry always carries the superset of both encodings
 
