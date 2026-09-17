@@ -1945,7 +1945,7 @@ mod tests {
     /// attach — an entry running something else would be a hook the author
     /// never wrote.
     #[test]
-    fn only_a_harness_with_a_wrapper_template_delivers_an_entry() {
+    fn a_platform_without_a_wrapper_template_delivers_no_hook() {
         let home = UzeHome::at(Path::new("/tmp/uze-home"));
         let resource = hook_resource(Path::new("/pkg"));
         let plan = HookTarget::Claude.entry_plan(
