@@ -1854,6 +1854,40 @@ mod placement_tests {
         );
     }
 
+    /// The directory is not the only evidence an agent is alive: one whose
+    /// pane walked out of its slot stands nowhere its record names, and
+    /// only the identity its tab echoes still says it is there.
+    #[test]
+    fn an_agent_that_walked_out_of_its_slot_is_kept_by_the_identity_its_tab_echoes() {
+        let repository = repository("release-echoed");
+        let root = repository.root().to_path_buf();
+        let app = application("release-echoed-home");
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
+        let id = placed.placement.agent().as_str().to_owned();
+        let wandered = [root.join("src")];
+
+        assert!(
+            app.workspace()
+                .release_abandoned_tasks(&root, &wandered, std::slice::from_ref(&id))
+                .is_empty(),
+            "a tab still launched for the task keeps it"
+        );
+        let released = app
+            .workspace()
+            .release_abandoned_tasks(&root, &wandered, &[]);
+        assert_eq!(
+            released
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![id.as_str()],
+            "without the echo, a pane outside the slot is no agent of it"
+        );
+    }
+
     #[test]
     fn an_agent_that_left_work_behind_parks_its_slot() {
         let repository = repository("release-park");
