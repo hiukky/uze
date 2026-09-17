@@ -2357,12 +2357,7 @@ pub(super) fn render_action_index(
         .saturating_sub(8)
         .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH);
     let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
-    let rect = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
+    let rect = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Block::default()

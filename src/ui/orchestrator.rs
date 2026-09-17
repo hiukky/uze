@@ -14,7 +14,7 @@ use crossterm::event::{
 };
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
@@ -2464,12 +2464,7 @@ impl WorkspaceModel {
     fn hit_rect_at(&self, column: u16, row: u16) -> Option<(Rect, WorkspaceHit)> {
         self.hits
             .iter()
-            .find(|(rect, _)| {
-                rect.x <= column
-                    && column < rect.x + rect.width
-                    && rect.y <= row
-                    && row < rect.y + rect.height
-            })
+            .find(|(rect, _)| rect.contains(Position::new(column, row)))
             .map(|(rect, hit)| (*rect, *hit))
     }
 
@@ -3573,12 +3568,7 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
         .hits
         .iter()
         .rev()
-        .find(|(rect, _)| {
-            rect.x <= column
-                && column < rect.x + rect.width
-                && rect.y <= row
-                && row < rect.y + rect.height
-        })
+        .find(|(rect, _)| rect.contains(Position::new(column, row)))
         .map(|(_, hit)| *hit)
 }
 
