@@ -1476,27 +1476,8 @@ mod tests {
     /// of that remote, standing in for whoever else pushes to it.
     fn published(label: &str) -> (Repository, PathBuf) {
         let repository = repository(label);
-        let base = uze_testkit::temp::scratch(&format!("{label}-remote"));
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
-        let other = base.join("other");
-        repository.git(&[
-            "clone",
-            "--quiet",
-            origin.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ]);
-        repository.git_in(&other, &["config", "user.name", "Other"]);
-        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        repository.with_origin(TARGET);
+        let other = repository.clone_origin();
         (repository, other)
     }
 
@@ -1633,18 +1614,7 @@ mod tests {
     #[test]
     fn pr_publishes_and_leaves_the_request_to_the_agent() {
         let repository = repository("landing-pr");
-        let base = uze_testkit::temp::scratch("landing-pr-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+        let origin = repository.with_origin(TARGET);
 
         let primary = repository.root();
         let mut store = TaskStore::default();
@@ -1747,18 +1717,7 @@ mod tests {
     #[test]
     fn a_merge_request_is_discovered_the_same_way_a_pull_request_is() {
         let repository = repository("landing-mr");
-        let base = uze_testkit::temp::scratch("landing-mr-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+        repository.with_origin(TARGET);
 
         let primary = repository.root();
         let mut store = TaskStore::default();

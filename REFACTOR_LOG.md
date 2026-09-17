@@ -3,6 +3,12 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Landing tests use the shared origin fixture
+
+- **Change:** the three bare-origin setups in `landing.rs` tests now use `Repository::with_origin`/`clone_origin` (−45 lines).
+- **Why:** these were the last of eight hand-rolled copies of one fixture.
+- **Proof:** tests only, and the 28 landing tests are unchanged.
+
 ## 2026-09-17 — A stopped pane takes its process group with it
 
 - **Bug (orchestration):**
