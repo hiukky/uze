@@ -2197,7 +2197,7 @@ mod workspace_tests {
         assert!(
             hits.iter().any(|(_, hit)| matches!(
                 hit,
-                WorkspaceHit::PickSpaceKind(uze_application::PlacementKind::Tenant)
+                WorkspaceHit::PickSpaceKind(uze_terminal::SpaceKind::Workspace)
             )),
             "the other chip is a click away"
         );
@@ -2210,8 +2210,7 @@ mod workspace_tests {
         model.root_picker.as_mut().unwrap().absorb_profile(
             landed,
             uze_application::RootProfile {
-                repository: false,
-                has_commit: false,
+                slots_possible: false,
             },
         );
         let mut hits = Vec::new();
@@ -2223,7 +2222,7 @@ mod workspace_tests {
         assert!(
             !hits.iter().any(|(_, hit)| matches!(
                 hit,
-                WorkspaceHit::PickSpaceKind(uze_application::PlacementKind::Slot)
+                WorkspaceHit::PickSpaceKind(uze_terminal::SpaceKind::Worktree)
             )),
             "and the slot kind is not offered there"
         );
@@ -2233,7 +2232,7 @@ mod workspace_tests {
                 .as_ref()
                 .and_then(RootPicker::chosen)
                 .map(|(_, kind)| kind),
-            Some(uze_application::PlacementKind::Tenant)
+            Some(uze_terminal::SpaceKind::Workspace)
         );
     }
 

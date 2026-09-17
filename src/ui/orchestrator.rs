@@ -40,8 +40,8 @@ use uze_extensions::{
 use uze_keys::{Action, Chord, Key};
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
-    PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
-    read_event, send_request,
+    PaneSnapshot, RenderCell, Session, Space, SpaceId, SpaceKind, Tab, TabId, TerminalColor,
+    attach, read_event, send_request,
 };
 
 /// Input/redraw cadence. Unlike the pane content itself — which the server
@@ -688,7 +688,7 @@ struct PlacementResolution {
 enum PlacementRequest {
     New {
         from: PathBuf,
-        kind: uze_application::PlacementKind,
+        kind: SpaceKind,
         harness: String,
     },
     Resume {
@@ -732,6 +732,13 @@ fn spawn_agent_placement(
                     harness,
                 } => tui_application(home)
                     .and_then(|app| {
+                        // The one place the space's kind becomes a domain
+                        // request: the wire and placement each keep their
+                        // own vocabulary.
+                        let kind = match kind {
+                            SpaceKind::Worktree => uze_application::PlacementKind::Slot,
+                            SpaceKind::Workspace => uze_application::PlacementKind::Tenant,
+                        };
                         app.workspace()
                             .place_new_agent(&from, kind, &harness, &occupied)
                     })
@@ -876,8 +883,7 @@ fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>
         let profile = answered_or(
             || uze_application::root_profile(&root),
             uze_application::RootProfile {
-                repository: false,
-                has_commit: false,
+                slots_possible: false,
             },
         );
         let _ = sender.send(RootProfileResolution { root, profile });
@@ -1275,7 +1281,7 @@ pub(super) enum WorkspaceHit {
     /// picker.
     PickSpaceRoot(usize),
     /// One of the two kind chips under the picker's directory line.
-    PickSpaceKind(uze_application::PlacementKind),
+    PickSpaceKind(SpaceKind),
     /// The tab strip's right-corner button — opens the Git extension's
     /// changes of the active tab's checkout — the code surface
     /// (`WorkspaceModel::code`), opened on its diff.

@@ -1306,45 +1306,19 @@ pub enum PlacementKind {
 /// asks, so a picker never waits on a repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RootProfile {
-    /// Inside a Git working tree.
-    pub repository: bool,
-    /// With a commit to branch a slot from.
-    pub has_commit: bool,
-}
-
-impl RootProfile {
-    /// Whether the slot kind can be offered for this root.
-    pub fn allows_slots(self) -> bool {
-        self.repository && self.has_commit
-    }
-
-    /// The kind a new space over this root lands on: slots where they are
-    /// possible, tenancy anywhere else.
-    pub fn default_placement(self) -> PlacementKind {
-        if self.allows_slots() {
-            PlacementKind::Slot
-        } else {
-            PlacementKind::Tenant
-        }
-    }
+    /// Inside a Git working tree with a commit to branch a slot from.
+    pub slots_possible: bool,
 }
 
 /// Profiles `root` from Git alone: no application, no home, because the
 /// question is asked before either exists (the client's first attach) and
 /// from inside the picker's own worker.
 pub fn root_profile(root: &Path) -> RootProfile {
-    let Some(primary) = worktree::primary_checkout(root) else {
-        return RootProfile {
-            repository: false,
-            has_commit: false,
-        };
-    };
-    let has_commit = checkout::current_branch(&primary)
-        .is_some_and(|branch| !checkout::tip_of(&primary, &branch).is_empty());
-    RootProfile {
-        repository: true,
-        has_commit,
-    }
+    let slots_possible = worktree::primary_checkout(root).is_some_and(|primary| {
+        checkout::current_branch(&primary)
+            .is_some_and(|branch| !checkout::tip_of(&primary, &branch).is_empty())
+    });
+    RootProfile { slots_possible }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -2108,11 +2108,10 @@ fn render_kind_chips(
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    use uze_application::PlacementKind;
     let Some(rect) = rows.next(1) else { return };
     let chips = [
-        (PlacementKind::Slot, "worktree", picker.slots_available()),
-        (PlacementKind::Tenant, "workspace", true),
+        (SpaceKind::Worktree, "worktree", picker.slots_available()),
+        (SpaceKind::Workspace, "workspace", true),
     ];
     let mut spans = vec![Span::raw("    ")];
     let mut x = rect.x + 4;

@@ -765,7 +765,7 @@ impl Attach<'_> {
                     self.model.root_picker.as_ref().and_then(RootPicker::chosen)
                 {
                     self.model.root_picker = None;
-                    self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
+                    self.open_space_at(root, kind, columns, rows);
                 }
             }
             Action::Dismiss => self.model.root_picker = None,
@@ -1298,7 +1298,7 @@ impl Attach<'_> {
                             })
                         {
                             self.model.root_picker = None;
-                            self.open_space_at(root, crate::ui::space_kind_of(kind), columns, rows);
+                            self.open_space_at(root, kind, columns, rows);
                         }
                     }
                     Some(WorkspaceHit::PickSpaceKind(kind)) => {
@@ -2249,7 +2249,7 @@ impl Attach<'_> {
                 };
                 PlacementRequest::New {
                     from: space.root.clone(),
-                    kind: crate::ui::placement_of(space.kind),
+                    kind: space.kind,
                     harness,
                 }
             }
