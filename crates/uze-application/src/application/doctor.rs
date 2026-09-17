@@ -109,9 +109,8 @@ impl Health<'_> {
         rows
     }
 
-    /// The cheap half of `doctor` — everything except per-receipt
-    /// attachment inspection (`attachments` left empty). Shared by
-    /// [`doctor`](Self::doctor), which adds the (cached) inspection layer.
+    /// Everything [`report`](Self::report) says except per-receipt
+    /// attachment inspection, which it adds on top.
     fn doctor_shell(&self) -> DoctorReport {
         let package_ids = self.0.store.package_ids();
         let (store, plugins) = match package_ids {

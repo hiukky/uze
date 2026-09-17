@@ -194,7 +194,8 @@ impl MarketplaceCatalogues {
     }
 }
 
-fn read_in_place(root: &Path) -> Result<Catalogue> {
+/// The marketplace manifest at `root`, read where it is.
+pub(crate) fn read_in_place(root: &Path) -> Result<Catalogue> {
     let path = root.join(MARKETPLACE_MANIFEST_NAME);
     let bytes = fs::read(&path).map_err(|source| UzeError::Read {
         path: path.clone(),

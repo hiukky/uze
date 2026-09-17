@@ -27,39 +27,26 @@ impl Plugins<'_> {
         }
     }
 
+    /// Installs a package straight from a source, under the `local`
+    /// marketplace. Refuses, without asking, a bare plugin name already
+    /// active under another marketplace (ADR-038).
     #[tracing::instrument(name = "plugins.add", skip_all, err)]
     pub fn add(
         &self,
         source: PackageSource,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        self.add_resolving(source, authority, &NoNameCollisionAuthority)
-    }
-
-    /// `add_plugin`, with an explicit answer for what to do if the
-    /// package's bare plugin name is already active under a different
-    /// marketplace (ADR-038) — the CLI/TUI's interactive `--alias`/
-    /// `--replace` entry point. Plain `add_plugin` refuses without asking.
-    #[tracing::instrument(name = "plugins.add_resolving", skip_all, err)]
-    pub fn add_resolving(
-        &self,
-        source: PackageSource,
-        authority: &dyn TrustAuthority,
-        name_authority: &dyn NameCollisionAuthority,
-    ) -> Result<AddPluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        // An embedded snapshot is always the official marketplace, never
-        // `local` — `install_from_marketplace` takes this same path and
-        // relies on it for the official-plugin protection/removal rules to
-        // recognize the result.
-        let marketplace = match &source {
-            PackageSource::Embedded { .. } => "uze-official",
-            _ => "local",
-        };
         // Acquisition brings the bytes to a local directory and owns their
         // cleanup; the Store only ever sees a materialized package.
         let materialized = self.acquire(&source)?;
-        self.install_materialized(materialized, marketplace, None, authority, name_authority)
+        self.install_materialized(
+            materialized,
+            "local",
+            None,
+            authority,
+            &NoNameCollisionAuthority,
+        )
     }
 
     /// Installs bytes that already exist locally: asks `authority` about any

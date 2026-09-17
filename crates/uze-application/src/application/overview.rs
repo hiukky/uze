@@ -28,7 +28,7 @@ use std::{
 use serde::Serialize;
 
 use uze_core::{
-    PackageSource, Result,
+    Result,
     acquisition::marketplace,
     project_lock,
     workspace::{self, WorkspaceKind},
@@ -199,10 +199,8 @@ impl Workspace<'_> {
     }
 
     fn marketplace_overview(root: &Path) -> OverviewMarketplace {
-        match UzeApplication::load_marketplace_manifest(&PackageSource::Local {
-            path: root.to_path_buf(),
-        }) {
-            Ok((_, manifest)) => {
+        match super::marketplace_catalogue::read_in_place(root) {
+            Ok(super::marketplace_catalogue::Catalogue { manifest, .. }) => {
                 let package_count = manifest.plugins.len();
                 let invalid_packages = manifest
                     .plugins

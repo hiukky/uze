@@ -1123,13 +1123,8 @@ pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_updat
     let root = uze_testkit::temp::scratch("protected-update");
     let home = UzeHome::at(&root);
     let app = UzeApplication::new(home, Vec::new());
-    app.plugins()
-        .add(
-            uze_core::PackageSource::Embedded {
-                id: "uze".to_owned(),
-            },
-            &uze_core::trust::AlwaysTrust,
-        )
+    app.marketplace()
+        .install_plugin("uze@uze-official", &uze_core::trust::AlwaysTrust)
         .unwrap();
 
     let err = app.plugins().remove("uze").unwrap_err();

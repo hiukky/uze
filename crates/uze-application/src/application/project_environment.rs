@@ -18,6 +18,7 @@ use uze_core::{
     trust::{self, TrustAuthority},
 };
 
+use super::marketplace::MarketplaceRequest;
 use super::services::Project;
 use super::*;
 
@@ -34,34 +35,6 @@ fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMa
         r#ref: locked.r#ref.clone(),
         subdirectory: locked.subdirectory.clone(),
         plugins: Vec::new(),
-    }
-}
-
-/// A marketplace resolved far enough to read from: the repository behind
-/// it, and the narrowing the declaration asked for.
-struct MarketplaceRequest {
-    repository: uze_core::acquisition::marketplace::MarketplaceRepository,
-    reference: Option<String>,
-    subdirectory: Option<PathBuf>,
-}
-
-impl MarketplaceRequest {
-    /// What a machine-registered or declared source resolves to.
-    fn of(source: &PackageSource) -> Result<Self> {
-        let repository = uze_core::acquisition::marketplace::repository_of(source)?;
-        let (reference, subdirectory) = match source {
-            PackageSource::Git {
-                reference,
-                subdirectory,
-                ..
-            } => (reference.clone(), subdirectory.clone()),
-            _ => (None, None),
-        };
-        Ok(Self {
-            repository,
-            reference,
-            subdirectory,
-        })
     }
 }
 
@@ -250,12 +223,12 @@ impl Project<'_> {
         {
             repository.fetch = local.fetch;
         }
-        UzeApplication::materialize_marketplace_plugin_at(
-            &repository,
-            Some(&locked.revision),
-            locked.subdirectory.as_deref(),
-            plugin,
-        )
+        MarketplaceRequest {
+            repository,
+            reference: Some(locked.revision.clone()),
+            subdirectory: locked.subdirectory.clone(),
+        }
+        .materialize_plugin(plugin)
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
@@ -602,12 +575,7 @@ impl Project<'_> {
         request: &MarketplaceRequest,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        let materialized = UzeApplication::materialize_marketplace_plugin_at(
-            &request.repository,
-            request.reference.as_deref(),
-            request.subdirectory.as_deref(),
-            plugin,
-        )?;
+        let materialized = request.materialize_plugin(plugin)?;
         let report = self.0.plugins().install_materialized(
             materialized,
             marketplace,
