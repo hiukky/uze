@@ -8,6 +8,7 @@ use uze_core::{
     Result, UzeError,
     context::{self as instruction_context, InstructionContribution},
     integration::{AttachmentState, ContextDelivery},
+    project_context::AGENTS_MD_FILE_NAME,
     text_region,
     worktree::{self, WorktreePolicy},
 };
@@ -22,15 +23,14 @@ impl Context<'_> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
-        // Resolves upward the same way `add_project_plugin`/
-        // `install_project_environment` do (nearest `agents.lock`/
-        // `AGENTS.md`/`.git`) — a caller pointing at a subdirectory of a
+        // Resolves upward the same way every project-scoped command does —
+        // a caller pointing at a subdirectory of a
         // project must land on the same root every other project-scoped
         // command finds, not silently inspect the subdirectory itself as
         // if it had no context at all.
         let canonical = uze_core::project_root::resolve_project_root(project_root)?;
 
-        let agents_md_path = canonical.join("AGENTS.md");
+        let agents_md_path = canonical.join(AGENTS_MD_FILE_NAME);
         let contributions_input = self.instruction_contributions()?;
         let observation =
             instruction_context::inspect_agents_md(&agents_md_path, &contributions_input);
@@ -40,7 +40,7 @@ impl Context<'_> {
         // plus whatever each registered integration declares through
         // `context_delivery` (its bridge file or additional native files) —
         // never an Application-owned list of filenames.
-        let mut source_names = vec!["AGENTS.md"];
+        let mut source_names = vec![AGENTS_MD_FILE_NAME];
         for integration in &self.0.integrations {
             match integration.context_delivery() {
                 ContextDelivery::Bridge { file_name } => source_names.push(file_name),
@@ -158,7 +158,7 @@ impl Context<'_> {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
         let canonical = uze_core::project_root::resolve_project_root(project_root)?;
-        let agents_md = canonical.join("AGENTS.md");
+        let agents_md = canonical.join(AGENTS_MD_FILE_NAME);
         let contributions = self.instruction_contributions()?;
         let agents_md_plan = instruction_context::plan_agents_md(&agents_md, &contributions);
 
@@ -226,7 +226,7 @@ impl Context<'_> {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
         let canonical = uze_core::project_root::resolve_project_root(project_root)?;
-        let agents_md = canonical.join("AGENTS.md");
+        let agents_md = canonical.join(AGENTS_MD_FILE_NAME);
         let contributions = self.instruction_contributions()?;
         let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
 
@@ -372,7 +372,7 @@ fn derive_portability(
         let vendor_files: Vec<PathBuf> = sources
             .iter()
             .filter(|source| {
-                source.file_name != "AGENTS.md" && source.exists && source.has_user_content
+                source.file_name != AGENTS_MD_FILE_NAME && source.exists && source.has_user_content
             })
             .map(|source| source.path.clone())
             .collect();
@@ -411,7 +411,7 @@ fn derive_warnings(
     let vendor_specific_with_content: Vec<&InstructionSourceObservation> = sources
         .iter()
         .filter(|source| {
-            source.file_name != "AGENTS.md" && source.exists && source.has_user_content
+            source.file_name != AGENTS_MD_FILE_NAME && source.exists && source.has_user_content
         })
         .collect();
     if !agents_md_exists && vendor_specific_with_content.len() >= 2 {

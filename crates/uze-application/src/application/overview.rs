@@ -120,7 +120,9 @@ impl Workspace<'_> {
             cwd: cwd.to_path_buf(),
             root: root.clone(),
             kind: resolved.kind,
-            agents_directory_present: root.join(".agents").is_dir(),
+            agents_directory_present: root
+                .join(uze_core::project_context::AGENTS_DIRECTORY_NAME)
+                .is_dir(),
             project: self.project_overview(&root, has_lock),
             marketplace: has_manifest.then(|| Self::marketplace_overview(&root)),
         })
@@ -162,7 +164,9 @@ impl Workspace<'_> {
             Some(Err(_)) | Some(Ok(None)) => (ProjectEnvironmentState::Invalid, 0, 0, Vec::new()),
             None => (ProjectEnvironmentState::NotConfigured, 0, 0, Vec::new()),
         };
-        let agents_md = root.join("AGENTS.md").is_file();
+        let agents_md = root
+            .join(uze_core::project_context::AGENTS_MD_FILE_NAME)
+            .is_file();
         let portability = self
             .0
             .context()
