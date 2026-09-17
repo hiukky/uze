@@ -299,38 +299,14 @@ fn materialize_user_only_skill_dir(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let (description, body) = crate::shared::skill::parse_skill_body(&bytes);
     let name = crate::shared::skill::frontmatter_value(&bytes, "name")
         .unwrap_or_else(|| skill_name.to_owned());
-    let mut document = String::from("---\n");
-    document.push_str(&format!("name: {name}\n"));
-    if let Some(description) = description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
-        document.push_str(&format!("description: \"{escaped}\"\n"));
-    }
-    document.push_str("---\n");
-    document.push_str(&body);
-    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
-        path: target_dir.join("SKILL.md"),
-        source: source_error,
-    })?;
-    let policy_file = target_dir.join("agents/openai.yaml");
+    crate::shared::skill::write_file(
+        &target_dir.join("SKILL.md"),
+        crate::shared::skill::render_skill_wrapper(&name, &bytes, &[]).as_bytes(),
+    )?;
     if !policy.model {
-        fs::create_dir_all(policy_file.parent().expect("policy file has a parent")).map_err(
-            |source_error| UzeError::Write {
-                path: policy_file
-                    .parent()
-                    .expect("policy file has a parent")
-                    .to_path_buf(),
-                source: source_error,
-            },
-        )?;
-        fs::write(&policy_file, super::skills::EXPLICIT_ONLY_POLICY_YAML).map_err(
-            |source_error| UzeError::Write {
-                path: policy_file,
-                source: source_error,
-            },
-        )?;
+        crate::shared::skill::write_explicit_only_sidecar(target_dir)?;
     }
     for entry in sorted_entries(canonical_dir)? {
         let name = entry.file_name();

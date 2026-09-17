@@ -21,8 +21,8 @@ use uze_core::{
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
-        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
-        default_exposure_name_candidates,
+        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -58,7 +58,6 @@ use plugin::{
     MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
     marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
 };
-use skills::codex_skill_exposure_name_candidates;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
@@ -225,36 +224,6 @@ impl CodexIntegration {
             &generated_dir,
             &selector,
         )))
-    }
-
-    /// Materializes this Skill's wrapper when this resource owns the shared
-    /// entry; when the shared-root resolution reused another integration's
-    /// artifact, verifies that the reused artifact still carries Codex's own
-    /// invocation encoding for a user-only Skill — otherwise the canonical
-    /// `invoke.model=false` would silently degrade into model visibility.
-    fn materialize_or_verify_skill(&self, resource: &Resource) -> Result<()> {
-        let policy = resource.skill_invocation();
-        let Some(target) = &resource.resolved_artifact_target else {
-            return skills::materialize_generated_skill(&self.uze_home, resource).map(|_| ());
-        };
-        if policy.is_invalid() {
-            return Ok(());
-        }
-        if !policy.model && !target.join("agents/openai.yaml").is_file() {
-            let entry = resource
-                .resolved_exposure_name
-                .clone()
-                .map(|name| self.skills_dir.join(name))
-                .unwrap_or_else(|| target.to_path_buf());
-            return Err(crate::shared::projection::conflict(
-                resource,
-                &entry,
-                target,
-                "Codex needs agents/openai.yaml with policy.allow_implicit_invocation: false for a user-only Skill",
-                self.id(),
-            ));
-        }
-        Ok(())
     }
 
     fn materialize_agent(&self, resource: &Resource) -> Result<PathBuf> {
@@ -443,7 +412,8 @@ impl IntegrationPort for CodexIntegration {
     /// stays on the default fully-qualified policy.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return codex_skill_exposure_name_candidates(&self.uze_home, resource);
+            let active_name = active_plugin_name(&self.uze_home, resource);
+            return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
     }

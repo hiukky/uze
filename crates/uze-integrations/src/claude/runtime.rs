@@ -157,8 +157,9 @@ fn project_resource_projection(
     // the previous link atomically and both writers converge on the same
     // target either way. Same nonce pattern `write_atomic` uses.
     let temporary = temporary_projection_path(parent, resource);
-    symlink_dir(&project_source, &temporary).inspect_err(|_| {
+    uze_core::persistence::create_symlink(&project_source, &temporary).map_err(|error| {
         let _ = fs::remove_file(&temporary);
+        error.to_string()
     })?;
     if let Err(error) = fs::rename(&temporary, &projected) {
         let _ = fs::remove_file(&temporary);
@@ -197,20 +198,6 @@ fn attempt_path(parent: &Path, resource: &str, nonce: u128) -> PathBuf {
         resource,
         std::process::id(),
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ))
-}
-
-#[cfg(unix)]
-fn symlink_dir(source: &Path, target: &Path) -> std::result::Result<(), String> {
-    std::os::unix::fs::symlink(source, target).map_err(|error| error.to_string())
-}
-
-#[cfg(not(unix))]
-fn symlink_dir(source: &Path, target: &Path) -> std::result::Result<(), String> {
-    Err(format!(
-        "runtime project resource projection has no symlink support on this platform (would link {} -> {})",
-        target.display(),
-        source.display()
     ))
 }
 

@@ -30,6 +30,7 @@
 
 use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
+use crate::shared::skill::{link_extras, link_or_repair, recreate_dir, write_file};
 use uze_core::{
     Result, UzeError,
     capability::Resource,
@@ -238,6 +239,11 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
     if !package.root.join("skills").is_dir() {
         return Ok(());
     }
+    let skills_dir = envelope_dir.join("skills");
+    fs::create_dir_all(&skills_dir).map_err(|source| UzeError::Write {
+        path: skills_dir.clone(),
+        source,
+    })?;
     let resources = uze_core::engine::package_resources_at(&package.id, &package.root)?;
     for resource in resources.into_iter().filter(|resource| {
         resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill
@@ -254,97 +260,21 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
         let skill_name = resource
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
-        let target_dir = envelope_dir.join("skills").join(&skill_name);
-        fs::create_dir_all(target_dir.parent().expect("skill dir has a parent")).map_err(
-            |source_error| UzeError::Write {
-                path: target_dir
-                    .parent()
-                    .expect("skill dir has a parent")
-                    .to_path_buf(),
-                source: source_error,
-            },
-        )?;
+        let target_dir = skills_dir.join(&skill_name);
         if policy.is_default() {
-            materialize_byte_preserving_skill(canonical_dir, &target_dir)?;
+            link_or_repair(&target_dir, canonical_dir)?;
             continue;
         }
-        materialize_wrapped_skill(canonical_dir, &target_dir, policy, &skill_name)?;
+        recreate_dir(&target_dir)?;
+        let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
+            path: canonical_dir.join("SKILL.md"),
+            source: error,
+        })?;
+        let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, &skill_name);
+        write_file(&target_dir.join("SKILL.md"), document.as_bytes())?;
+        link_extras(canonical_dir, &target_dir, &[])?;
     }
     Ok(())
-}
-
-/// Default-policy skills reference the whole canonical directory: no wrapper
-/// is generated, so the harness sees the author's own `SKILL.md` byte for
-/// byte.
-fn materialize_byte_preserving_skill(canonical_dir: &Path, target_dir: &Path) -> Result<()> {
-    match fs::symlink_metadata(target_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let current = fs::read_link(target_dir).map_err(|source_error| UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: source_error,
-            })?;
-            if current != canonical_dir {
-                fs::remove_dir_all(target_dir).map_err(|source_error| UzeError::Write {
-                    path: target_dir.to_path_buf(),
-                    source: source_error,
-                })?;
-                uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
-            }
-        }
-        Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
-        }
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Non-default-policy skills get a generated wrapper `SKILL.md` (the
-/// invocation policy baked into its frontmatter); everything else in the
-/// canonical skill directory stays referenced so the wrapper never silently
-/// drops scripts/references.
-fn materialize_wrapped_skill(
-    canonical_dir: &Path,
-    target_dir: &Path,
-    policy: uze_core::skill::SkillInvocationPolicy,
-    skill_name: &str,
-) -> Result<()> {
-    match fs::symlink_metadata(target_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            fs::remove_file(target_dir).map_err(|source_error| UzeError::Write {
-                path: target_dir.to_path_buf(),
-                source: source_error,
-            })?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    fs::create_dir_all(target_dir).map_err(|source_error| UzeError::Write {
-        path: target_dir.to_path_buf(),
-        source: source_error,
-    })?;
-    let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
-        path: canonical_dir.join("SKILL.md"),
-        source: error,
-    })?;
-    let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, skill_name);
-    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
-        path: target_dir.join("SKILL.md"),
-        source: source_error,
-    })?;
-    crate::shared::skill::link_extras(canonical_dir, target_dir, &[])
 }
 
 /// Removes one package's generated envelope directory by id alone — used at

@@ -57,26 +57,10 @@ use uze_core::{
 
 use super::OpenCodeIntegration;
 use crate::shared::plan::unsupported;
-
-/// Root of every generated OpenCode Skill wrapper directory. Under
-/// `$UZE_HOME/state/attachments/opencode/skills/`, never under the Store.
-pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = resource
-        .package_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown");
-    let name = resource
-        .logical_capability_name()
-        .unwrap_or_else(|| resource.name());
-    uze_home
-        .state_dir()
-        .join("attachments")
-        .join("opencode")
-        .join("skills")
-        .join(package_id)
-        .join(name)
-}
+use crate::shared::skill::{
+    SharedRootReader, entry_name, generated_skill_dir, invalid_policy_plan, setup_pending_plan,
+    skill_label, verify_reused_wrapper, write_superset_skill_wrapper,
+};
 
 /// Deterministically materializes (or refreshes) one Skill's
 /// wrapper directory — the shared-root superset representation
@@ -98,33 +82,23 @@ pub(super) fn materialize_generated_skill(
             "a Skill nobody may invoke is never projected".to_owned(),
         ));
     }
-    let dir = generated_skill_dir(uze_home, resource);
-    if dir.exists() {
-        fs_remove_dir_all(&dir)?;
-    }
-    fs_create_dir_all(&dir)?;
+    let dir = generated_skill_dir(uze_home, "opencode", resource);
     let canonical_dir = resource
         .capability
         .path
         .parent()
         .expect("SKILL.md has a parent");
-    let fallback_name = canonical_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("skill");
-    let bytes = std::fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
-        path: canonical_dir.join("SKILL.md"),
-        source: error,
-    })?;
-    let active_name = uze_core::integration::active_plugin_name(uze_home, resource);
-    let label = uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| fallback_name.to_owned());
-    crate::shared::skill::write_superset_skill_wrapper(
+    let label = skill_label(uze_home, resource).unwrap_or_else(|| {
+        canonical_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill")
+            .to_owned()
+    });
+    write_superset_skill_wrapper(
         &dir,
         canonical_dir,
-        &bytes,
+        &resource.capability.payload,
         &label,
         &policy,
     )?;
@@ -132,11 +106,6 @@ pub(super) fn materialize_generated_skill(
 }
 
 impl OpenCodeIntegration {
-    fn is_generated_skill_wrapper(&self, target: &Path) -> bool {
-        target.starts_with(self.uze_home.state_dir().join("attachments"))
-            && target.join("SKILL.md").is_file()
-    }
-
     pub(super) fn cleanup_unused_wrapper(&self, target: &Path) -> Result<()> {
         let managed_root = crate::shared::path::attachment_root(&self.uze_home, "opencode");
         crate::shared::path::cleanup_unused_wrapper(
@@ -154,124 +123,62 @@ impl OpenCodeIntegration {
     /// own invocation encoding — otherwise the canonical policy would
     /// silently degrade (ADR-030 §25).
     pub(super) fn materialize_or_verify_skill(&self, resource: &Resource) -> Result<()> {
-        let policy = resource.skill_invocation();
-        if policy.is_invalid() {
+        if resource.skill_invocation().is_invalid() {
             return Ok(());
         }
-        let Some(target) = &resource.resolved_artifact_target else {
-            return materialize_generated_skill(&self.uze_home, resource).map(|_| ());
-        };
-        if !self.is_generated_skill_wrapper(target) {
-            return materialize_generated_skill(&self.uze_home, resource).map(|_| ());
-        }
-        if policy.is_default() {
-            return Ok(());
-        }
-        let bytes = std::fs::read(target.join("SKILL.md")).map_err(|error| UzeError::Read {
-            path: target.join("SKILL.md"),
-            source: error,
-        })?;
-        let entry = resource
-            .resolved_exposure_name
-            .clone()
-            .map(|name| self.skills_dir.join(name))
-            .unwrap_or_else(|| target.to_path_buf());
-        if !policy.model && !crate::shared::skill::has_opencode_autoinvoke_false(&bytes) {
-            return Err(crate::shared::projection::conflict(
+        match &resource.resolved_artifact_target {
+            Some(wrapper) => verify_reused_wrapper(
                 resource,
-                &entry,
-                target,
-                "OpenCode needs metadata.opencode/autoinvoke: false for a user-only Skill",
+                wrapper,
+                &self.skills_dir,
+                SharedRootReader::OpenCode,
                 self.id(),
-            ));
+            ),
+            None => materialize_generated_skill(&self.uze_home, resource).map(|_| ()),
         }
-        if !policy.user && !crate::shared::skill::has_slash_false(&bytes) {
-            return Err(crate::shared::projection::conflict(
-                resource,
-                &entry,
-                target,
-                "OpenCode needs slash: false for a model-only Skill",
-                self.id(),
-            ));
-        }
-        Ok(())
     }
 
     pub(super) fn skill_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return ExposurePlan {
-                route: CompatibilityRoute::Unsupported,
-                mechanism: ExposureMechanism::Unsupported {
-                    rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
-                },
-                evidence: "Invalid canonical invocation policy: a Skill that nobody may invoke is not a projectable capability (ADR-030 §1).".to_owned(),
-            };
+            return invalid_policy_plan();
         }
-        let Some(entry_name) = resource
-            .resolved_exposure_name
-            .clone()
-            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
-        else {
+        let Some(entry_name) = entry_name(self, resource) else {
             return unsupported("Resource has no derivable attachment entry name.");
         };
+        if !state::is_installed(&self.uze_home, self.id()) {
+            return setup_pending_plan("OpenCode");
+        }
         let source = resource
             .resolved_artifact_target
-            .as_ref()
-            .filter(|target| self.is_generated_skill_wrapper(target))
-            .cloned()
-            .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource));
-        if state::is_installed(&self.uze_home, self.id()) {
-            let mut evidence = String::from(
-                "OpenCode natively discovers the UZE-managed symlink in ~/.agents/skills (the same shared root Codex uses). UZE generates a wrapper carrying the stable qualified label as its `name`, while preserving the canonical description and body without rewriting the Store.",
+            .clone()
+            .unwrap_or_else(|| generated_skill_dir(&self.uze_home, "opencode", resource));
+        let mut evidence = String::from(
+            "OpenCode natively discovers the UZE-managed symlink in ~/.agents/skills (the same shared root Codex uses). UZE generates a wrapper carrying the stable qualified label as its `name`, while preserving the canonical description and body without rewriting the Store.",
+        );
+        let mut route = CompatibilityRoute::Native;
+        if !policy.is_default() {
+            evidence.push_str(
+                " A non-default policy is translated into OpenCode's own SKILL.md fields on a generated wrapper (metadata.opencode/autoinvoke: false for model=false; slash: false for user=false) without touching the canonical Store bytes.",
             );
-            let mut route = CompatibilityRoute::Native;
-            if !policy.is_default() {
-                evidence.push_str(
-                    " A non-default policy is translated into OpenCode's own SKILL.md fields on a generated wrapper (metadata.opencode/autoinvoke: false for model=false; slash: false for user=false) without touching the canonical Store bytes.",
-                );
-            }
-            if !policy.user {
-                // Measured, not assumed: `slash: false` removes the Skill
-                // from the `/` catalog, and a mention (`@id`) still expands
-                // its body — V2's picker offers every discovered Skill that
-                // way. Half the policy is carried; half is not.
-                route = CompatibilityRoute::Adaptable;
-                evidence.push_str(
-                    " invoke.user=false degrades on OpenCode V2: `slash: false` withholds the Skill from the `/` catalog, but a mention (`@<label>`) still invokes it, so a user can reach it anyway — ADAPTED per ADR-030, reported rather than claimed.",
-                );
-            }
-            return ExposurePlan {
-                route,
-                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
-                    path: self.skills_dir.clone().join(entry_name),
-                    target: source,
-                }),
-                evidence,
-            };
+        }
+        if !policy.user {
+            // Measured, not assumed: `slash: false` removes the Skill from
+            // the `/` catalog, and a mention (`@id`) still expands its body —
+            // V2's picker offers every discovered Skill that way. Half the
+            // policy is carried; half is not.
+            route = CompatibilityRoute::Adaptable;
+            evidence.push_str(
+                " invoke.user=false degrades on OpenCode V2: `slash: false` withholds the Skill from the `/` catalog, but a mention (`@<label>`) still invokes it, so a user can reach it anyway — ADAPTED per ADR-030, reported rather than claimed.",
+            );
         }
         ExposurePlan {
-            route: CompatibilityRoute::Unsupported,
-            mechanism: ExposureMechanism::Unsupported {
-                rationale: "OpenCode has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
-                    .to_owned(),
-            },
-            evidence: "Skills reach OpenCode through a managed user-scope attachment, which exists only once `uze setup` has completed."
-                .to_owned(),
+            route,
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                path: self.skills_dir.join(entry_name),
+                target: source,
+            }),
+            evidence,
         }
     }
-}
-
-fn fs_create_dir_all(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(|source| UzeError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn fs_remove_dir_all(path: &Path) -> Result<()> {
-    std::fs::remove_dir_all(path).map_err(|source| UzeError::Write {
-        path: path.to_path_buf(),
-        source,
-    })
 }

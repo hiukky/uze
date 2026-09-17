@@ -66,7 +66,8 @@ use uze_core::{
     hook::HOOKS_FILE_NAME,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
-        HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
+        HarnessDetection, IntegrationPort, ManagedArtifact, active_plugin_name,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
@@ -376,7 +377,8 @@ impl IntegrationPort for AntigravityIntegration {
     /// policy — capability naming policies are never mixed.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return skills::antigravity_skill_exposure_name_candidates(&self.uze_home, resource);
+            let active_name = active_plugin_name(&self.uze_home, resource);
+            return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
     }
