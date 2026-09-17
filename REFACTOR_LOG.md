@@ -3,6 +3,17 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Sleep in tests reviewed
+
+- **Converted:** the two terminal tests that polled the grid every 10 ms for half a second now wait on the pane's damage channel, with a timeout that only a real failure reaches.
+- **Kept, by design** (28 sites). Each either proves a property about time or waits on a foreign process that emits no event:
+  - a writer killed mid-save;
+  - a gate that must still be running inside a window;
+  - stepping past the clock's resolution;
+  - a peer dribbling bytes under a handshake deadline;
+  - another process reaching `exec`, exiting or listening.
+  Every one is bounded by a deadline that fails the test; none retries an assertion.
+
 ## 2026-09-17 — Conformance Lab green on the refactored integrations
 
 - **Why:** the integrations consolidation changed several things that only real harness binaries can check:
