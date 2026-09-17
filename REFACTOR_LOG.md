@@ -3,6 +3,14 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — Every production `unsafe` states its contract
+
+- **Change:**
+  - `SAFETY:` comments on `localtime_r`'s zeroed `tm` and on `retire`'s `kill`, which relies on `signalable` refusing 0 and negative pids;
+  - one `current_uid()` helper for the three `getuid` calls;
+  - `Route::index`'s bare `unwrap` now states its invariant.
+- **Not changed:** SIGPIPE in `main.rs` already carries its justification.
+
 ## 2026-09-17 — Stopped panes are reaped (`cd4b12d`)
 
 - **Bug:** `portable-pty`'s `kill` is SIGHUP, a ≤200 ms poll, then an

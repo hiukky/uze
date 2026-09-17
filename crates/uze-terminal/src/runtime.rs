@@ -140,7 +140,7 @@ fn identify(pid: u32) -> Listener {
 pub fn socket_path() -> Result<PathBuf, RuntimeError> {
     let identity = identity_of(&uze_home_dir());
     let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
-    let owner = unsafe { libc::getuid() };
+    let owner = current_uid();
 
     let candidates = [
         env::var_os("XDG_RUNTIME_DIR")
@@ -722,6 +722,9 @@ fn retire(pid: u32, socket: &Path) {
         if !runs_uze(target) {
             return;
         }
+        // SAFETY: `target` is a positive pid (`signalable` refuses 0 and
+        // negatives, which would address a group or every process) that
+        // was just confirmed to run `uze`.
         unsafe { libc::kill(target, signal) };
         let deadline = Instant::now() + RETIRE_WITHIN;
         while !released() && Instant::now() < deadline {
@@ -1590,7 +1593,14 @@ fn restore_endpoint_directory(socket: &Path) -> io::Result<()> {
         return Ok(());
     };
     fs::create_dir_all(directory)?;
-    private_directory(directory, unsafe { libc::getuid() })
+    private_directory(directory, current_uid())
+}
+
+/// The real user id of this process.
+fn current_uid() -> libc::uid_t {
+    // SAFETY: `getuid` takes no arguments, cannot fail, and touches no
+    // memory of ours.
+    unsafe { libc::getuid() }
 }
 
 /// What identifies the socket a server bound, so a later look at the same
@@ -4025,7 +4035,7 @@ mod tests {
         let elsewhere = scratch.join("elsewhere");
         std::fs::create_dir_all(&xdg).unwrap();
         std::fs::create_dir_all(&elsewhere).unwrap();
-        let owner = unsafe { libc::getuid() };
+        let owner = super::current_uid();
         let candidate = xdg.join(format!("uze-runtime-{owner}"));
         std::os::unix::fs::symlink(&elsewhere, &candidate).unwrap();
 

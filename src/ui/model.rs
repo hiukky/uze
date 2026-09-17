@@ -111,7 +111,10 @@ impl Route {
     }
 
     pub(crate) fn index(self) -> usize {
-        ROUTES.iter().position(|route| *route == self).unwrap()
+        ROUTES
+            .iter()
+            .position(|route| *route == self)
+            .expect("every route is listed in ROUTES")
     }
 
     /// The route one step along the sidebar, wrapping at either end. Only
