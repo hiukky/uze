@@ -16,7 +16,6 @@
 
 use std::{fs, path::Path, path::PathBuf};
 
-use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::Resource,
@@ -27,9 +26,11 @@ use uze_core::{
         HookEvent, HookMatcher, PortableHook, ToolBinding,
     },
     integration::{AttachmentInspection, AttachmentState},
-    persistence::write_atomic,
     router::CompatibilityRoute,
 };
+
+use crate::shared::json_config;
+use crate::shared::plan::{blocked, unsupported};
 
 // ============================================================================
 // Capability profiles: the semantic axes each harness preserves
@@ -595,13 +596,13 @@ pub(crate) fn merge_named_entry(
     entry_name: &str,
     entry: &serde_json::Value,
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     config
         .as_object_mut()
-        .expect("read_config_object returns an object")
+        .expect("read_object returns an object")
         .insert(entry_name.to_owned(), entry.clone());
-    write_config(config_path, &config)?;
+    json_config::write_object(config_path, &config)?;
     Ok(config_path.to_path_buf())
 }
 
@@ -617,7 +618,7 @@ pub(crate) fn inspect_named_entry(
     if let Some(inspection) = inspect_wrapper(wrapper) {
         return inspection;
     }
-    let Ok(config) = read_config_object(config_path) else {
+    let Ok(config) = json_config::read_object(config_path) else {
         return blocked("hook config is missing or unreadable");
     };
     let Ok(expected) = serde_json::from_str::<serde_json::Value>(expected) else {
@@ -652,11 +653,11 @@ pub(crate) fn remove_named_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     config
         .as_object_mut()
-        .expect("read_config_object returns an object")
+        .expect("read_object returns an object")
         .remove(entry_name);
     // A file that now holds nothing was created by UZE and is safe to
     // remove entirely; anything else stays exactly as the user left it.
@@ -672,7 +673,7 @@ pub(crate) fn remove_named_entry(
             }
         }
     } else {
-        write_config(config_path, &config)?;
+        json_config::write_object(config_path, &config)?;
     }
     Ok(AttachmentInspection {
         state: AttachmentState::Missing,
@@ -1047,7 +1048,7 @@ pub(crate) fn materialize_wrapper(path: &Path, source: &str) -> Result<()> {
             source,
         })?;
     }
-    write_atomic(path, source.as_bytes())?;
+    uze_core::persistence::write_atomic(path, source.as_bytes())?;
     make_executable(path)
 }
 
@@ -1198,50 +1199,6 @@ pub(crate) fn wrapper_command_line(
 // Event-array config merge (Claude settings.json, Codex hooks.json)
 // ============================================================================
 
-/// Reads a shared hook config as a JSON object; a missing file is an empty
-/// object. Malformed JSON or a non-object root is a blocked file, never
-/// something UZE rewrites.
-fn read_config_object(config_path: &Path) -> std::result::Result<serde_json::Value, String> {
-    match fs::read(config_path) {
-        Ok(bytes) if bytes.is_empty() => Ok(serde_json::json!({})),
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-            format!(
-                "hook config `{}` is not readable JSON: {error}",
-                config_path.display()
-            )
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
-        Err(error) => Err(format!(
-            "hook config `{}` cannot be read: {error}",
-            config_path.display()
-        )),
-    }
-    .and_then(|value| {
-        if value.is_object() {
-            Ok(value)
-        } else {
-            Err(format!(
-                "hook config `{}` root must be a JSON object",
-                config_path.display()
-            ))
-        }
-    })
-}
-
-/// Writes a config document with a trailing newline, creating missing
-/// parent directories for a UZE-created file. Atomic (temp+rename) so a
-/// crash mid-merge can never corrupt a vendor config file.
-fn write_config(config_path: &Path, config: &serde_json::Value) -> Result<()> {
-    let parent = config_path.parent().expect("hook config path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    let mut bytes = serde_json::to_vec_pretty(config).expect("hook config serializes");
-    bytes.push(b'\n');
-    write_atomic(config_path, &bytes)
-}
-
 /// The exact entries one integration already owns for one hook entry name
 /// in the receipt ledger — the "previous version" contents for idempotent
 /// re-attach, and the proof of ownership for a later replacement.
@@ -1352,7 +1309,7 @@ pub(crate) fn merge_event_entry(
     entry: &serde_json::Value,
     previous: &[String],
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     let array = event_array(&mut config, event, config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
@@ -1364,7 +1321,7 @@ pub(crate) fn merge_event_entry(
     if !array.iter().any(|candidate| candidate == entry) {
         array.push(entry.clone());
     }
-    write_config(config_path, &config)?;
+    json_config::write_object(config_path, &config)?;
     Ok(config_path.to_path_buf())
 }
 
@@ -1379,7 +1336,7 @@ pub(crate) fn inspect_event_entry(
     if let Some(inspection) = inspect_wrapper(wrapper) {
         return inspection;
     }
-    let Ok(config) = read_config_object(config_path) else {
+    let Ok(config) = json_config::read_object(config_path) else {
         return blocked("hook config is missing or unreadable");
     };
     let Some(entries) = config
@@ -1423,7 +1380,7 @@ pub(crate) fn remove_event_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path)
+    let mut config = json_config::read_object(config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     let array = event_array(&mut config, event, config_path)
         .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
@@ -1463,7 +1420,7 @@ pub(crate) fn remove_event_entry(
             }
         }
     } else {
-        write_config(config_path, &config)?;
+        json_config::write_object(config_path, &config)?;
     }
     Ok(AttachmentInspection {
         state: AttachmentState::Missing,

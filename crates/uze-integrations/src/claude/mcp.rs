@@ -2,7 +2,7 @@
 //! `claude mcp <verb>` CLI surface, plus `~/.claude.json`'s `mcpServers`
 //! read path used for read-only inspection.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use uze_core::{
     Result,
@@ -14,8 +14,9 @@ use uze_core::{
 };
 
 use super::ClaudeIntegration;
+use crate::shared::json_config;
 use crate::shared::mcp::{cli_add, cli_remove, managed_stdio_plan};
-use crate::shared::plan::unsupported;
+use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::is_cli_safe_token;
 
 impl ClaudeIntegration {
@@ -89,35 +90,11 @@ pub(super) fn inspect_claude_mcp(
                 .to_owned(),
         };
     }
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return AttachmentInspection {
-                state: AttachmentState::Missing,
-                reason: "Claude config is missing".to_owned(),
-            };
-        }
-        Err(error) => {
-            return AttachmentInspection {
-                state: AttachmentState::Blocked,
-                reason: error.to_string(),
-            };
-        }
+    let config = match json_config::read_object(path) {
+        Ok(config) => config,
+        Err(reason) => return blocked(reason),
     };
-    let config: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => {
-            return AttachmentInspection {
-                state: AttachmentState::Blocked,
-                reason: "Claude config is malformed".to_owned(),
-            };
-        }
-    };
-    let Some(entry) = config
-        .get("mcpServers")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|servers| servers.get(entry_name))
-    else {
+    let Some(entry) = json_config::get_path(&config, &["mcpServers", entry_name]) else {
         return AttachmentInspection {
             state: AttachmentState::Missing,
             reason: "Claude MCP entry is missing".to_owned(),

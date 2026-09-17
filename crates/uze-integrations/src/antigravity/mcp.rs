@@ -6,7 +6,7 @@
 //! MCP profile (Antigravity separately MCP from settings.json; legacy
 //! inline declarations are gone).
 
-use std::{fs, path::Path, path::PathBuf};
+use std::{path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -18,6 +18,7 @@ use uze_core::{
 };
 
 use super::AntigravityIntegration;
+use crate::shared::json_config;
 use crate::shared::mcp::managed_stdio_plan;
 use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
@@ -97,17 +98,8 @@ fn mcp_config_path(command_home: &Path) -> PathBuf {
 }
 
 fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
-    read_mcp_entry(&mcp_config_path(command_home), entry_name).is_some()
-}
-
-fn read_mcp_entry(path: &Path, entry_name: &str) -> Option<serde_json::Value> {
-    let bytes = fs::read(path).ok()?;
-    let config: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    config
-        .get("mcpServers")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|servers| servers.get(entry_name))
-        .cloned()
+    json_config::read_object(&mcp_config_path(command_home))
+        .is_ok_and(|config| json_config::get_path(&config, &["mcpServers", entry_name]).is_some())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,26 +118,17 @@ pub(super) fn inspect_antigravity_mcp(
             "Antigravity MCP receipt requests state this integration cannot verify safely",
         );
     }
-    if !path.exists() {
-        return AttachmentInspection {
-            state: AttachmentState::Missing,
-            reason: "Antigravity MCP config is missing".to_owned(),
-        };
-    }
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => return blocked(error.to_string()),
+    let config = match json_config::read_object(path) {
+        Ok(config) => config,
+        Err(reason) => return blocked(reason),
     };
-    if serde_json::from_slice::<serde_json::Value>(&bytes).is_err() {
-        return blocked("Antigravity MCP config is malformed");
-    }
-    let Some(entry) = read_mcp_entry(path, entry_name) else {
+    let Some(entry) = json_config::get_path(&config, &["mcpServers", entry_name]) else {
         return AttachmentInspection {
             state: AttachmentState::Missing,
             reason: "Antigravity MCP entry is absent".to_owned(),
         };
     };
-    inspect_antigravity_mcp_value(&entry, command, args)
+    inspect_antigravity_mcp_value(entry, command, args)
 }
 
 fn inspect_antigravity_mcp_value(

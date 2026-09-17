@@ -57,7 +57,6 @@
 
 use std::{collections::BTreeMap, fs, path::Path, path::PathBuf};
 
-use crate::shared::plan::{blocked, unsupported};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
@@ -88,6 +87,7 @@ mod skills;
 
 use crate::hooks as hook_projection;
 use crate::shared::agent::{agent_name, markdown_agent_plan};
+use crate::shared::plan::{blocked, unsupported};
 use crate::shared::process::real_executable;
 use crate::shared::provision::provision_cli;
 use generate::remove_generated_plugin_by_id;

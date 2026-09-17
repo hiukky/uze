@@ -20,7 +20,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::shared::plan::unsupported;
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
@@ -33,7 +32,6 @@ use uze_core::{
         HarnessDetection, IntegrationPort, ManagedArtifact, active_plugin_name,
         default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
-    persistence::write_atomic,
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
@@ -51,6 +49,8 @@ mod skills;
 
 use crate::hooks as hook_projection;
 use crate::shared::agent::{agent_name, markdown_agent_plan};
+use crate::shared::json_config;
+use crate::shared::plan::{blocked, unsupported};
 use mcp::attach_mcp_config;
 use provision::{provision_opencode, resolve_opencode_binary};
 
@@ -322,30 +322,10 @@ impl IntegrationPort for OpenCodeIntegration {
         else {
             return receipt.artifact.inspect_standard();
         };
-        let bytes = match fs::read(&self.config_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return AttachmentInspection {
-                    state: AttachmentState::Missing,
-                    reason: "OpenCode config is missing".to_owned(),
-                };
-            }
-            Err(error) => {
-                return AttachmentInspection {
-                    state: AttachmentState::Blocked,
-                    reason: format!("OpenCode config cannot be read: {error}"),
-                };
-            }
-        };
-        let Ok(config) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            return AttachmentInspection {
-                state: AttachmentState::Blocked,
-                reason: "OpenCode config is not readable JSON".to_owned(),
-            };
-        };
-        match mcp::configured_server(&config, entry_name) {
-            Some(current) => mcp::inspect_opencode_mcp_value(
-                current,
+        match json_config::read_object(&self.config_path) {
+            Ok(config) => mcp::inspect_mcp_entry(
+                &config,
+                entry_name,
                 transport,
                 command,
                 args,
@@ -353,10 +333,7 @@ impl IntegrationPort for OpenCodeIntegration {
                 environment,
                 *enabled,
             ),
-            None => AttachmentInspection {
-                state: AttachmentState::Missing,
-                reason: "OpenCode MCP entry is missing".to_owned(),
-            },
+            Err(reason) => blocked(reason),
         }
     }
 
@@ -386,49 +363,16 @@ impl IntegrationPort for OpenCodeIntegration {
             }
             return Ok(detached);
         };
-        let bytes = fs::read(&self.config_path).map_err(|source| UzeError::Read {
-            path: self.config_path.clone(),
-            source,
-        })?;
-        let mut config: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-                path: self.config_path.clone(),
-                source,
-            })?;
-        let current = mcp::configured_server(&config, entry_name);
-        let fresh = match current {
-            Some(current) => mcp::inspect_opencode_mcp_value(
-                current,
-                transport,
-                command,
-                args,
-                cwd.as_deref(),
-                environment,
-                *enabled,
-            ),
-            None => AttachmentInspection {
-                state: AttachmentState::Missing,
-                reason: "OpenCode MCP entry disappeared before detach".to_owned(),
-            },
-        };
-        if fresh.state != AttachmentState::Matched {
-            return Ok(fresh);
-        }
-        config
-            .get_mut("mcp")
-            .and_then(serde_json::Value::as_object_mut)
-            .and_then(|mcp| mcp.get_mut("servers"))
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("matched entry has mcp.servers object")
-            .remove(entry_name);
-        // Atomic: a crash mid-write must not corrupt the user's opencode.json.
-        let mut bytes = serde_json::to_vec_pretty(&config).expect("config serializable");
-        bytes.push(b'\n');
-        write_atomic(&self.config_path, &bytes)?;
-        Ok(AttachmentInspection {
-            state: AttachmentState::Missing,
-            reason: "OpenCode managed MCP entry detached".to_owned(),
-        })
+        mcp::detach_mcp_config(
+            &self.config_path,
+            entry_name,
+            transport,
+            command,
+            args,
+            cwd.as_deref(),
+            environment,
+            *enabled,
+        )
     }
 }
 

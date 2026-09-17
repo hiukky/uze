@@ -3,31 +3,21 @@
 //! the same file inspection and detach read; the OpenCode MCP runtime
 //! remains native.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use uze_core::{
     Result, UzeError,
     capability::Resource,
     exposure::ExposurePlan,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
-    persistence::write_atomic,
     router::CompatibilityRoute,
     state,
 };
 
 use super::OpenCodeIntegration;
+use crate::shared::json_config;
 use crate::shared::mcp::managed_stdio_plan;
 use crate::shared::plan::unsupported;
-
-pub(super) fn configured_server<'a>(
-    config: &'a serde_json::Value,
-    entry_name: &str,
-) -> Option<&'a serde_json::Value> {
-    config
-        .get("mcp")
-        .and_then(|mcp| mcp.get("servers"))
-        .and_then(|servers| servers.get(entry_name))
-}
 
 impl OpenCodeIntegration {
     pub(super) fn mcp_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -54,6 +44,13 @@ impl OpenCodeIntegration {
     }
 }
 
+/// Where the server lives in `opencode.json`.
+fn entry_path(entry_name: &str) -> [&str; 3] {
+    ["mcp", "servers", entry_name]
+}
+
+/// Writes the managed entry, leaving an identical one alone and refusing to
+/// replace one UZE did not write.
 pub(super) fn attach_mcp_config(
     config_path: &Path,
     entry_name: &str,
@@ -61,63 +58,90 @@ pub(super) fn attach_mcp_config(
     args: &[String],
 ) -> Result<()> {
     let mut config = if config_path.exists() {
-        serde_json::from_slice(&fs::read(config_path).map_err(|source| UzeError::Read {
-            path: config_path.to_path_buf(),
-            source,
-        })?)
-        .map_err(|source| UzeError::Json {
-            path: config_path.to_path_buf(),
-            source,
-        })?
+        json_config::read_object(config_path).map_err(UzeError::HarnessConfig)?
     } else {
         serde_json::json!({ "$schema": "https://opencode.ai/config.json" })
     };
-    let root = config.as_object_mut().ok_or_else(|| {
-        UzeError::HarnessConfig("OpenCode config root must be a JSON object".to_owned())
-    })?;
-    let mcp = root
-        .entry("mcp")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| {
-            UzeError::HarnessConfig("OpenCode config `mcp` must be an object".to_owned())
-        })?;
-    let servers = mcp
-        .entry("servers")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| {
-            UzeError::HarnessConfig("OpenCode V2 config `mcp.servers` must be an object".to_owned())
-        })?;
     let command_values: Vec<serde_json::Value> =
         std::iter::once(command.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
             .map(serde_json::Value::String)
             .collect();
     let desired = serde_json::json!({ "type": "local", "command": command_values });
-    match servers.get(entry_name) {
+    match json_config::get_path(&config, &entry_path(entry_name)) {
         Some(current) if current == &desired => return Ok(()),
         Some(_) => {
             return Err(UzeError::ExposureUnavailable(format!(
                 "OpenCode MCP entry `{entry_name}` already exists and is not owned by this UZE plan"
             )));
         }
-        None => {
-            servers.insert(entry_name.to_owned(), desired);
-        }
+        None => {}
     }
-    let parent = config_path.parent().expect("config path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
+    json_config::set_path(&mut config, &entry_path(entry_name), desired).map_err(|reason| {
+        UzeError::HarnessConfig(format!("cannot attach OpenCode MCP entry: {reason}"))
     })?;
-    // Atomic: a crash mid-write must not corrupt the user's opencode.json.
-    let mut bytes = serde_json::to_vec_pretty(&config).expect("config serializable");
-    bytes.push(b'\n');
-    write_atomic(config_path, &bytes)
+    json_config::write_object(config_path, &config)
 }
 
-pub(super) fn inspect_opencode_mcp_value(
+/// The managed entry's state in a read `opencode.json`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn inspect_mcp_entry(
+    config: &serde_json::Value,
+    entry_name: &str,
+    transport: &str,
+    command: &Path,
+    args: &[String],
+    cwd: Option<&Path>,
+    environment: &[uze_core::exposure::McpEnvironmentReference],
+    enabled: Option<bool>,
+) -> AttachmentInspection {
+    match json_config::get_path(config, &entry_path(entry_name)) {
+        Some(current) => {
+            inspect_opencode_mcp_value(current, transport, command, args, cwd, environment, enabled)
+        }
+        None => AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "OpenCode MCP entry is missing".to_owned(),
+        },
+    }
+}
+
+/// Removes exactly the managed entry once the file it is read from still
+/// matches the receipt.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn detach_mcp_config(
+    config_path: &Path,
+    entry_name: &str,
+    transport: &str,
+    command: &Path,
+    args: &[String],
+    cwd: Option<&Path>,
+    environment: &[uze_core::exposure::McpEnvironmentReference],
+    enabled: Option<bool>,
+) -> Result<AttachmentInspection> {
+    let mut config = json_config::read_object(config_path).map_err(UzeError::HarnessConfig)?;
+    let inspection = inspect_mcp_entry(
+        &config,
+        entry_name,
+        transport,
+        command,
+        args,
+        cwd,
+        environment,
+        enabled,
+    );
+    if inspection.state != AttachmentState::Matched {
+        return Ok(inspection);
+    }
+    json_config::remove_path(&mut config, &entry_path(entry_name));
+    json_config::write_object(config_path, &config)?;
+    Ok(AttachmentInspection {
+        state: AttachmentState::Missing,
+        reason: "OpenCode managed MCP entry detached".to_owned(),
+    })
+}
+
+fn inspect_opencode_mcp_value(
     current: &serde_json::Value,
     transport: &str,
     command: &Path,
