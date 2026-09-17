@@ -551,152 +551,20 @@ impl Workspace<'_> {
         let target = target_of(&primary, &policy);
         let mut notices = Vec::new();
         let mut ask_the_remote: Vec<Task> = Vec::new();
-        let vocabulary = policy.branch.clone();
-        let names_work = vocabulary.names_work();
         let completion = policy.completion;
         let evaluated = task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let owners = store.slot_owners();
+            let pass = EvaluationPass {
+                primary: &primary,
+                occupied,
+                owners: store.slot_owners(),
+                vocabulary: &policy.branch,
+                completion,
+            };
             for task in &mut store.tasks {
-                // A task that ended is still looked at while it owns its
-                // slot: the agent that delivered usually keeps working in the
-                // same checkout, and skipping every non-live task froze that
-                // row on `delivered` for the rest of the session however much
-                // the slot changed. `Closed` is the same story with nothing
-                // delivered — the checkout it ended in can be written in
-                // again. Only the *current* owner is reconsidered: a freed
-                // slot handed to a new agent belongs to that agent's task, not
-                // to the one that used to sit there. `Parked` is nobody's turn
-                // by definition and stays put — unless a pane sits in its
-                // checkout (`occupied`): parked means "no agent left", and an
-                // agent that is there makes it a lie, whichever way it got
-                // there — a release that raced the tab opening, a resume.
-                let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
-                    && owners.contains(&task.id);
-                let parked_with_agent = task.state == TaskState::Parked
-                    && landing::slot_path(&primary, task)
-                        .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
-                let revivable = ended_owner || parked_with_agent;
-                let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
-                if task.state == TaskState::Integrating
-                    || (!checkout::is_live(&task.state) && !revivable && !parked_alone)
-                {
-                    continue;
-                }
-                // Parked is nobody's turn, but its work can still reach the
-                // target without it — a request opened before its agent left,
-                // merged on the forge. Left parked, it was listed as preserved
-                // work for good and its slot never went back to the pool.
-                if parked_alone {
-                    landing::settle_delivered(&primary, task);
-                    continue;
-                }
-                // A rebase paused on work the target already carries — what an
-                // earlier refresh left behind when it replayed a squashed
-                // branch onto its own squash — is nobody's to resolve.
-                let paused = landing::slot_path(&primary, task)
-                    .is_some_and(|slot| landing::paused_rebase(&slot).is_some());
-                if paused && landing::settle_delivered(&primary, task) {
-                    continue;
-                }
-                // The branch a task is on is a Git fact, and `task.branch` is
-                // a cache of it. Re-read before anything is asked *about* the
-                // branch: an operator renaming it by hand otherwise leaves
-                // every later question pointed at a ref that no longer exists,
-                // and `commits_ahead` answers such a question with `0` — which
-                // reads as "nothing to deliver" rather than as "wrong branch".
-                // A checkout mid-rebase is on no branch and is left alone.
-                if let Some(slot) = landing::slot_path(&primary, task)
-                    && let Some(actual) = checkout::current_branch(&slot)
-                    && actual != task.branch
-                {
-                    task.take_name(actual);
-                }
-                match landing::readiness(&primary, task) {
-                    // Nothing new since it ended leaves the ending standing:
-                    // the delivery is the last thing that happened to the
-                    // task, and saying `running` instead would erase it on the
-                    // next tick.
-                    Readiness::Running if ended_owner => {}
-                    Readiness::Running => task.state = TaskState::Running,
-                    Readiness::Uncommitted => task.state = TaskState::Uncommitted,
-                    Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
-                    // A forge that squashes what it merges leaves none of the
-                    // branch's commits in the target, so they still count as
-                    // ahead; asked by patch instead, the work is delivered.
-                    // Left `Ready`, the refresh below replayed it onto its own
-                    // squash and paused mid-rebase on every file it touched.
-                    Readiness::Ready { .. }
-                        if checkout::is_integrated(&primary, &task.target, &task.branch) =>
-                    {
-                        landing::mark_delivered(&primary, task);
-                    }
-                    Readiness::Ready { base, .. } => {
-                        // Delivered, and now holding work the target lacks: the
-                        // agent kept going, and the request it had answered
-                        // for the work already merged, not for this.
-                        if task.state == TaskState::Integrated {
-                            task.forget_request();
-                        }
-                        task.base_commit = base;
-                        if task.state != TaskState::GateFailed {
-                            task.state = TaskState::Ready;
-                        }
-                    }
-                }
-                // The work has a commit and still carries the name UZE
-                // generated for it: name it from what the agent wrote. This is
-                // the automatic half, and it deliberately runs *late* — until
-                // there is a commit there is nothing to name the work after,
-                // and the agent naming it deliberately arrives earlier and
-                // therefore wins. `Ready` is the safe moment by construction:
-                // commits ahead, a clean tree, no rebase in progress.
-                //
-                // Nothing about this reaches a harness. It is a Git fact read
-                // on a pass that already runs, which is why it works on every
-                // harness and on the next one.
-                if names_work
-                    && task.state == TaskState::Ready
-                    && !task.is_named()
-                    && let Some(derived) = landing::derived_name(&primary, task, &vocabulary)
-                    && !checkout::branch_exists(&primary, &derived)
-                    && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
-                {
-                    task.take_name(derived);
-                }
-                // The other half of what a delivery would do, learned the
-                // same way readiness is: an agent told to push and open the
-                // request itself is the one case UZE's own records can never
-                // cover, and until this ran the button went on offering to
-                // publish a branch the forge already had a request open for.
-                // Only where a request is what completion means — a project
-                // that merges or hands off never asks the remote anything.
-                //
-                // Asked after the pass, with the document unlocked: it is a
-                // `git ls-remote` per task, and inside the lock one slow
-                // remote made every delivery and every placement in the
-                // project wait behind the whole pass.
-                if completion == CompletionBehavior::Pr {
-                    ask_the_remote.push(task.clone());
-                }
-                // Following a moved target costs a clean task nothing and a
-                // dirty one its work in progress, which `refresh` refuses.
-                // Whatever the completion behaviour: a task that follows the
-                // target as it moves meets a conflict while its agent is
-                // still holding the change, rather than in a request already
-                // opened.
-                if matches!(task.state, TaskState::Running | TaskState::Ready)
-                    && let Err(DeliveryFailure::Conflict {
-                        files,
-                        target_moved,
-                    }) = landing::refresh(&primary, task)
-                    && let Some(slot) = landing::slot_path(&primary, task)
-                {
-                    notices.push(AgentNotice {
-                        task: task.id.as_str().to_owned(),
-                        checkout: slot,
-                        message: landing::conflict_message(task, &files, target_moved),
-                    });
+                if let Some(read) = pass.evaluate(task) {
+                    ask_the_remote.extend(read.ask_the_remote);
+                    notices.extend(read.notice);
                 }
             }
             Ok(task_views(&primary, store, completion))
@@ -1021,7 +889,7 @@ impl Workspace<'_> {
         let recorded = task::locked(&self.0.home, &primary, |store| {
             for task in &mut store.tasks {
                 // A delivery in flight owns the task until it answers.
-                if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+                if !is_agents_turn(&task.state) {
                     continue;
                 }
                 let in_its_slot = landing::slot_path(&primary, task)
@@ -1130,6 +998,187 @@ impl Repository {
 
     fn views(&self) -> Vec<TaskView> {
         task_views(&self.primary, &self.store, self.policy.completion)
+    }
+}
+
+/// Whether an agent may still be at work on a task in `state`: live, and
+/// not owned by a delivery in flight.
+fn is_agents_turn(state: &TaskState) -> bool {
+    checkout::is_live(state) && *state != TaskState::Integrating
+}
+
+/// What reading one task from its checkout came to: the task as the remote
+/// is to be asked about it, where completion opens a request, and the
+/// conflict its agent is told about when following the target produced one.
+struct Read {
+    ask_the_remote: Option<Task>,
+    notice: Option<AgentNotice>,
+}
+
+/// What every task of one evaluation pass is read against.
+struct EvaluationPass<'a> {
+    primary: &'a Path,
+    /// The checkout directories a live pane still sits in.
+    occupied: &'a [PathBuf],
+    owners: BTreeSet<AgentId>,
+    vocabulary: &'a BranchVocabulary,
+    completion: CompletionBehavior,
+}
+
+impl EvaluationPass<'_> {
+    /// Reads `task` from its checkout, or `None` when it was not read:
+    /// nobody's turn, or settled without needing to be.
+    fn evaluate(&self, task: &mut Task) -> Option<Read> {
+        let primary = self.primary;
+        let slot = landing::slot_path(primary, task);
+        // A task that ended is still looked at while it owns its slot: the
+        // agent that delivered usually keeps working in the same checkout,
+        // and skipping every non-live task froze that row on `delivered`
+        // for the rest of the session however much the slot changed.
+        // `Closed` is the same story with nothing delivered — the checkout
+        // it ended in can be written in again. Only the *current* owner is
+        // reconsidered: a freed slot handed to a new agent belongs to that
+        // agent's task, not to the one that used to sit there. `Parked` is
+        // nobody's turn by definition and stays put — unless a pane sits in
+        // its checkout (`occupied`): parked means "no agent left", and an
+        // agent that is there makes it a lie, whichever way it got there —
+        // a release that raced the tab opening, a resume.
+        let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+            && self.owners.contains(&task.id);
+        let parked_with_agent = task.state == TaskState::Parked
+            && slot
+                .as_ref()
+                .is_some_and(|slot| self.occupied.iter().any(|pane| pane.starts_with(slot)));
+        let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
+        if !(is_agents_turn(&task.state) || ended_owner || parked_with_agent || parked_alone) {
+            return None;
+        }
+        // Parked is nobody's turn, but its work can still reach the target
+        // without it — a request opened before its agent left, merged on
+        // the forge. Left parked, it was listed as preserved work for good
+        // and its slot never went back to the pool.
+        if parked_alone {
+            landing::settle_delivered(primary, task);
+            return None;
+        }
+        // A rebase paused on work the target already carries — what an
+        // earlier refresh left behind when it replayed a squashed branch
+        // onto its own squash — is nobody's to resolve.
+        let paused = slot
+            .as_ref()
+            .is_some_and(|slot| landing::paused_rebase(slot).is_some());
+        if paused && landing::settle_delivered(primary, task) {
+            return None;
+        }
+        // The branch a task is on is a Git fact, and `task.branch` is a
+        // cache of it. Re-read before anything is asked *about* the branch:
+        // an operator renaming it by hand otherwise leaves every later
+        // question pointed at a ref that no longer exists, and
+        // `commits_ahead` answers such a question with `0` — which reads as
+        // "nothing to deliver" rather than as "wrong branch". A checkout
+        // mid-rebase is on no branch and is left alone.
+        if let Some(actual) = slot.as_deref().and_then(checkout::current_branch)
+            && actual != task.branch
+        {
+            task.take_name(actual);
+        }
+        self.read_readiness(task, ended_owner);
+        self.name_from_the_work(task);
+        // The other half of what a delivery would do, learned the same way
+        // readiness is: an agent told to push and open the request itself
+        // is the one case UZE's own records can never cover, and until this
+        // ran the button went on offering to publish a branch the forge
+        // already had a request open for. Only where a request is what
+        // completion means — a project that merges or hands off never asks
+        // the remote anything.
+        //
+        // Asked after the pass, with the document unlocked: it is a `git
+        // ls-remote` per task, and inside the lock one slow remote made
+        // every delivery and every placement in the project wait behind the
+        // whole pass.
+        let ask_the_remote = (self.completion == CompletionBehavior::Pr).then(|| task.clone());
+        // Following a moved target costs a clean task nothing and a dirty
+        // one its work in progress, which `refresh` refuses. Whatever the
+        // completion behaviour: a task that follows the target as it moves
+        // meets a conflict while its agent is still holding the change,
+        // rather than in a request already opened.
+        let notice = if matches!(task.state, TaskState::Running | TaskState::Ready)
+            && let Err(DeliveryFailure::Conflict {
+                files,
+                target_moved,
+            }) = landing::refresh(primary, task)
+            && let Some(slot) = slot
+        {
+            Some(AgentNotice {
+                task: task.id.as_str().to_owned(),
+                checkout: slot,
+                message: landing::conflict_message(task, &files, target_moved),
+            })
+        } else {
+            None
+        };
+        Some(Read {
+            ask_the_remote,
+            notice,
+        })
+    }
+
+    fn read_readiness(&self, task: &mut Task, ended_owner: bool) {
+        let primary = self.primary;
+        match landing::readiness(primary, task) {
+            // Nothing new since it ended leaves the ending standing: the
+            // delivery is the last thing that happened to the task, and
+            // saying `running` instead would erase it on the next tick.
+            Readiness::Running if ended_owner => {}
+            Readiness::Running => task.state = TaskState::Running,
+            Readiness::Uncommitted => task.state = TaskState::Uncommitted,
+            Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+            // A forge that squashes what it merges leaves none of the
+            // branch's commits in the target, so they still count as ahead;
+            // asked by patch instead, the work is delivered. Left `Ready`,
+            // the refresh replayed it onto its own squash and paused
+            // mid-rebase on every file it touched.
+            Readiness::Ready { .. }
+                if checkout::is_integrated(primary, &task.target, &task.branch) =>
+            {
+                landing::mark_delivered(primary, task);
+            }
+            Readiness::Ready { base, .. } => {
+                // Delivered, and now holding work the target lacks: the
+                // agent kept going, and the request it had answered for the
+                // work already merged, not for this.
+                if task.state == TaskState::Integrated {
+                    task.forget_request();
+                }
+                task.base_commit = base;
+                if task.state != TaskState::GateFailed {
+                    task.state = TaskState::Ready;
+                }
+            }
+        }
+    }
+
+    /// The work has a commit and still carries the name UZE generated for
+    /// it: name it from what the agent wrote. This is the automatic half,
+    /// and it deliberately runs *late* — until there is a commit there is
+    /// nothing to name the work after, and the agent naming it deliberately
+    /// arrives earlier and therefore wins. `Ready` is the safe moment by
+    /// construction: commits ahead, a clean tree, no rebase in progress.
+    ///
+    /// Nothing about this reaches a harness. It is a Git fact read on a
+    /// pass that already runs, which is why it works on every harness and
+    /// on the next one.
+    fn name_from_the_work(&self, task: &mut Task) {
+        let primary = self.primary;
+        if self.vocabulary.names_work()
+            && task.state == TaskState::Ready
+            && !task.is_named()
+            && let Some(derived) = landing::derived_name(primary, task, self.vocabulary)
+            && !checkout::branch_exists(primary, &derived)
+            && checkout::rename_branch(primary, &task.branch.clone(), &derived).is_ok()
+        {
+            task.take_name(derived);
+        }
     }
 }
 
