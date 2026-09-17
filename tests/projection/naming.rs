@@ -38,13 +38,13 @@ use std::{
 
 use uze_application::UzeApplication;
 use uze_core::{
-    PackageSource, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageSource, Resource, UzeHome, UzeStore,
+    capability::Resource as ProjectResource,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
         IntegrationStatus, PublicationStatus, default_exposure_name_candidates,
     },
-    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
     router::HarnessCapabilities,
     store::StoredPackage,
@@ -144,7 +144,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(
@@ -186,7 +189,7 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
 /// directory or `mcp.json` — which every fixture in this file has — now
 /// qualifies for whole-package native delivery rather than per-Skill
 /// decomposition, so it can no longer exercise
-/// `ManagedUserScopeReference` naming resolution through the full
+/// Managed `SymlinkReference` naming resolution through the full
 /// `add_plugin` path. OpenCode has no package-level native delivery
 /// concept at all (`package_exposure_plan` stays at Core's `None`
 /// default for every package, unconditionally) and uses the same shared
@@ -244,13 +247,14 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
     let installed = store
-        .ingest(&uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap())
+        .ingest(
+            &uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap(),
+            "local",
+            None,
+        )
         .unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&installed.id))
-        .unwrap();
-    environment
-        .resources
+    let resources = uze_core::engine::package_resources(&installed).unwrap();
+    resources
         .into_iter()
         .find(|resource| {
             resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill

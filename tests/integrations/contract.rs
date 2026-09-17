@@ -1,11 +1,11 @@
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use uze_core::{
-    UzeEngine, UzeHome, UzeStore,
-    capability::{CapabilityKind, Representation},
-    exposure::{ExposureMechanism, ExposurePlan},
+    UzeHome, UzeStore,
+    capability::CapabilityKind,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus, route},
+    router::{CompatibilityRoute, HarnessCapabilities},
 };
 
 use uze_integrations::{
@@ -22,9 +22,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn package_fixture() -> PathBuf {
@@ -35,29 +37,29 @@ fn mcp_package_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
-fn mcp_stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
+fn mcp_stored_environment(label: &str) -> (PathBuf, Vec<uze_core::Resource>) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, mcp_package_fixture()).unwrap();
-    let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
-    (root, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (root, resources)
 }
 
 fn temporary_home(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
-fn stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
+fn stored_environment(label: &str) -> (PathBuf, Vec<uze_core::Resource>) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, package_fixture()).unwrap();
-    let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
-    (root, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (root, resources)
 }
 
 #[test]
 fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
-    let (home_root, environment) = stored_environment("integration-contract");
+    let (home_root, resources) = stored_environment("integration-contract");
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), UzeHome::at(&home_root));
     let codex = CodexIntegration::new(home_root.join("agents-home"), UzeHome::at(&home_root));
     let opencode = OpenCodeIntegration::new(
@@ -66,32 +68,15 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
         UzeHome::at(&home_root),
     );
 
-    let resource = environment.resources.first().unwrap();
-    assert_eq!(resource.capability.representation, Representation::Standard);
-    assert!(resource.package_root().is_some());
+    let resource = resources.first().unwrap();
 
-    let claude_skill = claude.exposure_plan(resource);
-    assert_eq!(claude_skill.route, CompatibilityRoute::Adaptable);
-    assert_eq!(claude_skill.verification, VerificationStatus::Unverified);
-    assert!(matches!(
-        claude_skill.mechanism,
-        ExposureMechanism::RuntimeBridge { .. }
-    ));
-
-    let codex_skill = codex.exposure_plan(resource);
-    assert_eq!(codex_skill.route, CompatibilityRoute::Adaptable);
-    assert_eq!(codex_skill.verification, VerificationStatus::Unverified);
-    assert!(matches!(
-        codex_skill.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
-
-    let opencode_skill = opencode.exposure_plan(resource);
-    assert_eq!(opencode_skill.route, CompatibilityRoute::Adaptable);
-    assert!(matches!(
-        opencode_skill.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
+    for (id, plan) in [
+        ("claude", claude.exposure_plan(resource)),
+        ("codex", codex.exposure_plan(resource)),
+        ("opencode", opencode.exposure_plan(resource)),
+    ] {
+        assert_setup_required(id, &plan);
+    }
 
     fs::remove_dir_all(home_root).unwrap();
 }
@@ -107,7 +92,7 @@ impl IntegrationPort for FakeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: BTreeSet::from([CapabilityKind::AgentSkill]),
+            native: BTreeSet::from([CapabilityKind::AgentSkill]),
             evidence: "fake contract evidence".to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -115,35 +100,48 @@ impl IntegrationPort for FakeIntegration {
 
     fn exposure_plan(&self, resource: &uze_core::Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::DirectNative {
-                resource_path: resource.capability.path.clone(),
-            },
-            evidence: "fake direct exposure".to_owned(),
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                path: PathBuf::from("/fake-harness/skills").join("uze-e2e"),
+                target: resource.capability.path.parent().unwrap().to_path_buf(),
+            }),
+            evidence: "fake managed exposure".to_owned(),
         }
     }
 }
 
+/// Before `uze setup` a Skill has no managed attachment to reach, and a
+/// plan says so rather than inventing a per-session fallback.
+fn assert_setup_required(id: &str, plan: &ExposurePlan) {
+    assert_eq!(plan.route, CompatibilityRoute::Unsupported, "{id}");
+    let ExposureMechanism::Unsupported { rationale } = &plan.mechanism else {
+        panic!(
+            "{id}: expected an Unsupported plan, got {:?}",
+            plan.mechanism
+        );
+    };
+    assert!(rationale.contains("uze setup"), "{id}: {rationale}");
+}
+
 #[test]
 fn a_new_peer_integration_needs_no_core_change() {
-    let (home_root, environment) = stored_environment("fake-integration");
+    let (home_root, resources) = stored_environment("fake-integration");
     let cursor = FakeIntegration { id: "cursor" };
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
-    // The Core routes an integration it has never heard of from what that
-    // integration declares, and nothing else.
-    let decision = route(&resource.capability, &cursor.capabilities());
-    assert_eq!(decision.route, CompatibilityRoute::Native);
-    assert_eq!(decision.evidence, "fake contract evidence");
+    assert!(
+        cursor
+            .capabilities()
+            .native
+            .contains(&resource.capability.kind)
+    );
     assert_eq!(cursor.id(), "cursor");
 
     let skill = cursor.exposure_plan(resource);
     assert_eq!(skill.route, CompatibilityRoute::Native);
     assert!(matches!(
         skill.mechanism,
-        ExposureMechanism::DirectNative { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     fs::remove_dir_all(home_root).unwrap();
@@ -151,8 +149,8 @@ fn a_new_peer_integration_needs_no_core_change() {
 
 #[test]
 fn package_store_and_effective_environment_preserve_the_same_skill_bytes() {
-    let (home_root, environment) = stored_environment("byte-preservation");
-    let resource = environment.resources.first().unwrap();
+    let (home_root, resources) = stored_environment("byte-preservation");
+    let resource = resources.first().unwrap();
     let packaged_skill = package_fixture().join("skills/uze-e2e/SKILL.md");
 
     assert_eq!(
@@ -170,41 +168,37 @@ fn package_store_and_effective_environment_preserve_the_same_skill_bytes() {
 /// behavioral verification is a separate opt-in conformance concern.
 #[test]
 fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
-    let (home_root, environment) = stored_environment("claude-managed-attachment");
+    let (home_root, resources) = stored_environment("claude-managed-attachment");
     let uze_home = UzeHome::at(&home_root);
     let claude_home = home_root.join("claude-home");
     let claude = ClaudeIntegration::new(claude_home.clone(), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
-    // Before setup: the existing --plugin-dir conformance fallback.
-    assert!(matches!(
-        claude.exposure_plan(resource).mechanism,
-        ExposureMechanism::RuntimeBridge { .. }
-    ));
+    assert_setup_required("claude", &claude.exposure_plan(resource));
     assert!(claude.attach(resource).unwrap().is_none());
 
     // Simulate what `uze setup` records, without spawning a real `claude`
     // process.
     uze_core::state::record(
         &uze_home,
+        claude.id(),
         uze_core::state::IntegrationRecord {
-            harness: claude.id().to_owned(),
             version: Some("2.1.237".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
 
     assert!(matches!(
         claude.exposure_plan(resource).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let attached = claude
         .attach(resource)
         .unwrap()
-        .expect("managed attachment path");
+        .expect("managed attachment path")
+        .location();
     assert!(attached.is_symlink());
     assert_eq!(attached.parent().unwrap(), claude_home.join("skills"));
 
@@ -218,7 +212,7 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
     );
 
     // Idempotent: attaching again resolves to the same entry, no error.
-    let attached_again = claude.attach(resource).unwrap().unwrap();
+    let attached_again = claude.attach(resource).unwrap().unwrap().location();
     assert_eq!(attached, attached_again);
 
     fs::remove_dir_all(home_root).unwrap();
@@ -226,37 +220,34 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
 
 #[test]
 fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
-    let (home_root, environment) = stored_environment("codex-managed-attachment");
+    let (home_root, resources) = stored_environment("codex-managed-attachment");
     let uze_home = UzeHome::at(&home_root);
     let agents_home = home_root.join("agents-home");
     let codex = CodexIntegration::new(agents_home.clone(), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
-    assert!(matches!(
-        codex.exposure_plan(resource).mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
+    assert_setup_required("codex", &codex.exposure_plan(resource));
 
     uze_core::state::record(
         &uze_home,
+        codex.id(),
         uze_core::state::IntegrationRecord {
-            harness: codex.id().to_owned(),
             version: Some("0.148.0".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
 
     assert!(matches!(
         codex.exposure_plan(resource).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let attached = codex
         .attach(resource)
         .unwrap()
-        .expect("managed attachment path");
+        .expect("managed attachment path")
+        .location();
     assert!(attached.is_symlink());
     // The managed reference points at UZE's generated wrapper skill
     // (name = stable namespaced label `uze-agent-skill-conformance:uze-e2e`,
@@ -276,7 +267,7 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
     );
 
     // Idempotent, and independent of Claude's own attachment state.
-    let attached_again = codex.attach(resource).unwrap().unwrap();
+    let attached_again = codex.attach(resource).unwrap().unwrap().location();
     assert_eq!(attached, attached_again);
     assert!(!uze_core::state::is_installed(&uze_home, "claude-code"));
 
@@ -286,15 +277,15 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
 /// Deterministic MCP routing: exercises `exposure_plan` only (no `attach`,
 /// no real `claude`/`codex` process — see `tests/cli.rs` for the
 /// attach-exercising fake-harness suite). MCP has no per-session
-/// conformance-probe fallback (unlike Skills' `--plugin-dir`), so
-/// pre-setup routing must be `Unsupported`, not a fabricated mechanism.
+/// fallback any more than Skills do, so pre-setup routing must be
+/// `Unsupported`, not a fabricated mechanism.
 #[test]
 fn mcp_resource_is_unsupported_before_setup_for_both_harnesses() {
-    let (home_root, environment) = mcp_stored_environment("mcp-unsupported-before-setup");
+    let (home_root, resources) = mcp_stored_environment("mcp-unsupported-before-setup");
     let uze_home = UzeHome::at(&home_root);
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), uze_home.clone());
     let codex = CodexIntegration::new(home_root.join("agents-home"), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
     assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
 
     assert!(matches!(
@@ -311,35 +302,34 @@ fn mcp_resource_is_unsupported_before_setup_for_both_harnesses() {
 
 #[test]
 fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
-    let (home_root, environment) = mcp_stored_environment("mcp-managed-vendor-config");
+    let (home_root, resources) = mcp_stored_environment("mcp-managed-vendor-config");
     let uze_home = UzeHome::at(&home_root);
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), uze_home.clone());
     let codex = CodexIntegration::new(home_root.join("agents-home"), uze_home.clone());
-    let resource = environment.resources.first().unwrap();
+    let resource = resources.first().unwrap();
 
     for harness in [claude.id(), codex.id()] {
         uze_core::state::record(
             &uze_home,
+            harness,
             uze_core::state::IntegrationRecord {
-                harness: harness.to_owned(),
                 version: Some("0.0.0".to_owned()),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
         .unwrap();
     }
 
     let claude_plan = claude.exposure_plan(resource);
-    let ExposureMechanism::ManagedVendorConfig {
+    let ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
         entry_name,
         command,
         args,
         ..
-    } = &claude_plan.mechanism
+    }) = &claude_plan.mechanism
     else {
         panic!(
-            "expected ManagedVendorConfig, got {:?}",
+            "expected a managed VendorConfigEntry, got {:?}",
             claude_plan.mechanism
         );
     };
@@ -348,13 +338,13 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
     assert!(args.is_empty());
 
     let codex_plan = codex.exposure_plan(resource);
-    let ExposureMechanism::ManagedVendorConfig {
+    let ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
         entry_name: codex_entry_name,
         ..
-    } = &codex_plan.mechanism
+    }) = &codex_plan.mechanism
     else {
         panic!(
-            "expected ManagedVendorConfig, got {:?}",
+            "expected a managed VendorConfigEntry, got {:?}",
             codex_plan.mechanism
         );
     };

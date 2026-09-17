@@ -504,7 +504,7 @@ impl MutationGuard {
                 source,
             })?;
         let started = Instant::now();
-        while let Err(error) = try_lock_exclusive(&file) {
+        while let Err(error) = crate::persistence::try_lock_exclusive(&file) {
             if error.kind() != std::io::ErrorKind::WouldBlock {
                 return Err(UzeError::Write {
                     path,
@@ -532,28 +532,6 @@ impl Drop for MutationGuard {
             // Closing the file releases the `flock`.
         }
     }
-}
-
-#[cfg(unix)]
-fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: `flock` is called on a file descriptor this process owns and
-    // keeps open for as long as the lock is held.
-    let outcome = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if outcome == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-/// Without an OS-level advisory lock the guard serializes only this
-/// process's own threads, which the register above already does; a
-/// cross-process guarantee is a Unix property here, matching the runtime's
-/// supported platforms.
-#[cfg(not(unix))]
-fn try_lock_exclusive(_file: &File) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

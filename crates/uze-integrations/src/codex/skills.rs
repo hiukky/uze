@@ -36,11 +36,11 @@ use std::path::{Path, PathBuf};
 
 use uze_core::{
     Result,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -62,8 +62,9 @@ pub(super) fn skill_wrapper_root(uze_home: &UzeHome) -> PathBuf {
 }
 
 pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = Resource::package_root(resource)
-        .and_then(|root| root.file_name())
+    let package_id = resource
+        .package_root
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let name = resource
@@ -114,7 +115,7 @@ pub(super) fn materialize_generated_skill(
 /// list exactly as named, and the explicit-only policy keeps working).
 pub(super) fn codex_invocation_label(uze_home: &UzeHome, resource: &Resource) -> Option<String> {
     use uze_core::integration::{active_plugin_name, qualified_capability_name};
-    let active_name = active_plugin_name(uze_home, resource)?;
+    let active_name = active_plugin_name(uze_home, resource);
     let logical = resource.logical_capability_name()?;
     Some(qualified_capability_name(&active_name, &logical))
 }
@@ -156,9 +157,7 @@ impl CodexIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -193,41 +192,21 @@ impl CodexIntegration {
                 evidence.push_str(" Codex has no documented way to disable explicit `$skill` invocation, so the canonical invoke.user=false cannot be enforced — DEGRADED, reported honestly rather than invented.");
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: source,
+                }),
                 evidence,
             };
         }
-        let skill_directory = resource
-            .capability
-            .path
-            .parent()
-            .expect("SKILL.md has a parent");
-        let label = codex_skill_exposure_name_candidates(&self.uze_home, resource)
-            .first()
-            .cloned()
-            .unwrap_or_else(|| {
-                skill_directory
-                    .file_name()
-                    .expect("skill directory has a name")
-                    .to_string_lossy()
-                    .into_owned()
-            });
         ExposurePlan {
-            representation: resource.capability.representation,
-            route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::FilesystemProjection {
-                source: skill_directory.to_path_buf(),
-                target_relative: PathBuf::from(".agents/skills").join(label),
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "Codex has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "Codex has not completed `uze setup`; falling back to the per-session managed projection in the caller workspace rather than a persistent user-scope attachment."
+            evidence: "Skills reach Codex through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }
@@ -237,7 +216,7 @@ impl CodexIntegration {
 mod tests {
     use super::*;
     use std::fs;
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::store::PackageId;
 
     fn skill_resource(package_id: &str, path_string: &str, payload: &[u8]) -> Resource {
@@ -247,7 +226,6 @@ mod tests {
             PathBuf::from("/store/packages").join(package_id),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from(path_string),
                 payload: payload.to_vec(),
             },

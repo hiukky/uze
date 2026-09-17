@@ -35,11 +35,11 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -55,8 +55,9 @@ pub(super) fn skill_wrapper_root(uze_home: &UzeHome) -> PathBuf {
 }
 
 pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = Resource::package_root(resource)
-        .and_then(|root| root.file_name())
+    let package_id = resource
+        .package_root
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let name = resource
@@ -73,7 +74,7 @@ pub(super) fn antigravity_invocation_label(
     resource: &Resource,
 ) -> Option<String> {
     use uze_core::integration::{active_plugin_name, qualified_capability_name};
-    let active_name = active_plugin_name(uze_home, resource)?;
+    let active_name = active_plugin_name(uze_home, resource);
     let logical = resource.logical_capability_name()?;
     Some(qualified_capability_name(&active_name, &logical))
 }
@@ -151,9 +152,7 @@ impl AntigravityIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -190,21 +189,16 @@ impl AntigravityIntegration {
                 )
             };
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: source,
+                }),
                 evidence,
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "Antigravity setup has not completed, so there is no global skills root for the Skill delivery yet."
                     .to_owned(),
@@ -218,7 +212,7 @@ impl AntigravityIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::store::PackageId;
 
     fn skill_resource(package_id: &str, path_string: &str, payload: &[u8]) -> Resource {
@@ -228,7 +222,6 @@ mod tests {
             PathBuf::from("/store/packages").join(package_id),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from(path_string),
                 payload: payload.to_vec(),
             },

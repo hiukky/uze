@@ -23,22 +23,21 @@ use std::{
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
     hook::PortableHook,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, active_plugin_name,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
-        qualified_exposure_name_candidates,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     persistence::write_atomic,
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::PackageId,
 };
@@ -154,13 +153,13 @@ impl IntegrationPort for OpenCodeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Agent].into_iter().collect(),
-            native: [CapabilityKind::Mcp].into_iter().collect(),
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Agent, CapabilityKind::Mcp]
+                .into_iter()
+                .collect(),
             // Hooks reach OpenCode through UZE's generated bridge — an
             // explicit adapter, never a native hook file (OpenCode exposes
             // no declarative hook surface; ADR-033).
             adaptable: [CapabilityKind::Hook].into_iter().collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive. Portable Hooks are delivered as one owned, regenerable `plugins/hooks-<package>.ts` plugin the harness auto-discovers: it is the same wrapper the other harnesses get as a shell script — handlers run sequentially against the portable HOOK_* contract, first-deny-wins, per-handler timeouts, fail-closed by effect — with this package's groups as data and no author TypeScript toolchain (ADR-033)."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -229,9 +228,7 @@ impl IntegrationPort for OpenCodeIntegration {
     /// never mixed just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
-                return Vec::new();
-            };
+            let active_name = active_plugin_name(&self.uze_home, resource);
             return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
@@ -259,43 +256,41 @@ impl IntegrationPort for OpenCodeIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "native-user-scope-skills-plus-managed-mcp-config".to_owned(),
-                installed: true,
             },
         )
     }
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported(resource, "OpenCode attachment needs a UZE-stored package.");
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
             CapabilityKind::Mcp => self.mcp_plan(resource),
             CapabilityKind::Agent => self.agent_plan(resource),
             CapabilityKind::Hook => self.hook_plan(resource),
             _ => unsupported(
-                resource,
                 "OpenCode portability is implemented only for Agent Skills, Agents, MCP, and portable Hooks in this slice.",
             ),
         }
     }
-    fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { .. } => {
                 if resource.capability.kind == CapabilityKind::AgentSkill {
                     self.materialize_or_verify_skill(resource)?;
                 }
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedHookFile { path } => {
+            ManagedArtifact::ManagedHookFile { path } => {
                 self.attach_hook_bridge(resource, path)?;
-                Ok(Some(path.clone()))
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -323,13 +318,14 @@ impl IntegrationPort for OpenCodeIntegration {
                             &self.config_path,
                         )
                     {
-                        return Ok(path);
+                        return Ok(path.and(Some(artifact.clone())));
                     }
                 }
-                attach_mcp_config(&self.config_path, entry_name, command, args)
+                attach_mcp_config(&self.config_path, entry_name, command, args)?.is_some()
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -346,7 +342,7 @@ impl IntegrationPort for OpenCodeIntegration {
             enabled,
         } = &receipt.artifact
         else {
-            return inspect_standard_receipt(receipt);
+            return receipt.artifact.inspect_standard();
         };
         let bytes = match fs::read(&self.config_path) {
             Ok(bytes) => bytes,
@@ -404,7 +400,7 @@ impl IntegrationPort for OpenCodeIntegration {
             if let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact {
                 return self.detach_hook_bridge(receipt, path);
             }
-            let detached = detach_standard_receipt(receipt)?;
+            let detached = receipt.artifact.detach_standard()?;
             if detached.state == AttachmentState::Missing
                 && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
             {
@@ -482,14 +478,8 @@ impl OpenCodeIntegration {
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
             evidence: "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }
@@ -502,10 +492,7 @@ impl OpenCodeIntegration {
     /// entry to duplicate (verified against the real harness).
     fn hook_plan(&self, resource: &Resource) -> ExposurePlan {
         let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "hook resource payload is not a valid portable hook group",
-            );
+            return unsupported("hook resource payload is not a valid portable hook group");
         };
         let compatibility = uze_core::hook::assess(&hook, &self.hook_capabilities(), true);
         let mechanism = match compatibility.route {
@@ -517,20 +504,12 @@ impl OpenCodeIntegration {
                         .unwrap_or_else(|| "no compatible hook route".to_owned()),
                 }
             }
-            _ => {
-                let package_id = match &resource.origin {
-                    uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
-                    uze_core::project::ResourceOrigin::Project { .. } => {
-                        return unsupported(
-                            resource,
-                            "OpenCode hooks need a UZE-stored package for their owned bridge.",
-                        );
-                    }
-                };
-                ExposureMechanism::ManagedHookFile {
-                    path: hook_projection::opencode_bridge_path(self.config_root(), package_id),
-                }
-            }
+            _ => ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile {
+                path: hook_projection::opencode_bridge_path(
+                    self.config_root(),
+                    resource.package_id.as_str(),
+                ),
+            }),
         };
         let base = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file, so the delivered artifact is a generated Plugin.define plugin that IS the wrapper: it registers ctx.tool.hook callbacks and runs the authored handlers sequentially on the harness's embedded Bun runtime against the portable HOOK_* contract (per-handler timeouts, PLUGIN_ROOT injected, first-deny-wins, fail-closed by effect) with the package's groups as data. The V2 tool hooks carry the tool input but no block signal, and the only decision point (permission.evaluate) carries the action's resources rather than the input, so deny/ask are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the plugin can never be loaded twice.";
         let evidence = match &compatibility.reason {
@@ -538,9 +517,7 @@ impl OpenCodeIntegration {
             None => base.to_owned(),
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: compatibility.route,
-            verification: VerificationStatus::Unverified,
             mechanism,
             evidence,
         }
@@ -560,17 +537,8 @@ impl OpenCodeIntegration {
     /// package converges on one deterministic file regardless of attach
     /// order.
     fn attach_hook_bridge(&self, resource: &Resource, bridge_path: &Path) -> Result<()> {
-        let package_root = resource.package_root().ok_or_else(|| {
-            UzeError::ExposureUnavailable("OpenCode hooks need a UZE-stored package".to_owned())
-        })?;
-        let package_id = match &resource.origin {
-            uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
-            uze_core::project::ResourceOrigin::Project { .. } => {
-                return Err(UzeError::ExposureUnavailable(
-                    "OpenCode hooks need a UZE-stored package".to_owned(),
-                ));
-            }
-        };
+        let package_root = resource.package_root.as_path();
+        let package_id = resource.package_id.as_str();
         let current = serde_json::from_slice::<PortableHook>(&resource.capability.payload)
             .map_err(|source| UzeError::Json {
                 path: resource.capability.path.clone(),
@@ -730,11 +698,9 @@ impl OpenCodeIntegration {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },
@@ -753,7 +719,6 @@ mod lifecycle_tests {
             package_id: "plugin".to_owned(),
             resource_identity: Some("mcp:example".to_owned()),
             integration: "opencode".to_owned(),
-            strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: "uze-example".to_owned(),
                 transport: "stdio".to_owned(),

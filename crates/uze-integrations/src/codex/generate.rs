@@ -16,9 +16,9 @@ use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     home::UzeHome,
     integration::{AttachmentReceipt, ManagedArtifact},
-    project::Resource,
     store::{StoredPackage, is_valid_qualified_id},
 };
 
@@ -545,7 +545,6 @@ pub(super) fn generated_package_receipt(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace-generated".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: GENERATED_PLUGIN_KIND.to_owned(),
             selector: selector.to_owned(),
@@ -576,10 +575,10 @@ mod generated_native_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
     use super::*;
@@ -638,7 +637,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -652,7 +650,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -896,7 +893,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("extra/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -907,7 +903,13 @@ mod generated_native_tests {
         assert!(!covered.contains(&r_out.identity()));
 
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = CodexIntegration::new(_root.join("agents"), uze_home);
+        let integration = CodexIntegration::new(_root.join("agents"), uze_home.clone());
+        uze_core::state::record(
+            &uze_home,
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_out);
         assert!(!matches!(
             fallback.mechanism,
@@ -991,7 +993,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/deploy/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -1046,7 +1047,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg_root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },
@@ -1077,7 +1077,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg.root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },

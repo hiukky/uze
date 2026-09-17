@@ -257,14 +257,23 @@ worktrees:
 /// may call this: a repository somebody is only trying UZE against must
 /// come back unchanged.
 pub fn ensure_exists(root: &Path) -> Result<bool> {
+    let (document, created) = open_or_scaffold(root)?;
+    if created {
+        document.save()?;
+    }
+    Ok(created)
+}
+
+/// The project's manifest document, or the scaffold that would become it
+/// when the project has none — and whether it is the scaffold.
+fn open_or_scaffold(root: &Path) -> Result<(edit::ManifestDocument, bool)> {
     let path = manifest_path_for(root);
     if path.exists() {
-        return Ok(false);
+        return Ok((edit::ManifestDocument::open(&path)?, false));
     }
     let mut document = edit::ManifestDocument::empty(&path)?;
     document.append_block(SCAFFOLD)?;
-    document.save()?;
-    Ok(true)
+    Ok((document, true))
 }
 
 /// Declares the completion behavior, creating the manifest when the project
@@ -274,9 +283,7 @@ pub fn ensure_exists(root: &Path) -> Result<bool> {
 /// consequence of their click needs to say "this creates a tracked file"
 /// before it happens rather than after.
 pub fn set_completion(root: &Path, behavior: CompletionBehavior) -> Result<bool> {
-    let path = manifest_path_for(root);
-    let created = ensure_exists(root)?;
-    let mut document = edit::ManifestDocument::open(&path)?;
+    let (mut document, created) = open_or_scaffold(root)?;
     document.upsert(
         "worktrees",
         "completion",
@@ -289,33 +296,19 @@ pub fn set_completion(root: &Path, behavior: CompletionBehavior) -> Result<bool>
     Ok(created)
 }
 
-/// Declares a plugin under the marketplace it comes from, creating the
-/// manifest when the project has none. `source` is `None` for the built-in
-/// marketplace: its plugins are installed for every project by the
-/// machine's own bootstrap, so a project declaring one would be declaring
-/// something it never chose — nothing is written, and the caller is told
-/// so. The document is patched in place, so a comment a person wrote
-/// beside an unrelated entry survives.
+/// Declares a plugin under the marketplace it comes from, declared as
+/// `source`, creating the manifest when the project has none. The document
+/// is patched in place, so a comment a person wrote beside an unrelated
+/// entry survives.
 pub fn declare_plugin(
     root: &Path,
     plugin: &str,
     marketplace: &str,
-    source: Option<&DeclaredMarketplace>,
-) -> Result<bool> {
-    let Some(source) = source else {
-        return Ok(false);
-    };
-    let path = manifest_path_for(root);
-    let mut document = if path.exists() {
-        edit::ManifestDocument::open(&path)?
-    } else {
-        let mut fresh = edit::ManifestDocument::empty(&path)?;
-        fresh.append_block(SCAFFOLD)?;
-        fresh
-    };
-    let already_declared = load(root)?
-        .map(|manifest| manifest.marketplaces.contains_key(marketplace))
-        .unwrap_or(false);
+    source: &DeclaredMarketplace,
+) -> Result<()> {
+    let (mut document, _) = open_or_scaffold(root)?;
+    let already_declared =
+        load(root)?.is_some_and(|manifest| manifest.marketplaces.contains_key(marketplace));
     if already_declared {
         // Pushing into the list rather than rewriting the entry: the source
         // above it is the author's, comments and all.
@@ -330,7 +323,7 @@ pub fn declare_plugin(
     // schema rejects is a bug in this function, and must surface here rather
     // than on the next command.
     load(root)?;
-    Ok(true)
+    Ok(())
 }
 
 /// Removes a plugin's declaration. Reports whether it was there, so a
@@ -355,20 +348,15 @@ pub fn undeclare_plugin(root: &Path, plugin: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// The value UZE writes for a declaration. Typed, never a fragment of YAML
-/// text: the spelling — indentation, quoting, whether a path holding a
-/// comma needs quotes — belongs to the emitter, and a caller that composes
-/// syntax by hand is a caller that eventually composes it wrong.
-fn declaration<T: Serialize>(declared: &T, what: &str) -> Result<serde_yaml::Value> {
-    serde_yaml::to_value(declared).map_err(|error| UzeError::MalformedManifest {
-        path: PathBuf::from(MANIFEST_FILE_NAME),
-        reason: format!("{what} could not be written ({error})"),
-    })
-}
-
 impl DeclaredMarketplace {
-    pub fn declaration(&self) -> Result<serde_yaml::Value> {
-        declaration(self, "a marketplace declaration")
+    /// The value UZE writes for this declaration. Typed, never a fragment of
+    /// YAML text: the spelling — indentation, quoting, whether a path
+    /// holding a comma needs quotes — belongs to the emitter.
+    fn declaration(&self) -> Result<serde_yaml::Value> {
+        serde_yaml::to_value(self).map_err(|error| UzeError::MalformedManifest {
+            path: PathBuf::from(MANIFEST_FILE_NAME),
+            reason: format!("a marketplace declaration could not be written ({error})"),
+        })
     }
 }
 
@@ -421,18 +409,17 @@ pub fn parse(text: &str, path: &Path) -> Result<ProjectManifest> {
 const REFUSED_ROOT_KEYS: [(&str, &str); 1] = [(
     "version",
     "this file carries no schema version. A change to the schema is reported by naming the key it \
-     affects — which is what an older UZE already does with a key it does not know — and a number \
-     to compare would only be needed to keep reading a file UZE no longer understands",
+     affects, and a number to compare would only be needed to keep reading a file UZE no longer \
+     understands",
 )];
 
 /// serde's "unknown field" message is accurate and unhelpful for the two
 /// mistakes a person actually makes: writing a resolution into the
 /// manifest, or writing the policy into the lock.
 fn explain(reason: &str) -> String {
-    // `version` is not the lock's to hold either: its field there is
-    // permanently `None`, because nothing reads a plugin's version yet.
-    // Sending a person to a field that never populates is worse than
-    // saying not-yet.
+    // A plugin version is resolved nowhere — not here and not in the lock —
+    // so the answer is what can be pinned instead, never a pointer to a
+    // field that does not exist.
     if reason.contains("unknown field") && reason.contains("version") {
         return "UZE does not resolve plugin versions yet — nothing in a plugin or a marketplace \
                 catalog declares one. Pin the marketplace with its `ref:` instead."
@@ -589,15 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_marketplace_is_not_a_thing_a_project_declares() {
-        let error = parsed(&format!(
-            "marketplaces:\n  {BUILT_IN_MARKETPLACE}:\n    plugins: [uze]\n"
-        ))
-        .unwrap_err();
-        assert!(error.to_string().contains("built into UZE"), "{error}");
-    }
-
-    #[test]
     fn declaring_the_built_in_marketplace_is_refused() {
         let error = parsed(&format!(
             "marketplaces:\n  {BUILT_IN_MARKETPLACE}:\n    git: https://example.invalid/fake\n"
@@ -606,22 +584,6 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains(BUILT_IN_MARKETPLACE), "{message}");
         assert!(message.contains("built into UZE"), "{message}");
-    }
-
-    /// The built-in marketplace's plugins are installed for every project
-    /// by the machine's own bootstrap, so declaring one in a project file
-    /// would record a choice the project never made.
-    #[test]
-    fn a_plugin_from_the_built_in_marketplace_is_not_declared_at_all() {
-        let root = uze_testkit::temp::scratch("manifest-built-in");
-        assert!(
-            !declare_plugin(&root, "uze", BUILT_IN_MARKETPLACE, None).unwrap(),
-            "nothing to declare"
-        );
-        assert!(
-            !manifest_path_for(&root).exists(),
-            "a manifest was created for a plugin the project does not declare"
-        );
     }
 
     #[test]
@@ -695,7 +657,7 @@ mod tests {
         assert!(message.contains("`ref:`"), "{message}");
         assert!(
             !message.contains("agents.lock"),
-            "the lock's version field is permanently empty; do not send anyone there: {message}"
+            "the lock resolves no version either; do not send anyone there: {message}"
         );
     }
 
@@ -960,13 +922,13 @@ mod tests {
             &root,
             "flow",
             "ai",
-            Some(&DeclaredMarketplace {
+            &DeclaredMarketplace {
                 git: Some("https://example.invalid/ai".to_owned()),
                 path: None,
                 r#ref: None,
                 subdirectory: None,
                 plugins: Vec::new(),
-            }),
+            },
         )
         .unwrap();
 
@@ -993,7 +955,7 @@ mod tests {
             subdirectory: None,
             plugins: Vec::new(),
         };
-        declare_plugin(&root, "flow", "ai", Some(&source)).unwrap();
+        declare_plugin(&root, "flow", "ai", &source).unwrap();
 
         let path = manifest_path_for(&root);
         let annotated = fs::read_to_string(&path)
@@ -1001,7 +963,7 @@ mod tests {
             .replace("      - flow", "      # pinned deliberately\n      - flow");
         fs::write(&path, &annotated).unwrap();
 
-        declare_plugin(&root, "git", "ai", Some(&source)).unwrap();
+        declare_plugin(&root, "git", "ai", &source).unwrap();
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("# pinned deliberately"), "{written}");
         let manifest = load(&root).unwrap().unwrap();
@@ -1020,13 +982,13 @@ mod tests {
             &root,
             "flow",
             "ai",
-            Some(&DeclaredMarketplace {
+            &DeclaredMarketplace {
                 git: Some("https://example.invalid/ai".to_owned()),
                 path: None,
                 r#ref: None,
                 subdirectory: None,
                 plugins: Vec::new(),
-            }),
+            },
         )
         .unwrap();
 
@@ -1049,13 +1011,13 @@ mod tests {
             &root,
             "flow",
             "odd",
-            Some(&DeclaredMarketplace {
+            &DeclaredMarketplace {
                 git: None,
                 path: Some(PathBuf::from("../my, dir")),
                 r#ref: Some("release/{next}".to_owned()),
                 subdirectory: None,
                 plugins: Vec::new(),
-            }),
+            },
         )
         .unwrap();
 
@@ -1072,13 +1034,13 @@ mod tests {
             &root,
             "flow",
             "no",
-            Some(&DeclaredMarketplace {
+            &DeclaredMarketplace {
                 git: None,
                 path: Some(PathBuf::from("1.10")),
                 r#ref: Some("2.0".to_owned()),
                 subdirectory: None,
                 plugins: Vec::new(),
-            }),
+            },
         )
         .unwrap();
         let manifest = load(&root).unwrap().unwrap();

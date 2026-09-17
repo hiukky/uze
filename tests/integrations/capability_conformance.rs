@@ -18,7 +18,7 @@
 use std::{collections::BTreeSet, fs};
 
 use uze_core::{
-    exposure::ExposureMechanism, integration::IntegrationPort, project::Resource,
+    capability::Resource, exposure::ExposureMechanism, integration::IntegrationPort,
     router::CompatibilityRoute, store::StoredPackage,
 };
 

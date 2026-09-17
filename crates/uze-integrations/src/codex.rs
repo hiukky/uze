@@ -1,8 +1,8 @@
 //! Codex peer integration. Its transparent-attachment strategy is a
 //! UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
 //! Codex documents a cwd-independent USER-scope Agent Skill directory that
-//! explicitly follows symlinks. Until `uze setup` has completed, exposure
-//! falls back to the per-session managed projection from ADR-005.
+//! explicitly follows symlinks. Until `uze setup` has completed, a Skill is
+//! reported Unsupported with that instruction.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir reference), [`plugin`] (the native
@@ -16,20 +16,20 @@ use std::{fs, path::Path, path::PathBuf};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
+        default_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
 };
@@ -63,8 +63,8 @@ use skills::codex_skill_exposure_name_candidates;
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
 /// Codex documents a cwd-independent USER-scope Agent Skill directory that
-/// explicitly follows symlinks. Until `uze setup` has completed, exposure
-/// falls back to the per-session managed projection from ADR-005.
+/// explicitly follows symlinks. Until `uze setup` has completed, a Skill is
+/// reported Unsupported with that instruction.
 #[derive(Clone)]
 pub struct CodexIntegration {
     skills_dir: PathBuf,
@@ -184,7 +184,6 @@ impl CodexIntegration {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: self.id().to_owned(),
-            strategy: "native-plugin-marketplace".to_owned(),
             artifact: ManagedArtifact::IntegrationOwned {
                 kind: "marketplace-plugin".to_owned(),
                 selector,
@@ -358,7 +357,6 @@ impl IntegrationPort for CodexIntegration {
             ]
                 .into_iter()
                 .collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -431,29 +429,21 @@ impl IntegrationPort for CodexIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported(
-                resource,
-                "Codex attachment needs a UZE-stored Agent Plugin package.",
-            );
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
-                resource,
                 "Codex attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -481,7 +471,6 @@ impl IntegrationPort for CodexIntegration {
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
                 evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.".to_owned(),
             });
@@ -497,16 +486,17 @@ impl IntegrationPort for CodexIntegration {
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
             evidence: "No .codex-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Codex marketplace.".to_owned(),
         })
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { .. } => {
                 // Only materialize when this resource is the one that owns
                 // the physical entry. When the shared-root resolution reused
                 // another integration's receipt (resolved_artifact_target
@@ -519,9 +509,10 @@ impl IntegrationPort for CodexIntegration {
                 } else if resource.capability.kind == CapabilityKind::Agent {
                     self.materialize_agent(resource)?;
                 }
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -534,16 +525,17 @@ impl IntegrationPort for CodexIntegration {
                     entry_name,
                     command,
                     args,
-                )
+                )?
+                .is_some()
             }
-            ExposureMechanism::ManagedHookConfig {
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
                 wrapper,
             } => {
-                let path = hook_projection::attach_event_entry(
+                hook_projection::attach_event_entry(
                     &self.uze_home,
                     self.id(),
                     config_file,
@@ -552,10 +544,11 @@ impl IntegrationPort for CodexIntegration {
                     expected,
                     Some(("codex", wrapper.as_path())),
                 )?;
-                Ok(Some(path))
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn attach_package(
@@ -673,7 +666,7 @@ impl IntegrationPort for CodexIntegration {
                     &package_root,
                 )
             }
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -717,7 +710,7 @@ impl IntegrationPort for CodexIntegration {
                 }
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -739,14 +732,8 @@ impl CodexIntegration {
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.toml"),
-                source: self.generated_agents_dir.join(format!("{entry_name}.toml")),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.toml")), target: self.generated_agents_dir.join(format!("{entry_name}.toml")) }),
             evidence: "Codex natively loads standalone custom-agent TOML files from ~/.codex/agents/. UZE deterministically generates that native TOML from the portable Markdown definition and exposes it through a receipt-owned reference.".to_owned(),
         }
     }
@@ -820,11 +807,9 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("strings are JSON serializable")
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

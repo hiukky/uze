@@ -169,15 +169,12 @@ pub fn run_quiet<S: AsRef<OsStr>>(
     label: &str,
     args: &[S],
 ) -> Result<()> {
-    let output = capture(program, home, args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!("failed to run `{label}`: {error}"))
-    })?;
+    let output = capture(program, home, args)
+        .map_err(|error| UzeError::HarnessCommand(format!("failed to run `{label}`: {error}")))?;
     if output.status.success() {
         return Ok(());
     }
-    Err(UzeError::ExposureUnavailable(failed_message(
-        label, &output,
-    )))
+    Err(UzeError::HarnessCommand(failed_message(label, &output)))
 }
 
 /// Formats a vendor failure: `label` plus `ExitStatus`, and — when the

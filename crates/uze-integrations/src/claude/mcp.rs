@@ -6,10 +6,10 @@ use std::{fs, path::Path, path::PathBuf, process::Command};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -21,8 +21,7 @@ impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
-                "Claude Code has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
+                "Claude Code has not completed `uze setup`; run `uze setup` so UZE can attach this MCP server (see ADR-007).",
             );
         }
         let Some(entry_name) = resource
@@ -30,25 +29,19 @@ impl ClaudeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `claude mcp add`, not a name; refusing to attach.",
             );
         }
         let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "mcp.json server entry is missing a usable `command` field.",
-            );
+            return unsupported("mcp.json server entry is missing a usable `command` field.");
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -56,7 +49,7 @@ impl ClaudeIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: None,
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server once via `claude mcp add --scope user --transport stdio`, writing to ~/.claude.json's mcpServers. Available to every future session in any project with no --plugin-dir-style flag."
                 .to_owned(),
         }
@@ -86,12 +79,12 @@ pub(super) fn attach_mcp_entry(
     mcp_args.push(command.as_os_str().to_owned());
     mcp_args.extend(args.iter().map(std::ffi::OsString::from));
     let output = capture(executable, command_home, &mcp_args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `claude mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("claude mcp add `{entry_name}`"),
             &output,
         )));
@@ -205,7 +198,7 @@ pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str
     }
     let output =
         capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
-            UzeError::ExposureUnavailable(format!(
+            UzeError::HarnessCommand(format!(
                 "failed to run `claude mcp remove` for entry `{entry_name}`: {error}"
             ))
         })?;
@@ -216,14 +209,14 @@ pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str
     if !mcp_entry_exists(executable, command_home, entry_name) {
         return Ok(());
     }
-    Err(UzeError::ExposureUnavailable(failed_message(
+    Err(UzeError::HarnessCommand(failed_message(
         &format!("claude mcp remove `{entry_name}`"),
         &output,
     )))
 }
 
 /// Parses `{"command": "...", "args": [...]}` from a payload produced by
-/// `UzeEngine`'s MCP resource discovery (one server's config object,
+/// `engine`'s MCP resource discovery (one server's config object,
 /// already extracted from `mcp.json`'s `mcpServers` map).
 pub(super) fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;

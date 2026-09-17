@@ -2,8 +2,8 @@
 //! UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 //! (see ADR-006): Claude auto-loads any directory there containing
 //! `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-//! with no per-session flag. Until `uze setup` has completed, exposure falls
-//! back to the `--plugin-dir` conformance probe from ADR-005.
+//! with no per-session flag. Until `uze setup` has completed, a Skill is
+//! reported Unsupported with that instruction.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir shim), [`plugin`] (the native
@@ -18,21 +18,20 @@ use std::{fs, path::Path};
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
-        qualified_exposure_name_candidates,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
 };
@@ -74,8 +73,8 @@ const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
 /// UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 /// (see ADR-006): Claude auto-loads any directory there containing
 /// `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-/// with no per-session flag. Until `uze setup` has completed, exposure falls
-/// back to the `--plugin-dir` conformance probe from ADR-005.
+/// with no per-session flag. Until `uze setup` has completed, a Skill is
+/// reported Unsupported with that instruction.
 #[derive(Clone)]
 pub struct ClaudeIntegration {
     skills_dir: std::path::PathBuf,
@@ -291,7 +290,6 @@ impl IntegrationPort for ClaudeIntegration {
             ]
                 .into_iter()
                 .collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -392,29 +390,21 @@ impl IntegrationPort for ClaudeIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported(
-                resource,
-                "Claude Code needs a UZE-stored Agent Plugin package for this attachment.",
-            );
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
-                resource,
                 "Claude Code attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -434,9 +424,7 @@ impl IntegrationPort for ClaudeIntegration {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
-            return Vec::new();
-        };
+        let active_name = active_plugin_name(&self.uze_home, resource);
         qualified_exposure_name_candidates(resource, &active_name)
     }
 
@@ -450,7 +438,6 @@ impl IntegrationPort for ClaudeIntegration {
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
                 evidence: "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time."
                     .to_owned(),
@@ -469,7 +456,6 @@ impl IntegrationPort for ClaudeIntegration {
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
             evidence: "No .claude-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Claude marketplace."
                 .to_owned(),
@@ -533,37 +519,41 @@ impl IntegrationPort for ClaudeIntegration {
         PublicationStatus::Published
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<std::path::PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference {
-                source, entry_name, ..
-            } => {
-                if resource.capability.kind != CapabilityKind::AgentSkill {
-                    return Ok(Some(plan.mechanism.attach()?));
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { path, target } => {
+                if resource.capability.kind == CapabilityKind::AgentSkill {
+                    let skill_source_dir = resource
+                        .capability
+                        .path
+                        .parent()
+                        .expect("SKILL.md has a parent");
+                    let entry_name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .expect("a managed Skill entry has a UTF-8 name");
+                    // The shim's own plugin directory gets the stable
+                    // namespaced label (`flow:review`), while the *manifest
+                    // plugin name* stays the namespace (`flow`): Claude then
+                    // exposes the skill as `/flow:review` (ADR-026) instead
+                    // of double namespacing it (`/flow:flow:review`).
+                    let namespace = active_plugin_name(&self.uze_home, resource);
+                    let policy = resource.skill_invocation();
+                    materialize_shim(
+                        target,
+                        skill_source_dir,
+                        entry_name,
+                        Some(&namespace),
+                        &policy,
+                    )?;
                 }
-                let skill_source_dir = resource
-                    .capability
-                    .path
-                    .parent()
-                    .expect("SKILL.md has a parent");
-                // The shim's own plugin directory gets the stable namespaced
-                // label (`flow:review`), while the *manifest plugin name*
-                // stays the namespace (`flow`): Claude then exposes the
-                // skill as `/flow:review` (ADR-026) instead of double
-                // namespacing it (`/flow:flow:review`).
-                let namespace = active_plugin_name(&self.uze_home, resource);
-                let policy = resource.skill_invocation();
-                materialize_shim(
-                    source,
-                    skill_source_dir,
-                    entry_name,
-                    namespace.as_deref(),
-                    &policy,
-                )?;
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -576,16 +566,17 @@ impl IntegrationPort for ClaudeIntegration {
                     entry_name,
                     command,
                     args,
-                )
+                )?
+                .is_some()
             }
-            ExposureMechanism::ManagedHookConfig {
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
                 wrapper,
             } => {
-                let path = hook_projection::attach_event_entry(
+                hook_projection::attach_event_entry(
                     &self.uze_home,
                     self.id(),
                     config_file,
@@ -594,10 +585,11 @@ impl IntegrationPort for ClaudeIntegration {
                     expected,
                     Some(("claude", wrapper.as_path())),
                 )?;
-                Ok(Some(path))
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -652,7 +644,7 @@ impl IntegrationPort for ClaudeIntegration {
                     &marketplace_root,
                 )
             }
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -704,7 +696,7 @@ impl IntegrationPort for ClaudeIntegration {
                 })
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -724,14 +716,8 @@ impl ClaudeIntegration {
             .or_else(|| resource.logical_capability_name())
             .unwrap_or_else(|| resource.name());
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { path: self.agents_dir.clone().join(format!("{entry_name}.md")), target: resource.capability.path.clone() }),
             evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }
@@ -780,11 +766,9 @@ impl PreferencePort for ClaudeIntegration {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },
@@ -927,7 +911,6 @@ mod lifecycle_tests {
             package_id: "example".to_owned(),
             resource_identity: Some("skill:example".to_owned()),
             integration: integration.id().to_owned(),
-            strategy: "managed-user-scope-reference".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: reference,
                 target: shim.clone(),

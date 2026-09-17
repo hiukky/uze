@@ -43,7 +43,7 @@ pub fn short_hex(bytes: &[u8]) -> String {
 ///
 /// A symlink contributes its name and the path it points at, never the
 /// bytes on the other end. It is never entered, exactly as
-/// [`crate::project::files_named`] treats them: the tree being digested is
+/// [`crate::engine::discover_files`] treats them: the tree being digested is
 /// often a freshly cloned remote checkout, and following a link to an
 /// ancestor is an unbounded walk, not a digest. But a link *is* part of
 /// what a package does — `assert_self_contained` admits a relative,

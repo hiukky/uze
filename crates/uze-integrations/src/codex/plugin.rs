@@ -261,7 +261,7 @@ pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result
 /// exactly like Claude's malformed-manifest handling.
 pub(super) fn codex_exact_coverage(
     package: &StoredPackage,
-    resources: &[&uze_core::project::Resource],
+    resources: &[&uze_core::capability::Resource],
 ) -> std::collections::BTreeSet<String> {
     let manifest_path = package.root.join(".codex-plugin/plugin.json");
     let bytes = match fs::read(&manifest_path) {
@@ -378,10 +378,10 @@ mod codex_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
     use super::codex_exact_coverage;
@@ -449,7 +449,6 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -466,7 +465,6 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload,
             },
@@ -673,6 +671,12 @@ mod codex_native_coverage_tests {
         assert!(plan.provided_resource_identities.is_empty());
         // The uncovered skill must still be attachable through the normal
         // capability-level fallback — never silently dropped.
+        uze_core::state::record(
+            &UzeHome::at(_root.join("uze")),
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_a);
         assert!(!matches!(
             fallback.mechanism,
@@ -700,11 +704,10 @@ mod codex_native_coverage_tests {
         let integration = CodexIntegration::new(_root.join("agents"), uze_home.clone());
         uze_core::state::record(
             &uze_home,
+            integration.id(),
             uze_core::state::IntegrationRecord {
-                harness: integration.id().to_owned(),
                 version: None,
                 strategy: "test".to_owned(),
-                installed: true,
             },
         )
         .unwrap();

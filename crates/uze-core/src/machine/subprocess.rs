@@ -208,24 +208,9 @@ pub fn read_bounded<R: Read>(mut handle: R, cap: usize) -> (Vec<u8>, usize) {
 /// wrapper's `jq`); this is how a diagnostic checks for one without
 /// running it.
 pub fn program_on_path(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| {
-        let candidate = directory.join(program);
-        candidate.is_file() && is_executable(&candidate)
-    })
-}
-
-#[cfg(unix)]
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(_path: &std::path::Path) -> bool {
-    true
+    crate::harness_runtime::harness_search_path()
+        .iter()
+        .any(|directory| crate::harness_runtime::is_executable_file(&directory.join(program)))
 }
 
 /// Runs a shell command in `cwd`, bounded in time and output. Returns

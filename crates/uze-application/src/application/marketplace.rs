@@ -93,7 +93,7 @@ impl Marketplace<'_> {
         self.list()?
             .into_iter()
             .find(|entry| entry.name == name)
-            .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
+            .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))
     }
 
     #[tracing::instrument(name = "marketplace.install_plugin", skip_all, fields(spec = %spec), err)]
@@ -115,32 +115,23 @@ impl Marketplace<'_> {
         authority: &dyn TrustAuthority,
         name_authority: &dyn uze_core::naming::NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let (plugin_name, marketplace_name) =
-            uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
+        let (plugin_name, marketplace_name) = uze_core::store::parse_plugin_marketplace_spec(spec)?;
         if marketplace_name == "uze-official" {
             return self.install_from_resolving(&plugin_name, authority, name_authority);
         }
         let record = uze_core::state::marketplace_get(&self.0.home, &marketplace_name)?
-            .ok_or_else(|| {
-                UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
-            })?;
+            .ok_or_else(|| UzeError::UnknownMarketplace(marketplace_name.to_owned()))?;
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let materialized =
             UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
-        let report = self.0.plugins().install_materialized_from_marketplace(
+        self.0.plugins().install_materialized_from_marketplace(
             materialized,
             &marketplace_name,
             authority,
             &[],
             false,
             name_authority,
-        )?;
-        uze_core::state::plugin_marketplace_record(
-            &self.0.home,
-            &report.plugin.id,
-            &marketplace_name,
-        )?;
-        Ok(report)
+        )
     }
 
     /// Every plugin from every marketplace this Store knows about — the
@@ -217,10 +208,8 @@ impl Marketplace<'_> {
             // question about the catalogue, and it is answered without a
             // clone, the way the listing above was. Installing is what
             // clones at a commit.
-            let record =
-                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
-                    UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
-                })?;
+            let record = uze_core::state::marketplace_get(&self.0.home, marketplace)?
+                .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
             let catalogue = self.0.catalogue(marketplace, &record.source)?;
             let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
                 &catalogue.manifest,

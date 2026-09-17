@@ -10,10 +10,10 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -28,31 +28,26 @@ impl AntigravityIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "MCP resource has no derivable entry name.");
+            return unsupported("MCP resource has no derivable entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `agy mcp add`, not a name; refusing to attach.",
             );
         }
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
                 "Antigravity setup has not completed, so no managed MCP entry exists yet.",
             );
         }
         let Some((command, args)) = stdio_command(resource) else {
             return unsupported(
-                resource,
                 "Antigravity MCP attachment is only modeled for a stdio command/args server.",
             );
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -60,7 +55,7 @@ impl AntigravityIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: None,
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server once via `agy mcp add <name> <command> [args...]`, writing to ~/.gemini/config/mcp_config.json's mcpServers. The Antigravity MCP runtime remains native."
                 .to_owned(),
         }
@@ -92,12 +87,12 @@ pub(super) fn attach_mcp_entry(
     mcp_args.push(command.as_os_str().to_owned());
     mcp_args.extend(args.iter().map(std::ffi::OsString::from));
     let output = capture(Path::new(executable), command_home, &mcp_args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `agy mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("agy mcp add `{entry_name}`"),
             &output,
         )));

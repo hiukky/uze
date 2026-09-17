@@ -14,19 +14,18 @@ use std::{
 use serde::Serialize;
 
 use uze_core::{
-    PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    PackageSource, Result, UzeError, UzeHome, UzeStore,
     capability::CapabilityKind,
     context::{self as instruction_context},
     detection_cache::DetectionCache,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     integration::{
-        AttachmentInspection, AttachmentState, HarnessDetection, IntegrationPort,
-        IntegrationStatus, PublicationStatus,
+        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
     },
     preference::PreferencePort,
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
     reconciliation::{
-        PackageRemovalPlan, ReconciledReceipt, ReconciliationReport, reconcile_package,
+        PackageRemovalPlan, ReconciliationReport, reconcile_package, reconcile_package_with,
     },
     router::{CompatibilityRoute, HarnessCapabilities},
     state,
@@ -317,9 +316,7 @@ impl UzeApplication {
             return Ok(false);
         }
         for (_, receipt) in &for_integration {
-            if uze_core::integration::managed_artifact_fingerprint(&receipt.artifact).is_some()
-                && !uze_core::integration::managed_artifact_present(&receipt.artifact)
-            {
+            if receipt.artifact.fingerprint().is_some() && !receipt.artifact.is_in_place() {
                 // A stat-able artifact that is not in place (or
                 // re-pointed): not effective, re-attach to heal.
                 return Ok(false);
@@ -862,7 +859,7 @@ impl UzeApplication {
     }
 
     pub(crate) fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+        let resources = uze_core::engine::package_resources(package)?;
         let update_available = match &package.provenance.requested {
             PackageSource::Embedded { id } => bootstrap::has_update(id, &package.root).ok(),
             _ => None,
@@ -872,7 +869,7 @@ impl UzeApplication {
             active_name: package.active_name.clone(),
             source: package.provenance.requested.display(),
             store_path: package.root.clone(),
-            capability_count: environment.resources.len(),
+            capability_count: resources.len(),
             update_available,
         })
     }
@@ -955,9 +952,10 @@ impl UzeApplication {
                     .map(|integration| integration.id())
                     .collect::<Vec<_>>()
                     .join(", ");
-                UzeError::ExposureUnavailable(format!(
-                    "unknown harness `{requested}` (registered: {known})"
-                ))
+                UzeError::UnknownHarness {
+                    requested: requested.to_owned(),
+                    known,
+                }
             })
     }
 
@@ -1019,17 +1017,15 @@ impl UzeApplication {
         }
     }
 
-    pub(crate) fn engine(&self) -> UzeEngine {
-        UzeEngine::new(self.store.clone())
+    pub(crate) fn reconcile(&self, package_id: &str) -> ReconciliationReport {
+        reconcile_package(&self.home, package_id, &self.integration_ports())
     }
 
-    pub(crate) fn reconcile(&self, package_id: &str) -> ReconciliationReport {
-        let integrations = self
-            .integrations
+    fn integration_ports(&self) -> Vec<&dyn IntegrationPort> {
+        self.integrations
             .iter()
             .map(|integration| integration.as_ref() as &dyn IntegrationPort)
-            .collect::<Vec<_>>();
-        reconcile_package(&self.home, package_id, &integrations)
+            .collect()
     }
 
     /// The READ-ONLY cousin of `reconcile`: same report shape, but each
@@ -1040,61 +1036,29 @@ impl UzeApplication {
     /// going through [`reconcile`](Self::reconcile), whose live verdict is
     /// what makes ownership checks trustworthy.
     pub(crate) fn reconcile_cached_report(&self, package_id: &str) -> ReconciliationReport {
-        let entries = match state::receipts(&self.home, Some(package_id)) {
-            Ok(entries) => entries,
-            Err(error) => {
-                return ReconciliationReport {
-                    package_id: package_id.to_owned(),
-                    receipts: Vec::new(),
-                    ledger_error: Some(error.to_string()),
-                };
-            }
-        };
-        let receipts = entries
-            .into_iter()
-            .map(|(ledger_key, receipt)| {
-                let fingerprint =
-                    uze_core::integration::managed_artifact_fingerprint(&receipt.artifact);
-                let inspection = match self
+        reconcile_package_with(
+            &self.home,
+            package_id,
+            &self.integration_ports(),
+            |ledger_key, receipt, integration| {
+                let fingerprint = receipt.artifact.fingerprint();
+                if let Some(cached) = self
                     .inspection_cache
-                    .get(&ledger_key, fingerprint.as_deref())
+                    .get(ledger_key, fingerprint.as_deref())
                 {
-                    Some(cached) => cached,
-                    None => {
-                        let _span = tracing::info_span!(
-                            "integration.inspect",
-                            integration = %receipt.integration,
-                            receipt = %ledger_key
-                        )
-                        .entered();
-                        let live = self
-                            .integrations
-                            .iter()
-                            .find(|integration| integration.id() == receipt.integration)
-                            .map(|integration| integration.inspect_receipt(&receipt))
-                            .unwrap_or_else(|| AttachmentInspection {
-                                state: AttachmentState::Blocked,
-                                reason: format!(
-                                    "integration `{}` is unavailable",
-                                    receipt.integration
-                                ),
-                            });
-                        self.inspection_cache.put(&ledger_key, &live, fingerprint);
-                        live
-                    }
-                };
-                ReconciledReceipt {
-                    ledger_key,
-                    receipt,
-                    inspection,
+                    return cached;
                 }
-            })
-            .collect();
-        ReconciliationReport {
-            package_id: package_id.to_owned(),
-            receipts,
-            ledger_error: None,
-        }
+                let _span = tracing::info_span!(
+                    "integration.inspect",
+                    integration = %receipt.integration,
+                    receipt = %ledger_key
+                )
+                .entered();
+                let live = integration.inspect_receipt(receipt);
+                self.inspection_cache.put(ledger_key, &live, fingerprint);
+                live
+            },
+        )
     }
 }
 #[cfg(test)]

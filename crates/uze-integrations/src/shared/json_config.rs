@@ -119,17 +119,17 @@ pub(crate) fn write_object(path: &Path, config: &serde_json::Value) -> Result<()
 }
 
 /// Convenience for a `PreferencePort::apply` implementation: read, apply one
-/// mutation, write — surfacing a merge failure as `UzeError::ExposureUnavailable`
+/// mutation, write — surfacing a merge failure as `UzeError::HarnessConfig`
 /// the same way `hooks.rs` does for its own merge failures.
 pub(crate) fn merge(
     path: &Path,
     mutate: impl FnOnce(&mut serde_json::Value) -> std::result::Result<(), String>,
 ) -> Result<()> {
     let mut config = read_object(path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot update preferences: {reason}"))
+        UzeError::HarnessConfig(format!("cannot update preferences: {reason}"))
     })?;
     mutate(&mut config).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot update preferences: {reason}"))
+        UzeError::HarnessConfig(format!("cannot update preferences: {reason}"))
     })?;
     write_object(path, &config)
 }

@@ -30,7 +30,7 @@ Under a root:
   `acquisition.git` per clone step, `vendor.cli` per vendor CLI the
   integrations run, `process.run` per provisioning process, `hook.handler`
   per hook handler, `store.ingest`, `marketplace.clone`;
-- at debug level: `engine.compose`, `persistence.write`, and the detection
+- at debug level: `engine.package_resources`, `persistence.write`, and the detection
   cache's hit and miss events.
 
 A worker thread in the TUI enters the span that started it, so a refresh

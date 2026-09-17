@@ -159,11 +159,8 @@ impl Plugins<'_> {
             .map(|outcome| outcome.integration.as_str())
             .collect();
 
-        let environment = self
-            .0
-            .engine()
-            .compose(std::slice::from_ref(&installed.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(&installed)?;
+        let resources: Vec<_> = resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
         for integration in &self.0.integrations {
@@ -219,19 +216,20 @@ impl Plugins<'_> {
         requested_active_name: Option<&str>,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<uze_core::StoredPackage> {
-        let (name, existing, requested) = match self.0.store.ingest_with_active_name(
-            materialized,
-            marketplace,
-            requested_active_name,
-        ) {
-            Ok(installed) => return Ok(installed),
-            Err(UzeError::PluginNameCollision {
-                name,
-                existing,
-                requested,
-            }) => (name, existing, requested),
-            Err(other) => return Err(other),
-        };
+        let (name, existing, requested) =
+            match self
+                .0
+                .store
+                .ingest(materialized, marketplace, requested_active_name)
+            {
+                Ok(installed) => return Ok(installed),
+                Err(UzeError::PluginNameCollision {
+                    name,
+                    existing,
+                    requested,
+                }) => (name, existing, requested),
+                Err(other) => return Err(other),
+            };
         let request = NameCollisionRequest {
             name: name.clone(),
             existing: existing.clone(),
@@ -244,24 +242,20 @@ impl Plugins<'_> {
                 requested,
             }),
             NameCollisionResolution::Alias(alias) => {
-                self.0
-                    .store
-                    .ingest_with_active_name(materialized, marketplace, Some(&alias))
+                self.0.store.ingest(materialized, marketplace, Some(&alias))
             }
-            NameCollisionResolution::Replace => {
-                match self.detach_and_remove(&existing, false)? {
-                    RemovePluginReport::Removed { .. }
-                    | RemovePluginReport::AlreadyAbsent { .. } => self
-                        .0
+            NameCollisionResolution::Replace => match self.detach_and_remove(&existing, false)? {
+                RemovePluginReport::Removed { .. } | RemovePluginReport::AlreadyAbsent { .. } => {
+                    self.0
                         .store
-                        .ingest_with_active_name(materialized, marketplace, requested_active_name),
-                    RemovePluginReport::Blocked { .. } => Err(UzeError::PluginNameCollision {
-                        name,
-                        existing,
-                        requested,
-                    }),
+                        .ingest(materialized, marketplace, requested_active_name)
                 }
-            }
+                RemovePluginReport::Blocked { .. } => Err(UzeError::PluginNameCollision {
+                    name,
+                    existing,
+                    requested,
+                }),
+            },
         }
     }
 }

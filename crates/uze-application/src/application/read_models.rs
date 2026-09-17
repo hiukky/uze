@@ -30,8 +30,8 @@ impl Plugins<'_> {
     #[tracing::instrument(name = "plugins.inspect", skip_all, fields(id = %id), err)]
     pub fn inspect(&self, id: &str) -> Result<PluginInspection> {
         let package = self.0.package_by_name(id)?;
-        let environment = self.0.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(&package)?;
+        let resources: Vec<_> = resources.iter().collect();
         let deliveries = self
             .0
             .integrations
@@ -751,7 +751,6 @@ pub(crate) fn integration_status(status: IntegrationStatus) -> String {
 /// at `link` that is not already a UZE-created symlink to something else —
 /// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
 /// helper uses.
-#[cfg(unix)]
 pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
     match fs::symlink_metadata(link) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -776,15 +775,7 @@ pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
             });
         }
     }
-    std::os::unix::fs::symlink(target, link).map_err(|source| UzeError::Write {
-        path: link.to_path_buf(),
-        source,
-    })
-}
-
-#[cfg(not(unix))]
-pub(crate) fn refresh_shim_symlink(_target: &Path, link: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(link.to_path_buf()))
+    uze_core::persistence::create_symlink(target, link)
 }
 
 pub(crate) fn package_receipt_key(package: &str, integration: &str) -> String {

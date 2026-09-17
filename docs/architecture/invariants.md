@@ -168,7 +168,7 @@ where it always was, and never gains a policy sidecar it did not declare.
 
 > `tests/integrations/policy.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
 > `tests/integrations/policy.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
-> `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
+> `crates/uze-core/src/capability.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
 
 ### A shared-root entry always carries the superset of both encodings
 
@@ -231,12 +231,12 @@ Provenance reaches the Store as an opaque value it stores and compares through
 
 `packages.json` is a ledger of independent registrations, so an entry this
 UZE cannot read — a key that is not a valid qualified id, or a value whose
-fields an older UZE spelled differently — is quarantined, never fatal. The
+fields it does not know — is quarantined, never fatal. The
 readable entries stay listable, resolvable and removable; the quarantined one
 answers to nothing and the next save drops it. `doctor` reports it as a named
 state carrying its remedy, not as the serde error that produced it.
 
-> `crates/uze-core/src/package/store.rs::tests::an_entry_written_by_an_older_uze_is_quarantined_and_named`
+> `crates/uze-core/src/package/store.rs::tests::an_entry_with_unreadable_fields_is_quarantined_and_named`
 > `crates/uze-core/src/package/store.rs::tests::load_registry_quarantines_a_tampered_entry_without_losing_valid_ones`
 > `crates/uze-application/src/application/doctor.rs::tests::doctor_names_an_unreadable_registration_and_its_remedy`
 
@@ -1377,16 +1377,14 @@ same terms, and rebuilt by the next launch that needs it.
 > `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_directory_that_names_no_root_is_swept`
 > `tests/integrations/runtime_projection.rs::a_swept_projection_is_rebuilt_by_the_next_launch`
 
-### The runtime tree's two tenants are never confused for one another
+### The runtime tree has one tenant, and the sweep owns the rest
 
 `runtime/projects/` holds derived projections that outlive every invocation
-and die with their project root; `runtime/sessions/` holds the receipts that
-let a filesystem projection be undone, and dies with the invocation that made
-it. They are named siblings rather than sibling ids under one integration, so
-the sweep can never take one for the other, and nothing project-owned is
-reached through a projection it collects.
+and die with their project root. Anything else directly under `runtime/` is
+UZE's own output at a path nothing writes any more, so the sweep removes it,
+and nothing project-owned is reached through a projection it collects.
 
-> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_both_tenants_and_nothing_else`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenant_and_nothing_else`
 > `tests/integrations/runtime_projection.rs::sweeping_a_dead_projection_never_touches_the_project_it_pointed_at`
 > `tests/packages/store.rs::uze_home_derives_every_owned_path_from_one_root`
 

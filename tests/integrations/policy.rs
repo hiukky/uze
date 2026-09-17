@@ -11,7 +11,7 @@ pub(crate) use std::path::PathBuf;
 
 use uze_core::capability::CapabilityKind;
 pub(crate) use uze_core::{
-    PackageSource, Resource, SkillInvocationPolicy, UzeEngine, UzeHome, UzeStore,
+    PackageSource, Resource, SkillInvocationPolicy, UzeHome, UzeStore,
     integration::{AttachmentState, IntegrationPort, ManagedArtifact},
     router::CompatibilityRoute,
     state,
@@ -37,19 +37,20 @@ pub(crate) fn install(
     store: &UzeStore,
     path: impl Into<PathBuf>,
 ) -> uze_core::Result<StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(&PackageSource::local(
-        path,
-    ))?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     state::record(
         home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: Some("test".to_owned()),
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -63,10 +64,7 @@ pub(crate) fn stored_fixture(
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
     let package = install(&store, fixture).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let resources = environment.resources;
+    let resources = uze_core::engine::package_resources(&package).unwrap();
     (root, home, package, resources)
 }
 
@@ -96,11 +94,8 @@ pub(crate) fn make_policy_package(
     )
     .unwrap();
     let package = install(&store, &package_root).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let resource = environment
-        .resources
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    let resource = resources
         .into_iter()
         .find(|resource| resource.capability.kind == CapabilityKind::AgentSkill)
         .expect("fixture ships exactly one Skill");

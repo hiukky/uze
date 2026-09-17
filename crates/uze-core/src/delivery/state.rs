@@ -1,34 +1,56 @@
 //! Core minimal, secret-free machine integration state. See ADR-006.
 
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     error::{Result, UzeError},
     home::UzeHome,
+    integration::AttachmentReceipt,
     provisioning::{ProvisionAction, ProvisionStatus, ProvisioningResult},
 };
 
+/// Reads a JSON ledger, treating an absent file as an empty one. A file
+/// that exists but does not parse is an error: reading it as empty would
+/// invite the next write to overwrite it.
+fn read_json_or_default<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    if !path.exists() {
+        return Ok(T::default());
+    }
+    let bytes = fs::read(path).map_err(|source| UzeError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    let payload = serde_json::to_vec_pretty(value).expect("ledger serialization is infallible");
+    crate::persistence::write_atomic(path, &payload)
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct AttachmentLedger {
-    receipts: BTreeMap<String, crate::integration::AttachmentReceipt>,
+    receipts: BTreeMap<String, AttachmentReceipt>,
+}
+
+fn attachments_path(home: &UzeHome) -> PathBuf {
+    home.state_dir().join("attachments.json")
 }
 
 pub fn receipts(
     home: &UzeHome,
     package_id: Option<&str>,
-) -> Result<Vec<(String, crate::integration::AttachmentReceipt)>> {
-    let path = home.state_dir().join("attachments.json");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    let ledger: AttachmentLedger =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
+) -> Result<Vec<(String, AttachmentReceipt)>> {
+    let ledger: AttachmentLedger = read_json_or_default(&attachments_path(home))?;
     Ok(ledger
         .receipts
         .into_iter()
@@ -36,45 +58,35 @@ pub fn receipts(
         .collect())
 }
 
-pub fn record_receipt(
-    home: &UzeHome,
-    key: String,
-    receipt: crate::integration::AttachmentReceipt,
-) -> Result<()> {
+pub fn record_receipt(home: &UzeHome, key: String, receipt: AttachmentReceipt) -> Result<()> {
     home.ensure_layout()?;
-    let path = home.state_dir().join("attachments.json");
-    let mut entries = receipts(home, None)?
-        .into_iter()
-        .collect::<BTreeMap<_, _>>();
-    entries.insert(key, receipt);
-    crate::persistence::write_atomic(
-        &path,
-        &serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
-            .expect("receipt ledger serializable"),
-    )
+    update_receipts(home, |receipts| {
+        receipts.insert(key, receipt);
+    })
 }
 
 pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
-    let path = home.state_dir().join("attachments.json");
-    let mut entries = receipts(home, None)?
-        .into_iter()
-        .collect::<BTreeMap<_, _>>();
-    entries.remove(key);
-    crate::persistence::write_atomic(
-        &path,
-        &serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
-            .expect("receipt ledger serializable"),
-    )
+    update_receipts(home, |receipts| {
+        receipts.remove(key);
+    })
+}
+
+fn update_receipts(
+    home: &UzeHome,
+    change: impl FnOnce(&mut BTreeMap<String, AttachmentReceipt>),
+) -> Result<()> {
+    let path = attachments_path(home);
+    let mut ledger: AttachmentLedger = read_json_or_default(&path)?;
+    change(&mut ledger.receipts);
+    write_json(&path, &ledger)
 }
 
 /// Operational facts about one harness's machine-level UZE integration.
 /// Deliberately excludes anything resembling a harness credential.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IntegrationRecord {
-    pub harness: String,
     pub version: Option<String>,
     pub strategy: String,
-    pub installed: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -84,62 +96,41 @@ struct IntegrationRegistry {
 
 /// All recorded integration state, keyed by harness id.
 pub fn load(home: &UzeHome) -> Result<BTreeMap<String, IntegrationRecord>> {
-    Ok(load_registry(home)?.integrations)
+    let registry: IntegrationRegistry = read_json_or_default(&home.integrations_state_path())?;
+    Ok(registry.integrations)
 }
 
 pub fn get(home: &UzeHome, harness: &str) -> Result<Option<IntegrationRecord>> {
-    Ok(load_registry(home)?.integrations.get(harness).cloned())
+    Ok(load(home)?.remove(harness))
 }
 
-/// True only when the harness has a recorded, completed installation. Any
-/// read/parse failure is treated as "not installed" so exposure planning can
-/// safely fall back to a conformance-probe mechanism rather than error.
+/// True only when the harness has a recorded installation. Any read/parse
+/// failure is treated as "not installed" so exposure planning reports the
+/// setup it needs rather than an error.
 pub fn is_installed(home: &UzeHome, harness: &str) -> bool {
-    get(home, harness)
-        .ok()
-        .flatten()
-        .is_some_and(|record| record.installed)
+    get(home, harness).ok().flatten().is_some()
 }
 
 /// Idempotently records or refreshes one harness's integration state. A
 /// second call with the same harness id replaces, rather than duplicates,
 /// its entry.
-pub fn record(home: &UzeHome, entry: IntegrationRecord) -> Result<()> {
+pub fn record(home: &UzeHome, harness: &str, entry: IntegrationRecord) -> Result<()> {
     home.ensure_layout()?;
-    let mut registry = load_registry(home)?;
+    let path = home.integrations_state_path();
+    let mut registry: IntegrationRegistry = read_json_or_default(&path)?;
     // Every command records each detected harness on its way in; an
     // unchanged record must cost a read, not a synced rewrite of the file.
-    if registry.integrations.get(&entry.harness) == Some(&entry) {
+    if registry.integrations.get(harness) == Some(&entry) {
         return Ok(());
     }
-    registry.integrations.insert(entry.harness.clone(), entry);
-    save_registry(home, &registry)
-}
-
-fn load_registry(home: &UzeHome) -> Result<IntegrationRegistry> {
-    let path = home.integrations_state_path();
-    if !path.exists() {
-        return Ok(IntegrationRegistry::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
-}
-
-fn save_registry(home: &UzeHome, registry: &IntegrationRegistry) -> Result<()> {
-    let path = home.integrations_state_path();
-    let payload =
-        serde_json::to_vec_pretty(registry).expect("integration state serialization is infallible");
-    crate::persistence::write_atomic(&path, &payload)
+    registry.integrations.insert(harness.to_owned(), entry);
+    write_json(&path, &registry)
 }
 
 /// Durable evidence of an explicit provisioning attempt. It grants no right
 /// to remove a harness executable; it is product history, not ownership.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProvisioningRecord {
-    pub harness: String,
     pub action: ProvisionAction,
     pub status: ProvisionStatus,
     pub method: String,
@@ -153,10 +144,8 @@ struct ProvisioningRegistry {
 }
 
 pub fn provisioning(home: &UzeHome, harness: &str) -> Result<Option<ProvisioningRecord>> {
-    Ok(load_provisioning_registry(home)?
-        .harnesses
-        .get(harness)
-        .cloned())
+    let mut registry: ProvisioningRegistry = read_json_or_default(&home.provisioning_state_path())?;
+    Ok(registry.harnesses.remove(harness))
 }
 
 pub fn record_provisioning(
@@ -165,16 +154,15 @@ pub fn record_provisioning(
     result: &ProvisioningResult,
 ) -> Result<()> {
     home.ensure_layout()?;
-    let harness = harness.into();
-    let mut registry = load_provisioning_registry(home)?;
+    let path = home.provisioning_state_path();
+    let mut registry: ProvisioningRegistry = read_json_or_default(&path)?;
     let recorded_at_unix_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     registry.harnesses.insert(
-        harness.clone(),
+        harness.into(),
         ProvisioningRecord {
-            harness,
             action: result.action,
             status: result.status,
             method: result.method.clone(),
@@ -182,27 +170,11 @@ pub fn record_provisioning(
             recorded_at_unix_secs,
         },
     );
-    let path = home.provisioning_state_path();
-    let payload = serde_json::to_vec_pretty(&registry)
-        .expect("provisioning state serialization is infallible");
-    crate::persistence::write_atomic(&path, &payload)
-}
-
-fn load_provisioning_registry(home: &UzeHome) -> Result<ProvisioningRegistry> {
-    let path = home.provisioning_state_path();
-    if !path.exists() {
-        return Ok(ProvisioningRegistry::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+    write_json(&path, &registry)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MarketplaceRecord {
-    pub name: String,
     pub source: crate::acquisition::PackageSource,
 }
 
@@ -211,25 +183,20 @@ struct MarketplaceRegistry {
     marketplaces: BTreeMap<String, MarketplaceRecord>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct PluginMarketplaceRegistry {
-    plugins: BTreeMap<String, String>,
-}
-
 /// Registers a marketplace under `name`. Idempotent, mirroring
-/// `UzeStore::install_materialized`'s same-origin check: adding a
-/// marketplace already registered from the exact same source is a no-op
-/// (`Ok(false)`), not an error — a marketplace discovery source has no
-/// content of its own to overwrite, so this is safe to repeat. Adding it
-/// again from a *different* source is a genuine conflict (`Ok(true)` when
-/// newly registered).
+/// `UzeStore::ingest`'s same-origin check: adding a marketplace already
+/// registered from the exact same source is a no-op (`Ok(false)`), not an
+/// error — a marketplace discovery source has no content of its own to
+/// overwrite, so this is safe to repeat. Adding it again from a *different*
+/// source is a genuine conflict (`Ok(true)` when newly registered).
 pub fn marketplace_add(
     home: &UzeHome,
     name: &str,
     source: crate::acquisition::PackageSource,
 ) -> Result<bool> {
     home.ensure_layout()?;
-    let mut registry = load_marketplace_registry(home)?;
+    let path = home.marketplaces_path();
+    let mut registry: MarketplaceRegistry = read_json_or_default(&path)?;
     if let Some(existing) = registry.marketplaces.get(name) {
         if existing.source == source {
             return Ok(false);
@@ -240,111 +207,39 @@ pub fn marketplace_add(
             requested: format!("{source:?}"),
         });
     }
-    registry.marketplaces.insert(
-        name.to_owned(),
-        MarketplaceRecord {
-            name: name.to_owned(),
-            source,
-        },
-    );
-    save_marketplace_registry(home, &registry)?;
+    registry
+        .marketplaces
+        .insert(name.to_owned(), MarketplaceRecord { source });
+    write_json(&path, &registry)?;
     Ok(true)
 }
 
 pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {
-    let mut registry = load_marketplace_registry(home)?;
+    let path = home.marketplaces_path();
+    let mut registry: MarketplaceRegistry = read_json_or_default(&path)?;
     if !registry.marketplaces.contains_key(name) {
-        return Err(UzeError::UnknownPackage(format!(
-            "marketplace `{name}` not found"
-        )));
+        return Err(UzeError::UnknownMarketplace(name.to_owned()));
     }
-    // `plugin_marketplaces.json` is written at exactly one call site
-    // (a successful non-official install) and only cleared on remove — it
-    // is a cache of the Store's own ids, not the source of truth, and can
-    // drift (a plugin's entry never gets backfilled by, say, `update`). The
-    // Store's `PackageId` is already marketplace-qualified (ADR-036: every
-    // id ends `@<marketplace>`), so it is checked directly here rather than
-    // trusted to have mirrored every install into the ledger.
-    let plugin_map = load_plugin_marketplace_registry(home)?;
-    let store = crate::store::UzeStore::new(home.clone());
-    let still_installed = plugin_map.plugins.values().any(|m| m == name)
-        || store
-            .package_ids()?
-            .iter()
-            .any(|id| id.marketplace() == name);
+    // Every Store id is marketplace-qualified (ADR-036), so the Store alone
+    // answers whether this marketplace still has installed plugins.
+    let still_installed = crate::store::UzeStore::new(home.clone())
+        .package_ids()?
+        .iter()
+        .any(|id| id.marketplace() == name);
     if still_installed {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "marketplace `{name}` still has installed plugins; remove them first"
-        )));
+        return Err(UzeError::MarketplaceInUse(name.to_owned()));
     }
     registry.marketplaces.remove(name);
-    save_marketplace_registry(home, &registry)
+    write_json(&path, &registry)
 }
 
 pub fn marketplace_list(home: &UzeHome) -> Result<BTreeMap<String, MarketplaceRecord>> {
-    Ok(load_marketplace_registry(home)?.marketplaces)
+    let registry: MarketplaceRegistry = read_json_or_default(&home.marketplaces_path())?;
+    Ok(registry.marketplaces)
 }
 
 pub fn marketplace_get(home: &UzeHome, name: &str) -> Result<Option<MarketplaceRecord>> {
-    Ok(load_marketplace_registry(home)?
-        .marketplaces
-        .get(name)
-        .cloned())
-}
-
-pub fn plugin_marketplace_record(home: &UzeHome, plugin_id: &str, marketplace: &str) -> Result<()> {
-    home.ensure_layout()?;
-    let mut registry = load_plugin_marketplace_registry(home)?;
-    registry
-        .plugins
-        .insert(plugin_id.to_owned(), marketplace.to_owned());
-    save_plugin_marketplace_registry(home, &registry)
-}
-
-pub fn plugin_marketplace_remove(home: &UzeHome, plugin_id: &str) -> Result<()> {
-    let mut registry = load_plugin_marketplace_registry(home)?;
-    registry.plugins.remove(plugin_id);
-    save_plugin_marketplace_registry(home, &registry)
-}
-
-fn load_marketplace_registry(home: &UzeHome) -> Result<MarketplaceRegistry> {
-    let path = home.marketplaces_path();
-    if !path.exists() {
-        return Ok(MarketplaceRegistry::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
-}
-
-fn save_marketplace_registry(home: &UzeHome, registry: &MarketplaceRegistry) -> Result<()> {
-    let path = home.marketplaces_path();
-    let payload = serde_json::to_vec_pretty(registry).expect("marketplace registry serializable");
-    crate::persistence::write_atomic(&path, &payload)
-}
-
-fn load_plugin_marketplace_registry(home: &UzeHome) -> Result<PluginMarketplaceRegistry> {
-    let path = home.plugin_marketplaces_path();
-    if !path.exists() {
-        return Ok(PluginMarketplaceRegistry::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
-}
-
-fn save_plugin_marketplace_registry(
-    home: &UzeHome,
-    registry: &PluginMarketplaceRegistry,
-) -> Result<()> {
-    let path = home.plugin_marketplaces_path();
-    let payload =
-        serde_json::to_vec_pretty(registry).expect("plugin marketplace registry serializable");
-    crate::persistence::write_atomic(&path, &payload)
+    Ok(marketplace_list(home)?.remove(name))
 }
 
 #[cfg(test)]
@@ -357,20 +252,18 @@ mod tests {
         UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
-    fn record_of(harness: &str, version: &str) -> IntegrationRecord {
+    fn record_of(version: &str) -> IntegrationRecord {
         IntegrationRecord {
-            harness: harness.to_owned(),
             version: Some(version.to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
-            installed: true,
         }
     }
 
     #[test]
     fn recording_twice_refreshes_instead_of_duplicating() {
         let home = temp_home("idempotent");
-        record(&home, record_of("claude-code", "2.1.237")).unwrap();
-        record(&home, record_of("claude-code", "2.1.238")).unwrap();
+        record(&home, "claude-code", record_of("2.1.237")).unwrap();
+        record(&home, "claude-code", record_of("2.1.238")).unwrap();
 
         let all = load(&home).unwrap();
         assert_eq!(all.len(), 1);
@@ -387,7 +280,7 @@ mod tests {
     #[test]
     fn one_harness_state_does_not_affect_another() {
         let home = temp_home("independent");
-        record(&home, record_of("claude-code", "2.1.237")).unwrap();
+        record(&home, "claude-code", record_of("2.1.237")).unwrap();
         assert!(is_installed(&home, "claude-code"));
         assert!(!is_installed(&home, "codex"));
         fs::remove_dir_all(home.root()).unwrap();
@@ -398,7 +291,6 @@ mod tests {
             package_id: package.to_owned(),
             resource_identity: Some(format!("mcp:{entry}")),
             integration: integration.to_owned(),
-            strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: entry.to_owned(),
                 transport: "stdio".to_owned(),
@@ -469,7 +361,6 @@ mod tests {
                 package_id: "plugin-a".to_owned(),
                 resource_identity: None,
                 integration: "codex".to_owned(),
-                strategy: "native-plugin-marketplace".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "marketplace-plugin".to_owned(),
                     selector: "plugin-a@uze-local".to_owned(),

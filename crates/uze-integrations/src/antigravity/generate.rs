@@ -18,8 +18,8 @@ use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     home::UzeHome,
-    project::Resource,
     store::{StoredPackage, is_valid_qualified_id},
 };
 
@@ -211,7 +211,7 @@ pub(super) fn materialize_generated_plugin(
 
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
-        symlink(&skills_source, &dir.join("skills"))?;
+        uze_core::persistence::create_symlink(&skills_source, &dir.join("skills"))?;
     }
     if canonical_mcp_servers(package).is_some() {
         let mcp = translated_mcp_config(package);
@@ -255,29 +255,16 @@ pub(super) fn remove_generated_plugin_by_id(uze_home: &UzeHome, package_id: &str
     Ok(())
 }
 
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
-}
-
 #[cfg(test)]
 mod generated_native_tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::AntigravityIntegration;
     use super::*;
@@ -344,7 +331,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -358,7 +344,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -414,7 +399,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/commit/SKILL.md"),
                 payload: b"---\nname: commit\ninvoke:\n  model: false\n  user: true\n---\n"
                     .to_vec(),

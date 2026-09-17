@@ -70,20 +70,16 @@ pub use delivery::{
     continuity, engine, exposure, integration, persistence, reconciliation, router, state,
 };
 pub use machine::{detection_cache, harness_runtime, home, provisioning, shell_path, subprocess};
-pub use package::{acquisition, bundle, importer, importers, naming, store, trust};
+pub use package::{acquisition, naming, store, trust};
 pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
     project_root, task, tenant, text_region, workspace, worktree,
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
-pub use engine::UzeEngine;
+pub use capability::Resource;
 pub use error::{ProjectionConflictDetails, Result, UzeError};
-pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan, PreparedExposure};
+pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan};
 pub use home::UzeHome;
-pub use project::{
-    EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
-    resolve_project_resources,
-};
 pub use skill::SkillInvocationPolicy;
 pub use store::{PackageId, StoredPackage, UzeStore};

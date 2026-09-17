@@ -18,7 +18,8 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     hook::{
         CommandHook, HOOKS_FILE_NAME, HarnessToolVocabulary, HookCapabilities, HookEffect,
@@ -26,8 +27,7 @@ use uze_core::{
     },
     integration::{AttachmentInspection, AttachmentState},
     persistence::write_atomic,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
 };
 
 // ============================================================================
@@ -594,9 +594,8 @@ pub(crate) fn merge_named_entry(
     entry_name: &str,
     entry: &serde_json::Value,
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     config
         .as_object_mut()
         .expect("read_config_object returns an object")
@@ -652,9 +651,8 @@ pub(crate) fn remove_named_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     config
         .as_object_mut()
         .expect("read_config_object returns an object")
@@ -1353,12 +1351,10 @@ pub(crate) fn merge_event_entry(
     entry: &serde_json::Value,
     previous: &[String],
 ) -> Result<PathBuf> {
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
-    let array = event_array(&mut config, event, config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
+    let array = event_array(&mut config, event, config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot merge hook entry: {reason}")))?;
     for expected in previous {
         if let Ok(old) = serde_json::from_str::<serde_json::Value>(expected) {
             array.retain(|candidate| candidate != &old);
@@ -1426,12 +1422,10 @@ pub(crate) fn remove_event_entry(
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
     }
-    let mut config = read_config_object(config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
-    let array = event_array(&mut config, event, config_path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
-    })?;
+    let mut config = read_config_object(config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
+    let array = event_array(&mut config, event, config_path)
+        .map_err(|reason| UzeError::HarnessConfig(format!("cannot detach hook entry: {reason}")))?;
     let expected: serde_json::Value =
         serde_json::from_str(expected).map_err(|source| UzeError::Json {
             path: config_path.to_path_buf(),
@@ -1774,10 +1768,7 @@ pub(crate) fn hook_exposure_plan(
     evidence: &str,
 ) -> ExposurePlan {
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan(
-            resource,
-            "hook resource payload is not a valid portable hook group",
-        );
+        return unsupported_plan("hook resource payload is not a valid portable hook group");
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, bridged);
     let mut undeliverable = None;
@@ -1791,24 +1782,21 @@ pub(crate) fn hook_exposure_plan(
             }
         }
         _ => {
-            let package_root = resource
-                .package_root()
-                .expect("hook exposure_plan is only reached for packages");
             match hook_delivery(
                 target,
                 &hook,
-                package_root,
+                &resource.package_root,
                 Some(shared_wrapper_path(uze_home, target)),
                 exec_form,
             ) {
-                Some(delivery) => ExposureMechanism::ManagedHookConfig {
+                Some(delivery) => ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
                     config_file,
                     entry_name: hook_entry_name(resource, &hook),
                     event: hook.event,
                     expected: serde_json::to_string(&delivery.entry)
                         .expect("hook entry serializes"),
                     wrapper: delivery.wrapper,
-                },
+                }),
                 None => {
                     undeliverable = Some(NO_WRAPPER_TEMPLATE);
                     ExposureMechanism::Unsupported {
@@ -1830,9 +1818,7 @@ pub(crate) fn hook_exposure_plan(
         (None, None) => evidence.to_owned(),
     };
     ExposurePlan {
-        representation: resource.capability.representation,
         route,
-        verification: VerificationStatus::Unverified,
         mechanism,
         evidence,
     }
@@ -1856,10 +1842,7 @@ pub(crate) fn antigravity_hook_exposure_plan(
 ) -> ExposurePlan {
     const EVIDENCE: &str = "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).";
     let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
-        return unsupported_plan(
-            resource,
-            "hook resource payload is not a valid portable hook group",
-        );
+        return unsupported_plan("hook resource payload is not a valid portable hook group");
     };
     let compatibility = uze_core::hook::assess(&hook, capabilities, false);
     let mut undeliverable = false;
@@ -1879,18 +1862,15 @@ pub(crate) fn antigravity_hook_exposure_plan(
             }
         }
         _ => {
-            let package_root = resource
-                .package_root()
-                .expect("hook exposure_plan is only reached for packages");
             let wrapper = shared_wrapper_path(uze_home, ANTIGRAVITY_TARGET);
-            let entry = agy_named_entry(&hook, &wrapper, package_root);
-            ExposureMechanism::ManagedHookConfig {
+            let entry = agy_named_entry(&hook, &wrapper, &resource.package_root);
+            ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name: hook_entry_name(resource, &hook),
                 event: hook.event,
                 expected: serde_json::to_string(&entry).expect("hook entry serializes"),
                 wrapper,
-            }
+            })
         }
     };
     let evidence = match (&compatibility.reason, undeliverable) {
@@ -1899,13 +1879,11 @@ pub(crate) fn antigravity_hook_exposure_plan(
         (None, false) => EVIDENCE.to_owned(),
     };
     ExposurePlan {
-        representation: resource.capability.representation,
         route: if undeliverable {
             CompatibilityRoute::Unsupported
         } else {
             compatibility.route
         },
-        verification: VerificationStatus::Unverified,
         mechanism,
         evidence,
     }
@@ -1914,19 +1892,12 @@ pub(crate) fn antigravity_hook_exposure_plan(
 /// The stable UZE identity for one hook group entry, mirroring the
 /// qualified-capability naming policy (ADR-026): `<package>:<hook-id>`.
 pub(crate) fn hook_entry_name(resource: &Resource, hook: &PortableHook) -> String {
-    match &resource.origin {
-        uze_core::project::ResourceOrigin::Package { id, .. } => {
-            format!("{}:{}", id.as_str(), hook.id)
-        }
-        uze_core::project::ResourceOrigin::Project { .. } => hook.id.clone(),
-    }
+    format!("{}:{}", resource.package_id.as_str(), hook.id)
 }
 
-fn unsupported_plan(resource: &Resource, rationale: &str) -> ExposurePlan {
+fn unsupported_plan(rationale: &str) -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },
@@ -2106,7 +2077,6 @@ mod tests {
             package.clone(),
             uze_core::capability::Capability {
                 kind: uze_core::capability::CapabilityKind::Hook,
-                representation: uze_core::capability::Representation::Standard,
                 path: package.join(HOOKS_FILE_NAME),
                 payload: serde_json::to_vec(&hook()).unwrap(),
             },
@@ -2657,7 +2627,6 @@ mod tests {
             package_id: "pkg@market".to_owned(),
             resource_identity: None,
             integration: ANTIGRAVITY_TARGET.to_owned(),
-            strategy: "hook-config-entry".to_owned(),
             artifact: uze_core::integration::ManagedArtifact::HookConfigEntry {
                 config_file: config.to_path_buf(),
                 entry_name: entry_name.to_owned(),

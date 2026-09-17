@@ -44,10 +44,10 @@ use std::{
 // `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
 
 use uze_core::{
-    capability::{Capability, CapabilityKind, Representation},
+    capability::Resource,
+    capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::{AttachmentState, IntegrationPort, ManagedArtifact},
-    project::Resource,
     state,
 };
 
@@ -394,11 +394,10 @@ fn a_failing_vendor_cli_propagates_the_error_and_leaves_no_partial_state() {
     env_scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
     state::record(
         &uze_home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "conformance-fixture".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -415,7 +414,6 @@ fn a_failing_vendor_cli_propagates_the_error_and_leaves_no_partial_state() {
         package.root.clone(),
         Capability {
             kind: CapabilityKind::Mcp,
-            representation: Representation::Standard,
             path: package.root.join("mcp.json"),
             payload: br#"{"command":"/bin/echo"}"#.to_vec(),
         },

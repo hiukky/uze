@@ -409,11 +409,11 @@ impl Mapping {
 /// The same words `apply` fails with, so a preview and an apply refused
 /// for one reason say so the same way.
 fn unwritable(reason: String) -> UzeError {
-    UzeError::ExposureUnavailable(format!("cannot update preferences: {reason}"))
+    UzeError::HarnessConfig(format!("cannot update preferences: {reason}"))
 }
 
 fn unreadable(reason: String) -> UzeError {
-    UzeError::ExposureUnavailable(format!("cannot read preferences: {reason}"))
+    UzeError::HarnessConfig(format!("cannot read preferences: {reason}"))
 }
 
 fn json_value(value: Value) -> serde_json::Value {

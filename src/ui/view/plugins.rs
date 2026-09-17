@@ -621,13 +621,12 @@ fn render_plugin_drawer(
 
 /// The order a reader meets a plugin's resources in: what they invoke
 /// first, what runs on its own after.
-const RESOURCE_ORDER: [CapabilityKind; 6] = [
+const RESOURCE_ORDER: [CapabilityKind; 5] = [
     CapabilityKind::AgentSkill,
     CapabilityKind::Agent,
     CapabilityKind::Hook,
     CapabilityKind::Mcp,
     CapabilityKind::Instruction,
-    CapabilityKind::Policy,
 ];
 
 /// One row per kind the plugin declares — `Skills  init, worktree` —

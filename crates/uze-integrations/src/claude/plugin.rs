@@ -8,8 +8,8 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf, proc
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     integration::{AttachmentInspection, AttachmentReceipt, AttachmentState, ManagedArtifact},
-    project::Resource,
     store::StoredPackage,
 };
 
@@ -103,7 +103,6 @@ pub(super) fn claude_package_receipt(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: "claude-plugin".to_owned(),
             selector: selector.to_owned(),
@@ -417,10 +416,10 @@ mod claude_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::ClaudeIntegration;
     use super::claude_catalogue_document;
@@ -476,7 +475,6 @@ mod claude_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: body.as_bytes().to_vec(),
             },
@@ -493,7 +491,6 @@ mod claude_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload,
             },
@@ -854,6 +851,12 @@ mod claude_native_coverage_tests {
         assert!(plan.provided_resource_identities.contains(&r_a.identity()));
         assert!(!plan.provided_resource_identities.contains(&r_b.identity()));
         // r_b should still be attachable via capability fallback
+        uze_core::state::record(
+            &UzeHome::at(_root.join("uze")),
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let plan_b = integration.exposure_plan(&r_b);
         assert!(!matches!(
             plan_b.mechanism,

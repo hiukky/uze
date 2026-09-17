@@ -138,7 +138,7 @@ impl HookMatcher {
             }
             return Ok(Self::Native(native.trim().to_owned()));
         }
-        if portable_tool_aliases().contains(&token) {
+        if portable_tool_aliases().any(|alias| alias == token) {
             return Ok(Self::Portable(token.to_owned()));
         }
         Err(format!(
@@ -199,14 +199,8 @@ pub fn portable_tool_vocabulary() -> &'static [ToolAlias] {
     ]
 }
 
-pub fn portable_tool_aliases() -> &'static [&'static str] {
-    static ALIASES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    ALIASES.get_or_init(|| {
-        portable_tool_vocabulary()
-            .iter()
-            .map(|entry| entry.alias)
-            .collect()
-    })
+pub fn portable_tool_aliases() -> impl Iterator<Item = &'static str> {
+    portable_tool_vocabulary().iter().map(|entry| entry.alias)
 }
 
 /// The portable fields one alias guarantees; empty for an alias the
@@ -287,7 +281,6 @@ impl HarnessToolVocabulary {
 pub struct HookCompatibility {
     pub route: CompatibilityRoute,
     pub reason: Option<String>,
-    pub artifacts: Vec<String>,
 }
 
 /// An integration's declaration of the hook semantics it can preserve. This
@@ -300,7 +293,6 @@ pub struct HookCapabilities {
     pub supports_native_matchers: bool,
     pub supports_input_transform: bool,
     pub executes_handlers_in_order: bool,
-    pub artifacts: Vec<String>,
 }
 
 /// Calculates compatibility over the actual semantic axes. `Native` is
@@ -319,7 +311,7 @@ pub fn assess(
     } else if !capabilities.effects.contains(&hook.effect) {
         Some(format!(
             "the target cannot preserve `{}` hook effect",
-            effect_name(hook.effect)
+            hook.effect.abi_name()
         ))
     } else if hook
         .matchers
@@ -343,21 +335,7 @@ pub fn assess(
         None if bridged => CompatibilityRoute::Adaptable,
         None => CompatibilityRoute::Native,
     };
-    HookCompatibility {
-        route,
-        reason,
-        artifacts: capabilities.artifacts.clone(),
-    }
-}
-
-fn effect_name(effect: HookEffect) -> &'static str {
-    match effect {
-        HookEffect::Observe => "observe",
-        HookEffect::Allow => "allow",
-        HookEffect::Ask => "ask",
-        HookEffect::Deny => "deny",
-        HookEffect::Transform => "transform",
-    }
+    HookCompatibility { route, reason }
 }
 
 /// The longest a group's wrapper can be busy: every handler's own deadline
@@ -545,7 +523,7 @@ mod tests {
             .iter()
             .map(|entry| entry.alias)
             .collect();
-        assert_eq!(aliases, portable_tool_aliases().to_vec());
+        assert_eq!(aliases, portable_tool_aliases().collect::<Vec<_>>());
         assert_eq!(alias_fields("shell"), ["command"]);
         assert_eq!(alias_fields("file.write"), ["path"]);
         assert_eq!(alias_fields("agent.spawn"), [] as [&str; 0]);

@@ -46,6 +46,13 @@ incompatibility.
 resources remain project-owned. `UzeEngine` composes both sources into one
 effective environment before routing it to integrations.
 
+> Note (2026-09): project-owned resource composition (`resolve_project`,
+> `ResourceOrigin::Project`, `UzeEngine::compose_project`) only ever ran in
+> tests — a project's own `AGENTS.md`, `.agents/skills` and `mcp.json` are
+> read by each harness natively, never delivered by UZE. A `Resource` is now
+> always a package's (`capability::Resource` carries its package id and
+> root), and `engine::package_resources` reads one installed package.
+
 **Normal harness invocation is the target DX.** The user runs `claude`,
 `codex`, `agy`, or `opencode` in the real project directory. A UZE launcher,
 a per-session flag, or replacing the harness executable on `PATH` is not the
@@ -63,8 +70,17 @@ was removed along with `import_bundle()`:
 > but no foreign importer is retained in production until a real
 > acquisition or reverse-discovery flow requires it.
 
-`AgentPluginImporter` — the live importer `Store::ingest` depends on — and
-the `ForeignImporter` trait it implements are unchanged.
+Note (2026-09): the canonical importer went the same way. `AgentPluginImporter`,
+the `ForeignImporter` trait and the `ImportedBundle` it produced were built
+by `Store::ingest` and then discarded unread, so the one thing they did —
+reading `plugin.json` and refusing a reference outside the package — is now
+`store::read_plugin_manifest`, shared by ingest and capability inspection.
+The type-level echoes of "three facts" went too: `Representation` was always
+`Standard`, plans carried a `VerificationStatus` nothing read or ever set past
+`Unverified`/`NotExposed`, and `router::route` ran only in tests. Probe
+verdicts live in the conformance Lab's evidence, not in plan types, and an
+integration declaring a kind `native` is the whole route claim
+(`direct_standard` folded into it).
 
 Alternatives rejected: retaining the named-harness core matrix; treating
 Claude import as a canonical source pipeline; and requiring filesystem

@@ -1,9 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use uze_core::{
-    ResourceOrigin, UzeEngine, UzeHome, UzeStore,
-    capability::{CapabilityKind, Representation},
-};
+use uze_core::{UzeHome, UzeStore, capability::CapabilityKind};
 
 /// The acquisition pipeline every install now goes through: a source is
 /// acquired into a materialized package, and only then does the Store ingest
@@ -13,9 +10,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn package_fixture() -> PathBuf {
@@ -54,13 +53,6 @@ fn uze_home_derives_every_owned_path_from_one_root() {
     assert_eq!(home.state_dir(), root.join("state"));
     assert_eq!(home.cache_dir(), root.join("cache"));
     assert_eq!(home.runtime_dir(), root.join("runtime"));
-    // The runtime tree's two tenants are named siblings, never interleaved
-    // by integration: one is swept when a project root goes, the other dies
-    // with the invocation that made it.
-    assert_eq!(
-        home.runtime_session_dir("fake", "session"),
-        root.join("runtime/sessions/fake/session")
-    );
     assert_eq!(home.runtime_projects_dir(), root.join("runtime/projects"));
     assert_eq!(
         home.runtime_project_dir("abc123"),
@@ -111,9 +103,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     let materialized =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(package_fixture())).unwrap();
 
-    let from_alpha = store
-        .ingest_from_marketplace(&materialized, "alpha")
-        .unwrap();
+    let from_alpha = store.ingest(&materialized, "alpha", None).unwrap();
     assert_eq!(from_alpha.id.as_str(), "uze-agent-skill-conformance@alpha");
     assert_eq!(from_alpha.active_name, "uze-agent-skill-conformance");
 
@@ -121,9 +111,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     // default — not because its bytes can't coexist (they can, and do, once
     // resolved), but because it would silently shadow `alpha`'s claim on
     // every harness's `/uze-agent-skill-conformance:*` invocation.
-    let collision = store
-        .ingest_from_marketplace(&materialized, "beta")
-        .unwrap_err();
+    let collision = store.ingest(&materialized, "beta", None).unwrap_err();
     assert!(matches!(
         collision,
         uze_core::UzeError::PluginNameCollision { existing, requested, .. }
@@ -136,7 +124,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     // Resolved with an explicit alias, `beta`'s copy installs and coexists —
     // its own bytes, its own registration, active under the chosen name.
     let from_beta = store
-        .ingest_with_active_name(
+        .ingest(
             &materialized,
             "beta",
             Some("uze-agent-skill-conformance-beta"),
@@ -178,7 +166,7 @@ fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
 
     assert!(
         store
-            .ingest_from_marketplace(&materialized, "not/a-marketplace")
+            .ingest(&materialized, "not/a-marketplace", None)
             .is_err()
     );
     assert!(!home.plugins_dir().join("not/a-marketplace").exists());
@@ -190,44 +178,13 @@ fn engine_composes_a_standard_resource_from_the_store() {
     let root = temporary_home("engine");
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, package_fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
+    let resources = uze_core::engine::package_resources(&package).unwrap();
 
-    assert_eq!(environment.resources.len(), 1);
-    let resource = &environment.resources[0];
+    assert_eq!(resources.len(), 1);
+    let resource = &resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::AgentSkill);
-    assert_eq!(resource.capability.representation, Representation::Standard);
-    assert!(matches!(
-        resource.origin,
-        ResourceOrigin::Package { ref id, .. } if id == &package.id
-    ));
+    assert_eq!(resource.package_id, package.id);
     assert!(resource.capability.path.starts_with(&package.root));
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn engine_composes_project_and_store_sources_into_one_effective_environment() {
-    let root = temporary_home("combined-environment");
-    let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("AGENTS.md"), "# Project-owned instructions\n").unwrap();
-    let store = UzeStore::new(UzeHome::at(root.join("uze-home")));
-    let package = install(&store, package_fixture()).unwrap();
-
-    let environment = UzeEngine::new(store).compose_project(&project).unwrap();
-    assert_eq!(environment.root, project.canonicalize().unwrap());
-    assert_eq!(environment.resources.len(), 2);
-    assert!(
-        environment
-            .resources
-            .iter()
-            .any(|resource| matches!(resource.origin, ResourceOrigin::Project { .. }))
-    );
-    assert!(environment.resources.iter().any(|resource| {
-        matches!(resource.origin, ResourceOrigin::Package { ref id, .. } if id == &package.id)
-    }));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -249,13 +206,10 @@ fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
         fs::read(mcp_package_fixture().join("mcp.json")).unwrap()
     );
 
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    assert_eq!(environment.resources.len(), 1);
-    let resource = &environment.resources[0];
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    assert_eq!(resources.len(), 1);
+    let resource = &resources[0];
     assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
-    assert_eq!(resource.capability.representation, Representation::Standard);
     assert_eq!(resource.capability.path, package.root.join("mcp.json"));
 
     let config: serde_json::Value = serde_json::from_slice(&resource.capability.payload).unwrap();
@@ -273,12 +227,9 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     let store = UzeStore::new(home.clone());
     let fixture = uze_testkit::fixtures::canonical("multi-mcp-plugin");
     let package = install(&store, fixture).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    assert_eq!(environment.resources.len(), 2);
-    let identities = environment
-        .resources
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    assert_eq!(resources.len(), 2);
+    let identities = resources
         .iter()
         .map(|resource| resource.identity())
         .collect::<Vec<_>>();
@@ -297,8 +248,7 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     // collision-avoidance prefix. Physical exposure naming (with
     // qualification when needed) is an Integration/Application decision
     // now, not something a Resource computes for itself.
-    let names = environment
-        .resources
+    let names = resources
         .iter()
         .map(|resource| resource.logical_capability_name().unwrap())
         .collect::<Vec<_>>();

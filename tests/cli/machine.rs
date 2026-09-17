@@ -650,7 +650,6 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
 
     let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
     assert!(integrations.contains("\"opencode\""));
-    assert!(integrations.contains("\"installed\": true"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);

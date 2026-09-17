@@ -443,7 +443,6 @@ mod tests {
                 package_id,
                 resource_identity: Some("skill:fixture".to_owned()),
                 integration: "fixture".to_owned(),
-                strategy: "symlink".to_owned(),
                 artifact: ManagedArtifact::SymlinkReference {
                     path: link.clone(),
                     target: target.clone(),
@@ -489,7 +488,6 @@ mod tests {
                 package_id,
                 resource_identity: Some("skill:fixture".to_owned()),
                 integration: "fixture".to_owned(),
-                strategy: "symlink".to_owned(),
                 artifact: ManagedArtifact::SymlinkReference {
                     path: link.clone(),
                     target: expected,
@@ -535,7 +533,6 @@ mod tests {
                 package_id: "old-git".to_owned(),
                 resource_identity: None,
                 integration: "fixture".to_owned(),
-                strategy: "symlink".to_owned(),
                 artifact: ManagedArtifact::SymlinkReference {
                     path: link.clone(),
                     target: target.clone(),

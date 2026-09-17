@@ -1,67 +1,62 @@
-//! Deterministic project root resolution for `agents.lock`.
+//! Where a project begins, seen from any directory inside it.
 //!
-//! One predictable rule, no git assumption.
+//! The nearest directory declaring `agents.yaml` is the project. Without
+//! one, the nearest `AGENTS.md` is, and without that, the repository: the
+//! first `.git` met ends the walk, so a repository never inherits a manifest
+//! or `AGENTS.md` from a directory above it that happens to be a parent on
+//! this machine (a dotfiles repository in `$HOME`, a checkout under another
+//! checkout). Outside any repository, the directory itself is the project.
 
 use std::path::{Path, PathBuf};
 
-use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME};
+use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME, project_context::AGENTS_MD_FILE_NAME};
+
+/// The file or directory marking a Git repository's root.
+const GIT_MARKER: &str = ".git";
 
 pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
     if !cwd.exists() {
         return Err(UzeError::MissingPath(cwd.to_path_buf()));
     }
-    let cwd = if cwd.is_dir() {
-        cwd.canonicalize().map_err(|source| UzeError::Read {
-            path: cwd.to_path_buf(),
-            source,
-        })?
-    } else {
-        cwd.parent()
-            .unwrap_or(cwd)
-            .canonicalize()
-            .map_err(|source| UzeError::Read {
-                path: cwd.to_path_buf(),
-                source,
-            })?
-    };
-
-    // Walk upward (starting at cwd itself) looking for agents.lock,
-    // AGENTS.md, or .git (priority in that order per directory).
-    //
-    // The first `.git` met also *ends* the walk, after that directory has
-    // been examined: a repository is a project boundary, so a repo without
-    // its own AGENTS.md must resolve to the repo — never inherit an
-    // AGENTS.md from some directory above it that happens to be a parent on
-    // this machine (a dotfiles repo in `$HOME`, a checkout under another
-    // checkout). Without the boundary the answer depended on where the tree
-    // happened to be cloned, which is exactly the kind of environment
-    // sensitivity this resolution exists to remove.
-    let mut current = Some(cwd.as_path());
-    let mut best_agents: Option<PathBuf> = None;
-    let mut best_git: Option<PathBuf> = None;
-    while let Some(dir) = current {
+    let mut nearest_agents_md = None;
+    let (start, root) = find_upward(cwd, |dir| {
         if dir.join(MANIFEST_FILE_NAME).is_file() {
-            return Ok(dir.to_path_buf());
+            return Some(dir.to_path_buf());
         }
-        if best_agents.is_none() && dir.join("AGENTS.md").is_file() {
-            best_agents = Some(dir.to_path_buf());
+        if nearest_agents_md.is_none() && dir.join(AGENTS_MD_FILE_NAME).is_file() {
+            nearest_agents_md = Some(dir.to_path_buf());
         }
-        if dir.join(".git").exists() {
-            best_git = Some(dir.to_path_buf());
-            break;
-        }
-        current = dir.parent();
-    }
+        is_repository_root(dir).then(|| {
+            nearest_agents_md
+                .clone()
+                .unwrap_or_else(|| dir.to_path_buf())
+        })
+    })?;
+    Ok(root.or(nearest_agents_md).unwrap_or(start))
+}
 
-    if let Some(p) = best_agents {
-        return Ok(p);
-    }
-    if let Some(p) = best_git {
-        return Ok(p);
-    }
+/// Walks from the directory `path` names — its parent when `path` is a file
+/// — up through every ancestor, nearest first, and returns the canonical
+/// starting directory with the first answer `found` gives.
+pub(crate) fn find_upward<T>(
+    path: &Path,
+    found: impl FnMut(&Path) -> Option<T>,
+) -> Result<(PathBuf, Option<T>)> {
+    let directory = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    let start = directory.canonicalize().map_err(|source| UzeError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let answer = start.ancestors().find_map(found);
+    Ok((start, answer))
+}
 
-    // 3. Fallback: cwd itself.
-    Ok(cwd)
+pub(crate) fn is_repository_root(directory: &Path) -> bool {
+    directory.join(GIT_MARKER).exists()
 }
 
 #[cfg(test)]
@@ -101,7 +96,7 @@ mod tests {
         let outer = uze_testkit::temp::scratch("git-boundary");
         let repo = outer.join("repo");
         fs::create_dir_all(repo.join(".git")).unwrap();
-        fs::write(outer.join("AGENTS.md"), "# not this one\n").unwrap();
+        fs::write(outer.join(AGENTS_MD_FILE_NAME), "# not this one\n").unwrap();
         let sub = repo.join("src");
         fs::create_dir_all(&sub).unwrap();
         let resolved = resolve_project_root(&sub).unwrap();
@@ -114,11 +109,24 @@ mod tests {
         let root = uze_testkit::temp::scratch("agents-vs-git");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("AGENTS.md"), "# hi\n").unwrap();
+        fs::write(root.join(AGENTS_MD_FILE_NAME), "# hi\n").unwrap();
         let sub = root.join("sub");
         fs::create_dir_all(&sub).unwrap();
         let resolved = resolve_project_root(&sub).unwrap();
         assert_eq!(resolved, root.canonicalize().unwrap());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_repository_never_inherits_a_manifest_from_above_it() {
+        let outer = uze_testkit::temp::scratch("git-boundary-manifest");
+        let repo = outer.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(outer.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
+        let sub = repo.join("src");
+        fs::create_dir_all(&sub).unwrap();
+        let resolved = resolve_project_root(&sub).unwrap();
+        assert_eq!(resolved, repo.canonicalize().unwrap());
+        fs::remove_dir_all(outer).unwrap();
     }
 }

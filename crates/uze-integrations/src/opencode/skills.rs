@@ -47,11 +47,11 @@ use std::path::{Path, PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -61,8 +61,9 @@ use super::unsupported;
 /// Root of every generated OpenCode Skill wrapper directory. Under
 /// `$UZE_HOME/state/attachments/opencode/skills/`, never under the Store.
 pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = Resource::package_root(resource)
-        .and_then(|root| root.file_name())
+    let package_id = resource
+        .package_root
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let name = resource
@@ -115,12 +116,10 @@ pub(super) fn materialize_generated_skill(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let label = uze_core::integration::active_plugin_name(uze_home, resource)
-        .and_then(|active_name| {
-            uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
-                .into_iter()
-                .next()
-        })
+    let active_name = uze_core::integration::active_plugin_name(uze_home, resource);
+    let label = uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
+        .into_iter()
+        .next()
         .unwrap_or_else(|| fallback_name.to_owned());
     crate::shared::skill::write_superset_skill_wrapper(
         &dir,
@@ -202,9 +201,7 @@ impl OpenCodeIntegration {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
                 mechanism: ExposureMechanism::Unsupported {
                     rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
                 },
@@ -216,14 +213,8 @@ impl OpenCodeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
-        let canonical_source = resource
-            .capability
-            .path
-            .parent()
-            .expect("SKILL.md has a parent")
-            .to_path_buf();
         let source = resource
             .resolved_artifact_target
             .as_ref()
@@ -251,40 +242,21 @@ impl OpenCodeIntegration {
                 );
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route,
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: source,
+                }),
                 evidence,
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
-            route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::FilesystemProjection {
-                source: canonical_source,
-                target_relative: PathBuf::from(".agents/skills").join(
-                    self.exposure_name_candidates(resource)
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            resource
-                                .capability
-                                .path
-                                .parent()
-                                .and_then(Path::file_name)
-                                .expect("skill dir name")
-                                .to_string_lossy()
-                                .into_owned()
-                        }),
-                ),
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "OpenCode has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "OpenCode setup has not completed; the existing project-scope projection remains a conformance fallback."
+            evidence: "Skills reach OpenCode through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }

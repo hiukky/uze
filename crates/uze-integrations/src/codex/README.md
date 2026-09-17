@@ -107,11 +107,8 @@ alone qualifies); an explicit envelope, even malformed, always wins.
 
 ## Fallbacks
 
-- **Skills**, pre-setup: `ExposureMechanism::FilesystemProjection` into the
-  caller's own workspace (`.agents/skills/<name>`), cleaned up per-session.
-- **MCP**: no pre-setup fallback exists (`Unsupported` until `uze setup`
-  completes) — this is a documented, accepted gap (ADR-007), not specific to
-  this integration.
+- **Skills and MCP**: no pre-setup fallback exists (`Unsupported`, with a
+  rationale naming `uze setup`, until it completes) — ADR-006, ADR-007.
 
 ## Runtime
 

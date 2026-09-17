@@ -8,10 +8,10 @@ use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     skill::SkillInvocationPolicy,
     state,
 };
@@ -40,7 +40,7 @@ impl ClaudeIntegration {
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return unsupported_invalid_policy(resource);
+            return unsupported_invalid_policy();
         }
         if state::is_installed(&self.uze_home, self.id())
             && let Some(entry_name) = resource
@@ -67,33 +67,21 @@ impl ClaudeIntegration {
                 );
             }
             return ExposurePlan {
-                representation: resource.capability.representation,
                 route: route_for_policy(policy),
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source: shim_root,
-                },
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.clone().join(entry_name),
+                    target: shim_root,
+                }),
                 evidence,
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
-            route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::RuntimeBridge {
-                bridge: "Claude Code --plugin-dir".to_owned(),
-                arguments: vec![
-                    "--plugin-dir".to_owned(),
-                    resource
-                        .package_root()
-                        .expect("guarded above")
-                        .display()
-                        .to_string(),
-                ],
+            route: CompatibilityRoute::Unsupported,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "Claude Code has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+                    .to_owned(),
             },
-            evidence: "Claude Code has not completed `uze setup`; falling back to the per-session --plugin-dir conformance probe rather than a managed attachment."
+            evidence: "Skills reach Claude Code through a managed user-scope attachment, which exists only once `uze setup` has completed."
                 .to_owned(),
         }
     }
@@ -112,11 +100,9 @@ pub(super) fn route_for_policy(policy: SkillInvocationPolicy) -> CompatibilityRo
     CompatibilityRoute::Adaptable
 }
 
-fn unsupported_invalid_policy(resource: &Resource) -> ExposurePlan {
+fn unsupported_invalid_policy() -> ExposurePlan {
     ExposurePlan {
-        representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
         },
@@ -233,12 +219,12 @@ fn link_or_repair(link: &Path, source: &Path) -> Result<()> {
                     path: link.to_path_buf(),
                     source: source_error,
                 })?;
-                symlink(source, link)?;
+                uze_core::persistence::create_symlink(source, link)?;
             }
         }
         Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            symlink(source, link)?;
+            uze_core::persistence::create_symlink(source, link)?;
         }
         Err(error) => {
             return Err(UzeError::Read {
@@ -271,17 +257,4 @@ fn write_or_replace_file(target: &Path, content: &[u8]) -> Result<()> {
         path: target.to_path_buf(),
         source: source_error,
     })
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }

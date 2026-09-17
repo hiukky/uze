@@ -20,8 +20,8 @@ use std::{
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     integration::{AttachmentInspection, AttachmentReceipt, AttachmentState, IntegrationPort},
-    project::Resource,
     store::StoredPackage,
 };
 
@@ -277,7 +277,6 @@ pub(super) fn attach_explicit_plugin(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration.id().to_owned(),
-        strategy: "native-plugin-install".to_owned(),
         artifact: uze_core::integration::ManagedArtifact::IntegrationOwned {
             kind: PLUGIN_KIND.to_owned(),
             selector: name,
@@ -327,7 +326,6 @@ pub(super) fn attach_generated_plugin(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration.id().to_owned(),
-        strategy: "native-plugin-generated".to_owned(),
         artifact: uze_core::integration::ManagedArtifact::IntegrationOwned {
             kind: GENERATED_PLUGIN_KIND.to_owned(),
             selector: name,
@@ -441,10 +439,10 @@ mod plugin_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::{AttachmentState, IntegrationPort};
-    use uze_core::project::Resource;
     use uze_core::store::StoredPackage;
 
     use super::super::AntigravityIntegration;
@@ -488,7 +486,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -509,7 +506,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: payload.as_bytes().to_vec(),
             },
@@ -523,7 +519,6 @@ mod plugin_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },

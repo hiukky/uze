@@ -22,11 +22,7 @@ impl Plugins<'_> {
         // Removal changes vendor-visible state; cached inspection verdicts
         // must not outlive it (ADR 018).
         self.0.inspection_cache.invalidate();
-        let report = self.detach_and_remove(id, false)?;
-        if matches!(report, RemovePluginReport::Removed { .. }) {
-            let _ = uze_core::state::plugin_marketplace_remove(&self.0.home, id);
-        }
-        Ok(report)
+        self.detach_and_remove(id, false)
     }
 
     pub(crate) fn is_protected_package(package: &StoredPackage) -> bool {
@@ -76,10 +72,7 @@ impl Plugins<'_> {
             Err(error) => return Err(error),
         };
         if !allow_protected && Self::is_protected_package(&package) {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "official marketplace plugin `{}` is protected and cannot be removed",
-                package.id.as_str()
-            )));
+            return Err(UzeError::ProtectedPackage(package.id.as_str().to_owned()));
         }
         let report = self.0.reconcile(package.id.as_str());
         let plan = plan_remove(&report);

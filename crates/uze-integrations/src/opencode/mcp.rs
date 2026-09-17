@@ -9,12 +9,12 @@ use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     harness_runtime::resolve_real_executable,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
     persistence::write_atomic,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
@@ -36,7 +36,6 @@ impl OpenCodeIntegration {
     pub(super) fn mcp_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
                 "OpenCode has not completed `uze setup`; its managed global MCP config is not yet enabled.",
             );
         }
@@ -45,25 +44,19 @@ impl OpenCodeIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `opencode mcp add`, not a name; refusing to attach.",
             );
         }
         let Some((command, args)) = parse_mcp(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "mcp.json server entry is missing a usable `command` field.",
-            );
+            return unsupported("mcp.json server entry is missing a usable `command` field.");
         };
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 transport: "stdio".to_owned(),
                 command,
@@ -71,7 +64,7 @@ impl OpenCodeIntegration {
                 cwd: None,
                 environment: Vec::new(),
                 enabled: Some(true),
-            },
+            }),
             evidence: "UZE registers the store-owned MCP server via `opencode mcp add <name> -- <command>` into opencode.json's mcp.servers.<name>.command array; OpenCode MCP runtime remains native. Verified `opencode mcp --help` exposes `add` (requires ` -- ` separator); no `remove` verb exists so detach stays direct JSON rewrite."
                 .to_owned(),
         }
@@ -97,23 +90,21 @@ pub(super) fn attach_mcp_config(
         serde_json::json!({ "$schema": "https://opencode.ai/config.json" })
     };
     let root = config.as_object_mut().ok_or_else(|| {
-        UzeError::ExposureUnavailable("OpenCode config root must be a JSON object".to_owned())
+        UzeError::HarnessConfig("OpenCode config root must be a JSON object".to_owned())
     })?;
     let mcp = root
         .entry("mcp")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| {
-            UzeError::ExposureUnavailable("OpenCode config `mcp` must be an object".to_owned())
+            UzeError::HarnessConfig("OpenCode config `mcp` must be an object".to_owned())
         })?;
     let servers = mcp
         .entry("servers")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| {
-            UzeError::ExposureUnavailable(
-                "OpenCode V2 config `mcp.servers` must be an object".to_owned(),
-            )
+            UzeError::HarnessConfig("OpenCode V2 config `mcp.servers` must be an object".to_owned())
         })?;
     let command_values: Vec<serde_json::Value> =
         std::iter::once(command.to_string_lossy().into_owned())
@@ -204,12 +195,12 @@ pub(super) fn attach_mcp_entry(
     cmd.args(&mcp_args);
     cmd.stdin(std::process::Stdio::null());
     let output = cmd.output().map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
+        UzeError::HarnessCommand(format!(
             "failed to run `opencode mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
+        return Err(UzeError::HarnessCommand(failed_message(
             &format!("opencode mcp add `{entry_name}`"),
             &output,
         )));

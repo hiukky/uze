@@ -32,9 +32,9 @@ use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     home::UzeHome,
     integration::{AttachmentReceipt, ManagedArtifact},
-    project::Resource,
     store::{StoredPackage, is_valid_qualified_id},
 };
 
@@ -288,12 +288,12 @@ fn materialize_byte_preserving_skill(canonical_dir: &Path, target_dir: &Path) ->
                     path: target_dir.to_path_buf(),
                     source: source_error,
                 })?;
-                symlink(canonical_dir, target_dir)?;
+                uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
             }
         }
         Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            symlink(canonical_dir, target_dir)?;
+            uze_core::persistence::create_symlink(canonical_dir, target_dir)?;
         }
         Err(error) => {
             return Err(UzeError::Read {
@@ -359,7 +359,7 @@ fn materialize_wrapped_skill(
         let source = entry.path();
         let target = target_dir.join(&name);
         if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
+            uze_core::persistence::create_symlink(&source, &target)?;
         }
     }
     Ok(())
@@ -480,7 +480,6 @@ pub(super) fn generated_package_receipt(
         package_id: package.id.as_str().to_owned(),
         resource_identity: None,
         integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace-generated".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: GENERATED_PLUGIN_KIND.to_owned(),
             selector: selector.to_owned(),
@@ -498,29 +497,16 @@ pub(super) fn generated_package_receipt(
     }
 }
 
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
-}
-
 #[cfg(test)]
 mod generated_native_tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::ClaudeIntegration;
     use super::*;
@@ -579,7 +565,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -593,7 +578,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -797,7 +781,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("extra/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -808,7 +791,13 @@ mod generated_native_tests {
         assert!(!covered.contains(&r_out.identity()));
 
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = ClaudeIntegration::new(_root.join("claude"), uze_home);
+        let integration = ClaudeIntegration::new(_root.join("claude"), uze_home.clone());
+        uze_core::state::record(
+            &uze_home,
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_out);
         assert!(!matches!(
             fallback.mechanism,
@@ -929,7 +918,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/deploy/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -985,7 +973,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg_root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },
@@ -1019,7 +1006,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg.root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },
@@ -1088,7 +1074,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills").join(skill_dir).join("SKILL.md"),
                 payload: fs::read(pkg.root.join("skills").join(skill_dir).join("SKILL.md"))
                     .unwrap(),

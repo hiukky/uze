@@ -183,6 +183,10 @@ pub enum UzeError {
         existing: String,
         requested: String,
     },
+    #[error("marketplace `{0}` not found")]
+    UnknownMarketplace(String),
+    #[error("marketplace `{0}` still has installed plugins; remove them first")]
+    MarketplaceInUse(String),
     #[error("marketplace `{0}` is reserved and cannot be added or removed")]
     ReservedMarketplace(String),
     #[error("invalid plugin spec: {0}")]
@@ -205,10 +209,21 @@ pub enum UzeError {
         "`{plugin}` is not used by this project; run `uze plugin remove {plugin}` to remove it from this machine"
     )]
     PluginNotUsedByProject { plugin: String },
-    #[error("runtime projection target already exists: {0}")]
-    RuntimePathExists(PathBuf),
-    #[error("runtime filesystem projection is unavailable on this platform: {0}")]
-    UnsupportedRuntimeProjection(PathBuf),
+    #[error("symbolic links are unavailable on this platform: {0}")]
+    SymlinkUnsupported(PathBuf),
+    #[error("the plugin store cannot preserve special filesystem entry `{0}`")]
+    UnpreservableEntry(PathBuf),
+    #[error("official marketplace plugin `{0}` is protected and cannot be removed")]
+    ProtectedPackage(String),
+    #[error("unknown harness `{requested}` (registered: {known})")]
+    UnknownHarness { requested: String, known: String },
+    /// A harness's own configuration could not be read or changed the way
+    /// UZE needs; the text names the file's problem.
+    #[error("{0}")]
+    HarnessConfig(String),
+    /// A harness's own CLI could not be run, or refused what UZE asked of it.
+    #[error("{0}")]
+    HarnessCommand(String),
     #[error("no exposure route is available: {0}")]
     ExposureUnavailable(String),
     #[error("a non-UZE managed entry already exists at {0}")]
@@ -230,9 +245,7 @@ pub enum UzeError {
         "a managed text region's content differs from what was requested; user content at {0} was preserved"
     )]
     ManagedRegionDrift(PathBuf),
-    #[error(
-        "a managed text region's markers are duplicated, out of order, or only half present at {0}"
-    )]
+    #[error("{markers} at {0}", markers = crate::text_region::MALFORMED_MARKERS)]
     ManagedRegionConflict(PathBuf),
     #[error(
         "managed text region identity `{0}` contains characters outside the safe marker charset"

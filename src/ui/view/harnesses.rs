@@ -484,7 +484,7 @@ fn context_row(mechanism: ContextMechanism) -> (String, Style) {
 }
 
 fn capability_status(capabilities: &HarnessCapabilities, kind: CapabilityKind) -> (String, Style) {
-    if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
+    if capabilities.native.contains(&kind) {
         (
             format!("{} Native", theme::glyph(Symbol::MarkNative)),
             theme::fg(Token::Accent),

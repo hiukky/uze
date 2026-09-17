@@ -52,7 +52,7 @@ impl ManifestDocument {
         })
     }
 
-    /// A new, empty document — what `uze init` starts from.
+    /// A new, empty document — what a manifest UZE creates starts from.
     pub fn empty(path: &Path) -> Result<Self> {
         Self::from_source(path, "")
     }
@@ -61,19 +61,10 @@ impl ManifestDocument {
         self.document.source()
     }
 
-    /// Replaces the value at `path` (a dotted path such as
-    /// `worktrees.completion`), creating neither the key nor its parents:
-    /// a path that is not there is an error, not a silent insert.
-    pub fn set(&mut self, path: &str, value: &str) -> Result<()> {
-        self.document
-            .set(path, value)
-            .map_err(|error| self.refusal(path, error.to_string()))
-    }
-
     /// Adds `key` to the mapping at `mapping_path`, or replaces its value
     /// when it is already there. The mapping itself is created when
-    /// absent, since a manifest that has never declared a plugin has no
-    /// `plugins:` key to insert into.
+    /// absent, since a manifest that has never declared a marketplace has
+    /// no `marketplaces:` key to insert into.
     ///
     /// The value is a *typed* value, never a fragment of YAML text. The
     /// library emits it in the file's own style and verifies the spliced
@@ -208,10 +199,10 @@ impl ManifestDocument {
     }
 
     /// Removes `key` from the mapping at `mapping_path`. When it was the
-    /// last entry, the mapping's own key goes with it: `plugins:` left
+    /// last entry, the mapping's own key goes with it: `marketplaces:` left
     /// holding `{}` reads as a declaration that was made and emptied,
     /// which is not what happened.
-    pub fn remove(&mut self, mapping_path: &str, key: &str) -> Result<()> {
+    fn remove(&mut self, mapping_path: &str, key: &str) -> Result<()> {
         let full = format!("{mapping_path}.{key}");
         if self.document.get(&full).is_none() {
             return Ok(());
@@ -328,9 +319,9 @@ worktrees:
   completion: pr        # entrega via pull request
   link: [.env.local]
 
-plugins:
+marketplaces:
   # pinado ate o fix do #431 subir
-  flow: { marketplace: ai, ref: v0.3.1 }
+  ai: { path: ../ai, ref: v0.3.1, plugins: [flow] }
 ";
 
     fn open(text: &str) -> ManifestDocument {
@@ -341,15 +332,21 @@ plugins:
         serde_yaml::from_str(yaml).unwrap()
     }
 
+    fn reparsed(document: &ManifestDocument) -> serde_yaml::Value {
+        serde_yaml::from_str(document.source()).unwrap()
+    }
+
     #[test]
     fn reading_and_writing_back_untouched_is_byte_identical() {
         assert_eq!(open(AUTHORED).source(), AUTHORED);
     }
 
     #[test]
-    fn setting_a_value_changes_only_that_value() {
+    fn setting_a_scalar_changes_only_that_value() {
         let mut document = open(AUTHORED);
-        document.set("worktrees.completion", "merge").unwrap();
+        document
+            .upsert("worktrees", "completion", &value("merge"))
+            .unwrap();
         assert_eq!(
             document
                 .source()
@@ -359,44 +356,84 @@ plugins:
     }
 
     #[test]
-    fn adding_a_plugin_keeps_the_comment_above_its_neighbour() {
+    fn adding_a_marketplace_keeps_the_comment_above_its_neighbour() {
         let mut document = open(AUTHORED);
-        document.upsert("plugins", "git", &value("ai")).unwrap();
+        document
+            .upsert(
+                "marketplaces",
+                "tools",
+                &value("path: ../tools\nplugins: [git]\n"),
+            )
+            .unwrap();
         let after = document.source();
         assert!(after.contains("# pinado ate o fix do #431 subir"));
-        assert!(after.contains("flow: { marketplace: ai, ref: v0.3.1 }"));
-        assert!(after.contains("git: ai"), "{after}");
+        assert!(after.contains("ai: { path: ../ai, ref: v0.3.1, plugins: [flow] }"));
+        assert_eq!(
+            reparsed(&document)["marketplaces"]["tools"]["plugins"][0].as_str(),
+            Some("git"),
+            "{after}"
+        );
     }
 
     #[test]
-    fn adding_the_first_plugin_creates_the_mapping() {
+    fn adding_the_first_marketplace_creates_the_mapping() {
         let mut document = open("worktrees:\n  completion: pr\n");
         document
-            .upsert("plugins", "flow", &value("marketplace: ai\nref: v0.3.1\n"))
+            .upsert(
+                "marketplaces",
+                "ai",
+                &value("path: ../ai\nplugins: [flow]\n"),
+            )
             .unwrap();
+        assert!(
+            document
+                .source()
+                .starts_with("worktrees:\n  completion: pr\n")
+        );
         assert_eq!(
-            document.source(),
-            "worktrees:\n  completion: pr\nplugins:\n  flow:\n    marketplace: ai\n    ref: \
-             v0.3.1\n"
+            reparsed(&document)["marketplaces"]["ai"]["plugins"][0].as_str(),
+            Some("flow")
+        );
+    }
+
+    #[test]
+    fn pushing_a_plugin_is_idempotent_and_keeps_the_entry() {
+        let mut document = open(AUTHORED);
+        document
+            .push_unique("marketplaces.ai.plugins", "review")
+            .unwrap();
+        document
+            .push_unique("marketplaces.ai.plugins", "review")
+            .unwrap();
+        let plugins = reparsed(&document)["marketplaces"]["ai"]["plugins"].clone();
+        assert_eq!(plugins.as_sequence().map(Vec::len), Some(2), "{plugins:?}");
+        assert!(
+            document
+                .source()
+                .contains("# pinado ate o fix do #431 subir")
         );
     }
 
     #[test]
     fn a_scalar_entry_can_grow_into_a_block_without_losing_its_neighbours() {
-        let mut document = open("plugins:\n  flow: ai\n  review: ai\n");
+        let mut document = open("marketplaces:\n  ai: ../ai\n  tools: ../tools\n");
         document
-            .upsert("plugins", "flow", &value("marketplace: ai\nref: v0.4.0\n"))
+            .upsert("marketplaces", "ai", &value("path: ../ai\nref: v0.4.0\n"))
             .unwrap();
         let after = document.source();
         assert!(after.contains("ref: v0.4.0"), "{after}");
-        assert!(after.contains("review: ai"), "{after}");
+        assert!(after.contains("tools: ../tools"), "{after}");
     }
 
     #[test]
-    fn adding_a_plugin_that_is_already_there_replaces_its_value() {
+    fn declaring_a_marketplace_that_is_already_there_replaces_its_value() {
         let mut document = open(AUTHORED);
         document
-            .upsert("plugins", "flow", &value("marketplace: ai\nref: v0.4.0\n"))
+            .upsert(
+                "marketplaces",
+                "ai",
+                &value("path: ../ai\nref: v0.4.0\nplugins: [flow]\n"),
+            )
             .unwrap();
         assert!(document.source().contains("v0.4.0"));
         assert!(!document.source().contains("v0.3.1"));
@@ -414,7 +451,7 @@ plugins:
                 &value("path: \"../my, dir\"\nref: \"release/{next}\"\n"),
             )
             .unwrap();
-        let reparsed: serde_yaml::Value = serde_yaml::from_str(document.source()).unwrap();
+        let reparsed = reparsed(&document);
         assert_eq!(
             reparsed["marketplaces"]["odd"]["path"].as_str(),
             Some("../my, dir")
@@ -426,27 +463,19 @@ plugins:
     }
 
     #[test]
-    fn removing_the_last_plugin_removes_the_mapping_rather_than_leaving_it_empty() {
+    fn removing_the_last_marketplace_removes_the_mapping_rather_than_leaving_it_empty() {
         let mut document = open(AUTHORED);
-        document.remove("plugins", "flow").unwrap();
+        document.remove("marketplaces", "ai").unwrap();
         let after = document.source();
         assert!(!after.contains("{}"), "left an empty mapping: {after}");
-        assert!(!after.contains("plugins:"));
+        assert!(!after.contains("marketplaces:"));
         assert!(after.contains("completion: pr"));
     }
 
     #[test]
     fn removing_something_absent_is_not_an_error() {
         let mut document = open(AUTHORED);
-        document.remove("plugins", "never-declared").unwrap();
-        assert_eq!(document.source(), AUTHORED);
-    }
-
-    #[test]
-    fn an_edit_that_would_produce_invalid_yaml_leaves_the_file_untouched() {
-        let mut document = open(AUTHORED);
-        let outcome = document.set("worktrees.completion", "\"unterminated");
-        assert!(outcome.is_err());
+        document.remove("marketplaces", "never-declared").unwrap();
         assert_eq!(document.source(), AUTHORED);
     }
 
