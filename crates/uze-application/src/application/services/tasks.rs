@@ -1677,27 +1677,8 @@ mod placement_tests {
     fn a_new_agent_starts_from_the_target_as_the_remote_has_it() {
         let repository = repository("place-synced");
         let root = repository.root().to_path_buf();
-        let base = uze_testkit::temp::scratch("place-synced-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            "main",
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", "origin", "main"]);
-        let other = base.join("other");
-        repository.git(&[
-            "clone",
-            "--quiet",
-            origin.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ]);
-        repository.git_in(&other, &["config", "user.name", "Other"]);
-        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        repository.with_origin("main");
+        let other = repository.clone_origin();
         std::fs::write(other.join("merged-while-you-were-away.rs"), "").unwrap();
         repository.git_in(&other, &["add", "."]);
         repository.git_in(&other, &["commit", "-qm", "merged while you were away"]);
@@ -2848,10 +2829,7 @@ mod task_service_tests {
 ",
         );
         let root = repository.root().to_path_buf();
-        let remote = uze_testkit::temp::scratch("svc-agent-publish-remote").join("origin.git");
-        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
-        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+        repository.with_origin(&repository.branch());
 
         let app = application("svc-agent-publish-home");
         let (id, slot) = launched(&app, &root);
@@ -2925,10 +2903,7 @@ mod task_service_tests {
         let repository = repository("svc-merge-remote");
         declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
-        let remote = uze_testkit::temp::scratch("svc-merge-remote-origin").join("origin.git");
-        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
-        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+        repository.with_origin(&repository.branch());
 
         let app = application("svc-merge-remote-home");
         let (id, slot) = launched(&app, &root);
