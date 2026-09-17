@@ -19,7 +19,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME};
+use crate::{
+    Result,
+    manifest::MANIFEST_FILE_NAME,
+    project_root::{find_upward, is_repository_root},
+};
 
 /// The marketplace manifest name (`marketplace.json`) — the same name
 /// `acquisition::marketplace` reads, named here because this module is the
@@ -48,12 +52,9 @@ pub struct ResolvedWorkspace {
     pub kind: WorkspaceKind,
 }
 
-/// Walks upward from `cwd` (inclusive) looking for the first directory
-/// containing `agents.yaml` and/or `marketplace.json`. Nearest ancestor wins —
-/// a nested consumer inside a marketplace (or vice versa) is detected as
-/// its own workspace, never as the outer one.
-/// The workspace root `cwd` belongs to, falling back to `cwd` itself when
-/// nothing marks one.
+/// The root runtime identities are keyed on for `cwd`: its workspace when
+/// one is anchored, otherwise the Git repository it sits in, otherwise `cwd`
+/// itself.
 ///
 /// Every runtime-scoped identity keyed on "which workspace is this" must go
 /// through here rather than through the raw launch directory. The terminal
@@ -62,45 +63,46 @@ pub struct ResolvedWorkspace {
 /// from a repository and from a subdirectory of it produces two independent
 /// servers over one repository, each believing it is alone.
 pub fn workspace_root_or_self(cwd: &Path) -> PathBuf {
-    resolve_workspace(cwd)
-        .map(|workspace| workspace.root)
-        .unwrap_or_else(|_| cwd.to_path_buf())
+    let Ok(workspace) = resolve_workspace(cwd) else {
+        return cwd.to_path_buf();
+    };
+    if workspace.kind != WorkspaceKind::NoWorkspace {
+        return workspace.root;
+    }
+    find_upward(&workspace.root, |dir| {
+        is_repository_root(dir).then(|| dir.to_path_buf())
+    })
+    .ok()
+    .and_then(|(_, repository)| repository)
+    .unwrap_or(workspace.root)
 }
 
+/// The nearest directory, from `cwd` upward, anchoring a workspace — an
+/// `agents.yaml`, a `marketplace.json`, or both — and which kind it is. A
+/// nested workspace is detected as its own, never as the outer one. With no
+/// anchor anywhere, the canonical `cwd` with [`WorkspaceKind::NoWorkspace`].
 pub fn resolve_workspace(cwd: &Path) -> Result<ResolvedWorkspace> {
-    let canonical = if cwd.is_dir() {
-        cwd.canonicalize()
-    } else {
-        cwd.parent().unwrap_or(cwd).canonicalize()
-    }
-    .map_err(|source| UzeError::Read {
-        path: cwd.to_path_buf(),
-        source,
+    let (start, anchored) = find_upward(cwd, |dir| {
+        anchor_kind(dir).map(|kind| ResolvedWorkspace {
+            root: dir.to_path_buf(),
+            kind,
+        })
     })?;
-
-    let mut current = Some(canonical.as_path());
-    while let Some(dir) = current {
-        let consumer = dir.join(MANIFEST_FILE_NAME).is_file();
-        let marketplace = dir.join(MARKETPLACE_MANIFEST_NAME).is_file();
-        if consumer || marketplace {
-            let kind = match (consumer, marketplace) {
-                (true, true) => WorkspaceKind::Hybrid,
-                (true, false) => WorkspaceKind::Consumer,
-                (false, true) => WorkspaceKind::Marketplace,
-                (false, false) => unreachable!(),
-            };
-            return Ok(ResolvedWorkspace {
-                root: dir.to_path_buf(),
-                kind,
-            });
-        }
-        current = dir.parent();
-    }
-
-    Ok(ResolvedWorkspace {
-        root: canonical,
+    Ok(anchored.unwrap_or(ResolvedWorkspace {
+        root: start,
         kind: WorkspaceKind::NoWorkspace,
-    })
+    }))
+}
+
+fn anchor_kind(dir: &Path) -> Option<WorkspaceKind> {
+    let consumer = dir.join(MANIFEST_FILE_NAME).is_file();
+    let marketplace = dir.join(MARKETPLACE_MANIFEST_NAME).is_file();
+    match (consumer, marketplace) {
+        (true, true) => Some(WorkspaceKind::Hybrid),
+        (true, false) => Some(WorkspaceKind::Consumer),
+        (false, true) => Some(WorkspaceKind::Marketplace),
+        (false, false) => None,
+    }
 }
 
 // Count of a project's own local agent resources is deliberately NOT here:
@@ -123,6 +125,23 @@ mod workspace_root_tests {
         assert_eq!(
             workspace_root_or_self(&nested),
             workspace_root_or_self(&root)
+        );
+    }
+
+    #[test]
+    fn a_subdirectory_of_a_repository_without_a_manifest_resolves_to_the_repository() {
+        let repository = uze_testkit::temp::scratch("workspace-repository");
+        let nested = repository.join("crates").join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+
+        assert_eq!(
+            workspace_root_or_self(&nested),
+            repository.canonicalize().unwrap()
+        );
+        assert_eq!(
+            workspace_root_or_self(&nested),
+            workspace_root_or_self(&repository)
         );
     }
 

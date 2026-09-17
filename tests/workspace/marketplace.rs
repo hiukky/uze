@@ -79,14 +79,9 @@ fn removing_a_marketplace_with_an_installed_plugin_is_blocked() {
     let market = scenario.marketplace.as_ref().unwrap();
     env.run_ok(uze_bin(), &["market", "add", market.to_str().unwrap()]);
 
-    // Seed an empty lock so `resolve_project_root`'s upward walk stops
-    // right here. Without a marker of its own, a fresh isolated project
-    // dir keeps walking past the env root into the real `/tmp` — and if
-    // any earlier test run ever left an `agents.lock` directly there (the
-    // walk has no bound), every test with no marker of its own would
-    // silently share and mutate that one file instead of its own isolated
-    // project.
-    std::fs::write(env.project.join("agents.lock"), "version: 1\n").unwrap();
+    // The project declares itself, so resolving its root never walks past
+    // the isolated environment into whatever an ancestor directory holds.
+    std::fs::write(env.project.join("agents.yaml"), "worktrees: {}\n").unwrap();
 
     env.run_ok(uze_bin(), &["flow@stale-ledger-market"]);
 
