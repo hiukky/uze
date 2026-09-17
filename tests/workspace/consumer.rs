@@ -573,9 +573,8 @@ fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
 
 /// The marketplace built into UZE is not a project's to declare: its
 /// plugins are installed for every project by the machine's own bootstrap.
-/// `declare_plugin` already refuses to write one into `agents.yaml`, and
-/// the lock refuses it for the same reason — an entry recording something
-/// nobody declared is a line nobody can act on.
+/// Neither `agents.yaml` nor the lock records one — an entry recording
+/// something nobody declared is a line nobody can act on.
 #[test]
 fn adding_a_built_in_plugin_installs_it_without_writing_the_project_files() {
     let fx = Fixture::new("built-in-not-declared");

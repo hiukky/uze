@@ -26,15 +26,15 @@ use super::*;
 /// the one thing only the manifest has: the list of plugins taken from it,
 /// left empty because `declare_plugin` pushes into whatever is already
 /// declared rather than replacing it.
-fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> Option<DeclaredMarketplace> {
-    let locked = lock.marketplaces.get(marketplace)?;
-    Some(DeclaredMarketplace {
+fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMarketplace {
+    let locked = &lock.marketplaces[marketplace];
+    DeclaredMarketplace {
         git: Some(locked.git.clone()),
         path: None,
         r#ref: locked.r#ref.clone(),
         subdirectory: locked.subdirectory.clone(),
         plugins: Vec::new(),
-    })
+    }
 }
 
 /// A marketplace resolved far enough to read from: the repository behind
@@ -270,8 +270,7 @@ impl Project<'_> {
         let canonical = project_root::resolve_project_root(root)?;
         // The marketplace built into UZE is not a project's to declare:
         // its plugins are installed for every project by the machine's own
-        // bootstrap. `declare_plugin` already refuses to write it into
-        // `agents.yaml`, and the lock refuses it for the same reason — an
+        // bootstrap, so neither `agents.yaml` nor the lock records it — an
         // entry recording something nobody declared is a line that cannot
         // be acted on.
         if marketplace == uze_core::manifest::BUILT_IN_MARKETPLACE {
@@ -324,7 +323,7 @@ impl Project<'_> {
             &canonical,
             plugin,
             marketplace,
-            declared_marketplace_for(&lock, marketplace).as_ref(),
+            &declared_marketplace_for(&lock, marketplace),
         )?;
         project_lock::save_lock(&canonical, &lock)?;
 
