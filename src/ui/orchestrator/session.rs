@@ -674,10 +674,8 @@ impl Attach<'_> {
         let identities = &self.identities;
         let Some(target) = self.model.session.as_ref().and_then(|session| {
             let space = session.selected_space();
-            let agents: Vec<TabId> = space
-                .tabs
+            let agents: Vec<TabId> = agent_tabs_of(space, identities)
                 .iter()
-                .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
                 .map(|tab| tab.id)
                 .collect();
             if agents.is_empty() {
@@ -2115,8 +2113,7 @@ impl Attach<'_> {
             WorkspaceHit::ResumeLostCheckout(tab) => {
                 let resume = self
                     .model
-                    .tab_focus_pane(tab)
-                    .and_then(|pane| self.model.lost_task(pane))
+                    .lost_task(tab)
                     .map(|(primary, task)| ResumeTarget {
                         primary: primary.clone(),
                         task: task.id.clone(),

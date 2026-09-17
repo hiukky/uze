@@ -418,11 +418,8 @@ fn sidebar_account(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Line
     let Some(session) = &model.session else {
         return Line::default();
     };
-    let agent_count = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| space.tabs.iter())
+    let agent_count = model
+        .tabs()
         .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
         .count();
     let space_count = session.workspace.spaces.len();
@@ -804,7 +801,7 @@ fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
 
 /// The agent tabs of a space, in the order the sidebar draws them — the
 /// order `step_agent` walks too.
-fn agent_tabs_of<'a>(space: &'a Space, identities: &[AgentIdentity]) -> Vec<&'a Tab> {
+pub(super) fn agent_tabs_of<'a>(space: &'a Space, identities: &[AgentIdentity]) -> Vec<&'a Tab> {
     space
         .tabs
         .iter()
@@ -923,7 +920,7 @@ impl<'a> SidebarAgent<'a> {
         // more, and the task it was running is what the preserved list now
         // holds.
         let lost = model.lost_checkouts.contains(&tab.pane.id);
-        let resumable = lost && model.lost_task(tab.pane.id).is_some();
+        let resumable = lost && model.lost_task(tab.id).is_some();
         // A tab-reorder drag in this exact space, resolved to drop right
         // before (or, on the last row, at the end after) this one.
         let drop_target = model.dragging_tab.is_some_and(|dragging| {

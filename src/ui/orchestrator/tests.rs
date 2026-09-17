@@ -2552,7 +2552,7 @@ mod workspace_tests {
             "the binding outlives the checkout"
         );
         assert!(
-            model.lost_task(pane).is_some(),
+            model.lost_task(tab).is_some(),
             "and is what offers the resume"
         );
     }
@@ -2647,7 +2647,7 @@ mod workspace_tests {
 
         model.lost_checkouts.insert(pane);
         assert!(
-            model.lost_task(pane).is_some(),
+            model.lost_task(tab).is_some(),
             "and so the row can offer the way back in"
         );
     }

@@ -1775,16 +1775,8 @@ fn workspace_has_active_agent_operation(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
 ) -> bool {
-    model.session.as_ref().is_some_and(|session| {
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .any(|tab| {
-                agent_identity_for_tab(identities, tab).is_some()
-                    && model.agent_is_working(tab.pane.id)
-            })
+    model.tabs().any(|tab| {
+        agent_identity_for_tab(identities, tab).is_some() && model.agent_is_working(tab.pane.id)
     })
 }
 
@@ -1805,14 +1797,8 @@ fn selected_agent_context(
 /// selected one, since an agent nobody is looking at is exactly the one
 /// whose conversation would otherwise go unrecorded.
 fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<LaunchedAgent> {
-    let Some(session) = model.session.as_ref() else {
-        return Vec::new();
-    };
-    session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| space.tabs.iter())
+    model
+        .tabs()
         .filter_map(|tab| {
             let integration = agent_for_tab(identities, tab)?.integration;
             let id = launched_agent_id(tab)?.to_owned();
@@ -2551,12 +2537,7 @@ impl WorkspaceModel {
         // A space the user is not looking at keeps whatever it had: only
         // the spaces this update actually described are re-stated, and an
         // agent that has gone is one no space names any more.
-        let known: BTreeSet<TabId> = session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| space.tabs.iter().map(|tab| tab.id))
-            .collect();
+        let known: BTreeSet<TabId> = self.tabs().map(|tab| tab.id).collect();
         self.strip_selection
             .retain(|agent, _| known.contains(agent));
         self.strip_selection.extend(live);
@@ -2697,16 +2678,25 @@ impl WorkspaceModel {
             .as_ref()
             .map(|session| session.selected_tab().id)
     }
-    fn pane_for_tab(&self, tab: TabId) -> Option<PaneId> {
-        self.session.as_ref().and_then(|session| {
-            session
-                .workspace
-                .spaces
-                .iter()
-                .flat_map(|space| &space.tabs)
-                .find(|candidate| candidate.id == tab)
-                .map(|candidate| candidate.pane.id)
-        })
+    /// Every tab of every space, in the order the session lists them.
+    pub(super) fn tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.session
+            .iter()
+            .flat_map(|session| &session.workspace.spaces)
+            .flat_map(|space| &space.tabs)
+    }
+
+    pub(super) fn tab(&self, id: TabId) -> Option<&Tab> {
+        self.tabs().find(|tab| tab.id == id)
+    }
+
+    fn tab_of_pane(&self, pane: PaneId) -> Option<&Tab> {
+        self.tabs().find(|tab| tab.pane.id == pane)
+    }
+
+    /// The pane a tab — and the sidebar row standing for it — shows.
+    pub(super) fn pane_for_tab(&self, tab: TabId) -> Option<PaneId> {
+        self.tab(tab).map(|tab| tab.pane.id)
     }
     /// Marks the pane as busy and, when the submission was reconstructed
     /// with confidence, records it. Activity is noted for every Enter in an
@@ -2876,14 +2866,8 @@ impl WorkspaceModel {
     }
 
     fn is_agent_pane(&self, pane: PaneId, identities: &[AgentIdentity]) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            session
-                .workspace
-                .spaces
-                .iter()
-                .flat_map(|space| &space.tabs)
-                .any(|tab| tab.pane.id == pane && agent_identity_for_tab(identities, tab).is_some())
-        })
+        self.tab_of_pane(pane)
+            .is_some_and(|tab| agent_identity_for_tab(identities, tab).is_some())
     }
 
     /// Advances every agent pane's phase for the current instant: a pane
@@ -2930,16 +2914,10 @@ impl WorkspaceModel {
         {
             return;
         }
-        let Some(session) = self.session.as_ref() else {
+        if self.session.is_none() {
             return;
-        };
-        let live: BTreeSet<PaneId> = session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .map(|tab| tab.pane.id)
-            .collect();
+        }
+        let live: BTreeSet<PaneId> = self.tabs().map(|tab| tab.pane.id).collect();
         self.agent_activity.retain(|pane, _| live.contains(pane));
         self.completed_agent_panes
             .retain(|pane| live.contains(pane));
@@ -2964,26 +2942,7 @@ impl WorkspaceModel {
 
     /// The agent a tab was launched for, by the identity the session echoes.
     pub(super) fn tab_agent_id(&self, tab: TabId) -> Option<&str> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|candidate| candidate.id == tab)
-            .and_then(launched_agent_id)
-    }
-
-    /// The same, for the pane an agent tab's row stands for.
-    fn pane_agent_id(&self, pane: PaneId) -> Option<&str> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|tab| tab.pane.id == pane)
-            .and_then(launched_agent_id)
+        self.tab(tab).and_then(launched_agent_id)
     }
 
     /// The task listed for an identity, whichever repository listed it.
@@ -3010,11 +2969,12 @@ impl WorkspaceModel {
     /// resolves. Only
     /// while the task is waiting for a slot: once resumed it has one, and
     /// the row that lost its own is nobody's way back in any more.
-    pub(super) fn lost_task(&self, pane: PaneId) -> Option<(&PathBuf, &TaskView)> {
-        if !self.lost_checkouts.contains(&pane) {
+    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &TaskView)> {
+        let tab = self.tab(tab)?;
+        if !self.lost_checkouts.contains(&tab.pane.id) {
             return None;
         }
-        let (primary, task) = self.task_with_id(self.pane_agent_id(pane)?)?;
+        let (primary, task) = self.task_with_id(launched_agent_id(tab)?)?;
         let resumable = task.checkout.is_none()
             && !matches!(
                 task.state,
@@ -3042,26 +3002,8 @@ impl WorkspaceModel {
         task.state.clone()
     }
 
-    /// The pane an agent tab's row stands for.
-    pub(super) fn tab_focus_pane(&self, tab: TabId) -> Option<PaneId> {
-        self.session
-            .as_ref()?
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find(|candidate| candidate.id == tab)
-            .map(|tab| tab.pane.id)
-    }
-
     fn pane_cwd(&self, pane: PaneId) -> Option<PathBuf> {
-        let session = self.session.as_ref()?;
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find_map(|tab| (tab.pane.id == pane).then(|| tab.pane.cwd.clone()))
+        self.tab_of_pane(pane).map(|tab| tab.pane.cwd.clone())
     }
 
     /// The pane of the tab launched for agent `id` — where a message for
@@ -3070,13 +3012,9 @@ impl WorkspaceModel {
     /// agent's slot is not the agent, and a message typed into it runs as
     /// a command.
     fn pane_for_agent(&self, id: &str) -> Option<PaneId> {
-        let session = self.session.as_ref()?;
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .find_map(|tab| (launched_agent_id(tab) == Some(id)).then_some(tab.pane.id))
+        self.tabs()
+            .find(|tab| launched_agent_id(tab) == Some(id))
+            .map(|tab| tab.pane.id)
     }
 
     /// Tasks holding work that no live agent tab is in front of, with the
@@ -3662,19 +3600,17 @@ fn adopt_agent_labels(
     model: &mut WorkspaceModel,
     identities: &[AgentIdentity],
 ) -> Vec<ClientRequest> {
+    let still_generated: BTreeSet<TabId> = model
+        .tabs()
+        .filter(|tab| is_generated_shell_label(&tab.label))
+        .map(|tab| tab.id)
+        .collect();
+    model
+        .label_adoptions
+        .retain(|tab, _| still_generated.contains(tab));
     let Some(session) = model.session.as_ref() else {
         return Vec::new();
     };
-    let tabs: Vec<&Tab> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .collect();
-    model.label_adoptions.retain(|tab, _| {
-        tabs.iter()
-            .any(|candidate| candidate.id == *tab && is_generated_shell_label(&candidate.label))
-    });
     let mut requests = Vec::new();
     for space in &session.workspace.spaces {
         let mut agents = space
@@ -3713,14 +3649,8 @@ fn adopt_agent_labels(
 /// Asked once per tab through the same `label_adoptions` ledger, so a
 /// session that has not yet echoed the rename is not asked twice.
 fn adopt_task_names(model: &mut WorkspaceModel) -> Vec<ClientRequest> {
-    let Some(session) = model.session.as_ref() else {
-        return Vec::new();
-    };
-    let named: Vec<(TabId, String)> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
+    let named: Vec<(TabId, String)> = model
+        .tabs()
         .filter_map(|tab| {
             let task = model.tab_task(tab.id)?;
             if task.label.is_empty() || task.label == task.id || task.label == tab.label {
@@ -3886,17 +3816,8 @@ fn begin_rename(model: &mut WorkspaceModel, target: MenuTarget) {
     let (rename_target, label) = match target {
         MenuTarget::Tab(tab) => {
             let label = model
-                .session
-                .as_ref()
-                .and_then(|session| {
-                    session
-                        .workspace
-                        .spaces
-                        .iter()
-                        .flat_map(|space| &space.tabs)
-                        .find(|t| t.id == tab)
-                })
-                .map(|t| t.label.clone())
+                .tab(tab)
+                .map(|tab| tab.label.clone())
                 .unwrap_or_default();
             (RenameTarget::Tab(tab), label)
         }
@@ -3983,13 +3904,17 @@ fn sync_slot_occupancy(
     let Some(session) = model.session.as_ref() else {
         return;
     };
-    let live: Vec<(PaneId, PathBuf)> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .map(|tab| &tab.pane)
-        .map(|pane| (pane.id, pane.cwd.clone()))
+    let live: Vec<(PaneId, PathBuf)> = model
+        .tabs()
+        .map(|tab| (tab.pane.id, tab.pane.cwd.clone()))
+        .collect();
+    // Which agents still have a tab: what the launch stamped, echoed back
+    // by the server, and the one fact that still names a task after its
+    // checkout is gone from under it.
+    let echoed: Vec<String> = model
+        .tabs()
+        .filter_map(launched_agent_id)
+        .map(str::to_owned)
         .collect();
     let space_roots: Vec<PathBuf> = session
         .workspace
@@ -4015,17 +3940,6 @@ fn sync_slot_occupancy(
         .pane_checkouts
         .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
     let occupied: BTreeSet<PathBuf> = model.pane_checkouts.values().cloned().collect();
-    // Which agents still have a tab: what the launch stamped, echoed back
-    // by the server, and the one fact that still names a task after its
-    // checkout is gone from under it.
-    let echoed: Vec<String> = session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| &space.tabs)
-        .filter_map(launched_agent_id)
-        .map(str::to_owned)
-        .collect();
     // Bound to a checkout that is no longer on disk, or first seen already
     // standing in one: `/proc` reports a removed directory as its old path
     // followed by ` (deleted)`, which is not a path anything resolves.
