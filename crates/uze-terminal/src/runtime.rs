@@ -1635,9 +1635,20 @@ impl Server {
             });
     }
 
+    /// Ends every pane, and returns once each has been reaped: the server
+    /// exits right after, and a reaper still running when it does would
+    /// leave the pane's process group behind. All at once, so shutdown
+    /// waits for the slowest pane rather than for their sum.
     fn stop_panes(&self) {
-        for pane in self.panes.lock().expect("panes poisoned").values() {
-            pane.stop();
+        let reapers: Vec<_> = self
+            .panes
+            .lock()
+            .expect("panes poisoned")
+            .values()
+            .map(|pane| pane.stop())
+            .collect();
+        for reaper in reapers {
+            let _ = reaper.join();
         }
     }
 
@@ -1708,6 +1719,18 @@ fn restore_endpoint_directory(socket: &Path) -> io::Result<()> {
     };
     fs::create_dir_all(directory)?;
     private_directory(directory, current_uid())
+}
+
+/// The process group `pid` leads, when it leads one of its own: a pane's
+/// program is started in a session of its own, so its group is its pid.
+/// `None` for anything else — above all this process's own group, which a
+/// group signal must never reach.
+fn own_process_group(pid: u32) -> Option<libc::pid_t> {
+    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1)?;
+    // SAFETY: `getpgid` reads the group of a positive pid and touches no
+    // memory of ours; `getpgrp` takes no arguments and cannot fail.
+    let (group, ours) = unsafe { (libc::getpgid(pid), libc::getpgrp()) };
+    (group == pid && group != ours).then_some(group)
 }
 
 /// The real user id of this process.
@@ -2000,9 +2023,19 @@ impl PaneRuntime {
         let child = Arc::clone(&self.child);
         thread::spawn(move || {
             let mut child = child.lock().expect("child poisoned");
+            let group = child.process_id().and_then(own_process_group);
             // Waited on whether or not the signal landed: a program that
             // already exited is exactly the zombie this is here to reap.
             let _ = child.kill();
+            // What the leader started and left behind: a harness's workers
+            // that ignore the hangup would otherwise outlive the pane, and
+            // hold its terminal open so its reader never ends either.
+            if let Some(group) = group {
+                // SAFETY: `group` is a positive process-group id that is
+                // the pane's own and not this process's (`own_process_group`),
+                // so the negation addresses exactly that group.
+                unsafe { libc::kill(-group, libc::SIGKILL) };
+            }
             let _ = child.wait();
         })
     }
@@ -3061,6 +3094,68 @@ mod tests {
     /// attach that named the launch directory every time reopened the
     /// space closed just before it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// Stopping a pane ends what its program left behind in its process
+    /// group, not only the program: a worker deaf to the hangup would
+    /// otherwise outlive the pane. The worker holds the only writer of a
+    /// FIFO, so its death is the FIFO hanging up — no polling for it.
+    #[test]
+    fn a_stopped_pane_takes_its_process_group_with_it() {
+        let scratch = uze_testkit::temp::scratch("pane-group");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let fifo = scratch.join("worker");
+        let path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `path` is a NUL-terminated string that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+
+        let (damage, damage_events) = std::sync::mpsc::channel();
+        let pane = PaneRuntime::spawn(
+            PaneId(8),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            Launch::Program {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!(
+                        "trap '' HUP; sleep 300 > '{}' & echo worker-started; wait",
+                        fifo.display()
+                    ),
+                ],
+                env: Vec::new(),
+            },
+            Arc::new(Mutex::new(Palette::default())),
+        )
+        .unwrap();
+        // Opening for reading waits for the worker to open its end.
+        let reader = std::fs::File::open(&fifo).unwrap();
+        let started = damage_events.iter().any(|_| {
+            pane.snapshot()
+                .cells
+                .iter()
+                .map(|cell| cell.character)
+                .collect::<String>()
+                .contains("worker-started")
+        });
+        assert!(started, "the worker never started");
+
+        pane.stop().join().expect("the reaper finished");
+
+        let mut poll = libc::pollfd {
+            fd: std::os::fd::AsRawFd::as_raw_fd(&reader),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid `pollfd` for an fd `reader` keeps open.
+        let ready = unsafe { libc::poll(&mut poll, 1, 10_000) };
+        assert!(
+            ready == 1 && poll.revents & libc::POLLHUP != 0,
+            "the worker outlived its pane"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// A client that stops reading is not buffered for without limit: once
     /// its queue is full it is marked stale and sent nothing more, and once
     /// it has caught up it is sent the whole workspace again.

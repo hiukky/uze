@@ -3,6 +3,22 @@
 Newest first. Each entry: what changed, why, what was rejected, numbers,
 remaining risk.
 
+## 2026-09-17 — A stopped pane takes its process group with it
+
+- **Bug (orchestration):**
+  - Stopping a pane signalled only the program. Workers it started that ignore SIGHUP survived as orphans.
+  - Those orphans also held the PTY slave open, so the pane's reader thread never saw EOF and leaked too.
+  - On shutdown, reapers were not awaited before the process exited.
+- **Change:**
+  - After the leader is handled, the reaper SIGKILLs the pane's process group.
+  - `own_process_group` guards the signal: the group must be the pid itself, `> 1`, and not UZE's own group.
+  - `stop_panes` starts every reaper and joins them all.
+- **Rejected:**
+  - A process tree walk via `/proc`: platform-bound and racy against forks.
+  - Leaving it to the TTY hangup: it never reaches a worker that ignores SIGHUP, and the orphan keeps the master from closing.
+- **Proof:** `a_stopped_pane_takes_its_process_group_with_it` fails without the group signal, leaving an orphaned `sleep`. It observes the worker's death as its FIFO hanging up, with no polling. Gate 1 902/0.
+- **Risk:** a job an interactive shell moved into a group of its own is outside the pane's group. It still receives the terminal hangup.
+
 ## 2026-09-17 — A client that stops reading is bounded
 
 - **Bug (robustness):** each attached client had an unbounded event queue. A client that stopped reading, such as a suspended `uze` or a stalled socket, made the server buffer every repaint of every pane for as long as it stayed attached.
