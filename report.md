@@ -76,9 +76,9 @@ The code was reviewed against the settled design, one review per area, and chang
   - Process, race and resource tests synchronize on events (the damage channel, a FIFO's end, a reaper's join) rather than sleeping.
   - Journeys assert on the machine (Git, filesystem, process table), never on UZE's own output.
 - **Weak:**
-  - 30 `thread::sleep` polls remain in tests, 11 of them in the terminal runtime.
-  - Low coverage in `ui/worker.rs` (21 %) and `orchestrator/session.rs` (44 %), which dispatch the TUI's intents.
-  - No property tests for the state machines (task, slot, space).
+  - `orchestrator/session.rs` is still at 44 % coverage. The worker's result handling has since gained characterization tests, and the last-space gesture has its own.
+  - There are no property tests for the task, slot or space state machines.
+  - 28 test sleeps remain. Each was reviewed: they model time (a mid-save kill, a gate window, clock resolution, a dribbling peer) or wait on another process's `exec`, exit or listen, and all are bounded by a failing deadline.
 - **Caught along the way:**
   - A first zombie test passed without the fix, because SIGHUP beat the trap. It was rewritten to wait for the program.
   - A `poll` on a FIFO passed on Linux and failed on macOS. It was rewritten as a thread read.
@@ -86,8 +86,7 @@ The code was reviewed against the settled design, one review per area, and chang
 ## Open
 
 - **Backlog** (`BACKLOG.md`):
-  - sleep-polling tests;
-  - client coverage;
+  - `orchestrator/session.rs` coverage;
   - host-only gestures inside the extension contract;
   - CLI startup measurement.
 - **Decisions** (`QUESTIONS.md`):
