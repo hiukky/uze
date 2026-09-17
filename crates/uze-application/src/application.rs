@@ -6,7 +6,6 @@
 #![allow(clippy::empty_line_after_doc_comments)]
 
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -23,7 +22,7 @@ use uze_core::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
     },
     preference::PreferencePort,
-    provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
+    provisioning::{ProcessRunner, ProvisionStatus, SystemProcessRunner},
     reconciliation::{
         PackageRemovalPlan, ReconciliationReport, reconcile_package, reconcile_package_with,
     },
@@ -205,11 +204,11 @@ impl UzeApplication {
     }
 
     /// Ensures every plugin `bootstrap::DEFAULT_PLUGIN_IDS` names is present
-    /// in the Store, then attached to every detected harness. Each default
-    /// plugin's *first install* goes through the exact same lifecycle a
-    /// normal `uze add` would (`install_materialized`), so Store, Engine,
-    /// Router and every `IntegrationPort` stay unaware any of this is a
-    /// "default" rather than an ordinary installed plugin.
+    /// in the Store. Each default plugin's *first install* goes through the
+    /// exact same lifecycle any other install does
+    /// (`Plugins::install_materialized`), so Store, Engine, Router and every
+    /// `IntegrationPort` stay unaware any of this is a "default" rather than
+    /// an ordinary installed plugin.
     ///
     /// This is BOOTSTRAP, not UPDATE: an already-installed default plugin is
     /// never touched here, no matter how its content compares to the
@@ -217,112 +216,32 @@ impl UzeApplication {
     /// (including read-only ones like `doctor`/`list`), and an observational
     /// command must not mutate installed plugin content. A newer snapshot is
     /// surfaced as `PluginSummary::update_available` (a pure read) for an
-    /// explicit `update_plugin` to act on later, not applied silently. See
+    /// explicit `Plugins::update` to act on later, not applied silently. See
     /// `docs/architecture/invariants.md`'s "Official marketplace" section.
     ///
-    /// Idempotent: nothing changes on a repeat call once every default
-    /// plugin is installed and attached. Returns `true` if it installed at
-    /// least one Store entry.
+    /// Idempotent. Returns `true` if it installed at least one Store entry.
     ///
     /// This is deliberately not called from `from_env`/`new` so contract
     /// tests can construct isolated worlds with no default plugins. The CLI
-    /// (`src/main.rs`) and `setup` call this explicitly; `add`/`remove` do
-    /// not need to because `setup` already covers the attach path.
+    /// (`src/main.rs`) and `setup` call this explicitly.
     pub fn ensure_default_plugins(&self) -> Result<bool> {
         let _span = tracing::info_span!("bootstrap.ensure_default_plugins").entered();
         let mut installed_any = false;
         for &id in bootstrap::DEFAULT_PLUGIN_IDS {
             installed_any |= self.ensure_default_plugin_installed(id)?;
         }
-        // Attach every default plugin — freshly installed or already
-        // present — to every currently detected harness. Kept as its own
-        // pass, unconditional, because a harness detected since the last
-        // run should not wait for an explicit `uze setup` before seeing the
-        // fallback delivery; also prepares detected harnesses (creating
-        // `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the plugin
-        // without a prior `uze setup`. Idempotent via ledger receipt keys,
-        // so re-attaching a plugin `install_materialized` just attached is
-        // harmless. This does not touch plugin *content*, only exposure —
-        // distinct from the update question above.
-        let _ = self.prepare_detected_integrations(None);
-        // Derived views refresh before attachment, same ordering `add_plugin`
-        // already relies on (`install_materialized`): a Generated Native
-        // Package's own catalogue (e.g. Claude's `generated/.claude-plugin/
-        // marketplace.json`) is written by republishing, and native
-        // delivery below reads that view. Attaching first on a fresh/
-        // catalogue-less `UZE_HOME` made the vendor CLI's own `marketplace
-        // add` fail outright (`Marketplace file not found at .../
-        // marketplace.json`) — real-host dogfood caught this. Only a view
-        // that no longer matches the installed set is rewritten: this runs
-        // before every command, and rewriting four catalogues (each a
-        // synced atomic write) to say what they already said was most of
-        // what a read-only command cost.
+        // Prepares detected harnesses (creating `~/.claude/skills` etc.) so a
+        // harness detected since the last run does not wait for an explicit
+        // `uze setup`. Best-effort: `setup`/`doctor` surface a failure.
+        let _ = self.prepare_detected_integrations();
+        // A Generated Native Package's own catalogue is written by
+        // republishing, and a vendor CLI reading a missing one fails
+        // outright. Only a view that no longer matches the installed set is
+        // rewritten: this runs before every command, and rewriting every
+        // catalogue (each a synced atomic write) to say what it already said
+        // was most of what a read-only command cost.
         self.republish_unpublished();
-        let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
-        for package_id in self.store.package_ids().unwrap_or_default() {
-            if !installed_ids.contains(package_id.as_str()) {
-                continue;
-            }
-            let Ok(package) = self.store.package(&package_id) else {
-                continue;
-            };
-            for integration in &self.integrations {
-                let effective = self
-                    .attachment_effective(package.id.as_str(), integration.as_ref())
-                    .unwrap_or(false);
-                if self.detect_cached(integration.as_ref()).present && !effective {
-                    // Production resilience: a single harness's foreign state
-                    // (e.g. Antigravity `uze` already imported outside UZE)
-                    // must not abort bootstrap for other harnesses. Attach
-                    // failures are best-effort here; `setup`/`doctor` will
-                    // surface them as warnings. This intentionally swallows
-                    // the error — the method's contract is "best-effort attach",
-                    // not "all harnesses must succeed".
-                    if let Err(err) = self.attach_package_to(&package, integration.as_ref()) {
-                        // Swallow foreign-state errors silently in bootstrap;
-                        // explicit `setup` will surface them per-harness.
-                        let _ = err;
-                    }
-                }
-            }
-        }
         Ok(installed_any)
-    }
-
-    /// Whether the bootstrap can consider `integration`'s delivery of
-    /// `package_id` already effective:
-    ///
-    /// - no receipt for this integration → not effective (attach);
-    /// - stat-able artifacts (skill symlinks) must still be physically in
-    ///   place — a vanished link is healed by a cheap re-attach (no
-    ///   vendor CLI involved);
-    /// - non-stat-able artifacts (vendor-native catalogues recorded
-    ///   through the vendor CLIs) are effective by receipt: re-running
-    ///   `codex/claude plugin add` on every invocation was the
-    ///   steady-state cost this guard removes, and a vendor-side loss is
-    ///   surfaced by the read-time inspection (anomalies are always
-    ///   re-inspected live) and healed by the explicit setup path.
-    fn attachment_effective(
-        &self,
-        package_id: &str,
-        integration: &dyn IntegrationPort,
-    ) -> Result<bool> {
-        let receipts = state::receipts(&self.home, Some(package_id))?;
-        let for_integration: Vec<_> = receipts
-            .into_iter()
-            .filter(|(_, receipt)| receipt.integration == integration.id())
-            .collect();
-        if for_integration.is_empty() {
-            return Ok(false);
-        }
-        for (_, receipt) in &for_integration {
-            if receipt.artifact.fingerprint().is_some() && !receipt.artifact.is_in_place() {
-                // A stat-able artifact that is not in place (or
-                // re-pointed): not effective, re-attach to heal.
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 
     /// Installs default plugin `id` if it is not already in the Store.
@@ -337,12 +256,11 @@ impl UzeApplication {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
-        match self.plugins().install_materialized_from_marketplace(
+        match self.plugins().install_materialized(
             materialized,
             "uze-official",
+            None,
             &trust::NoTrustAuthority,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         ) {
             Ok(_) => Ok(true),
@@ -796,39 +714,19 @@ impl UzeApplication {
 
     /// Prepares integrations only when their real executable is present.
     /// This is the shared bridge between explicit `setup` and implicit
-    /// preparation during `add`; neither presentation layer needs to know
-    /// which directories/configuration an integration owns.
-    pub(crate) fn prepare_detected_integrations(
-        &self,
-        requested: Option<&str>,
-    ) -> Result<Vec<SetupResult>> {
-        self.integrations
-            .iter()
-            .filter(|integration| requested.is_none_or(|id| integration.id() == id))
-            .map(|integration| {
-                let detection = self.detect_cached(integration.as_ref());
-                let configured = detection.present;
-                if detection.present {
-                    let _span =
-                        tracing::debug_span!("integration.install", integration = integration.id())
-                            .entered();
-                    integration.install(&self.home, &detection)?;
-                }
-                Ok(SetupResult {
-                    integration: integration.id().to_owned(),
-                    detection: detection.clone(),
-                    configured,
-                    provisioning: ProvisioningResult::verified(
-                        uze_core::provisioning::ProvisionAction::None,
-                        "implicit-existing-executable",
-                        detection,
-                    ),
-                    runtime_shim: None,
-                    attach_error: None,
-                    shim_error: None,
-                })
-            })
-            .collect()
+    /// preparation during an install; neither presentation layer needs to
+    /// know which directories/configuration an integration owns.
+    pub(crate) fn prepare_detected_integrations(&self) -> Result<()> {
+        for integration in &self.integrations {
+            let detection = self.detect_cached(integration.as_ref());
+            if detection.present {
+                let _span =
+                    tracing::debug_span!("integration.install", integration = integration.id())
+                        .entered();
+                integration.install(&self.home, &detection)?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {

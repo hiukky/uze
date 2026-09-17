@@ -474,12 +474,11 @@ impl Project<'_> {
             // substituted remote must stop here, not be discovered later by
             // reading what an agent was told to do.
             Self::verify_integrity_of(&name, &locked, materialized.root())?;
-            self.0.plugins().install_materialized_from_marketplace(
+            self.0.plugins().install_materialized(
                 materialized,
                 marketplace,
+                None,
                 authority,
-                &[],
-                false,
                 &uze_core::naming::NoNameCollisionAuthority,
             )?;
             installed_plugins.push(name);
@@ -609,12 +608,11 @@ impl Project<'_> {
             request.subdirectory.as_deref(),
             plugin,
         )?;
-        let report = self.0.plugins().install_materialized_from_marketplace(
+        let report = self.0.plugins().install_materialized(
             materialized,
             marketplace,
+            None,
             authority,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         )?;
 

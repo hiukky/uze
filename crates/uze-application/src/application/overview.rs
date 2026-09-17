@@ -463,12 +463,11 @@ mod tests {
                 .unwrap();
             self.app
                 .plugins()
-                .install_materialized_from_marketplace(
+                .install_materialized(
                     materialized,
                     marketplace,
+                    None,
                     &AlwaysTrust,
-                    &[],
-                    false,
                     &uze_core::naming::NoNameCollisionAuthority,
                 )
                 .unwrap();

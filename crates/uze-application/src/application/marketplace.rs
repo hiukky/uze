@@ -124,12 +124,11 @@ impl Marketplace<'_> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let materialized =
             UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
-        self.0.plugins().install_materialized_from_marketplace(
+        self.0.plugins().install_materialized(
             materialized,
             &marketplace_name,
+            None,
             authority,
-            &[],
-            false,
             name_authority,
         )
     }
@@ -261,12 +260,11 @@ impl Marketplace<'_> {
         let materialized = self.0.plugins().acquire(&PackageSource::Embedded {
             id: name.to_owned(),
         })?;
-        self.0.plugins().install_materialized_from_marketplace(
+        self.0.plugins().install_materialized(
             materialized,
             "uze-official",
+            None,
             authority,
-            &[],
-            false,
             name_authority,
         )
     }

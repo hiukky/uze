@@ -43,7 +43,7 @@ impl Plugins<'_> {
         // be prepared is a failure with no consequence at all while the
         // package is still installed. Reached after the removal it was a
         // plugin gone from the machine with nothing left to heal it.
-        self.0.prepare_detected_integrations(None)?;
+        self.0.prepare_detected_integrations()?;
 
         // What is left can still fail with the package already removed — the
         // ingest running out of disk, a revision whose environment will not
@@ -69,13 +69,10 @@ impl Plugins<'_> {
         // official-plugin protection and any project lock both key on the
         // marketplace-qualified id staying exactly what it was.
         let requested_active_name = (active_name != bare_name).then_some(active_name.as_str());
-        let installing = self.install_materialized_from_marketplace_as(
+        let installing = self.install_authorized(
             materialized,
             installed.id.marketplace(),
             requested_active_name,
-            &trust::AlwaysTrust,
-            &[],
-            true,
             &uze_core::naming::NoNameCollisionAuthority,
         );
         let report = match installing {
@@ -141,13 +138,10 @@ impl Plugins<'_> {
     ) -> Result<()> {
         let recovered =
             MaterializedPackage::borrowed(superseded.to_path_buf(), installed.provenance.clone());
-        self.install_materialized_from_marketplace_as(
+        self.install_authorized(
             recovered,
             installed.id.marketplace(),
             requested_active_name,
-            &trust::AlwaysTrust,
-            &[],
-            true,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .map(|_| ())

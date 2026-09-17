@@ -10,7 +10,7 @@ use uze_core::{
         NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,
     },
-    trust::{self, TrustAuthority},
+    trust::TrustAuthority,
 };
 
 use crate::bootstrap;
@@ -59,51 +59,41 @@ impl Plugins<'_> {
         // Acquisition brings the bytes to a local directory and owns their
         // cleanup; the Store only ever sees a materialized package.
         let materialized = self.acquire(&source)?;
-        self.install_materialized_from_marketplace(
-            materialized,
-            marketplace,
-            authority,
-            &[],
-            false,
-            name_authority,
-        )
+        self.install_materialized(materialized, marketplace, None, authority, name_authority)
     }
 
-    pub(crate) fn install_materialized_from_marketplace(
+    /// Installs bytes that already exist locally: asks `authority` about any
+    /// execution they introduce, then ingests and delivers them.
+    ///
+    /// Deliberately takes no lock: every caller holds one already, and
+    /// `MutationLock` is not reentrant.
+    ///
+    /// `active_name` requests a local name other than the package's own bare
+    /// plugin name (ADR-038); an update uses it to keep an alias a past
+    /// collision resolution gave the package.
+    pub(crate) fn install_materialized(
         &self,
         materialized: uze_core::MaterializedPackage,
         marketplace: &str,
+        active_name: Option<&str>,
         authority: &dyn TrustAuthority,
-        already_trusted: &[trust::ExecutableCapability],
-        replacing_installed: bool,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        self.install_materialized_from_marketplace_as(
-            materialized,
-            marketplace,
-            None,
-            authority,
-            already_trusted,
-            replacing_installed,
-            name_authority,
-        )
+        // Trust is decided here — after the package is materialized and can
+        // be inspected honestly, and strictly before anything is written to
+        // the Store or shown to a harness. Neither the Store nor any
+        // integration knows this question exists.
+        self.0.authorize(&materialized, authority, &[], false)?;
+        self.install_authorized(materialized, marketplace, active_name, name_authority)
     }
 
-    /// `install_materialized_from_marketplace`, requesting an explicit local
-    /// active name instead of the package's own bare plugin name (ADR-038)
-    /// — used only by `update_plugin`, to restore an `alias` a past
-    /// collision resolution gave this exact package across its
-    /// remove-then-reinstall cycle. `None` behaves identically to the
-    /// wrapper above.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn install_materialized_from_marketplace_as(
+    /// `install_materialized` for bytes whose trust question was already
+    /// answered — an update asks it against the revision it replaces.
+    pub(super) fn install_authorized(
         &self,
         materialized: uze_core::MaterializedPackage,
         marketplace: &str,
-        requested_active_name: Option<&str>,
-        authority: &dyn TrustAuthority,
-        already_trusted: &[trust::ExecutableCapability],
-        replacing_installed: bool,
+        active_name: Option<&str>,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         // Any installation changes vendor-visible state; cached inspection
@@ -121,16 +111,6 @@ impl Plugins<'_> {
         // explicit, narrower place that reconciliation belongs; a blocked
         // install's `ProjectionConflict` is the correct, honest outcome
         // when the ambiguity can't be resolved silently.
-        // Trust is decided here — after the package is materialized and can
-        // be inspected honestly, and strictly before anything is written to
-        // the Store or shown to a harness. Neither the Store nor any
-        // integration knows this question exists.
-        self.0.authorize(
-            &materialized,
-            authority,
-            already_trusted,
-            replacing_installed,
-        )?;
 
         // `uze add` is deliberately enough for a harness the user already
         // has.  Preparing a detected integration only creates UZE's own
@@ -139,12 +119,12 @@ impl Plugins<'_> {
         // the vendor executable.  Do it before ingesting so a preparation
         // failure cannot leave a newly installed package with no reported
         // delivery attempt.
-        self.0.prepare_detected_integrations(None)?;
+        self.0.prepare_detected_integrations()?;
 
         let installed = self.ingest_resolving_name_collision(
             &materialized,
             marketplace,
-            requested_active_name,
+            active_name,
             name_authority,
         )?;
 

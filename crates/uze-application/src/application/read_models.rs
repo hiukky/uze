@@ -11,6 +11,7 @@
 use uze_core::{
     Result,
     integration::{ContextDelivery, IntegrationPort},
+    provisioning::ProvisioningResult,
 };
 
 use super::services::Plugins;
