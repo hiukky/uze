@@ -64,6 +64,27 @@ mod workspace_tests {
         RenderCell, Session, SpaceId, Tab, TabId, TerminalColor,
     };
 
+    /// A fresh one-space session over `root`, at the size every test
+    /// frame is drawn at.
+    fn session(root: impl AsRef<Path>, kind: uze_terminal::SpaceKind) -> Session {
+        Session::new(
+            uze_terminal::SpaceSeat {
+                root: root.as_ref().to_path_buf(),
+                kind,
+            },
+            80,
+            24,
+        )
+    }
+
+    /// A model attached to `session` and nothing else.
+    fn model_of(session: Session) -> WorkspaceModel {
+        WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        }
+    }
+
     fn identities_fixture() -> Vec<AgentIdentity> {
         vec![AgentIdentity {
             binary: "agent",
@@ -77,20 +98,10 @@ mod workspace_tests {
     /// A one-tab session whose only tab `agent_identity_for_tab` resolves
     /// to the fixture identity by its probed process.
     fn agent_session() -> WorkspaceModel {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
         session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
-        WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        }
+        model_of(session)
     }
 
     /// Damage carrying one changed cell — the smallest thing that still
@@ -155,14 +166,7 @@ mod workspace_tests {
         // would resume, not where the user is. Drawing the dot from that
         // alone gave the sidebar one "this is the agent you are talking to"
         // per open space.
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
         session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
         session.create_space(
@@ -176,10 +180,7 @@ mod workspace_tests {
         );
         session.workspace.spaces[1].tabs[0].label = "Agent".into();
         session.workspace.spaces[1].tabs[0].pane.process = "agent".into();
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
 
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         let mut hits = Vec::new();
@@ -293,14 +294,7 @@ mod workspace_tests {
     /// the shell the space was born with. Returns the model and the two
     /// agent tabs, in creation order.
     fn two_agents_with_shells() -> (WorkspaceModel, TabId, TabId) {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/repo".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/repo", uze_terminal::SpaceKind::Worktree);
         let space = session.workspace.selected_space;
         let agent = |session: &mut Session, label: &str, cwd: &str| {
             let pane = session.add_tab(space, label.into(), None, 80, 24, cwd.into());
@@ -320,10 +314,7 @@ mod workspace_tests {
         };
         let first = agent(&mut session, "Agent one", "/repo/.worktrees/a");
         let second = agent(&mut session, "Agent two", "/repo/.worktrees/b");
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
         (model, first, second)
     }
 
@@ -752,14 +743,7 @@ mod workspace_tests {
     /// back where it was".
     #[test]
     fn dragging_the_first_agent_onto_the_seconds_own_label_row_reorders_it() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/repo".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/repo", uze_terminal::SpaceKind::Worktree);
         let space = session.workspace.selected_space;
         let mut agent_ids = Vec::new();
         for (label, cwd) in [
@@ -772,10 +756,7 @@ mod workspace_tests {
             session.update_pane_status(pane, cwd.into(), "agent".into());
             agent_ids.push(session.selected_space().selected_tab);
         }
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
         let layout = full_frame(&mut model);
         let dragged = agent_ids[0];
 
@@ -1769,24 +1750,14 @@ mod workspace_tests {
     /// `claude` (the space's context agent, selected) and `agent 2` running
     /// `codex`, both in the space's own root.
     fn workspace_space_session() -> WorkspaceModel {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/repo".into(),
-                kind: uze_terminal::SpaceKind::Workspace,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/repo", uze_terminal::SpaceKind::Workspace);
         let space = session.workspace.selected_space;
         let first = session.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
         session.update_pane_status(first, "/repo".into(), "claude".into());
         let second = session.add_tab(space, "agent 2".into(), None, 80, 24, "/repo".into());
         session.update_pane_status(second, "/repo".into(), "codex".into());
         session.workspace.spaces[0].selected_tab = TabId(3);
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
         model
             .remembered
             .branches
@@ -1946,18 +1917,8 @@ mod workspace_tests {
 
     #[test]
     fn an_empty_workspace_space_draws_its_root_as_a_caption() {
-        let session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/repo".into(),
-                kind: uze_terminal::SpaceKind::Workspace,
-            },
-            80,
-            24,
-        );
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let session = session("/repo", uze_terminal::SpaceKind::Workspace);
+        let model = model_of(session);
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert!(
             rows.iter()
@@ -3157,22 +3118,12 @@ mod workspace_tests {
     }
 
     fn agent_session_in(cwd: &str) -> WorkspaceModel {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/repo".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/repo", uze_terminal::SpaceKind::Worktree);
         let tab = &mut session.workspace.spaces[0].tabs[0];
         tab.label = "Agent".into();
         tab.pane.process = "agent".into();
         tab.pane.cwd = cwd.into();
-        WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        }
+        model_of(session)
     }
 
     /// Two agents in one space, the first of them selected: `Agent` in
@@ -3204,17 +3155,7 @@ mod workspace_tests {
     /// A session whose one space is rooted at `root` — a real directory,
     /// so the picker and the client compare the same canonical path.
     fn session_rooted_at(root: &Path) -> WorkspaceModel {
-        WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: root.to_path_buf(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
-            ..WorkspaceModel::default()
-        }
+        model_of(session(root, uze_terminal::SpaceKind::Worktree))
     }
 
     /// A one-agent session in `/repo` whose checkout's history is
@@ -4603,14 +4544,7 @@ mod workspace_tests {
     /// merely out of view.
     #[test]
     fn the_space_tree_scrolls_to_what_the_column_cannot_show() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
         session.workspace.spaces[0].tabs[0].pane.process = "agent".into();
         for index in 1..8 {
@@ -4626,10 +4560,7 @@ mod workspace_tests {
             session.workspace.spaces[index].tabs[0].label = "Agent".into();
             session.workspace.spaces[index].tabs[0].pane.process = "agent".into();
         }
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
 
         let Sidebar { rows, metrics, .. } = sidebar(&model, &identities_fixture());
         assert!(metrics.tree_overflow > 0, "the tree outgrows the column");
@@ -5432,17 +5363,7 @@ mod workspace_tests {
 
     #[test]
     fn a_shell_pane_never_receives_agent_activity() {
-        let mut model = WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: "/tmp".into(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session("/tmp", uze_terminal::SpaceKind::Worktree));
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         animate(&mut model, PaneId(1), Instant::now());
         assert!(model.remembered.agent_activity.is_empty());
@@ -5450,14 +5371,7 @@ mod workspace_tests {
 
     #[test]
     fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -5469,10 +5383,7 @@ mod workspace_tests {
         session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
         assert_eq!(
@@ -5493,14 +5404,7 @@ mod workspace_tests {
         // switch, a restored selection — the check has to go once they are
         // looking at it. Clearing it only at the call sites that happened to
         // know about it is what made "done" survive on a tab already open.
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -5512,10 +5416,7 @@ mod workspace_tests {
         session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
         assert_eq!(
@@ -5535,14 +5436,7 @@ mod workspace_tests {
 
     #[test]
     fn a_closed_tab_leaves_no_status_behind_for_the_next_pane() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
@@ -5554,10 +5448,7 @@ mod workspace_tests {
         session.update_pane_status(agent_pane, "/tmp".into(), "agent".into());
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
-        let mut model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         model.note_pane_input(agent_pane);
 
@@ -5710,18 +5601,8 @@ mod workspace_tests {
 
     #[test]
     fn new_agent_labels_are_numbered_independently_of_harnesses() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
-        let model = WorkspaceModel {
-            session: Some(session.clone()),
-            ..WorkspaceModel::default()
-        };
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
+        let model = model_of(session.clone());
         assert_eq!(next_agent_label(&model), "agent 1");
 
         session.add_tab(
@@ -5732,30 +5613,17 @@ mod workspace_tests {
             24,
             "/tmp".into(),
         );
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
         assert_eq!(next_agent_label(&model), "agent 2");
     }
 
     #[test]
     fn a_lone_agent_can_close_when_it_is_replaced_by_a_shell() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         session.workspace.spaces[0].tabs[0].label = "Claude Code".into();
         session.workspace.spaces[0].tabs[0].pane.process = "claude".into();
         let tab = session.workspace.spaces[0].selected_tab;
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
 
         assert!(tab_needs_replacement_shell(&model, &identities(), tab));
         assert!(can_close_tab_from_menu(&model, &identities(), tab));
@@ -5763,19 +5631,9 @@ mod workspace_tests {
 
     #[test]
     fn a_lone_plain_shell_stays_non_closable() {
-        let session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let session = session("/tmp", uze_terminal::SpaceKind::Worktree);
         let tab = session.workspace.spaces[0].selected_tab;
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
 
         assert!(!tab_needs_replacement_shell(&model, &identities(), tab));
         assert!(!can_close_tab_from_menu(&model, &identities(), tab));
@@ -5789,19 +5647,9 @@ mod workspace_tests {
 
     #[test]
     fn new_tabs_use_the_selected_panes_live_directory() {
-        let mut session = Session::new(
-            uze_terminal::SpaceSeat {
-                root: "/tmp/root".into(),
-                kind: uze_terminal::SpaceKind::Worktree,
-            },
-            80,
-            24,
-        );
+        let mut session = session("/tmp/root", uze_terminal::SpaceKind::Worktree);
         assert!(session.update_pane_status(PaneId(1), "/tmp/project/src".into(), "zsh".into()));
-        let model = WorkspaceModel {
-            session: Some(session),
-            ..WorkspaceModel::default()
-        };
+        let model = model_of(session);
 
         assert_eq!(selected_pane_cwd(&model), Some("/tmp/project/src".into()));
     }
@@ -5858,14 +5706,7 @@ mod workspace_tests {
         let mut plain = blank_pane(PaneId(1), 80, 24);
         plain.bracketed_paste = false;
         let plain_model = WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: "/tmp".into(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
+            session: Some(session("/tmp", uze_terminal::SpaceKind::Worktree)),
             panes: [(PaneId(1), plain)].into(),
             ..WorkspaceModel::default()
         };
@@ -5876,14 +5717,7 @@ mod workspace_tests {
         let mut bracketed = blank_pane(PaneId(1), 80, 24);
         bracketed.bracketed_paste = true;
         let bracketed_model = WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: "/tmp".into(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
+            session: Some(session("/tmp", uze_terminal::SpaceKind::Worktree)),
             panes: [(PaneId(1), bracketed)].into(),
             ..WorkspaceModel::default()
         };
@@ -5900,14 +5734,7 @@ mod workspace_tests {
         let mut pane = blank_pane(PaneId(1), 80, 24);
         pane.alternate_screen = true;
         let model = WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: "/tmp".into(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
+            session: Some(session("/tmp", uze_terminal::SpaceKind::Worktree)),
             panes: [(PaneId(1), pane)].into(),
             ..WorkspaceModel::default()
         };
@@ -5924,14 +5751,7 @@ mod workspace_tests {
     #[test]
     fn scroll_uses_terminal_scrollback_for_a_normal_screen_without_mouse_reporting() {
         let model = WorkspaceModel {
-            session: Some(Session::new(
-                uze_terminal::SpaceSeat {
-                    root: "/tmp".into(),
-                    kind: uze_terminal::SpaceKind::Worktree,
-                },
-                80,
-                24,
-            )),
+            session: Some(session("/tmp", uze_terminal::SpaceKind::Worktree)),
             panes: [(PaneId(1), blank_pane(PaneId(1), 80, 24))].into(),
             ..WorkspaceModel::default()
         };
