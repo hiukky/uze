@@ -334,35 +334,6 @@ pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
     crate::persistence::write_atomic(&path, yaml.as_bytes())
 }
 
-/// Parses `plugin@marketplace` shorthand. Marketplace is required.
-pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
-    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
-        UzeError::InvalidPluginSpec(format!("`{spec}` must be `name@marketplace`"))
-    })?;
-    if plugin.is_empty() || marketplace.is_empty() {
-        return Err(UzeError::InvalidPluginSpec(format!(
-            "`{spec}` must be `name@marketplace` with non-empty parts"
-        )));
-    }
-    // Validate charset similar to PackageId but allow same set.
-    for c in plugin.chars() {
-        if !(c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(UzeError::InvalidPackageName {
-                path: PathBuf::from("agents.lock"),
-                name: plugin.to_owned(),
-            });
-        }
-    }
-    for c in marketplace.chars() {
-        if !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
-            return Err(UzeError::InvalidPluginSpec(format!(
-                "invalid marketplace name `{marketplace}`"
-            )));
-        }
-    }
-    Ok((plugin.to_owned(), marketplace.to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,16 +448,6 @@ mod tests {
         let written = fs::read_to_string(lock_path_for(&root)).unwrap();
         fs::remove_dir_all(&root).ok();
         assert!(written.ends_with('\n'), "{written:?}");
-    }
-
-    #[test]
-    fn parse_plugin_marketplace_requires_at() {
-        assert!(parse_plugin_marketplace_spec("flow").is_err());
-        assert!(parse_plugin_marketplace_spec("flow@").is_err());
-        assert!(parse_plugin_marketplace_spec("@ai").is_err());
-        let (p, m) = parse_plugin_marketplace_spec("flow@ai").unwrap();
-        assert_eq!(p, "flow");
-        assert_eq!(m, "ai");
     }
 
     /// The whole file, spelled out. This is the contract, so it is asserted

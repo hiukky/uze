@@ -33,11 +33,11 @@ pub use uze_core::{
         Autonomy, AxisPlan, KeyPlan, ModelPreference, PlannedValue, PreferenceApplyOutcome,
         PreferenceAxis, PreferencePlan, Preferences, SandboxScope,
     },
-    project_lock::parse_plugin_marketplace_spec,
     prompt_history::{PromptAge, PromptClock, PromptEntry, PromptOrigin},
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,
+    store::parse_plugin_marketplace_spec,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
     worktree::{

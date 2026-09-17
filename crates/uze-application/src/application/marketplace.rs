@@ -115,8 +115,7 @@ impl Marketplace<'_> {
         authority: &dyn TrustAuthority,
         name_authority: &dyn uze_core::naming::NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let (plugin_name, marketplace_name) =
-            uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
+        let (plugin_name, marketplace_name) = uze_core::store::parse_plugin_marketplace_spec(spec)?;
         if marketplace_name == "uze-official" {
             return self.install_from_resolving(&plugin_name, authority, name_authority);
         }

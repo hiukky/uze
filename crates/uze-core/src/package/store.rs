@@ -186,6 +186,23 @@ fn is_valid_name_component(value: &str) -> bool {
         })
 }
 
+/// Parses the `plugin@marketplace` spelling an operator types. Both halves
+/// are required and held to the same rule a [`PackageId`] is.
+pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
+    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
+        UzeError::InvalidPluginSpec(format!("`{spec}` must be `name@marketplace`"))
+    })?;
+    for part in [plugin, marketplace] {
+        if !is_valid_name_component(part) {
+            return Err(UzeError::InvalidPluginSpec(format!(
+                "`{spec}` must be `name@marketplace`, and `{part}` is not a valid name: \
+                 letters, digits, `-` and `_`, not starting with `-`"
+            )));
+        }
+    }
+    Ok((plugin.to_owned(), marketplace.to_owned()))
+}
+
 /// Whether `value` is a valid qualified `name@marketplace` package id — the
 /// same rule the constructors and the ledger deserializer enforce. Public so
 /// integrations can re-check an id that arrives from state (a receipt's
@@ -797,6 +814,18 @@ mod tests {
             Err(UzeError::UnsafePathReference { .. })
         ));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_plugin_spec_requires_both_valid_halves() {
+        assert!(parse_plugin_marketplace_spec("flow").is_err());
+        assert!(parse_plugin_marketplace_spec("flow@").is_err());
+        assert!(parse_plugin_marketplace_spec("@ai").is_err());
+        assert!(parse_plugin_marketplace_spec("fl/ow@ai").is_err());
+        assert!(parse_plugin_marketplace_spec("flow@-ai").is_err());
+        let (plugin, marketplace) = parse_plugin_marketplace_spec("flow@ai").unwrap();
+        assert_eq!(plugin, "flow");
+        assert_eq!(marketplace, "ai");
     }
 
     #[test]
