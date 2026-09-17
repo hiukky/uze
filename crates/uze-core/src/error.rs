@@ -245,9 +245,7 @@ pub enum UzeError {
         "a managed text region's content differs from what was requested; user content at {0} was preserved"
     )]
     ManagedRegionDrift(PathBuf),
-    #[error(
-        "a managed text region's markers are duplicated, out of order, or only half present at {0}"
-    )]
+    #[error("{markers} at {0}", markers = crate::text_region::MALFORMED_MARKERS)]
     ManagedRegionConflict(PathBuf),
     #[error(
         "managed text region identity `{0}` contains characters outside the safe marker charset"

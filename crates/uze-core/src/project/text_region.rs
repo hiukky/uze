@@ -30,6 +30,11 @@ use crate::{
     persistence::write_atomic,
 };
 
+/// Why a region whose markers are duplicated, out of order, or only half
+/// present is refused.
+pub const MALFORMED_MARKERS: &str =
+    "managed text region markers are duplicated, out of order, or only half present";
+
 /// Characters a region identity may contain. Deliberately narrow: an
 /// identity built from these characters can never itself be mistaken for
 /// marker syntax, so a whole-line-equality parser is sufficient without
@@ -236,10 +241,7 @@ pub fn inspect(
             state: AttachmentState::Missing,
             reason: "managed text region markers are absent".to_owned(),
         },
-        Scan::Malformed => blocked(
-            "managed text region markers are duplicated, out of order, or only half present"
-                .to_owned(),
-        ),
+        Scan::Malformed => blocked(MALFORMED_MARKERS.to_owned()),
         Scan::WellFormed { begin, end } => {
             let current = joined_text(&lines[begin + 1..end]);
             let expected = content_lines(expected_content).join("\n");
@@ -432,10 +434,7 @@ pub fn remove_unconditionally(
             state: AttachmentState::Missing,
             reason: "managed text region markers are absent".to_owned(),
         }),
-        RegionShape::Malformed => Ok(blocked(
-            "managed text region markers are duplicated, out of order, or only half present"
-                .to_owned(),
-        )),
+        RegionShape::Malformed => Ok(blocked(MALFORMED_MARKERS)),
         RegionShape::WellFormed => {
             let (begin_marker, end_marker) = markers(region_identity);
             // Absence and validity were already established by
@@ -457,6 +456,88 @@ pub fn remove_unconditionally(
             })
         }
     }
+}
+
+/// One desired region after [`converge`]: its inspection, and the write
+/// failure behind it when the region could not be created at all — which
+/// the inspection alone cannot tell apart from a region nobody has created
+/// yet, since both read `Missing`.
+#[derive(Clone, Debug)]
+pub struct DesiredRegion {
+    pub identity: String,
+    pub inspection: AttachmentInspection,
+    pub write_failure: Option<String>,
+}
+
+/// What [`converge`] did to the regions one owner claims in a file.
+#[derive(Clone, Debug, Default)]
+pub struct RegionConvergence {
+    /// One entry per desired region, in the order given.
+    pub desired: Vec<DesiredRegion>,
+    /// Owned regions no longer desired, removed.
+    pub removed: Vec<String>,
+    /// Owned regions no longer desired that could not be removed, and why.
+    pub blocked: Vec<(String, String)>,
+}
+
+/// The regions `owns` claims in `target_file` that none of
+/// `desired_identities` names — what an earlier state of the owner left
+/// behind. Claimed by identity shape, never by content. Deduplicated and
+/// sorted.
+pub fn stale_regions<'a>(
+    target_file: &Path,
+    owns: impl Fn(&str) -> bool,
+    desired_identities: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let desired: std::collections::BTreeSet<&str> = desired_identities.into_iter().collect();
+    region_identities_present(target_file)
+        .into_iter()
+        .filter(|identity| owns(identity) && !desired.contains(identity.as_str()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Brings the regions one owner claims in `target_file` to exactly
+/// `desired` — `(identity, content)` pairs: every stale owned region is
+/// removed first, so the file never briefly carries an old and a new
+/// statement together, then each desired region is created when missing.
+/// Drift and malformed markers are reported, never overwritten or guessed
+/// at. Removal is structural (see [`remove_unconditionally`]).
+pub fn converge(
+    target_file: &Path,
+    owns: impl Fn(&str) -> bool,
+    desired: &[(String, String)],
+) -> RegionConvergence {
+    let mut convergence = RegionConvergence::default();
+    let stale = stale_regions(
+        target_file,
+        owns,
+        desired.iter().map(|(identity, _)| identity.as_str()),
+    );
+    for identity in stale {
+        match remove_unconditionally(target_file, &identity) {
+            Ok(inspection) if inspection.state == AttachmentState::Missing => {
+                convergence.removed.push(identity);
+            }
+            Ok(inspection) => convergence.blocked.push((identity, inspection.reason)),
+            Err(error) => convergence.blocked.push((identity, error.to_string())),
+        }
+    }
+    for (identity, content) in desired {
+        let write_failure = match attach(target_file, identity, content) {
+            Ok(()) | Err(UzeError::ManagedRegionDrift(_) | UzeError::ManagedRegionConflict(_)) => {
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        convergence.desired.push(DesiredRegion {
+            identity: identity.clone(),
+            inspection: inspect(target_file, identity, content),
+            write_failure,
+        });
+    }
+    convergence
 }
 
 /// The `region_identity` of every well-formed managed region currently in

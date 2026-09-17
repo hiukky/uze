@@ -1515,7 +1515,7 @@ impl IntegrationPort for ForeignFailingIntegration {
         // any other package should succeed so per-package resilience can be
         // observed (the same shape as the real Antigravity preflight which
         // only blocks the conflicting name).
-        if resource.package_id.as_str() == "uze" {
+        if resource.package_id.as_str().eq("uze") {
             return Ok(None);
         }
         let path = self.root.join(resource.name());

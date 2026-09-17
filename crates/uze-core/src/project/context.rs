@@ -8,17 +8,15 @@
 //! is a separate, explicit concern layered on top (see
 //! `uze-application`'s context orchestration).
 //!
-//! `uze add`/`uze remove` never call anything here: package installation
-//! stays global and project-independent. Reconciling a project's shared
-//! instructions file is its own explicit, re-runnable operation that takes
-//! a project root as ordinary input, not a persisted concept.
+//! Package installation itself stays global and project-independent:
+//! reconciling a project's shared instructions file is its own re-runnable
+//! operation that takes a project root as ordinary input.
 
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::{
-    error::UzeError,
     integration::{AttachmentInspection, AttachmentState},
     store::PackageId,
     text_region,
@@ -78,10 +76,14 @@ impl AgentsMdReconciliation {
     /// least one well-formed contribution — the exact question a bridge's
     /// own reconciliation needs answered.
     pub fn has_any_matched_contribution(&self) -> bool {
-        self.packages
-            .iter()
-            .any(|(_, inspection)| inspection.state == crate::integration::AttachmentState::Matched)
+        any_matched(&self.packages)
     }
+}
+
+fn any_matched(packages: &[(PackageId, AttachmentInspection)]) -> bool {
+    packages
+        .iter()
+        .any(|(_, inspection)| inspection.state == AttachmentState::Matched)
 }
 
 /// A region identity this module created but that no longer corresponds to
@@ -112,9 +114,7 @@ pub struct AgentsMdObservation {
 
 impl AgentsMdObservation {
     pub fn has_any_matched_contribution(&self) -> bool {
-        self.packages
-            .iter()
-            .any(|(_, inspection)| inspection.state == AttachmentState::Matched)
+        any_matched(&self.packages)
     }
 }
 
@@ -140,27 +140,18 @@ pub fn inspect_agents_md(
             .push((contribution.package_id.clone(), inspection));
     }
 
-    // Deduplicated: a malformed, duplicated marker for one identity makes
-    // `region_identities_present` return that same identity once per
-    // occurrence — this loop must still evaluate and report it exactly
-    // once, not once per stray marker line.
-    let present_identities: std::collections::BTreeSet<String> =
-        text_region::region_identities_present(agents_md)
-            .into_iter()
-            .collect();
-    for present in present_identities {
-        if !is_our_orphan_shape(&present) || expected_identities.contains(&present) {
-            continue;
-        }
+    let stale = text_region::stale_regions(
+        agents_md,
+        is_our_orphan_shape,
+        expected_identities.iter().map(String::as_str),
+    );
+    for present in stale {
         match text_region::region_shape(agents_md, &present) {
             text_region::RegionShape::WellFormed => observation.orphaned_regions.push(present),
             text_region::RegionShape::Malformed => observation.malformed_regions.push(present),
-            text_region::RegionShape::Absent => {
-                // Listed by `region_identities_present` a moment ago, gone
-                // now — a benign race with something else touching the file
-                // between the two reads. Nothing to report; the next
-                // observation will see whatever is actually there.
-            }
+            // Listed a moment ago, gone now — a benign race with something
+            // else touching the file between the two reads.
+            text_region::RegionShape::Absent => {}
         }
     }
 
@@ -179,51 +170,31 @@ pub fn reconcile_agents_md(
     agents_md: &Path,
     contributions: &[InstructionContribution],
 ) -> AgentsMdReconciliation {
-    let mut failed = Vec::new();
-    for contribution in contributions {
-        let identity = region_identity_for(&contribution.package_id);
-        // Drift and malformed markers are refusals by design, and the
-        // observation below names them per package; anything else is a
-        // write that did not happen, which nothing else can report.
-        match text_region::attach(agents_md, &identity, &contribution.content) {
-            Ok(()) => {}
-            Err(UzeError::ManagedRegionDrift(_) | UzeError::ManagedRegionConflict(_)) => {}
-            Err(error) => failed.push((contribution.package_id.clone(), error.to_string())),
-        }
-    }
-
-    // The attach pass above only ever creates a *missing* region or leaves
-    // an already-matched one untouched (see `text_region::attach`); it never
-    // silently resolves drift. Re-observing afterwards is therefore always
-    // an accurate account of the result, not a second, competing diff.
-    let observation = inspect_agents_md(agents_md, contributions);
+    let desired: Vec<(String, String)> = contributions
+        .iter()
+        .map(|contribution| {
+            (
+                region_identity_for(&contribution.package_id),
+                contribution.content.clone(),
+            )
+        })
+        .collect();
+    let convergence = text_region::converge(agents_md, is_our_orphan_shape, &desired);
     let mut report = AgentsMdReconciliation {
-        packages: observation.packages,
-        removed_orphans: Vec::new(),
-        failed,
-        blocked_orphans: observation
-            .malformed_regions
-            .into_iter()
-            .map(|identity| {
-                (
-                    identity,
-                    "managed text region markers are duplicated, out of order, or only half present"
-                        .to_owned(),
-                )
-            })
-            .collect(),
+        removed_orphans: convergence.removed,
+        blocked_orphans: convergence.blocked,
+        ..AgentsMdReconciliation::default()
     };
-
-    for identity in observation.orphaned_regions {
-        match text_region::remove_unconditionally(agents_md, &identity) {
-            Ok(inspection) if inspection.state == AttachmentState::Missing => {
-                report.removed_orphans.push(identity);
-            }
-            Ok(inspection) => report.blocked_orphans.push((identity, inspection.reason)),
-            Err(error) => report.blocked_orphans.push((identity, error.to_string())),
+    for (contribution, region) in contributions.iter().zip(convergence.desired) {
+        if let Some(failure) = region.write_failure {
+            report
+                .failed
+                .push((contribution.package_id.clone(), failure));
         }
+        report
+            .packages
+            .push((contribution.package_id.clone(), region.inspection));
     }
-
     report
 }
 
@@ -324,14 +295,9 @@ pub fn plan_agents_md(agents_md: &Path, contributions: &[InstructionContribution
                 observation
                     .malformed_regions
                     .into_iter()
-                    .map(|region_identity| {
-                        OrphanPlan {
-                action: PlannedAction::Blocked(
-                    "managed text region markers are duplicated, out of order, or only half present"
-                        .to_owned(),
-                ),
-                region_identity,
-            }
+                    .map(|region_identity| OrphanPlan {
+                        action: PlannedAction::Blocked(text_region::MALFORMED_MARKERS.to_owned()),
+                        region_identity,
                     }),
             )
             .collect(),

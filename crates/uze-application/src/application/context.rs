@@ -162,17 +162,15 @@ impl Context<'_> {
         let contributions = self.instruction_contributions()?;
         let agents_md_plan = instruction_context::plan_agents_md(&agents_md, &contributions);
 
-        // Bridge planning needs the same "would AGENTS.md end up with a
-        // matched contribution" question `context_reconcile` asks, computed
-        // the same read-only way: attach-or-not never actually ran here.
-        let observation = instruction_context::inspect_agents_md(&agents_md, &contributions);
+        // Bridge planning asks the question `reconcile` asks — would
+        // AGENTS.md end up with a matched contribution — read from the plan.
         let would_have_contribution = agents_md_plan.contributions.iter().any(|plan| {
             matches!(
                 plan.action,
                 instruction_context::PlannedAction::Attach
                     | instruction_context::PlannedAction::NoChange
             )
-        }) || observation.has_any_matched_contribution();
+        });
 
         let bridges = self
             .0
@@ -238,34 +236,32 @@ impl Context<'_> {
         // ends up carrying, not by what it carried on entry.
         let declared_policy = self.worktree_policy(&canonical)?;
         let worktree_region = declared_policy.as_ref().map(|policy| {
-            // A superseded region goes before the current one is written, so
-            // the file never briefly carries two statements of the same
-            // policy. Removal is structural (`remove_unconditionally`): the
-            // region's content was UZE's to render, and the authored source
-            // it came from is the lock, not the file.
-            let mut removed = Vec::new();
-            let mut blocked = Vec::new();
-            for identity in superseded_policy_regions(&agents_md, policy) {
-                match text_region::remove_unconditionally(&agents_md, &identity) {
-                    Ok(inspection) if inspection.state == AttachmentState::Missing => {
-                        removed.push(identity);
-                    }
-                    Ok(inspection) => blocked.push((identity, inspection.reason)),
-                    Err(error) => blocked.push((identity, error.to_string())),
-                }
-            }
-            let inspection = text_region::reconcile(
+            let mut convergence = text_region::converge(
                 &agents_md,
-                &policy.region_identity(),
-                &policy.instructions(),
-                true,
+                WorktreePolicy::owns_region,
+                &[(policy.region_identity(), policy.instructions())],
             );
+            let region = convergence
+                .desired
+                .pop()
+                .expect("one desired region yields one outcome");
+            let (state, reason) = match region.write_failure {
+                Some(failure)
+                    if !matches!(
+                        region.inspection.state,
+                        AttachmentState::Blocked | AttachmentState::Drifted
+                    ) =>
+                {
+                    (AttachmentState::Blocked, failure)
+                }
+                _ => (region.inspection.state, region.inspection.reason),
+            };
             WorktreeRegionStatus {
                 file: agents_md.clone(),
-                state: inspection.state,
-                reason: inspection.reason,
-                removed_superseded: removed,
-                blocked_superseded: blocked,
+                state,
+                reason,
+                removed_superseded: convergence.removed,
+                blocked_superseded: convergence.blocked,
             }
         });
 
@@ -447,15 +443,11 @@ fn derive_warnings(
 /// Structural, exactly like `uze_core::context`'s orphan detection: an
 /// identity is claimed by shape, never by comparing rendered content.
 fn superseded_policy_regions(agents_md: &std::path::Path, policy: &WorktreePolicy) -> Vec<String> {
-    let current = policy.region_identity();
-    let mut stale: Vec<String> = text_region::region_identities_present(agents_md)
-        .into_iter()
-        .filter(|identity| WorktreePolicy::owns_region(identity) && *identity != current)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    stale.sort();
-    stale
+    text_region::stale_regions(
+        agents_md,
+        WorktreePolicy::owns_region,
+        [policy.region_identity().as_str()],
+    )
 }
 
 /// The action a managed region needs to reach its desired presence. Shared
