@@ -8,7 +8,7 @@ pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
     DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind, Reconciliation, ReleasedTask,
-    RootProfile, TaskStateView, TaskView, TenantView, UpstreamSync, root_profile,
+    RootProfile, TaskStateView, TaskView, UpstreamSync, root_profile,
 };
 
 /// Types the read models above are made of. Presentation consumes these

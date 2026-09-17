@@ -30,7 +30,7 @@ use std::{
 use uze_application::AgentIdentity;
 use uze_application::{
     CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
-    TenantView, UpstreamSync,
+    UpstreamSync,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -387,28 +387,19 @@ fn spawn_task_evaluation(
         // key, and the directory is then never evaluated again.
         let answered = answered_or(
             || {
-                tui_application(home).ok().map(|app| {
+                tui_application(home).ok().and_then(|app| {
                     let workspace = app.workspace();
-                    // Every question here is about the *repository*, and `cwd` is
-                    // only how the caller happened to name it — usually a pane's
-                    // directory. Once that directory is removed it names nothing:
-                    // `primary_of` asks Git and `evaluate_tasks` opens the
-                    // repository, so both answered empty, and the client kept the
-                    // task view it already had — one that still believed it had a
-                    // checkout, which is the single thing the way back in is gated
-                    // on. The slot key is the same repository, derived lexically
-                    // before this thread started and already what every other
-                    // lookup below asks with; the three that took `cwd` now take
-                    // the repository too.
-                    // A directory that is no repository still answers: it
-                    // has no tasks, but it may well have tenants.
-                    let primary = workspace
-                        .primary_of(&cwd)
-                        .or_else(|| {
-                            uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
-                        })
-                        .unwrap_or_else(|| key.clone());
-                    EvaluationAnswer {
+                    // Every question here is about the *repository*, and `cwd`
+                    // is only how the caller named it. A slot removed from
+                    // under its pane names nothing Git can answer for, so
+                    // the repository is the slot's key, derived lexically
+                    // before this thread started — otherwise the client
+                    // keeps a view that still believes the task has its
+                    // checkout, which is what the way back in is gated on.
+                    let primary = workspace.primary_of(&cwd).or_else(|| {
+                        uze_application::is_isolated_checkout(&cwd).then(|| key.clone())
+                    })?;
+                    Some(EvaluationAnswer {
                         branch: workspace.current_branch(&key),
                         target: workspace
                             .delivery_policy(&key)
@@ -416,7 +407,7 @@ fn spawn_task_evaluation(
                         sync: workspace.target_upstream_sync(&key),
                         evaluation: workspace.evaluate_tasks(&primary, &occupied),
                         primary,
-                    }
+                    })
                 })
             },
             None,
@@ -1970,7 +1961,6 @@ struct Remembered {
     git_pending: Option<PathBuf>,
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
-    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
     branches: BTreeMap<PathBuf, String>,
     targets: BTreeMap<PathBuf, String>,
     upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
@@ -2007,7 +1997,6 @@ impl WorkspaceModel {
             git_pending,
             prompt_buffers,
             tasks,
-            tenants,
             branches,
             targets,
             upstream_syncs,
@@ -2035,7 +2024,6 @@ impl WorkspaceModel {
             git_pending,
             prompt_buffers,
             tasks,
-            tenants,
             branches,
             targets,
             upstream_syncs,
@@ -2068,7 +2056,6 @@ impl WorkspaceModel {
             git_pending: self.git_pending,
             prompt_buffers: self.prompt_buffers,
             tasks: self.tasks,
-            tenants: self.tenants,
             branches: self.branches,
             targets: self.targets,
             upstream_syncs: self.upstream_syncs,
@@ -2237,9 +2224,6 @@ struct WorkspaceModel {
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
-    /// The live tenants of each space root, from the same evaluation that
-    /// lists a repository's tasks.
-    tenants: BTreeMap<PathBuf, Vec<TenantView>>,
     /// The branch checked out at each evaluation key (see
     /// [`evaluation_key`]) — the primary's for every slot of a repository,
     /// a directory's own outside any slot. Read for an agent outside any

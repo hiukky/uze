@@ -217,9 +217,6 @@ mod workspace_tests {
             branch: "agent/t1".into(),
             target: "main".into(),
             checkout: Some(PathBuf::from(checkout)),
-            checkout_id: Path::new(checkout)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned()),
             state,
             completion: CompletionBehavior::Merge,
             ahead,
@@ -2544,7 +2541,6 @@ mod workspace_tests {
 
         let mut orphaned = model.tasks[Path::new("/repo")][0].clone();
         orphaned.checkout = None;
-        orphaned.checkout_id = None;
         orphaned.state = TaskStateView::Parked;
         model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
         model.lost_checkouts.insert(pane);
@@ -2731,7 +2727,6 @@ mod workspace_tests {
         model.lost_checkouts.insert(pane);
         let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Parked, 2);
         parked.checkout = None;
-        parked.checkout_id = None;
         model
             .tasks
             .insert(PathBuf::from("/repo"), vec![parked.clone()]);
@@ -6290,7 +6285,6 @@ mod workspace_tests {
         task.id = id.to_owned();
         task.branch = branch.to_owned();
         task.checkout = None;
-        task.checkout_id = None;
         task
     }
 

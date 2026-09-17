@@ -563,12 +563,8 @@ impl Workspace<'_> {
     /// returns to the owning agent as a notice for its pane.
     #[tracing::instrument(name = "workspace.evaluate_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
-        let tenants = self.tenants(cwd);
         let Some((primary, policy)) = self.repository_context(cwd) else {
-            return Evaluation {
-                tenants,
-                ..Evaluation::default()
-            };
+            return Evaluation::default();
         };
         let target = target_of(&primary, &policy);
         let mut notices = Vec::new();
@@ -728,14 +724,12 @@ impl Workspace<'_> {
             Err(error) => {
                 return Evaluation {
                     unreadable: Some(error.to_string()),
-                    tenants,
                     ..Evaluation::default()
                 };
             }
         };
         let mut evaluation = Evaluation {
             tasks,
-            tenants,
             notices,
             unreadable: None,
         };
@@ -975,47 +969,23 @@ impl Workspace<'_> {
             if worktree::isolated_checkout(root).is_some() || !roots.insert(canonical(root)) {
                 continue;
             }
-            let ended = self.end_abandoned_tenants(root, echoed);
-            if !ended.is_empty() {
+            if !self.end_abandoned_tenants(root, echoed).is_empty() {
                 reconciliation.changed.push(root.clone());
-                reconciliation.ended_tenants.extend(ended);
             }
         }
         reconciliation
     }
 
     /// Records an agent launched into `root` itself — the space's own
-    /// directory, on whatever branch it is on — and answers its record.
-    /// No repository is needed: a tenant is keyed by the directory it works
-    /// in, which is every directory.
-    #[tracing::instrument(name = "workspace.place_tenant", skip_all, fields(root = %root.display(), harness), err)]
-    pub fn place_tenant(&self, root: &Path, harness: &str) -> Result<TenantView> {
-        self.record_tenant(&canonical(root), harness)
-            .map(|tenant| TenantView::from(&tenant))
-    }
-
+    /// directory, on whatever branch it is on. No repository is needed: a
+    /// tenant is keyed by the directory it works in, which is every
+    /// directory.
     fn record_tenant(&self, root: &Path, harness: &str) -> Result<Tenant> {
         task::locked(&self.0.home, root, |store| {
             let tenant = Tenant::new(harness, root);
             store.upsert_tenant(tenant.clone());
             Ok(tenant)
         })
-    }
-
-    /// The live tenants of `root`.
-    #[tracing::instrument(name = "workspace.tenants", skip_all, fields(root = %root.display()))]
-    pub fn tenants(&self, root: &Path) -> Vec<TenantView> {
-        let root = canonical(root);
-        task::load(&self.0.home, &root)
-            .map(|store| {
-                store
-                    .tenants
-                    .iter()
-                    .filter(|tenant| tenant.is_live())
-                    .map(TenantView::from)
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Ends every live tenant of `root` that no live tab was launched for,
@@ -1341,30 +1311,6 @@ pub struct Reconciliation {
     /// Empty is the ordinary answer.
     pub changed: Vec<PathBuf>,
     pub released: Vec<ReleasedTask>,
-    /// The tenants no live tab was launched for any more, by identifier.
-    pub ended_tenants: Vec<String>,
-}
-
-/// One tenant of a space's directory, as the sidebar lists it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TenantView {
-    pub id: String,
-    pub harness: String,
-    pub root: PathBuf,
-    pub created_at_unix: u64,
-    pub live: bool,
-}
-
-impl From<&Tenant> for TenantView {
-    fn from(tenant: &Tenant) -> Self {
-        Self {
-            id: tenant.id.as_str().to_owned(),
-            harness: tenant.harness.clone(),
-            root: tenant.root.clone(),
-            created_at_unix: tenant.created_at_unix,
-            live: tenant.is_live(),
-        }
-    }
 }
 
 /// The canonical spelling of a directory: the key every record of it is
@@ -1455,10 +1401,6 @@ pub struct TaskView {
     pub target: String,
     /// The slot's directory, when the task has one on disk.
     pub checkout: Option<PathBuf>,
-    /// The slot the task was given, whether or not its directory still
-    /// exists — what ties a pane standing in a removed checkout back to
-    /// the task it was running.
-    pub checkout_id: Option<String>,
     pub state: TaskStateView,
     /// What delivering this task does — the project's own say, carried on
     /// the task so a surface offering the delivery can name its ending
@@ -1506,10 +1448,6 @@ impl TaskView {
             branch: task.branch.clone(),
             target: task.target.clone(),
             checkout: landing::slot_path(primary, task),
-            checkout_id: task
-                .checkout
-                .as_ref()
-                .map(|checkout| checkout.as_str().to_owned()),
             state: drawn_state(primary, task, unsynced),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
@@ -1646,10 +1584,6 @@ pub struct AgentNotice {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Evaluation {
     pub tasks: Vec<TaskView>,
-    /// The live tenants of the directory the evaluation was asked for.
-    /// Present whether or not the directory is a repository: tenancy needs
-    /// none.
-    pub tenants: Vec<TenantView>,
     pub notices: Vec<AgentNotice>,
     /// Why the repository's recorded tasks could not be read, when they
     /// could not be.
@@ -2068,11 +2002,10 @@ mod placement_tests {
         let Placement::Tenant { id } = &placed.placement else {
             panic!("{placed:?}");
         };
-        let tenants = app.workspace().tenants(&outside);
+        let tenants = live_tenants(&app, &outside);
         assert_eq!(tenants.len(), 1);
-        assert_eq!(tenants[0].id, id.as_str());
+        assert_eq!(&tenants[0].id, id);
         assert_eq!(tenants[0].harness, "claude-code");
-        assert!(tenants[0].live);
         std::fs::remove_dir_all(outside).unwrap();
     }
 
@@ -2104,7 +2037,18 @@ mod placement_tests {
             app.workspace().tasks(&root).is_empty(),
             "a tenant is not a task"
         );
-        assert_eq!(app.workspace().tenants(&root).len(), 2);
+        assert_eq!(live_tenants(&app, &root).len(), 2);
+    }
+
+    /// The live tenants the store records for `root`, read the way every
+    /// other reader of the store reads them.
+    fn live_tenants(app: &UzeApplication, root: &Path) -> Vec<Tenant> {
+        task::load(&app.home, &canonical(root))
+            .unwrap()
+            .tenants
+            .into_iter()
+            .filter(Tenant::is_live)
+            .collect()
     }
 
     /// A tenant ends when no live tab was launched for it, and never while
@@ -2125,13 +2069,13 @@ mod placement_tests {
                 .is_empty(),
             "a tenant a tab still echoes stays live"
         );
-        assert_eq!(app.workspace().tenants(&plain).len(), 1);
+        assert_eq!(live_tenants(&app, &plain).len(), 1);
 
         let ended = app.workspace().end_abandoned_tenants(&plain, &[]);
         assert_eq!(ended, vec![id]);
         assert!(
-            app.workspace().tenants(&plain).is_empty(),
-            "ended tenants are not listed"
+            live_tenants(&app, &plain).is_empty(),
+            "the ending is recorded"
         );
         assert!(
             app.workspace()
@@ -2154,8 +2098,8 @@ mod placement_tests {
         let reconciliation =
             app.workspace()
                 .reconcile_occupancy(std::slice::from_ref(&plain), &[], &[]);
-        assert_eq!(reconciliation.ended_tenants.len(), 1);
-        assert!(app.workspace().tenants(&plain).is_empty());
+        assert_eq!(reconciliation.changed, vec![plain.clone()]);
+        assert!(live_tenants(&app, &plain).is_empty());
         std::fs::remove_dir_all(plain).unwrap();
     }
 
@@ -2228,7 +2172,7 @@ mod placement_tests {
             format!("agent/{}", before.as_str()),
             "it keeps the branch it had"
         );
-        assert_eq!(earlier.checkout_id, None, "the slot is no longer its");
+        assert_eq!(earlier.checkout, None, "the slot is no longer its");
         assert_eq!(earlier.state, TaskStateView::Closed);
     }
 

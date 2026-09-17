@@ -2480,9 +2480,6 @@ impl Attach<'_> {
                 continue;
             }
             self.model.tasks.insert(primary, evaluation.tasks);
-            self.model
-                .tenants
-                .insert(resolution.key.clone(), evaluation.tenants);
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
