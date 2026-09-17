@@ -2852,7 +2852,7 @@ mod tests {
 
     #[test]
     fn damage_since_last_is_sparse_after_a_small_change() {
-        let (damage, _damage_events) = std::sync::mpsc::channel();
+        let (damage, damage_events) = std::sync::mpsc::channel();
         let pane = PaneRuntime::spawn(
             PaneId(9),
             PathBuf::from("/tmp"),
@@ -2868,19 +2868,16 @@ mod tests {
         assert_eq!(baseline.changed.len(), 80 * 24);
 
         pane.write(b"printf uze-diff-probe\\r");
-        let mut probe = pane.damage_since_last();
-        for _ in 0..50 {
-            if probe
-                .changed
-                .iter()
-                .any(|(_, _, cell)| cell.character == 'u')
-            {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-            probe = pane.damage_since_last();
-        }
+        let probe = std::iter::from_fn(|| damage_events.recv_timeout(Duration::from_secs(10)).ok())
+            .map(|_| pane.damage_since_last())
+            .find(|damage| {
+                damage
+                    .changed
+                    .iter()
+                    .any(|(_, _, cell)| cell.character == 'u')
+            });
         pane.stop();
+        let probe = probe.expect("the echoed command never reached the grid");
         assert!(
             !probe.changed.is_empty(),
             "expected the echoed command to show up as changed cells"
@@ -2894,7 +2891,7 @@ mod tests {
 
     #[test]
     fn pane_process_keeps_output_until_explicit_stop() {
-        let (damage, _damage_events) = std::sync::mpsc::channel();
+        let (damage, damage_events) = std::sync::mpsc::channel();
         let pane = PaneRuntime::spawn(
             PaneId(7),
             PathBuf::from("/tmp"),
@@ -2906,21 +2903,19 @@ mod tests {
         )
         .unwrap();
         pane.write(b"printf uze-runtime-live\\r");
-        let mut rendered = String::new();
-        for _ in 0..50 {
-            rendered = pane
-                .snapshot()
-                .cells
-                .into_iter()
-                .map(|cell| cell.character)
-                .collect();
-            if rendered.contains("uze-runtime-live") {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+        let rendered =
+            std::iter::from_fn(|| damage_events.recv_timeout(Duration::from_secs(10)).ok()).any(
+                |_| {
+                    pane.snapshot()
+                        .cells
+                        .into_iter()
+                        .map(|cell| cell.character)
+                        .collect::<String>()
+                        .contains("uze-runtime-live")
+                },
+            );
         pane.stop();
-        assert!(rendered.contains("uze-runtime-live"));
+        assert!(rendered, "the printed line never reached the grid");
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
