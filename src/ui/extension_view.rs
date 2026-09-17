@@ -914,40 +914,57 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command
         uze_keys::Scope::Workspace,
         uze_keys::Scope::Code,
     ];
-    let actions: Vec<uze_keys::Action> = commands.iter().copied().map(action_of).collect();
+    let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
     frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
 }
 
-/// What an extension's command means in the product's own vocabulary. The
-/// inverse of the mapping the workspace client makes when it hands a key
-/// down — kept here, beside the render that needs it, rather than in the
-/// extension, which knows nothing of either.
-fn action_of(command: Command) -> uze_keys::Action {
-    match command {
-        Command::Close => uze_keys::Action::Dismiss,
-        Command::FocusNext => uze_keys::Action::FocusNext,
-        Command::SelectNext => uze_keys::Action::SelectNext,
-        Command::SelectPrevious => uze_keys::Action::SelectPrevious,
-        Command::Collapse => uze_keys::Action::Collapse,
-        Command::Expand => uze_keys::Action::Expand,
-        Command::Activate => uze_keys::Action::Activate,
-        Command::ScrollPageUp => uze_keys::Action::ScrollPageUp,
-        Command::Edit => uze_keys::Action::EditFile,
-        Command::TogglePreview => uze_keys::Action::TogglePreview,
-        Command::Save => uze_keys::Action::SaveFile,
-        Command::Delete => uze_keys::Action::DeleteFile,
-        Command::ConfirmDelete => uze_keys::Action::ConfirmDelete,
-        Command::CaretLeft => uze_keys::Action::CaretLeft,
-        Command::CaretRight => uze_keys::Action::CaretRight,
-        Command::CaretLineStart => uze_keys::Action::CaretLineStart,
-        Command::CaretLineEnd => uze_keys::Action::CaretLineEnd,
-        Command::Newline => uze_keys::Action::InsertNewline,
-        Command::EraseBack => uze_keys::Action::EraseBack,
-        Command::EraseForward => uze_keys::Action::EraseForward,
-        // Typing has no single key to name, so a footer never lists it.
-        Command::Type(_) => uze_keys::Action::EraseBack,
-        Command::ScrollPageDown => uze_keys::Action::ScrollPageDown,
-    }
+/// What each extension command means in the product's own vocabulary, read
+/// both ways: a key the workspace resolves is handed down as the command
+/// beside its action, and a footer names a command by the key its action
+/// is bound to. Kept here, beside the render that needs it, rather than in
+/// the extension, which knows nothing of either. Where two actions reach
+/// one command, the first row is the one a footer names.
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 22] = [
+    (Command::Close, uze_keys::Action::Dismiss),
+    (Command::FocusNext, uze_keys::Action::FocusNext),
+    (Command::FocusNext, uze_keys::Action::FocusPrevious),
+    (Command::SelectNext, uze_keys::Action::SelectNext),
+    (Command::SelectPrevious, uze_keys::Action::SelectPrevious),
+    (Command::Collapse, uze_keys::Action::Collapse),
+    (Command::Expand, uze_keys::Action::Expand),
+    (Command::Activate, uze_keys::Action::Activate),
+    (Command::ScrollPageUp, uze_keys::Action::ScrollPageUp),
+    (Command::ScrollPageDown, uze_keys::Action::ScrollPageDown),
+    (Command::Edit, uze_keys::Action::EditFile),
+    (Command::TogglePreview, uze_keys::Action::TogglePreview),
+    (Command::Save, uze_keys::Action::SaveFile),
+    (Command::Delete, uze_keys::Action::DeleteFile),
+    (Command::ConfirmDelete, uze_keys::Action::ConfirmDelete),
+    (Command::CaretLeft, uze_keys::Action::CaretLeft),
+    (Command::CaretRight, uze_keys::Action::CaretRight),
+    (Command::CaretLineStart, uze_keys::Action::CaretLineStart),
+    (Command::CaretLineEnd, uze_keys::Action::CaretLineEnd),
+    (Command::Newline, uze_keys::Action::InsertNewline),
+    (Command::EraseBack, uze_keys::Action::EraseBack),
+    (Command::EraseForward, uze_keys::Action::EraseForward),
+];
+
+/// The action a command is named by. `None` for typing, which has no
+/// single key to name.
+fn action_of(command: Command) -> Option<uze_keys::Action> {
+    COMMAND_ACTIONS
+        .iter()
+        .find(|(candidate, _)| *candidate == command)
+        .map(|(_, action)| *action)
+}
+
+/// The command a resolved action hands down to an extension's surface,
+/// when it means one.
+pub(crate) fn command_for(action: uze_keys::Action) -> Option<Command> {
+    COMMAND_ACTIONS
+        .iter()
+        .find(|(_, candidate)| *candidate == action)
+        .map(|(command, _)| *command)
 }
 
 /// Draws one extension [`Section`] into the rows it is given, and reports

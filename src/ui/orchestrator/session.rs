@@ -1084,29 +1084,8 @@ impl Attach<'_> {
             }
             _ => {}
         }
-        let command = match action {
-            Action::Dismiss => Command::Close,
-            Action::FocusNext | Action::FocusPrevious => Command::FocusNext,
-            Action::SelectNext => Command::SelectNext,
-            Action::SelectPrevious => Command::SelectPrevious,
-            Action::Collapse => Command::Collapse,
-            Action::Expand => Command::Expand,
-            Action::Activate => Command::Activate,
-            Action::ScrollPageUp => Command::ScrollPageUp,
-            Action::ScrollPageDown => Command::ScrollPageDown,
-            Action::EditFile => Command::Edit,
-            Action::TogglePreview => Command::TogglePreview,
-            Action::SaveFile => Command::Save,
-            Action::DeleteFile => Command::Delete,
-            Action::ConfirmDelete => Command::ConfirmDelete,
-            Action::CaretLeft => Command::CaretLeft,
-            Action::CaretRight => Command::CaretRight,
-            Action::CaretLineStart => Command::CaretLineStart,
-            Action::CaretLineEnd => Command::CaretLineEnd,
-            Action::InsertNewline => Command::Newline,
-            Action::EraseBack => Command::EraseBack,
-            Action::EraseForward => Command::EraseForward,
-            _ => return,
+        let Some(command) = crate::ui::extension_view::command_for(action) else {
+            return;
         };
         self.tell_the_code_surface(command);
     }
