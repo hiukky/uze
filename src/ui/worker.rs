@@ -1074,6 +1074,119 @@ mod tests {
         );
     }
 
+    fn drained(results: Vec<WorkerResult>, mut model: TuiModel) -> TuiModel {
+        let (sender, receiver) = mpsc::channel();
+        for result in results {
+            sender.send(result).unwrap();
+        }
+        drain_worker_results(&mut model, &receiver);
+        model
+    }
+
+    /// Clearing the marker on failure would have the per-frame check ask
+    /// again at once, and again after that: a failed inspection stays
+    /// failed until the selection moves.
+    #[test]
+    fn a_failed_inspection_keeps_its_marker_so_it_is_not_retried_every_frame() {
+        let inspecting = Intent::InspectPlugin("flow@market".to_owned());
+        let model = drained(
+            vec![WorkerResult::PluginInspected(Err("unreadable".to_owned()))],
+            TuiModel {
+                inspection_in_flight: Some(inspecting.clone()),
+                ..TuiModel::default()
+            },
+        );
+
+        assert_eq!(model.inspection_in_flight, Some(inspecting));
+        assert_eq!(model.status, Status::Error("unreadable".to_owned()));
+    }
+
+    #[test]
+    fn a_failed_refresh_releases_maintenance_and_says_why() {
+        let model = drained(
+            vec![WorkerResult::Refreshed(Err("store unreadable".to_owned()))],
+            TuiModel {
+                maintenance_in_flight: true,
+                ..TuiModel::default()
+            },
+        );
+
+        assert!(!model.maintenance_in_flight, "a later refresh may run");
+        assert_eq!(model.status, Status::Error("store unreadable".to_owned()));
+    }
+
+    /// An auto-update is announced even though its badge lives on a screen
+    /// the operator may never open, and it outranks a repair in the one
+    /// status line there is.
+    #[test]
+    fn updated_plugins_are_announced_ahead_of_repaired_attachments() {
+        let data = RefreshData {
+            auto_updated: vec!["a@m".to_owned(), "b@m".to_owned()],
+            ..refreshed_with_repair()
+        };
+        let model = drained(vec![WorkerResult::Refreshed(Ok(data))], TuiModel::default());
+
+        assert_eq!(
+            model.status,
+            Status::Success("Updated 2 plugins".to_owned())
+        );
+        assert!(
+            model.status_expires_at.is_some(),
+            "the notice goes away on its own"
+        );
+    }
+
+    #[test]
+    fn a_refusal_for_trust_asks_before_retrying() {
+        let model = drained(
+            vec![WorkerResult::TrustRequired {
+                plugin: "flow@market".to_owned(),
+                detail: "runs hooks".to_owned(),
+                retry: TrustedRetry::Update("flow@market".to_owned()),
+            }],
+            TuiModel::default(),
+        );
+
+        assert!(matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::Trust { ref plugin, .. },
+                focus: None,
+            } if plugin == "flow@market"
+        ));
+        assert_eq!(model.status, Status::Idle);
+    }
+
+    #[test]
+    fn the_apply_message_counts_harnesses_approximations_and_failures() {
+        use uze_application::PreferenceApplyOutcome;
+        let result = |outcome| ProfileApplyResult {
+            integration: "fixture".to_owned(),
+            outcome,
+        };
+        let results = vec![
+            result(PreferenceApplyOutcome::Applied {
+                changed_keys: Vec::new(),
+            }),
+            result(PreferenceApplyOutcome::AppliedWithApproximation {
+                changed_keys: Vec::new(),
+                notes: Vec::new(),
+            }),
+            result(PreferenceApplyOutcome::Failed {
+                reason: "read-only".to_owned(),
+            }),
+        ];
+
+        assert_eq!(
+            apply_message("default", &results),
+            "Applied profile \"default\" to 3 harnesses · 1 approximation · 1 failed"
+        );
+        assert_eq!(
+            apply_message("default", &results[..1]),
+            "Applied profile \"default\" to 1 harness"
+        );
+    }
+
     #[test]
     fn refresh_is_coalesced_while_maintenance_is_in_flight() {
         let (sender, receiver) = mpsc::channel();
