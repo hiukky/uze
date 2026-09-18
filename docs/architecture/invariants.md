@@ -877,7 +877,7 @@ fallback.
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
-> `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_carries_no_marker`
+> `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_is_left_unmarked_and_says_where_nowhere`
 
 ### A tenant never acquires a slot and never creates a branch (`add-space-kinds`)
 

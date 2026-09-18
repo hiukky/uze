@@ -406,33 +406,20 @@ pub(super) fn render_context_menu(
     }
 }
 
-/// How a caption row reads a pane's directory: a slot shows as the primary
-/// it hangs off rather than as its own `.worktrees/<id>` path — that tail
-/// is two more segments in a column only 28-40 wide (see
-/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
-/// is; the slot is where the agent is, which every agent has and none
-/// needs announced.
-fn caption_path(cwd: &Path) -> String {
-    match uze_application::isolated_checkout(cwd) {
-        Some(checkout) => crate::ui::display_project_path(checkout.primary),
-        None => crate::ui::display_project_path(cwd),
-    }
-}
-
-/// Whether `cwd` is outside any slot — the fallback every agent tab
-/// otherwise never needs: no repository, no commit to branch from, Git
-/// absent or refusing. An agent there has no task to take a branch from,
-/// so its caption reads the branch its own directory sits on, and the
-/// pull/push it owes its upstream.
+/// Whether `cwd` is outside any slot: no repository, no commit to branch
+/// from, Git absent or refusing, or a space of the workspace kind, whose
+/// agents stand in the operator's own directory. An agent there owes its
+/// upstream a pull or a push that an agent in a slot never does, which is
+/// the one thing its caption says beyond the harness.
 fn is_unisolated(cwd: &Path) -> bool {
     !uze_application::is_isolated_checkout(cwd)
 }
 
 /// The hue an agent's caption line is drawn in: dim, like every other
-/// detail, except under the agent actually receiving keystrokes. Its
-/// branch — whichever branch that is — is the one every command in the
-/// footer would act on, so the caption says so in the warning hue rather
-/// than leaving the operator to trace the bold label back down a row.
+/// detail, except under the agent actually receiving keystrokes — whose
+/// whole item, both rows of it, is what every command in the footer would
+/// act on. Saying so on the caption too spares the operator tracing the
+/// bold label back down a row.
 fn caption_color(is_current: bool) -> Color {
     if is_current {
         theme::color(Token::StateWarning)
@@ -746,7 +733,7 @@ pub(super) fn render_sidebar(
         if !agents.is_empty() {
             let captions: Vec<TreeCaption> = agents
                 .iter()
-                .map(|agent| TreeCaption::resolve(model, space, agent))
+                .map(|agent| TreeCaption::resolve(model, agent))
                 .collect();
             draw_tree(
                 frame,
@@ -894,15 +881,15 @@ struct TreeCaption {
     /// A checkout removed from under the agent whose task the preserved
     /// list still holds — the row offers to resume it.
     resumable: bool,
-    /// The task's branch, the harness while the root toggle is on, or the
-    /// words for a checkout that is gone.
+    /// The harness running the agent, or the words for a checkout that
+    /// is gone.
     detail: String,
     detail_color: Color,
     sync: Vec<(String, Color)>,
 }
 
 impl TreeCaption {
-    fn resolve(model: &WorkspaceModel, space: &Space, agent: &SidebarAgent<'_>) -> Self {
+    fn resolve(model: &WorkspaceModel, agent: &SidebarAgent<'_>) -> Self {
         let tab = agent.tab;
         let cwd = &tab.pane.cwd;
         let task = model.tab_task(tab.id);
@@ -913,25 +900,29 @@ impl TreeCaption {
         // holds.
         let lost = model.remembered.lost_checkouts.contains(&tab.pane.id);
         let resumable = lost && model.lost_task(tab.id).is_some();
-        // The task's own working branch in place of the cwd path — what
-        // this agent will deliver from. An agent outside any slot has no
-        // task, so its branch is the one its evaluation read at the
-        // directory itself. Either falls back to the cwd (via
-        // `caption_path`) for the moment right after tab creation, before
-        // the async evaluation resolves and a branch exists to show. The
-        // space's `⇄` shows the other side of it: where its work lives on
-        // the header, and what each agent runs on here — named by its id
-        // (`claude`, `codex`), the same word the picker launches and the
-        // process reports.
-        let showing_runtime = model.remembered.roots_shown.contains(&space.id);
+        // What runs here, named by its id (`claude`, `codex`) — the same
+        // word the picker launches and the process reports.
+        //
+        // Not the branch, which this row used to carry: a task's label is
+        // *derived* from its branch (`worktree::label_of`), so the caption
+        // repeated the name above it minus the type — and a task nobody
+        // named reads `agent/<id>` under a label that is the identifier
+        // itself. In a workspace space it was worse: every tenant shares
+        // the operator's branch, so every caption said the same thing.
+        // The branch belongs to the space, and the space's header and the
+        // timeline are where it is said once.
+        //
+        // The harness is the one fact that tells two agents of a space
+        // apart, and it cost a click to see. A row is only drawn for a
+        // recognized harness (`agent_tabs_of`), so the pane's own process
+        // is a fallback for a race, not a second answer.
         let detail = if lost {
             "checkout removed".to_owned()
-        } else if let Some(harness) = agent.harness.filter(|_| showing_runtime) {
-            harness.to_owned()
         } else {
-            task.map(|task| task.branch.clone())
-                .or_else(|| unisolated_branch(model, cwd))
-                .unwrap_or_else(|| caption_path(cwd))
+            agent
+                .harness
+                .unwrap_or(tab.pane.process.as_str())
+                .to_owned()
         };
         let detail_color = if lost {
             theme::color(Token::StateWarning)
@@ -1693,9 +1684,9 @@ fn header_is_current(
         && (folded || space_context_agent(space, identities).is_none())
 }
 
-/// Appends the `⇄` to a space header — which flips the space between what
-/// its work is (its label, each agent's branch) and where and on what it
-/// runs (its root, each agent's harness) — pinned to the row's right edge: the
+/// Appends the `⇄` to a space header — which flips the header between
+/// what the space is called and where its work lives — pinned to the
+/// row's right edge: the
 /// same column the agent rows below pin their task mark to (see
 /// [`push_trailing_mark`]), so the sidebar's right-hand column stays one
 /// column — and makes that one cell the click target that flips it.
@@ -1943,16 +1934,6 @@ pub(super) fn render_status_catalog(
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// The branch an agent outside any slot is on, as its evaluation last
-/// read it. `None` inside a slot: the branch there belongs to the task,
-/// and the key an unslotted directory is evaluated under is its own path.
-fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
-    if !is_unisolated(cwd) {
-        return None;
-    }
-    model.remembered.branches.get(&evaluation_key(cwd)).cloned()
 }
 
 /// What a pull and a push would move for an agent outside any slot, when

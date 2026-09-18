@@ -98,10 +98,17 @@ space's life. The same directory can be the root of one space of each kind.
 
 The worktree kind is the default for a repository and the only kind that
 isolates; a directory that is not a Git repository can only be a workspace
-space. In a workspace space the sidebar lists the agents flat, one row each,
-with the harness running in each and the branch — shared by all of them — on the
-space's header. Two agents there share one tree, the way two people in a shell
-would; uze keeps their conversations apart, and nothing else.
+space. In a workspace space the sidebar lists the agents flat, one row each.
+Two agents there share one tree, the way two people in a shell would; uze keeps
+their conversations apart, and nothing else.
+
+In either kind, an agent's row says two things: the name of the work, and
+underneath it the harness running it — `claude`, `codex`, `agy`. Not the
+branch: a named task's label *is* its branch read as words, and every agent of
+a workspace space shares the operator's branch, so the caption repeated what
+the row already said. Where the work lives is the space's, said once — on the
+header, behind the `⇄` that swaps the space's name for its root, and in the
+timeline below.
 
 ## An agent of a worktree space gets its own checkout
 
