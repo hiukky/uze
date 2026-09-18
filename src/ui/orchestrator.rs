@@ -865,6 +865,50 @@ fn spawn_changes_refresh(
     });
 }
 
+/// The artifacts a project declares, read for the checkout they were
+/// asked about.
+struct ArtifactsResolution {
+    root: PathBuf,
+    answer: architect::ArtifactsAnswer,
+}
+
+/// Resolving the manifest, walking the declared directory and reading
+/// every file in it: three unbounded reads, none of them the render
+/// thread's to make.
+fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.architect_artifacts").entered();
+        let silence = architect::ArtifactsAnswer::Nothing {
+            text: "Reading the project's artifacts failed".to_owned(),
+            hint: "Close this and open it again.".to_owned(),
+        };
+        let answer = answered_or(
+            || {
+                let source = match uze_application::project_artifacts(&root) {
+                    uze_application::ProjectArtifacts::Undeclared => {
+                        architect::ArtifactSource::Undeclared
+                    }
+                    uze_application::ProjectArtifacts::Refused(reason) => {
+                        architect::ArtifactSource::Refused(reason)
+                    }
+                    uze_application::ProjectArtifacts::Declared {
+                        directory,
+                        declared,
+                    } => architect::ArtifactSource::Directory {
+                        path: directory,
+                        declared: declared.display().to_string(),
+                    },
+                };
+                architect::read_artifacts(&WorkspaceHost, source)
+            },
+            silence,
+        );
+        let _ = sender.send(ArtifactsResolution { root, answer });
+    });
+}
+
 /// What a root's profile answered, tagged with the root it was asked for.
 struct RootProfileResolution {
     root: PathBuf,
@@ -1994,6 +2038,7 @@ struct Channels {
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
     root_profiles: Answers<RootProfileResolution>,
+    artifacts: Answers<ArtifactsResolution>,
 }
 
 /// The half of [`WorkspaceModel`] that outlives one attach. Everything
@@ -2219,6 +2264,12 @@ struct WorkspaceModel {
     /// [`EdgeDrag`] — so the click it might turn out to be is kept here
     /// until release.
     architect_grab: Option<DiagramGrab>,
+    /// The checkout the open architect surface belongs to, and whether
+    /// its artifacts have been asked for yet. Asked once per opening: the
+    /// answer carries the root, so one that arrives for a surface since
+    /// closed or reopened elsewhere is dropped rather than drawn.
+    architect_root: Option<PathBuf>,
+    architect_asked: bool,
     /// User-dragged navigator width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
     /// above, kept on the model rather than on the view itself so it
@@ -3328,6 +3379,26 @@ impl WorkspaceModel {
         spawn_file_request(root, request, sender.clone());
     }
 
+    fn schedule_artifacts_read(&mut self, sender: &mpsc::Sender<ArtifactsResolution>) {
+        if self.architect.is_none() || self.architect_asked {
+            return;
+        }
+        if let Some(root) = self.architect_root.clone() {
+            self.architect_asked = true;
+            spawn_artifacts_read(root, sender.clone());
+        }
+    }
+
+    fn absorb_artifacts(&mut self, resolution: ArtifactsResolution) -> bool {
+        match self.architect.as_mut() {
+            Some(view) if self.architect_root.as_ref() == Some(&resolution.root) => {
+                view.absorb(resolution.answer);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Installs one file answer, if the surface is still open on the
     /// checkout it was read for.
     fn absorb_file_answer(&mut self, resolution: FileResolution) -> bool {
@@ -4294,7 +4365,13 @@ impl WorkspaceModel {
 }
 
 fn open_architect(model: &mut WorkspaceModel) {
+    let Some(session) = model.session.as_ref() else {
+        return;
+    };
+    let root = session.selected_tab().pane.cwd.clone();
     model.close_code();
+    model.architect_root = Some(root);
+    model.architect_asked = false;
     model.architect = Some(architect::ArchitectView::opening());
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;

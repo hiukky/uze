@@ -1,0 +1,19 @@
+---
+title: Install pipeline
+---
+flowchart LR
+  install([uze install]) --> manifest[agents.yaml]
+  manifest --> resolve[Resolve marketplaces]
+  resolve -->|commit + digest| lock[agents.lock]
+  resolve --> acquire[Acquire bytes]
+  acquire --> trust{Trusted?}
+  trust -- no --> refuse[Refuse]
+  trust -- yes --> store[(Store)]
+  store --> engine[Engine]
+  engine --> router{Router}
+  router -->|native| native[Native plugin]
+  router -->|generated| generated[Generated package]
+  router -->|adapter| adapter[Safe adaptation]
+  router -.->|none| unsupported[Unsupported]
+  native & generated & adapter --> receipts[(Receipts)]
+  receipts ==> context[Reconcile AGENTS.md]

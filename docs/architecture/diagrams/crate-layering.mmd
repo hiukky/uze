@@ -1,0 +1,49 @@
+---
+title: Crate layering
+---
+flowchart TD
+  subgraph presentation [Presentation · src/]
+    cli[CLI<br/>main.rs · clap]
+    tui[Workspace TUI<br/>src/ui · ratatui]
+    shim[Runtime PATH shim<br/>src/shim.rs]
+  end
+  ext[uze-extensions<br/>describes, never draws]
+  keys[uze-keys<br/>actions · scopes]
+  theme[uze-theme<br/>tokens · symbols]
+  terminal[uze-terminal<br/>PTY server + protocol]
+  app[uze-application<br/>UzeApplication facade]
+  subgraph core [uze-core · domain]
+    package[package<br/>acquisition · trust · store]
+    capability[capability<br/>skill · hook]
+    delivery[delivery<br/>router · engine · receipts]
+    project[project<br/>lock · context · worktrees]
+    machine[machine<br/>home · subprocess · PATH]
+  end
+  subgraph integrations [uze-integrations]
+    registry[registry<br/>composition root]
+    verticals[harness verticals<br/>one module per harness]
+    shared[shared<br/>process · path helpers]
+  end
+  git[uze-git<br/>the one Git transport]
+  store[(Store · ~/.uze)]
+
+  cli --> app
+  tui --> app
+  tui --> ext
+  tui --> keys
+  tui --> terminal
+  cli --> theme
+  tui --> theme
+  shim -.->|sanctioned| machine
+  app --> package
+  app --> delivery
+  app --> project
+  app --> registry
+  registry --> verticals
+  verticals --> shared
+  verticals -.->|IntegrationPort| delivery
+  delivery --> capability
+  delivery --> machine
+  package --> git
+  project --> git
+  package --> store

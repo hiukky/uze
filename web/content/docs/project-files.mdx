@@ -124,6 +124,45 @@ uze's own marketplace is not declared here. `uze-official` is built into the
 binary, its plugins are installed for every project, and an entry claiming that
 name is refused — the only thing it could express is shadowing the built-in one.
 
+### `artifacts`
+
+Where the project keeps the artifacts that describe it. Today that means
+architecture diagrams: Mermaid files the workspace's architect surface draws in
+the terminal.
+
+```yaml
+artifacts:
+  path: docs/architecture
+```
+
+`path` is a directory inside the project, read as deep as it goes; a path that
+climbs out of it (`../`) or starts at the machine's root is refused, because
+this file is checked in and would point somewhere else on every machine.
+
+Nothing lists the files. Each one says what it is in its own first word, which
+is also the area it appears under, and names itself with Mermaid's own front
+matter — falling back to its file name:
+
+```text
+---
+title: System context
+---
+C4Context
+  Person(dev, "Developer")
+  System(uze, "uze")
+  Rel(dev, uze, "Installs, launches, reviews")
+```
+
+| The diagram starts with | Area |
+| --- | --- |
+| `C4Context`, `C4Container`, `C4Component`, … | C4 |
+| `sequenceDiagram` | Sequence |
+| `flowchart`, `graph` | Flowchart |
+
+A `.mmd` or `.mermaid` file of any other kind is still listed, under *Other*,
+with the reason it was not drawn — a file that silently fails to appear looks
+like a lost file.
+
 ## `agents.lock`
 
 Generated, never edited, and deleted outright when nothing is left to

@@ -1,11 +1,22 @@
 //! What there is to look at: areas, and the artifacts in each.
 //!
-//! An area is a *kind* of diagram — C4, sequence, flowchart — and it is
-//! read off the artifact itself: a Mermaid source says what it is in its
-//! first word, so nothing beside it has to repeat that and nothing can
-//! disagree with it.
+//! An artifact is a Mermaid file in the directory the project declares.
+//! Everything the surface needs to know about it is read off the file
+//! itself — its area from the diagram's first word, its name from a
+//! `title:` — so there is no index beside the files to keep in step with
+//! them. A list of what a directory holds is the one document that is
+//! wrong the moment somebody adds a file.
 
-use super::samples::SAMPLES;
+use std::path::{Path, PathBuf};
+
+use crate::Host;
+
+/// How deep the declared directory is read. Deep enough for a project
+/// that sorts its diagrams into folders; bounded, because the path is
+/// the project's to declare and a walk with no floor is how a surface
+/// ends up reading a `node_modules`.
+const DEPTH: usize = 4;
+const EXTENSIONS: [&str; 2] = ["mmd", "mermaid"];
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Kind {
@@ -18,8 +29,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn of(source: &str) -> Self {
-        let keyword = source
+    pub fn of(diagram: &str) -> Self {
+        let keyword = diagram
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty() && !line.starts_with("%%"))
@@ -47,7 +58,74 @@ impl Kind {
 pub struct Artifact {
     pub name: String,
     pub kind: Kind,
+    /// Where it lives, as the project would say it.
+    pub origin: String,
+    /// The file as written, front matter and all — what `Source` shows.
     pub source: String,
+}
+
+impl Artifact {
+    pub fn read(origin: impl Into<String>, source: impl Into<String>) -> Self {
+        let (origin, source) = (origin.into(), source.into());
+        let (front_matter, diagram) = split_front_matter(&source);
+        let name = titled(front_matter)
+            .or_else(|| titled(diagram))
+            .unwrap_or_else(|| name_from_path(&origin));
+        Self {
+            name,
+            kind: Kind::of(diagram),
+            origin,
+            source,
+        }
+    }
+
+    /// The diagram without its front matter, which Mermaid reads as
+    /// settings and this surface reads only for the name.
+    pub fn diagram(&self) -> &str {
+        split_front_matter(&self.source).1
+    }
+}
+
+/// Mermaid's own front matter: a YAML block between two `---` lines at
+/// the very top of the file.
+fn split_front_matter(source: &str) -> (&str, &str) {
+    let Some(rest) = source.trim_start().strip_prefix("---") else {
+        return ("", source);
+    };
+    match rest.find("\n---") {
+        Some(end) => {
+            let after = &rest[end + 4..];
+            (
+                &rest[..end],
+                after.split_once('\n').map_or("", |(_, body)| body),
+            )
+        }
+        None => ("", source),
+    }
+}
+
+/// A `title:` in front matter, or the `title` statement a diagram may
+/// carry in its own body.
+fn titled(text: &str) -> Option<String> {
+    text.lines().map(str::trim).find_map(|line| {
+        let rest = line.strip_prefix("title")?;
+        let rest = rest.strip_prefix(':').unwrap_or(rest);
+        let starts_a_value = rest.starts_with(char::is_whitespace);
+        let title = rest.trim().trim_matches('"').trim();
+        (starts_a_value && !title.is_empty()).then(|| title.to_owned())
+    })
+}
+
+fn name_from_path(origin: &str) -> String {
+    let stem = Path::new(origin)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().replace(['-', '_'], " "))
+        .unwrap_or_default();
+    let mut letters = stem.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => origin.to_owned(),
+    }
 }
 
 /// Every artifact, ordered by area and then by name — which is also the
@@ -64,19 +142,6 @@ impl Catalog {
         Self { artifacts }
     }
 
-    pub fn built_in() -> Self {
-        Self::of(
-            SAMPLES
-                .iter()
-                .map(|sample| Artifact {
-                    name: sample.name.to_owned(),
-                    kind: Kind::of(sample.source),
-                    source: sample.source.to_owned(),
-                })
-                .collect(),
-        )
-    }
-
     pub fn artifacts(&self) -> &[Artifact] {
         &self.artifacts
     }
@@ -84,6 +149,50 @@ impl Catalog {
     pub fn get(&self, index: usize) -> Option<&Artifact> {
         self.artifacts.get(index)
     }
+}
+
+/// Every Mermaid file under `directory`, or why it could not be listed.
+pub fn read(host: &dyn Host, directory: &Path) -> Result<Vec<Artifact>, String> {
+    let mut artifacts = Vec::new();
+    let mut pending: Vec<(PathBuf, usize)> = vec![(directory.to_path_buf(), 0)];
+    while let Some((folder, depth)) = pending.pop() {
+        let entries = match host.list_dir(&folder) {
+            Ok(entries) => entries,
+            Err(reason) if depth == 0 => return Err(reason),
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let path = folder.join(&entry.name);
+            if entry.name.starts_with('.') {
+                continue;
+            }
+            if entry.directory {
+                if depth < DEPTH {
+                    pending.push((path, depth + 1));
+                }
+                continue;
+            }
+            let is_mermaid = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| EXTENSIONS.contains(&extension));
+            if !is_mermaid {
+                continue;
+            }
+            let origin = path
+                .strip_prefix(directory)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            // An unreadable file still gets its tab: the reason is what
+            // the board shows, which is more use than the file going missing.
+            let source = host
+                .read_file(&path)
+                .unwrap_or_else(|reason| format!("%% {reason}\n"));
+            artifacts.push(Artifact::read(origin, source));
+        }
+    }
+    Ok(artifacts)
 }
 
 #[cfg(test)]
@@ -99,12 +208,40 @@ mod tests {
     }
 
     #[test]
+    fn an_artifact_names_itself_and_falls_back_to_its_file() {
+        let titled = Artifact::read("a/ctx.mmd", "---\ntitle: System context\n---\nC4Context\n");
+        assert_eq!(
+            (titled.name.as_str(), titled.kind),
+            ("System context", Kind::C4)
+        );
+        assert_eq!(titled.diagram().trim(), "C4Context");
+
+        let in_body = Artifact::read("x.mmd", "C4Container\n  title \"Containers of uze\"\n");
+        assert_eq!(in_body.name, "Containers of uze");
+
+        let unnamed = Artifact::read("flows/install-pipeline.mmd", "flowchart LR\n a --> b\n");
+        assert_eq!(unnamed.name, "Install pipeline");
+        assert_eq!(unnamed.diagram(), "flowchart LR\n a --> b\n");
+    }
+
+    #[test]
+    fn a_node_called_title_is_not_a_title() {
+        let artifact = Artifact::read("x.mmd", "flowchart TD\n  titles --> b\n  title[Heading]\n");
+        assert_eq!(artifact.name, "X");
+    }
+
+    #[test]
     fn the_catalog_is_ordered_by_area_then_by_name() {
-        let catalog = Catalog::built_in();
-        let kinds: Vec<Kind> = catalog.artifacts().iter().map(|a| a.kind).collect();
-        let mut sorted = kinds.clone();
-        sorted.sort();
-        assert_eq!(kinds, sorted);
-        assert_eq!(catalog.get(0).map(|a| a.kind), Some(Kind::C4));
+        let catalog = Catalog::of(vec![
+            Artifact::read("b.mmd", "flowchart TD\n a --> b"),
+            Artifact::read("z.mmd", "C4Context\n"),
+            Artifact::read("a.mmd", "C4Context\n"),
+        ]);
+        let names: Vec<&str> = catalog
+            .artifacts()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["A", "Z", "B"]);
     }
 }

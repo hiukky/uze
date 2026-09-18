@@ -48,6 +48,18 @@ pub struct ProjectManifest {
     pub worktrees: Option<WorktreePolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marketplaces: BTreeMap<String, DeclaredMarketplace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<DeclaredArtifacts>,
+}
+
+/// Where the project keeps what describes it — its architecture diagrams,
+/// today. A directory and nothing else: what each file in it *is* is read
+/// off the file, so there is no second place for that to go stale in.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredArtifacts {
+    /// Relative to the project root, and inside it.
+    pub path: PathBuf,
 }
 
 impl ProjectManifest {
@@ -245,6 +257,14 @@ worktrees:
 #     path: ../marketplace
 #     plugins:
 #       - bench-runner
+
+# Where this project keeps the artifacts that describe it: Mermaid files
+# (`.mmd`), which the workspace's architect surface draws. A directory
+# inside the project, read as deep as it goes. Nothing lists the files —
+# each says what it is in its own first word (`C4Context`,
+# `sequenceDiagram`, `flowchart`), and may name itself with a `title:`.
+# artifacts:
+#   path: docs/architecture
 
 ";
 
@@ -882,15 +902,20 @@ mod tests {
             subdirectory: Some(PathBuf::from("plugins")),
             plugins: vec!["flow".to_owned()],
         };
+        let artifacts = DeclaredArtifacts {
+            path: PathBuf::from("docs/architecture"),
+        };
         let manifest = ProjectManifest {
             worktrees: Some(policy.clone()),
             marketplaces: BTreeMap::from([("ai".to_owned(), marketplace.clone())]),
+            artifacts: Some(artifacts.clone()),
         };
 
         let keys = [
             declared_keys(&manifest),
             declared_keys(&policy),
             declared_keys(&marketplace),
+            declared_keys(&artifacts),
         ]
         .concat();
         assert!(keys.len() > 10, "the shapes emitted nothing to check");

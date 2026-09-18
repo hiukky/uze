@@ -1450,6 +1450,32 @@ mod tests {
         let (width, height) = (150, 45);
         let space = board_space(Rect::new(0, 0, width, height));
         let mut state = architect::ArchitectView::opening();
+        state.absorb(architect::ArtifactsAnswer::Found(
+            [
+                (
+                    "containers.mmd",
+                    include_str!("../../docs/architecture/diagrams/containers.mmd"),
+                ),
+                (
+                    "system-context.mmd",
+                    include_str!("../../docs/architecture/diagrams/system-context.mmd"),
+                ),
+                (
+                    "install-sequence.mmd",
+                    include_str!("../../docs/architecture/diagrams/install-sequence.mmd"),
+                ),
+                (
+                    "crate-layering.mmd",
+                    include_str!("../../docs/architecture/diagrams/crate-layering.mmd"),
+                ),
+                (
+                    "install-pipeline.mmd",
+                    include_str!("../../docs/architecture/diagrams/install-pipeline.mmd"),
+                ),
+            ]
+            .map(|(origin, source)| architect::Artifact::read(origin, source))
+            .into(),
+        ));
         let (rows, hits) = draw_sized(&architect::view(&state, space), width, height);
         if std::env::var_os("UZE_SHOW_BOARD").is_some() {
             println!("{}", rows.join("\n"));

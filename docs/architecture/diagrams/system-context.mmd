@@ -1,0 +1,17 @@
+---
+title: System context
+---
+C4Context
+  Person(dev, "Developer", "Installs plugins once and runs agents side by side")
+  Person(agent, "Coding agent", "Launched by uze in a checkout of its own")
+  System(uze, "uze", "Compatibility and distribution layer for agentic tooling")
+  System_Ext(harness, "Harnesses", "The coding-agent CLIs uze delivers into")
+  System_Ext(market, "Marketplaces", "Git repositories holding marketplace.json and plugins")
+  SystemDb_Ext(repo, "Project repository", "agents.yaml, agents.lock, AGENTS.md")
+  Rel(dev, uze, "Installs, launches, reviews")
+  Rel(uze, harness, "Delivers capabilities natively")
+  Rel(uze, market, "Clones and resolves", "Git")
+  Rel(uze, repo, "Reconciles context")
+  Rel(agent, uze, "Names and delivers work", "uze agent")
+  Rel(harness, agent, "Runs")
+  Rel(agent, repo, "Commits on its branch")

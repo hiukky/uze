@@ -2873,6 +2873,9 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
+        while let Ok(resolution) = self.channels.artifacts.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_artifacts(resolution);
+        }
         while let Ok(RootProfileResolution { root, profile }) =
             self.channels.root_profiles.receiver.try_recv()
         {
@@ -2888,6 +2891,8 @@ impl Attach<'_> {
             .schedule_changes_refresh(&self.channels.code_changes.sender);
         self.model
             .schedule_file_request(&self.channels.code_files.sender);
+        self.model
+            .schedule_artifacts_read(&self.channels.artifacts.sender);
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }

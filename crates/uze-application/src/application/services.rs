@@ -138,6 +138,8 @@ pub struct AgentIdentity {
 /// The workspace service's own file — named for what it holds rather
 /// than for the handle, since `workspace` is already `uze-core`'s module
 /// for resolving a project root.
+mod artifacts;
 mod tasks;
 
+pub use artifacts::*;
 pub use tasks::*;

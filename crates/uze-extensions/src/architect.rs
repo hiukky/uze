@@ -23,10 +23,12 @@ mod minimap;
 mod model;
 mod paint;
 mod route;
-mod samples;
 mod sequence;
 
+use std::path::PathBuf;
+
 use crate::{
+    Host,
     registry::BuiltinExtension,
     view::{
         Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow,
@@ -36,6 +38,8 @@ use crate::{
 
 use canvas::{Canvas, Frame, Glyphs};
 use catalog::Catalog;
+
+pub use catalog::Artifact;
 use minimap::Minimap;
 use model::Diagram;
 use paint::Scene;
@@ -86,6 +90,66 @@ pub struct ArchitectView {
     picked: Option<usize>,
     drawing: Drawing,
     canvas: Option<Canvas>,
+    /// Why there is nothing on the board, while there is nothing: the
+    /// read still in flight, or what it found instead of artifacts.
+    nothing: Option<(String, Option<String>)>,
+}
+
+/// Where the host found the project's artifacts to be declared. The
+/// host's to say, because only it may read the project's manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArtifactSource {
+    /// The project declares none.
+    Undeclared,
+    /// The declared directory, and how the project itself spells it.
+    Directory { path: PathBuf, declared: String },
+    /// Declared, and not something the host will follow.
+    Refused(String),
+}
+
+/// What reading a source produced — everything the surface needs to stop
+/// saying "reading".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArtifactsAnswer {
+    Found(Vec<Artifact>),
+    /// Nothing to draw, in two levels: what is the matter, and what to do.
+    Nothing {
+        text: String,
+        hint: String,
+    },
+}
+
+/// Reads a source. Unbounded — a directory walk and a read per file — so
+/// the host runs it off the thread that draws and hands the answer to
+/// [`ArchitectView::absorb`].
+pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswer {
+    let nothing = |text: String, hint: &str| ArtifactsAnswer::Nothing {
+        text,
+        hint: hint.to_owned(),
+    };
+    match source {
+        ArtifactSource::Undeclared => nothing(
+            "This project declares no artifacts yet".to_owned(),
+            "Add `artifacts:` with a `path:` to agents.yaml, and keep Mermaid files (.mmd) \
+             in that directory — C4 views, sequences and flowcharts are drawn here.",
+        ),
+        ArtifactSource::Refused(reason) => nothing(
+            reason,
+            "Fix `artifacts:` in agents.yaml and open this again.",
+        ),
+        ArtifactSource::Directory { path, declared } => match catalog::read(host, &path) {
+            Ok(artifacts) if artifacts.is_empty() => nothing(
+                format!("`{declared}` holds no Mermaid files yet"),
+                "Add a .mmd file there: a diagram that starts with `C4Context`, \
+                 `sequenceDiagram` or `flowchart` is drawn here.",
+            ),
+            Ok(artifacts) => ArtifactsAnswer::Found(artifacts),
+            Err(reason) => nothing(
+                format!("`{declared}` could not be read"),
+                &format!("{reason}. It is the `artifacts.path` agents.yaml declares."),
+            ),
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,18 +159,32 @@ pub enum ArchitectOutcome {
 }
 
 impl ArchitectView {
+    /// The surface before its artifacts have been read.
     pub fn opening() -> Self {
-        let mut view = Self {
-            catalog: Catalog::built_in(),
+        Self {
+            catalog: Catalog::default(),
             selected: 0,
             showing: Showing::Unicode,
             corner: None,
             picked: None,
             drawing: Drawing::Unreadable(String::new()),
             canvas: None,
-        };
-        view.open(0);
-        view
+            nothing: Some(("Reading the project's artifacts".to_owned(), None)),
+        }
+    }
+
+    pub fn absorb(&mut self, answer: ArtifactsAnswer) {
+        match answer {
+            ArtifactsAnswer::Found(artifacts) => {
+                self.catalog = Catalog::of(artifacts);
+                self.nothing = None;
+                self.open(0);
+            }
+            ArtifactsAnswer::Nothing { text, hint } => {
+                self.catalog = Catalog::default();
+                self.nothing = Some((text, Some(hint)));
+            }
+        }
     }
 
     fn open(&mut self, artifact: usize) {
@@ -115,7 +193,7 @@ impl ArchitectView {
         self.corner = None;
         self.picked = None;
         self.drawing = match self.catalog.get(self.selected) {
-            Some(artifact) => match mermaid::parse(&artifact.source) {
+            Some(artifact) => match mermaid::parse(artifact.diagram()) {
                 Ok(Diagram::Graph(graph)) => Drawing::Graph(Box::new(Scene::of(graph))),
                 Ok(Diagram::Sequence(sequence)) => Drawing::Sequence(sequence),
                 Err(reason) => Drawing::Unreadable(reason),
@@ -261,6 +339,17 @@ impl ArchitectView {
         }
     }
 
+    /// What the content says about itself, and which file it came from —
+    /// the second half is what somebody needs to go and change it.
+    fn caption(&self) -> String {
+        let origin = self.catalog.get(self.selected).map(|a| a.origin.as_str());
+        match (self.heading(), origin) {
+            (heading, Some(origin)) if heading.is_empty() => origin.to_owned(),
+            (heading, Some(origin)) => format!("{heading} · {origin}"),
+            (heading, None) => heading,
+        }
+    }
+
     /// The part of the board the screen is over, as the screen's own
     /// cells: the drawing, the grid behind it, the map over it.
     fn screen(&self, space: Size) -> Option<Canvas> {
@@ -347,6 +436,13 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
 }
 
 fn content(state: &ArchitectView, space: Size) -> Content {
+    if let Some((text, hint)) = &state.nothing {
+        return Content::Message {
+            text: text.clone(),
+            hint: hint.clone(),
+            role: Role::Muted,
+        };
+    }
     if let Drawing::Unreadable(reason) = &state.drawing {
         return Content::Message {
             text: "This artifact could not be drawn".to_owned(),
@@ -358,7 +454,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         Showing::Source => {
             let lines = source_lines(state.source());
             Content::Lines {
-                heading: state.heading(),
+                heading: state.caption(),
                 scroll: state.corner(space).1.max(0) as u16,
                 total: lines.len(),
                 lines,
@@ -371,7 +467,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         _ => {
             let lines = state.screen(space).map(|s| s.lines()).unwrap_or_default();
             Content::Lines {
-                heading: state.heading(),
+                heading: state.caption(),
                 scroll: 0,
                 total: lines.len(),
                 lines,

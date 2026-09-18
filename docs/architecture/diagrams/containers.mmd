@@ -1,0 +1,28 @@
+---
+title: Containers
+---
+C4Container
+  Person(dev, "Developer", "Works from a terminal")
+  System_Boundary(uze, "uze") {
+    Container(cli, "CLI", "Rust, clap", "Machine and project commands")
+    Container(tui, "Workspace TUI", "Rust, ratatui", "Spaces, agents, panes and the code surface")
+    Container(app, "Application", "uze-application", "Orchestrates add, install, remove, update, context")
+    Container(core, "Core", "uze-core", "Store, Engine, Router, IntegrationPort")
+    Container(integrations, "Integrations", "uze-integrations", "One vertical per harness")
+    Container(terminal, "Terminal server", "uze-terminal", "Owns the PTYs so a pane outlives its client")
+    ContainerDb(store, "Store", "Filesystem", "Installed package bytes and typed receipts")
+  }
+  System_Ext(harness, "Harnesses", "The coding-agent CLIs uze delivers into")
+  System_Ext(git, "Git", "Marketplaces and the project's own history")
+  Rel(dev, cli, "Runs")
+  Rel(dev, tui, "Works in")
+  Rel(cli, app, "Calls")
+  Rel(tui, app, "Reads models from")
+  Rel(tui, terminal, "Attaches to", "versioned protocol")
+  Rel(app, core, "Drives")
+  Rel(app, integrations, "Composes", "registry")
+  Rel(integrations, core, "Implements IntegrationPort")
+  Rel(core, store, "Owns")
+  Rel(core, git, "Reads and writes", "uze-git")
+  Rel(integrations, harness, "Projects plugins, hooks, context")
+  Rel(terminal, harness, "Hosts", "PTY")

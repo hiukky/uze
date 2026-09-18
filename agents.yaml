@@ -13,6 +13,12 @@ worktrees:
   # this vocabulary — the same one this repository's own history uses.
   branch: conventional
 
+# uze's own architecture, as Mermaid: the workspace's architect surface
+# draws these, and its tests draw them too — a diagram here that stops
+# routing is a red build.
+artifacts:
+  path: docs/architecture/diagrams
+
 marketplaces:
   ai:
     path: /home/hiukky/ai

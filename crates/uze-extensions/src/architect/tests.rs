@@ -5,8 +5,37 @@ const SPACE: Size = Size {
     height: 30,
 };
 
-fn showing(name: &str) -> ArchitectView {
+/// uze's own architecture, as the repository keeps it. Living fixtures:
+/// what is checked here is also that the project's real artifacts draw.
+fn opened() -> ArchitectView {
     let mut state = ArchitectView::opening();
+    state.absorb(ArtifactsAnswer::Found(vec![
+        Artifact::read(
+            "containers.mmd",
+            include_str!("../../../../docs/architecture/diagrams/containers.mmd"),
+        ),
+        Artifact::read(
+            "system-context.mmd",
+            include_str!("../../../../docs/architecture/diagrams/system-context.mmd"),
+        ),
+        Artifact::read(
+            "install-sequence.mmd",
+            include_str!("../../../../docs/architecture/diagrams/install-sequence.mmd"),
+        ),
+        Artifact::read(
+            "crate-layering.mmd",
+            include_str!("../../../../docs/architecture/diagrams/crate-layering.mmd"),
+        ),
+        Artifact::read(
+            "install-pipeline.mmd",
+            include_str!("../../../../docs/architecture/diagrams/install-pipeline.mmd"),
+        ),
+    ]));
+    state
+}
+
+fn showing(name: &str) -> ArchitectView {
+    let mut state = opened();
     let index = state
         .catalog
         .artifacts()
@@ -25,7 +54,7 @@ fn drawn(state: &ArchitectView) -> String {
 /// to look at what the layout produced without opening the TUI.
 #[test]
 fn every_artifact_is_drawn_with_every_edge_routed() {
-    let mut state = ArchitectView::opening();
+    let mut state = opened();
     for index in 0..state.catalog.artifacts().len() {
         state.open(index);
         let name = state.catalog.get(index).unwrap().name.clone();
@@ -40,7 +69,7 @@ fn every_artifact_is_drawn_with_every_edge_routed() {
 
 #[test]
 fn ascii_draws_the_same_diagram_in_seven_bit_characters() {
-    let mut state = ArchitectView::opening();
+    let mut state = opened();
     state.show(Showing::Ascii);
     for index in 0..state.catalog.artifacts().len() {
         state.open(index);
@@ -54,7 +83,7 @@ fn ascii_draws_the_same_diagram_in_seven_bit_characters() {
 
 #[test]
 fn the_screen_is_exactly_the_space_it_was_given() {
-    let state = ArchitectView::opening();
+    let state = opened();
     let Content::Lines { lines, scroll, .. } = view(&state, SPACE).content else {
         panic!("a diagram is lines");
     };
@@ -77,7 +106,7 @@ fn a_drawing_smaller_than_the_screen_opens_in_the_middle_of_it() {
 
 #[test]
 fn every_edge_of_the_board_can_be_brought_to_the_middle_of_the_screen() {
-    let mut state = ArchitectView::opening();
+    let mut state = opened();
     let board = state.board_size();
     drag_by(&mut state, 5000, 5000, SPACE);
     assert_eq!(state.corner(SPACE), (-50, -15));
@@ -99,7 +128,7 @@ fn a_board_that_fits_the_screen_still_moves() {
 
 #[test]
 fn a_click_on_the_minimap_brings_that_part_of_the_board_to_the_screen() {
-    let mut state = ArchitectView::opening();
+    let mut state = opened();
     let home = state.corner(SPACE);
     let map = state.minimap(SPACE).expect("the screen has room for a map");
     let hit = ViewHit::PlaceCaret {
@@ -117,7 +146,7 @@ fn a_click_on_the_minimap_brings_that_part_of_the_board_to_the_screen() {
 
 #[test]
 fn the_artifacts_go_round_and_an_area_opens_on_its_first() {
-    let mut state = ArchitectView::opening();
+    let mut state = opened();
     let last = state.catalog.artifacts().len() - 1;
     handle_command(&mut state, Command::PreviousView, SPACE);
     assert_eq!(state.selected, last);
@@ -154,4 +183,54 @@ fn clicking_a_box_selects_it_and_clicking_it_again_lets_go() {
     assert_eq!(state.picked, Some(0));
     handle_mouse(&mut state, Some(hit), SPACE);
     assert_eq!(state.picked, None);
+}
+
+#[test]
+fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
+    let mut state = ArchitectView::opening();
+    let Content::Message { hint, .. } = view(&state, SPACE).content else {
+        panic!("a read in flight is a message");
+    };
+    assert_eq!(hint, None);
+
+    struct Bare;
+    impl Host for Bare {
+        fn git(&self, _: &std::path::Path, _: &[&str], _: &[i32]) -> Result<String, String> {
+            Err("no git here".to_owned())
+        }
+        fn repository_root(&self, _: &std::path::Path) -> Result<PathBuf, String> {
+            Err("no git here".to_owned())
+        }
+        fn read_file(&self, _: &std::path::Path) -> Result<String, String> {
+            Err("no such file".to_owned())
+        }
+        fn list_dir(&self, _: &std::path::Path) -> Result<Vec<crate::DirEntry>, String> {
+            Ok(Vec::new())
+        }
+        fn write_file(&self, _: &std::path::Path, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn delete_file(&self, _: &std::path::Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn syntax_theme(&self) -> String {
+            String::new()
+        }
+    }
+    state.absorb(read_artifacts(&Bare, ArtifactSource::Undeclared));
+    let Content::Message { text, hint, .. } = view(&state, SPACE).content else {
+        panic!("an undeclared project is a message");
+    };
+    assert!(text.contains("declares no artifacts"));
+    assert!(hint.unwrap().contains("agents.yaml"));
+
+    let empty = ArtifactSource::Directory {
+        path: PathBuf::from("/project/docs/diagrams"),
+        declared: "docs/diagrams".to_owned(),
+    };
+    state.absorb(read_artifacts(&Bare, empty));
+    let Content::Message { text, .. } = view(&state, SPACE).content else {
+        panic!("an empty directory is a message");
+    };
+    assert!(text.contains("docs/diagrams"), "{text}");
 }
