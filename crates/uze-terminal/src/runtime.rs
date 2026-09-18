@@ -4103,12 +4103,20 @@ mod tests {
     }
 
     /// The command a launch runs to report what its environment carries:
-    /// one file, one value, then exit.
+    /// one file, one value, then exit. The value lands on a name of its own
+    /// and is renamed onto the reported path: a redirection creates the file
+    /// before the shell writes into it, so a reader watching for the path to
+    /// appear would otherwise be free to read the empty half of that window.
     fn report_variable(variable: &str, into: &Path) -> Vec<String> {
+        let partial = into.with_extension("partial");
         vec![
             "/bin/sh".to_owned(),
             "-c".to_owned(),
-            format!("printf %s \"${{{variable}-unset}}\" > {}", into.display()),
+            format!(
+                "printf %s \"${{{variable}-unset}}\" > \"{partial}\" && mv \"{partial}\" \"{reported}\"",
+                partial = partial.display(),
+                reported = into.display()
+            ),
         ]
     }
 
