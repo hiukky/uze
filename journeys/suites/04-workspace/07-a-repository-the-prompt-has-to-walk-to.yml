@@ -1,0 +1,110 @@
+journey: a repository under a folder that is not one is reachable from the new-space prompt
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  Checkouts are rarely siblings of the one you are in. They sit in a
+  folder of projects, often grouped a level further down, and the folder
+  holding them is not itself a repository.
+
+  The prompt has to be able to walk there. It used to offer, for a
+  worktree space, only the rows that were repositories — so the folder on
+  the way to them was not drawn at all, and a directory holding nothing
+  but repositories showed as empty. Typing the path instead did not work
+  either: a separator walked into whichever row was selected and cleared
+  the line, so the path never survived being typed.
+
+  Read off the machine, the claim is one fact: a space was created at the
+  repository two folders down, and the project uze started in is still
+  the space beside it.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 2
+
+scenes:
+  - scene: a repository grouped under a folder that is not one
+    when:
+      - shell: |
+          set -e
+          mkdir -p {world}/projects/group/engine
+          cd {world}/projects/group/engine
+          git init --quiet --initial-branch main
+          git config user.email agent@uze.test
+          git config user.name uze
+          printf 'fn main() {}\n' > main.rs
+          git add -A
+          git commit -qm 'feat: the engine'
+        say: another project, a folder deeper than the one uze opened on
+    then:
+      - dir: "{world}/projects/group/engine/.git"
+        count: 1
+        about: the repository exists, one folder below where the prompt starts
+      - dir: "{world}/projects/group/.git"
+        count: 0
+        about: and the folder holding it is not one itself
+
+  - scene: the path typed reaches it, and the space is created there
+    when:
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: new
+        say: open the new-space prompt
+        in: sidebar
+        expect: '▏'  # the prompt's own cursor, which nothing else draws
+      # No `clear:` — the prompt opens empty, and a backspace on an empty
+      # line is the way *out* of the directory it opened on, so clearing
+      # what is not there walks it up instead.
+      - type: "group"
+        say: name the folder on the way, which used to be drawn nowhere
+        submit: false
+        pause: 0.5
+      - wait: screen
+        until: "group"
+        in: sidebar
+        timeout: 10
+        say: the folder is a row like any other
+      - type: "/engine"
+        say: keep typing the path — the separator is a character, not a gesture
+        submit: false
+        pause: 0.5
+      - wait: screen
+        until: "engine"
+        in: sidebar
+        timeout: 10
+        say: and the repository under it is what the line now names
+      - key: "Enter"
+        say: create the space there
+        # The space's own header, which only exists once it does: the
+        # name alone was already on screen, in the row being typed.
+        expect: '▾ engine'
+        expect_timeout: 20
+        pause: 2.0
+    then:
+      - cmd:
+          run: |
+            python3 -c "
+            import json
+            spaces = json.load(open('{uze_home}/state/terminal/workspace.json'))['spaces']
+            print('%d space(s)' % len(spaces))
+            print('\n'.join(space['root'] for space in spaces))
+            "
+          stdout_contains: "2 space(s)"
+        about: the walk opened a space beside the one uze started in
+      - cmd:
+          run: |
+            python3 -c "
+            import json
+            spaces = json.load(open('{uze_home}/state/terminal/workspace.json'))['spaces']
+            print('\n'.join(space['root'] for space in spaces))
+            "
+          stdout_contains: "/projects/group/engine"
+        about: rooted at the repository two folders down, not at the folder on the way
+      - dir: "{world}/projects/group/engine/.worktrees/*"
+        count: 0
+        about: and creating the space placed no agent, so it cut no checkout

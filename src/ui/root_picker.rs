@@ -149,15 +149,11 @@ impl RootPicker {
         self.profile.is_none_or(|profile| profile.slots_possible)
     }
 
-    /// Chooses a kind. Always answered: the kind says what is being looked
-    /// for, and the listing narrows to the directories that can be it (see
-    /// `refresh`) — where it was refused, the control was dead in exactly
-    /// the place a person would use it, standing in a directory that is no
-    /// repository and looking for one under it.
+    /// Chooses a kind. Always answered: where it was refused, the control
+    /// was dead in exactly the place a person would use it, standing in a
+    /// directory that is no repository and looking for one under it.
     pub(super) fn choose_kind(&mut self, kind: SpaceKind) {
         self.chosen = Some(kind);
-        // What the listing offers depends on the kind (see `refresh`), so
-        // the rows are read again against the one just chosen.
         self.refresh();
     }
 
@@ -388,6 +384,16 @@ impl RootPicker {
         }
     }
 
+    /// Reads the directory the line names and matches the segment inside
+    /// it. Every directory is offered, whichever kind is being created:
+    /// the worktree kind used to keep only the rows that were
+    /// repositories, which made every repository that is not a direct
+    /// child of the directory being listed unreachable — `~/projects`
+    /// holds nothing but repositories and showed as empty, because
+    /// `projects` is not one itself. A directory is the way to what is
+    /// under it whether or not it is the thing being looked for, and
+    /// what a worktree space may be created on is decided by
+    /// [`Self::chosen`], which is where it was always decided.
     fn refresh(&mut self) {
         let (base, segment) = self.split_input();
         let needle = segment.to_lowercase();
@@ -412,18 +418,6 @@ impl RootPicker {
             }
         }
         leading.append(&mut inner);
-        // A worktree space cuts its agents' checkouts from a repository, so
-        // only a directory that is one can be picked for it. The test is a
-        // `.git` beside the name — one look at the filesystem per row,
-        // where asking Git would be a process per row on every keystroke.
-        if self.kind() == SpaceKind::Worktree {
-            let listing = &self.listing;
-            leading.retain(|index| {
-                listing
-                    .get(*index)
-                    .is_some_and(|candidate| holds_a_repository(&candidate.path))
-            });
-        }
         self.matched = leading;
         self.selected = 0;
         // Typing is choosing: the best match leads the list, and it is the

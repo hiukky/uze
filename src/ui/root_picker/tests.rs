@@ -357,31 +357,41 @@ fn the_listed_directory_is_what_the_prompt_lands_on() {
     );
 }
 
-/// A worktree space can only be cut from a repository, so that is all the
-/// listing offers for one — picking anything else silently created the
-/// space somewhere else. The other kind stands anywhere, and offers
-/// everything.
+/// Every directory is offered, whichever kind is being created. The
+/// worktree kind used to keep only the rows that were repositories, and
+/// a repository that is not a direct child of the directory being listed
+/// was then unreachable: a `projects` folder holding nothing but
+/// repositories showed as empty, because `projects` is not one itself.
 #[test]
-fn the_worktree_kind_offers_repositories_and_the_other_offers_every_directory() {
+fn every_directory_is_offered_whichever_kind_is_being_created() {
     let root = TempDir::new("root-picker-filter");
-    std::fs::create_dir_all(root.join("project/.git")).unwrap();
+    std::fs::create_dir_all(root.join("projects/engine/.git")).unwrap();
     std::fs::create_dir_all(root.join("notes")).unwrap();
     let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
-
-    // A plain directory names the tenancy, which offers both rows.
-    assert_eq!(names(&picker), ["notes", "project"]);
 
     picker.choose_kind(SpaceKind::Worktree);
 
     assert_eq!(
         names(&picker),
-        ["project"],
-        "only what a slot can be cut from"
+        ["notes", "projects"],
+        "the way to a repository is a row like any other"
+    );
+    assert_eq!(
+        picker.chosen(),
+        None,
+        "and what a slot cannot be cut from is not a root — which is what makes Enter walk in"
     );
 
-    picker.choose_kind(SpaceKind::Workspace);
+    picker.select(1);
+    picker.descend();
 
-    assert_eq!(names(&picker), ["notes", "project"], "and back");
+    assert_eq!(names(&picker), ["engine"]);
+    picker.select(0);
+    assert_eq!(
+        picker.chosen(),
+        Some((root.join("projects/engine"), SpaceKind::Worktree)),
+        "the repository under it is what a slot is cut from"
+    );
 }
 
 /// A worktree space is cut from a repository, so a directory inside one is
@@ -403,10 +413,12 @@ fn a_subdirectory_is_the_repository_for_a_worktree_and_itself_for_a_workspace() 
         Some((repository.clone(), SpaceKind::Worktree)),
         "a slot is cut from the repository"
     );
-    assert!(
-        names(&picker).is_empty(),
-        "and a subdirectory is no place to cut one from: {:?}",
-        names(&picker)
+    picker.select(0);
+    assert_eq!(names(&picker), ["docs"], "its subdirectories are offered");
+    assert_eq!(
+        picker.chosen(),
+        Some((repository.clone(), SpaceKind::Worktree)),
+        "and choosing one still cuts the slot from the repository it is in"
     );
 
     picker.choose_kind(SpaceKind::Workspace);
