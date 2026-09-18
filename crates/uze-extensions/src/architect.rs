@@ -363,6 +363,19 @@ pub fn handle_mouse(state: &mut ArchitectView, hit: Option<ViewHit>) -> Architec
     ArchitectOutcome::Stay
 }
 
+/// The diagram, taken hold of and moved: it follows the pointer, so a
+/// drag to the right brings what was off to the left into view — the way
+/// a sheet of paper moves, not the way a scrollbar does.
+pub fn drag_by(state: &mut ArchitectView, columns: i32, rows: i32, space: Size) {
+    state.pan_by(-columns, space);
+    state.scroll_by(-rows);
+}
+
+/// A sideways wheel, where the terminal reports one.
+pub fn pan(state: &mut ArchitectView, columns: i32, space: Size) {
+    state.pan_by(columns, space);
+}
+
 pub fn handle_scroll(state: &mut ArchitectView, direction: ScrollDirection) {
     state.scroll_by(match direction {
         ScrollDirection::Up => -3,

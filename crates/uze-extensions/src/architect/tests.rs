@@ -52,6 +52,24 @@ fn a_line_never_outgrows_the_space_it_was_given() {
 }
 
 #[test]
+fn a_dragged_diagram_follows_the_pointer_and_stops_at_its_edges() {
+    let mut state = ArchitectView::opening();
+    let space = Size {
+        width: 60,
+        height: 20,
+    };
+    drag_by(&mut state, -30, -10, space);
+    assert_eq!((state.pan, state.scroll), (30, 10));
+    drag_by(&mut state, 12, 4, space);
+    assert_eq!((state.pan, state.scroll), (18, 6));
+    drag_by(&mut state, 500, 500, space);
+    assert_eq!((state.pan, state.scroll), (0, 0));
+    drag_by(&mut state, -5000, 0, space);
+    let widest = state.canvas.as_ref().unwrap().width - 56;
+    assert_eq!(state.pan, widest);
+}
+
+#[test]
 fn clicking_a_box_selects_it_and_clicking_it_again_lets_go() {
     let mut state = ArchitectView::opening();
     let Drawing::Graph(scene) = &state.drawing else {

@@ -3027,6 +3027,19 @@ pub(super) fn render_tab_strip(
         hits.push((rect, WorkspaceHit::OpenFiles));
         trailing_right = rect.x.saturating_sub(1);
     }
+    {
+        let label = theme::glyph(Symbol::Architect);
+        let rect = chip_rect(&label, trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
+            &label,
+            theme::color(Token::TextSecondary),
+            chip_state(model, Some(WorkspaceHit::OpenArchitect)),
+        );
+        hits.push((rect, WorkspaceHit::OpenArchitect));
+        trailing_right = rect.x.saturating_sub(1);
+    }
     render_notice_chip(frame, model, inner, trailing_right);
 }
 

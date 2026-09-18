@@ -146,8 +146,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::ToggleFiles,
         Control("the tab strip's code chip, beside the changes one"),
     );
-    // A proof of concept: no chip of its own until it stops being one.
-    put(Action::ToggleArchitect, Index);
+    put(
+        Action::ToggleArchitect,
+        Control("the tab strip's architect chip, beside the code one"),
+    );
 
     // --- The code surface, and typing into a file -----------------------
     put(

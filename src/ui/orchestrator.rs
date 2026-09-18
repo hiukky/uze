@@ -1266,6 +1266,8 @@ pub(super) enum WorkspaceHit {
     /// changes chip *says* still varies, which is where that signal
     /// lives now.
     OpenFiles,
+    /// The tab strip's architect button, beside the code one.
+    OpenArchitect,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
     /// The task mark on a sidebar agent row — opens the catalog of what
@@ -1349,6 +1351,13 @@ enum TabDragGroup {
 /// The same shape `DraggingTab` uses, and for the same reason: a gesture
 /// that has not happened yet cannot be classified, and guessing early is
 /// how a drag becomes the wrong one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiagramGrab {
+    last: (u16, u16),
+    moved: bool,
+    click: ViewHit,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EdgeDrag {
     origin: (u16, u16),
@@ -2205,6 +2214,11 @@ struct WorkspaceModel {
     /// the two are never open together and the frame is the host's, not
     /// either extension's.
     architect: Option<architect::ArchitectView>,
+    /// The diagram held by the pointer. A press on it is not yet a click
+    /// or a drag — the first movement says which, as it does for
+    /// [`EdgeDrag`] — so the click it might turn out to be is kept here
+    /// until release.
+    architect_grab: Option<DiagramGrab>,
     /// User-dragged navigator width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
     /// above, kept on the model rather than on the view itself so it
@@ -2595,6 +2609,7 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.code.is_none()
+            && self.architect.is_none()
             && self.action_index.is_none()
             && self.manage.is_none()
             && !self.commit_detail_open()

@@ -1099,7 +1099,13 @@ impl Attach<'_> {
             },
             other => other,
         });
-        if view_hit == Some(ViewHit::DragContentScrollbar) {
+        if let Some(click @ ViewHit::PlaceCaret { .. }) = view_hit {
+            self.model.architect_grab = Some(DiagramGrab {
+                last: (column, row),
+                moved: false,
+                click,
+            });
+        } else if view_hit == Some(ViewHit::DragContentScrollbar) {
             if let Some(bar) = self.model.code_scrollbars.content_bar
                 && let Some(view) = self.model.architect.as_mut()
             {
@@ -1111,6 +1117,37 @@ impl Attach<'_> {
             self.model.architect = None;
         }
         self.model.dirty = true;
+    }
+
+    fn architect_space(&self) -> uze_extensions::view::Size {
+        crate::ui::extension_view::content_space(
+            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
+            self.model.code_tree_width,
+        )
+    }
+
+    fn drag_diagram(&mut self, column: u16, row: u16) {
+        let space = self.architect_space();
+        if let Some(grab) = self.model.architect_grab.as_mut()
+            && let Some(view) = self.model.architect.as_mut()
+        {
+            let columns = i32::from(column) - i32::from(grab.last.0);
+            let rows = i32::from(row) - i32::from(grab.last.1);
+            architect::drag_by(view, columns, rows, space);
+            grab.last = (column, row);
+            grab.moved = true;
+            self.model.dirty = true;
+        }
+    }
+
+    /// A press that never moved was a click on whatever was under it.
+    fn release_diagram(&mut self) {
+        if let Some(grab) = self.model.architect_grab.take()
+            && !grab.moved
+            && let Some(view) = self.model.architect.as_mut()
+        {
+            architect::handle_mouse(view, Some(grab.click));
+        }
     }
 
     /// Shows the part of the list a point on its scrollbar names. The
@@ -1185,10 +1222,7 @@ impl Attach<'_> {
             Action::ToggleChanges => open_code(&mut self.model, code::ContentMode::Diff),
             Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
             _ => {
-                let space = crate::ui::extension_view::content_space(
-                    Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
-                    self.model.code_tree_width,
-                );
+                let space = self.architect_space();
                 if let Some(command) = crate::ui::extension_view::command_for(action)
                     && let Some(view) = self.model.architect.as_mut()
                     && architect::handle_command(view, command, space)
@@ -1306,6 +1340,21 @@ impl Attach<'_> {
             MouseEventKind::Down(MouseButton::Right) => self.open_context_menu(mouse),
             MouseEventKind::Moved => self.hover(mouse),
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(mouse, viewport),
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+                if self.model.architect.is_some() =>
+            {
+                let space = self.architect_space();
+                let columns = if mouse.kind == MouseEventKind::ScrollLeft {
+                    -6
+                } else {
+                    6
+                };
+                if let Some(view) = self.model.architect.as_mut() {
+                    architect::pan(view, columns, space);
+                    self.model.dirty = true;
+                }
+                Flow::Continue
+            }
             _ => Flow::Continue,
         }
     }
@@ -1586,6 +1635,9 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            _ if self.model.architect_grab.is_some() => {
+                self.drag_diagram(mouse.column, mouse.row);
+            }
             _ if self.model.dragging_code_content => {
                 self.scroll_code_content_to(mouse.row);
             }
@@ -1698,6 +1750,7 @@ impl Attach<'_> {
         {
             forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
         }
+        self.release_diagram();
         if let Some(dragging) = self.model.dragging_space.take() {
             if let Some(pending) = dragging.pending {
                 let _ = send_request(
@@ -2272,6 +2325,7 @@ impl Attach<'_> {
             WorkspaceHit::OpenFiles => {
                 open_code(&mut self.model, code::ContentMode::Contents);
             }
+            WorkspaceHit::OpenArchitect => open_architect(&mut self.model),
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
