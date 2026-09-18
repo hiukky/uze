@@ -4,6 +4,24 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.6](https://github.com/hiukky/uze/compare/v0.0.0-alpha.5...v0.0.0-alpha.6) - 2026-09-18
+
+### Features
+
+- **workspace:** Identify agents at launch and place them by the space's kind ([#67](https://github.com/hiukky/uze/pull/67)) ([e3ebc12](https://github.com/hiukky/uze/commit/e3ebc127c15e950467d1d5ee83011f230cb531db))
+
+### Fixes
+
+- **ui:** Keep what the operator chose across spaces, drawers and screens ([#71](https://github.com/hiukky/uze/pull/71)) ([56a44cd](https://github.com/hiukky/uze/commit/56a44cdbc5a60a71c5b37e675407ad60d9d7490d))
+
+### Refactor
+
+- **ui:** Open management as a modal over the workspace ([#66](https://github.com/hiukky/uze/pull/66)) ([7f8ae03](https://github.com/hiukky/uze/commit/7f8ae039bca78e91b044bde49d40fcc9db042ef0))
+
+### Dependencies
+
+- **deps:** Bump taiki-e/install-action from 2.87.8 to 2.87.12 ([#68](https://github.com/hiukky/uze/pull/68)) ([701e60b](https://github.com/hiukky/uze/commit/701e60b1fa4ef959df5ba80d8b3d9aae688a746e))
+
 ## [0.0.0-alpha.5](https://github.com/hiukky/uze/compare/v0.0.0-alpha.4...v0.0.0-alpha.5) - 2026-09-13
 
 ### Features
