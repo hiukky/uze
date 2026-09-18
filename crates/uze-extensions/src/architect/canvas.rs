@@ -40,6 +40,9 @@ pub struct Cell {
     pub glyph: char,
     pub role: Role,
     pub bold: bool,
+    /// Written to, even if with a space: the inside of a box and the gap
+    /// between two words are the drawing's, not the board showing through.
+    pub solid: bool,
 }
 
 impl Default for Cell {
@@ -48,6 +51,7 @@ impl Default for Cell {
             glyph: ' ',
             role: Role::Default,
             bold: false,
+            solid: false,
         }
     }
 }
@@ -78,13 +82,18 @@ impl Canvas {
 
     pub fn put(&mut self, x: i32, y: i32, glyph: char, role: Role, bold: bool) {
         if let Some(index) = self.index(x, y) {
-            self.cells[index] = Cell { glyph, role, bold };
+            self.cells[index] = Cell {
+                glyph,
+                role,
+                bold,
+                solid: true,
+            };
         }
     }
 
     pub fn is_blank(&self, x: i32, y: i32) -> bool {
         self.index(x, y)
-            .is_some_and(|index| self.cells[index].glyph == ' ')
+            .is_some_and(|index| !self.cells[index].solid)
     }
 
     /// Writes `text` from `x`, one cell per column it occupies, and
@@ -136,22 +145,24 @@ impl Canvas {
         }
     }
 
-    /// The rows from `first`, cut to the columns from `pan`: what fits
-    /// the space, as lines the host can draw without wrapping any.
-    pub fn window(&self, pan: i32, columns: i32, first: usize, rows: usize) -> Vec<ContentLine> {
-        (0..self.height as usize)
-            .map(|row| {
-                let visible = row >= first && row < first + rows;
-                ContentLine {
-                    gutter: String::new(),
-                    number: String::new(),
-                    tone: LineTone::Neutral,
-                    spans: if visible {
-                        self.spans(row as i32, pan, columns)
-                    } else {
-                        Vec::new()
-                    },
-                }
+    pub fn cell(&self, x: i32, y: i32) -> Option<Cell> {
+        self.index(x, y).map(|index| self.cells[index])
+    }
+
+    pub fn set(&mut self, x: i32, y: i32, cell: Cell) {
+        if let Some(index) = self.index(x, y) {
+            self.cells[index] = cell;
+        }
+    }
+
+    /// Every row, as lines the host can draw as they are.
+    pub fn lines(&self) -> Vec<ContentLine> {
+        (0..self.height)
+            .map(|row| ContentLine {
+                gutter: String::new(),
+                number: String::new(),
+                tone: LineTone::Neutral,
+                spans: self.spans(row, 0, self.width),
             })
             .collect()
     }

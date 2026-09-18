@@ -226,6 +226,22 @@ actions! {
     ToggleArchitect => "toggle-architect", false,
         "Architect", "Open or close the project's architecture diagrams";
 
+    // --- The architect surface -------------------------------------------
+    PanLeft => "pan-left", false,
+        "Left", "Move the board to show what is further left";
+    PanRight => "pan-right", false,
+        "Right", "Move the board to show what is further right";
+    PanUp => "pan-up", false,
+        "Up", "Move the board to show what is further up";
+    PanDown => "pan-down", false,
+        "Down", "Move the board to show what is further down";
+    NextDiagram => "next-diagram", false,
+        "Next diagram", "Show the next diagram on the board";
+    PreviousDiagram => "previous-diagram", false,
+        "Previous diagram", "Show the previous diagram on the board";
+    NextRendering => "next-rendering", false,
+        "Rendering", "Draw the diagram the next way it can be drawn";
+
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,
         "Edit", "Open the selected file's contents and start typing";

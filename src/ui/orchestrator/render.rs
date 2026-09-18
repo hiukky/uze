@@ -159,7 +159,7 @@ pub(super) fn render(
         let area = frame.area();
         let view = uze_extensions::architect::view(
             architect,
-            crate::ui::extension_view::content_space(area, model.code_tree_width),
+            crate::ui::extension_view::board_space(area),
         );
         metrics.code = Some(crate::ui::extension_view::render(
             frame,
@@ -167,6 +167,7 @@ pub(super) fn render(
             area,
             model.code_tree_width,
             model.code_tree_scroll,
+            uze_keys::Scope::Architect,
             &mut view_hits,
         ));
         hits.extend(
@@ -194,6 +195,7 @@ pub(super) fn render(
             area,
             model.code_tree_width,
             model.code_tree_scroll,
+            uze_keys::Scope::Code,
             &mut view_hits,
         ));
         hits.extend(

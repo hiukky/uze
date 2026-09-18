@@ -358,9 +358,9 @@ impl Attach<'_> {
             // A file taking text seals everything behind it, the same way
             // the action index does: nothing else may answer a letter.
             Scope::CodeEditing
-        } else if self.model.code.is_some() || self.model.architect.is_some() {
-            // The architect surface answers the code surface's keys: both
-            // are a navigator beside content, asked the same things.
+        } else if self.model.architect.is_some() {
+            Scope::Architect
+        } else if self.model.code.is_some() {
             Scope::Code
         } else {
             // Last, and total: anything uze does not claim is the
@@ -1106,13 +1106,15 @@ impl Attach<'_> {
                 click,
             });
         } else if view_hit == Some(ViewHit::DragContentScrollbar) {
+            let space = self.architect_space();
             if let Some(bar) = self.model.code_scrollbars.content_bar
                 && let Some(view) = self.model.architect.as_mut()
             {
-                architect::scroll_to(view, bar.first_at(row));
+                architect::scroll_to(view, bar.first_at(row), space);
             }
-        } else if let Some(view) = self.model.architect.as_mut()
-            && architect::handle_mouse(view, view_hit) == architect::ArchitectOutcome::Close
+        } else if let Some(space) = Some(self.architect_space())
+            && let Some(view) = self.model.architect.as_mut()
+            && architect::handle_mouse(view, view_hit, space) == architect::ArchitectOutcome::Close
         {
             self.model.architect = None;
         }
@@ -1120,10 +1122,12 @@ impl Attach<'_> {
     }
 
     fn architect_space(&self) -> uze_extensions::view::Size {
-        crate::ui::extension_view::content_space(
-            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
-            self.model.code_tree_width,
-        )
+        crate::ui::extension_view::board_space(Rect::new(
+            0,
+            0,
+            self.model.last_size.0,
+            self.model.last_size.1,
+        ))
     }
 
     fn drag_diagram(&mut self, column: u16, row: u16) {
@@ -1142,11 +1146,12 @@ impl Attach<'_> {
 
     /// A press that never moved was a click on whatever was under it.
     fn release_diagram(&mut self) {
+        let space = self.architect_space();
         if let Some(grab) = self.model.architect_grab.take()
             && !grab.moved
             && let Some(view) = self.model.architect.as_mut()
         {
-            architect::handle_mouse(view, Some(grab.click));
+            architect::handle_mouse(view, Some(grab.click), space);
         }
     }
 
@@ -1971,22 +1976,9 @@ impl Attach<'_> {
                 } else {
                     ScrollDirection::Down
                 };
-                match crate::ui::extension_view::scroll_target(
-                    Rect::new(0, 0, size.width, size.height),
-                    self.model.code_tree_width,
-                    mouse.column,
-                    mouse.row,
-                ) {
-                    Some(uze_extensions::view::ScrollTarget::Navigator) => {
-                        self.model.code_tree_scroll =
-                            self.model.code_tree_scroll.scrolled(direction);
-                    }
-                    Some(uze_extensions::view::ScrollTarget::Content) => {
-                        if let Some(view) = self.model.architect.as_mut() {
-                            architect::handle_scroll(view, direction);
-                        }
-                    }
-                    None => {}
+                let space = self.architect_space();
+                if let Some(view) = self.model.architect.as_mut() {
+                    architect::handle_scroll(view, direction, space);
                 }
                 self.model.dirty = true;
             }

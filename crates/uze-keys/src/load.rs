@@ -340,6 +340,22 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Code, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "ctrl+e", Action::ToggleFiles),
         bind(Scope::Code, "alt+a", Action::ToggleArchitect),
+        bind(Scope::Architect, "esc", Action::Dismiss),
+        bind(Scope::Architect, "alt+a", Action::ToggleArchitect),
+        bind(Scope::Architect, "ctrl+g", Action::ToggleChanges),
+        bind(Scope::Architect, "ctrl+e", Action::ToggleFiles),
+        // The arrows move the board, all four ways: on a surface whose
+        // whole point is a drawing larger than the screen, that is what
+        // an arrow means, and the list of diagrams is a row of tabs.
+        bind(Scope::Architect, "left", Action::PanLeft),
+        bind(Scope::Architect, "right", Action::PanRight),
+        bind(Scope::Architect, "up", Action::PanUp),
+        bind(Scope::Architect, "down", Action::PanDown),
+        bind(Scope::Architect, "tab", Action::NextDiagram),
+        bind(Scope::Architect, "shift+tab", Action::PreviousDiagram),
+        bind(Scope::Architect, "v", Action::NextRendering),
+        bind(Scope::Architect, "pagedown", Action::ScrollPageDown),
+        bind(Scope::Architect, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "e", Action::EditFile),
         bind(Scope::Code, "p", Action::TogglePreview),
         bind(Scope::Code, "d", Action::DeleteFile),

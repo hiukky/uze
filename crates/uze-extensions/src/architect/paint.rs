@@ -165,6 +165,11 @@ fn paint_node(canvas: &mut Canvas, node: &Node, frame: Frame, selected: bool) {
         (_, true) => Role::Faint,
         _ => Role::Muted,
     };
+    for y in frame.y..frame.y + frame.h {
+        for x in frame.x..frame.x + frame.w {
+            canvas.put(x, y, ' ', Role::Default, false);
+        }
+    }
     canvas.frame(frame, corners, border);
     let mut row = frame.y + 1;
     if node.shape == Shape::Database {

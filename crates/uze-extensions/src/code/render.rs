@@ -17,8 +17,8 @@ use super::{
     editor::OpenFile,
 };
 use crate::view::{
-    Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon, Size,
-    Span, View,
+    Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
+    Size, Span, View,
 };
 
 /// `space` is advisory: it bounds how much content is worth producing,
@@ -42,6 +42,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             },
             footer,
             modes: Vec::new(),
+            layout: Layout::Sidebar,
         };
     }
 
@@ -58,6 +59,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
         },
         footer,
         modes: modes(code),
+        layout: Layout::Sidebar,
     }
 }
 

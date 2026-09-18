@@ -154,6 +154,9 @@ scopes! {
     /// The same surface with a file open for typing. Its own scope
     /// because it takes text — nothing behind it may answer a letter.
     CodeEditing => "code-editing", "Editing a file", Workspace, seals: true, text: false;
+    /// The architect surface: a diagram on a board that moves under the
+    /// keys the way it moves under the pointer.
+    Architect => "architect", "Architect", Workspace, seals: true, text: false;
     /// The directory picker a new space is born from.
     RootPicker => "root-picker", "Choosing a directory", Workspace, seals: true, text: true;
     /// The inline rename buffer over a tab or space label.

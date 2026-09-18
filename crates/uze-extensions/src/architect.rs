@@ -7,15 +7,18 @@
 //! click selects it and lights what it connects to. The diagrams are
 //! static ([`samples`]); where they come from is a later question.
 //!
-//! It describes and the host draws, like every surface here. A diagram
-//! is [`Content::Lines`] whose spans happen to be box-drawing, which is
-//! why this needed no new vocabulary — and also where the vocabulary
-//! shows its one gap: the host wraps a long line, and a wrapped diagram
-//! is noise, so this cuts every line to the space itself and pans.
+//! It describes and the host draws, like every surface here — but as a
+//! [`Layout::Board`], because a drawing is not a document: it is larger
+//! than the screen in both directions, it is moved rather than scrolled,
+//! and the list of diagrams is how it is switched rather than something
+//! to read beside it. What the board shows is a *screen* cut from the
+//! whole drawing: this side decides which part, because it owns the
+//! position; the host only draws the cells it is handed.
 
 mod canvas;
 mod layout;
 mod mermaid;
+mod minimap;
 mod model;
 mod paint;
 mod route;
@@ -25,12 +28,13 @@ mod sequence;
 use crate::{
     registry::BuiltinExtension,
     view::{
-        Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
-        ScrollDirection, Size, Span, View, ViewHit,
+        Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow,
+        PanDirection, Role, RowIcon, ScrollDirection, Size, Span, View, ViewHit,
     },
 };
 
-use canvas::{Canvas, Glyphs};
+use canvas::{Canvas, Frame, Glyphs};
+use minimap::Minimap;
 use model::Diagram;
 use paint::Scene;
 use samples::SAMPLES;
@@ -40,13 +44,15 @@ pub const CATALOG: BuiltinExtension = BuiltinExtension {
     name: "Architect",
     description: "A project's architecture as diagrams drawn in the terminal: Mermaid flowcharts, C4 views and sequences, laid out in cells with no graphics protocol.",
     surface: "Workspace TUI",
-    usage: "Alt+A opens it over the workspace; click a box to light what it connects to.",
+    usage: "Alt+A opens it over the workspace, as does its chip in the tab strip; drag the board to move it, click a box to light what it connects to.",
 };
 
-/// The margin the host keeps on each side of unnumbered content. Known
-/// here only because a line any longer would wrap; see the module docs.
-const READING_INSET: u16 = 2;
-const PAN_STEP: i32 = 8;
+const PAN_COLUMNS: i32 = 8;
+const PAN_ROWS: i32 = 3;
+/// The board's grid: a dot every so many cells, faint enough to read
+/// through and regular enough that moving the board is visible even
+/// where there is nothing drawn.
+const GRID: (i32, i32) = (6, 3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Showing {
@@ -61,12 +67,6 @@ const MODES: [(Showing, &str); 3] = [
     (Showing::Source, "Source"),
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Focus {
-    Navigator,
-    Content,
-}
-
 enum Drawing {
     Graph(Box<Scene>),
     Sequence(model::Sequence),
@@ -76,9 +76,8 @@ enum Drawing {
 pub struct ArchitectView {
     sample: usize,
     showing: Showing,
-    focus: Focus,
-    scroll: u16,
-    pan: i32,
+    /// The board cell at the screen's top-left corner.
+    corner: (i32, i32),
     picked: Option<usize>,
     drawing: Drawing,
     canvas: Option<Canvas>,
@@ -95,9 +94,7 @@ impl ArchitectView {
         let mut view = Self {
             sample: 0,
             showing: Showing::Unicode,
-            focus: Focus::Navigator,
-            scroll: 0,
-            pan: 0,
+            corner: (0, 0),
             picked: None,
             drawing: Drawing::Unreadable(String::new()),
             canvas: None,
@@ -107,9 +104,8 @@ impl ArchitectView {
     }
 
     fn open_sample(&mut self, sample: usize) {
-        self.sample = sample.min(SAMPLES.len() - 1);
-        self.scroll = 0;
-        self.pan = 0;
+        self.sample = sample % SAMPLES.len();
+        self.corner = (0, 0);
         self.picked = None;
         self.drawing = match mermaid::parse(SAMPLES[self.sample].source) {
             Ok(Diagram::Graph(graph)) => Drawing::Graph(Box::new(Scene::of(graph))),
@@ -133,51 +129,81 @@ impl ArchitectView {
 
     fn show(&mut self, showing: Showing) {
         self.showing = showing;
-        self.scroll = 0;
         self.repaint();
     }
 
-    fn total_rows(&self) -> usize {
+    fn board_size(&self) -> (i32, i32) {
         match (self.showing, &self.canvas) {
-            (Showing::Source, _) => SAMPLES[self.sample].source.lines().count(),
-            (_, Some(canvas)) => canvas.height as usize,
-            _ => 0,
+            (Showing::Source, _) => {
+                let lines = SAMPLES[self.sample].source.lines();
+                let widest = lines.clone().map(canvas::text_width).max().unwrap_or(0);
+                (widest, lines.count() as i32)
+            }
+            (_, Some(canvas)) => (canvas.width, canvas.height),
+            _ => (0, 0),
         }
     }
 
-    fn scroll_by(&mut self, rows: i32) {
-        let last = self.total_rows().saturating_sub(1) as i32;
-        self.scroll = (i32::from(self.scroll) + rows).clamp(0, last.max(0)) as u16;
+    /// Moves the screen's corner, never past the point where the board's
+    /// far edge would leave the screen's.
+    fn move_by(&mut self, columns: i32, rows: i32, space: Size) {
+        let board = self.board_size();
+        let furthest = (
+            (board.0 - i32::from(space.width)).max(0),
+            (board.1 - i32::from(space.height)).max(0),
+        );
+        self.corner = (
+            (self.corner.0 + columns).clamp(0, furthest.0),
+            (self.corner.1 + rows).clamp(0, furthest.1),
+        );
     }
 
-    fn pan_by(&mut self, columns: i32, space: Size) {
-        let width = self.canvas.as_ref().map_or(0, |canvas| canvas.width);
-        let furthest = (width - i32::from(visible_columns(space))).max(0);
-        self.pan = (self.pan + columns).clamp(0, furthest);
+    /// How far in a board smaller than the screen is set, so it sits in
+    /// the middle of it rather than against its top-left corner.
+    fn inset(&self, space: Size) -> (i32, i32) {
+        let board = self.board_size();
+        (
+            ((i32::from(space.width) - board.0) / 2).max(0),
+            ((i32::from(space.height) - board.1) / 2).max(0),
+        )
     }
 
-    fn pick(&mut self, line: usize, cell: usize) {
+    fn minimap(&self, space: Size) -> Option<Minimap> {
+        let screen = (i32::from(space.width), i32::from(space.height));
+        match self.showing {
+            Showing::Source => None,
+            _ => Minimap::of(self.board_size(), screen),
+        }
+    }
+
+    /// A click, given as the content line and the screen column it
+    /// landed on. The map answers first: it is drawn over the board.
+    fn click(&mut self, line: usize, cell: usize, space: Size) {
+        let (x, y) = (cell as i32, line as i32 - self.corner.1);
+        if let Some(target) = self.minimap(space).and_then(|map| map.board_cell_at(x, y)) {
+            let half = (i32::from(space.width) / 2, i32::from(space.height) / 2);
+            self.corner = (0, 0);
+            self.move_by(target.0 - half.0, target.1 - half.1, space);
+            return;
+        }
         let Drawing::Graph(scene) = &self.drawing else {
             return;
         };
-        let node = scene.placement.node_at(cell as i32 + self.pan, line as i32);
+        let inset = self.inset(space);
+        let board = (x - inset.0 + self.corner.0, line as i32 - inset.1);
+        let node = scene.placement.node_at(board.0, board.1);
         // Clicking what is already picked lets go of it, so the diagram
         // can be read whole again without reaching for a key.
         self.picked = if node == self.picked { None } else { node };
         self.repaint();
     }
 
-    fn heading(&self) -> String {
-        let sample = &SAMPLES[self.sample];
-        match &self.drawing {
+    fn heading(&self, space: Size) -> String {
+        let mut heading = match &self.drawing {
             Drawing::Graph(scene) => {
                 let graph = &scene.graph;
-                let mut heading = format!(
-                    "{} · {} boxes · {} edges",
-                    sample.name,
-                    graph.nodes.len(),
-                    graph.edges.len()
-                );
+                let mut heading =
+                    format!("{} boxes · {} edges", graph.nodes.len(), graph.edges.len());
                 if scene.routes.unrouted > 0 {
                     heading.push_str(&format!(" · {} not routed", scene.routes.unrouted));
                 }
@@ -196,18 +222,56 @@ impl ArchitectView {
                 heading
             }
             Drawing::Sequence(sequence) => format!(
-                "{} · {} participants · {} steps",
-                sample.name,
+                "{} participants · {} steps",
                 sequence.participants.len(),
                 sequence.steps.len()
             ),
-            Drawing::Unreadable(_) => sample.name.to_owned(),
+            Drawing::Unreadable(_) => String::new(),
+        };
+        if self.minimap(space).is_some() {
+            heading.push_str(" · drag the board or use the arrows to move it");
         }
+        heading
     }
-}
 
-fn visible_columns(space: Size) -> u16 {
-    space.width.saturating_sub(READING_INSET * 2).max(1)
+    /// The part of the board the screen is over, as the screen's own
+    /// cells: the drawing, the grid behind it, the map over it.
+    fn screen(&self, space: Size) -> Option<Canvas> {
+        let board = self.canvas.as_ref()?;
+        let (columns, rows) = (i32::from(space.width), i32::from(space.height));
+        let mut screen = Canvas::new(columns, rows, board.glyphs);
+        let inset = self.inset(space);
+        let grid_dot = match board.glyphs {
+            Glyphs::Unicode => '·',
+            Glyphs::Ascii => '.',
+        };
+        for y in 0..rows {
+            for x in 0..columns {
+                let at = (x - inset.0 + self.corner.0, y - inset.1 + self.corner.1);
+                match board.cell(at.0, at.1) {
+                    Some(cell) if cell.solid => screen.set(x, y, cell),
+                    _ if at.0.rem_euclid(GRID.0) == 0 && at.1.rem_euclid(GRID.1) == 0 => {
+                        screen.put(x, y, grid_dot, Role::Faint, false);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(map) = self.minimap(space) {
+            let boxes: &[Frame] = match &self.drawing {
+                Drawing::Graph(scene) => &scene.placement.nodes,
+                _ => &[],
+            };
+            let looking_at = Frame {
+                x: self.corner.0,
+                y: self.corner.1,
+                w: columns,
+                h: rows,
+            };
+            map.paint(&mut screen, boxes, looking_at);
+        }
+        Some(screen)
+    }
 }
 
 pub fn view(state: &ArchitectView, space: Size) -> View {
@@ -221,7 +285,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
                 name: group.to_owned(),
                 depth: 0,
                 collapsed: false,
-                icon: RowIcon::DirectoryOpen,
+                icon: RowIcon::None,
             });
         }
         rows.push(NavigatorRow::Item {
@@ -230,12 +294,9 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             depth: 1,
             marker: Span::default(),
             selected: index == state.sample,
-            icon: RowIcon::Markup,
+            icon: RowIcon::None,
         });
     }
-    let selected_row = rows
-        .iter()
-        .position(|row| matches!(row, NavigatorRow::Item { id, .. } if *id == state.sample));
     View {
         title: vec![
             Span::new("Architect", Role::Bright).bold(),
@@ -244,18 +305,15 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         navigator: Some(Navigator {
             heading: "DIAGRAMS".to_owned(),
             badge: SAMPLES.len().to_string(),
-            focused: state.focus == Focus::Navigator,
+            focused: false,
             rows,
-            anchor: selected_row,
+            anchor: None,
         }),
         content: content(state, space),
         footer: vec![
             Command::Close,
-            Command::FocusNext,
-            Command::SelectNext,
-            Command::Collapse,
-            Command::Expand,
-            Command::TogglePreview,
+            Command::NextView,
+            Command::NextMode,
             Command::ScrollPageDown,
         ],
         modes: MODES
@@ -265,6 +323,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
                 active: showing == state.showing,
             })
             .collect(),
+        layout: Layout::Board,
     }
 }
 
@@ -276,22 +335,37 @@ fn content(state: &ArchitectView, space: Size) -> Content {
             role: Role::Warning,
         };
     }
-    let lines = match (state.showing, &state.canvas) {
-        (Showing::Source, _) => source_lines(SAMPLES[state.sample].source),
-        (_, Some(canvas)) => canvas.window(
-            state.pan,
-            i32::from(visible_columns(space)),
-            usize::from(state.scroll),
-            usize::from(space.height) * 2,
-        ),
-        _ => Vec::new(),
+    let scrolled = state.corner.1.max(0) as usize;
+    let lines = match state.showing {
+        Showing::Source => source_lines(SAMPLES[state.sample].source),
+        _ => {
+            // The host skips the lines scrolled past, so they are handed
+            // over empty: only the screen is worth the cells.
+            let mut lines = vec![blank_line(); scrolled];
+            lines.extend(
+                state
+                    .screen(space)
+                    .map(|screen| screen.lines())
+                    .unwrap_or_default(),
+            );
+            lines
+        }
     };
     Content::Lines {
-        heading: state.heading(),
-        scroll: state.scroll,
-        total: state.total_rows(),
+        heading: state.heading(space),
+        scroll: scrolled as u16,
+        total: state.board_size().1.max(0) as usize,
         lines,
         caret: None,
+    }
+}
+
+fn blank_line() -> ContentLine {
+    ContentLine {
+        gutter: String::new(),
+        number: String::new(),
+        tone: LineTone::Neutral,
+        spans: Vec::new(),
     }
 }
 
@@ -316,75 +390,72 @@ pub fn handle_command(
     let page = i32::from(space.height.saturating_sub(2).max(1));
     match command {
         Command::Close => return ArchitectOutcome::Close,
-        Command::FocusNext => {
-            state.focus = match state.focus {
-                Focus::Navigator => Focus::Content,
-                Focus::Content => Focus::Navigator,
-            };
-        }
-        Command::SelectNext if state.focus == Focus::Content => state.scroll_by(1),
-        Command::SelectPrevious if state.focus == Focus::Content => state.scroll_by(-1),
-        Command::SelectNext => state.open_sample(state.sample + 1),
-        Command::SelectPrevious => state.open_sample(state.sample.saturating_sub(1)),
-        Command::Collapse => state.pan_by(-PAN_STEP, space),
-        Command::Expand => state.pan_by(PAN_STEP, space),
-        Command::ScrollPageDown => state.scroll_by(page),
-        Command::ScrollPageUp => state.scroll_by(-page),
-        Command::TogglePreview => {
+        Command::NextView => state.open_sample(state.sample + 1),
+        Command::PreviousView => state.open_sample(state.sample + SAMPLES.len() - 1),
+        Command::Pan(PanDirection::Left) => state.move_by(-PAN_COLUMNS, 0, space),
+        Command::Pan(PanDirection::Right) => state.move_by(PAN_COLUMNS, 0, space),
+        Command::Pan(PanDirection::Up) => state.move_by(0, -PAN_ROWS, space),
+        Command::Pan(PanDirection::Down) => state.move_by(0, PAN_ROWS, space),
+        Command::ScrollPageDown => state.move_by(0, page, space),
+        Command::ScrollPageUp => state.move_by(0, -page, space),
+        Command::NextMode => {
             let current = MODES
                 .iter()
                 .position(|&(showing, _)| showing == state.showing)
                 .unwrap_or(0);
             state.show(MODES[(current + 1) % MODES.len()].0);
+            state.move_by(0, 0, space);
         }
         _ => {}
     }
     ArchitectOutcome::Stay
 }
 
-pub fn handle_mouse(state: &mut ArchitectView, hit: Option<ViewHit>) -> ArchitectOutcome {
+pub fn handle_mouse(
+    state: &mut ArchitectView,
+    hit: Option<ViewHit>,
+    space: Size,
+) -> ArchitectOutcome {
     match hit {
         Some(ViewHit::Close) => return ArchitectOutcome::Close,
-        Some(ViewHit::SelectItem(sample)) => {
-            state.focus = Focus::Navigator;
-            state.open_sample(sample);
-        }
+        Some(ViewHit::SelectItem(sample)) => state.open_sample(sample),
         Some(ViewHit::SelectMode(mode)) => {
             if let Some(&(showing, _)) = MODES.get(mode) {
                 state.show(showing);
+                state.move_by(0, 0, space);
             }
         }
         Some(ViewHit::PlaceCaret { line, cell }) if state.showing != Showing::Source => {
-            state.focus = Focus::Content;
-            state.pick(line, cell);
+            state.click(line, cell, space);
         }
         _ => {}
     }
     ArchitectOutcome::Stay
 }
 
-/// The diagram, taken hold of and moved: it follows the pointer, so a
-/// drag to the right brings what was off to the left into view — the way
-/// a sheet of paper moves, not the way a scrollbar does.
+/// The board, taken hold of and moved: it follows the pointer, so a drag
+/// to the right brings what was off to the left into view — the way a
+/// sheet of paper moves, not the way a scrollbar does.
 pub fn drag_by(state: &mut ArchitectView, columns: i32, rows: i32, space: Size) {
-    state.pan_by(-columns, space);
-    state.scroll_by(-rows);
+    state.move_by(-columns, -rows, space);
 }
 
 /// A sideways wheel, where the terminal reports one.
 pub fn pan(state: &mut ArchitectView, columns: i32, space: Size) {
-    state.pan_by(columns, space);
+    state.move_by(columns, 0, space);
 }
 
-pub fn handle_scroll(state: &mut ArchitectView, direction: ScrollDirection) {
-    state.scroll_by(match direction {
-        ScrollDirection::Up => -3,
-        ScrollDirection::Down => 3,
-    });
+pub fn handle_scroll(state: &mut ArchitectView, direction: ScrollDirection, space: Size) {
+    let rows = match direction {
+        ScrollDirection::Up => -PAN_ROWS,
+        ScrollDirection::Down => PAN_ROWS,
+    };
+    state.move_by(0, rows, space);
 }
 
-pub fn scroll_to(state: &mut ArchitectView, first: usize) {
-    state.scroll = first.min(state.total_rows().saturating_sub(1)) as u16;
+pub fn scroll_to(state: &mut ArchitectView, first: usize, space: Size) {
+    state.corner.1 = 0;
+    state.move_by(0, first as i32, space);
 }
 
 #[cfg(test)]

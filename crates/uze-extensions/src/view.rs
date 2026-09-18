@@ -136,6 +136,24 @@ pub struct View {
     /// be reachable by pointing at it, and a mode nothing on screen
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
+    pub layout: Layout,
+}
+
+/// How a view's list and its content share the frame.
+///
+/// A meaning rather than a geometry, like everything else here: the
+/// extension says what kind of surface it is, and the host decides what
+/// that looks like.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Layout {
+    /// A list to work through, with what is selected shown beside it.
+    #[default]
+    Sidebar,
+    /// A drawing larger than the screen. The content is the surface: it
+    /// takes the whole frame, and is cut at the edge rather than wrapped,
+    /// because a wrapped drawing is noise. The list is how the drawing is
+    /// switched, so it becomes a row of tabs above it.
+    Board,
 }
 
 /// One way of showing the content, offered beside it.
@@ -479,4 +497,24 @@ pub enum Command {
     EraseBack,
     /// Delete the character under it.
     EraseForward,
+
+    // --- Asked of a board -----------------------------------------------
+    //
+    // A third kind of surface, and the same bar: a board is moved, which
+    // neither "select next" nor a caret can say.
+    /// Show what lies further this way.
+    Pan(PanDirection),
+    /// The next entry of the list, from wherever focus is.
+    NextView,
+    PreviousView,
+    /// The next of the [`View::modes`] offered.
+    NextMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanDirection {
+    Left,
+    Right,
+    Up,
+    Down,
 }

@@ -150,6 +150,26 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::ToggleArchitect,
         Control("the tab strip's architect chip, beside the code one"),
     );
+    for pan in [
+        Action::PanLeft,
+        Action::PanRight,
+        Action::PanUp,
+        Action::PanDown,
+    ] {
+        put(
+            pan,
+            Control("dragging the board, or a click on its minimap"),
+        );
+    }
+    put(Action::NextDiagram, Control("clicking the diagram's tab"));
+    put(
+        Action::PreviousDiagram,
+        Control("clicking the diagram's tab"),
+    );
+    put(
+        Action::NextRendering,
+        Control("clicking a rendering segment"),
+    );
 
     // --- The code surface, and typing into a file -----------------------
     put(

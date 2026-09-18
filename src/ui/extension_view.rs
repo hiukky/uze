@@ -19,8 +19,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
-    RowMark, ScrollTarget, Section, Size, Span, View, ViewHit,
+    Caret, Command, Content, ContentLine, Layout as ViewLayout, LineTone, Mode, Navigator,
+    NavigatorRow, PanDirection, Role, RowIcon, RowMark, ScrollTarget, Section, Size, Span, View,
+    ViewHit,
 };
 
 use crate::ui::scrollbar::Scrollbar;
@@ -123,6 +124,38 @@ pub(crate) fn content_columns(
     (columns[0], content_rows[0], content_rows[1])
 }
 
+/// A board's rows, top to bottom: the tabs, the heading, the board itself
+/// and the footer. The board gets everything the other three do not need —
+/// no navigator column, no blank row under the title, no reading margin.
+pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect, Rect) {
+    let inner = Rect::new(
+        frame_area.x + 2,
+        frame_area.y + 1,
+        frame_area.width.saturating_sub(4),
+        frame_area.height.saturating_sub(2),
+    );
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+    (rows[0], rows[1], rows[2], rows[3])
+}
+
+/// How many cells a board has to show its drawing in — exact, unlike
+/// [`content_space`]: the extension cuts the screen it hands over to this.
+pub(crate) fn board_space(frame_area: Rect) -> Size {
+    let (_, _, board, _) = board_rows(frame_area);
+    Size {
+        width: board.width,
+        height: board.height,
+    }
+}
+
 /// How much room the content column has, for an extension deciding how
 /// much to produce.
 pub(crate) fn content_space(frame_area: Rect, navigator_width_override: Option<u16>) -> Size {
@@ -215,6 +248,7 @@ pub(crate) fn render(
     area: Rect,
     navigator_width_override: Option<u16>,
     navigator_scroll: NavigatorScroll,
+    scope: uze_keys::Scope,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> Rendered {
     frame.render_widget(Clear, area);
@@ -248,6 +282,9 @@ pub(crate) fn render(
     );
     hits.push((close_rect, ViewHit::Close));
 
+    if view.layout == ViewLayout::Board {
+        return render_board(frame, view, area, scope, hits);
+    }
     let (navigator_area, content_area, footer) = content_columns(area, navigator_width_override);
 
     let mut rendered = Rendered {
@@ -299,8 +336,133 @@ pub(crate) fn render(
             );
         }
     }
-    render_footer(frame, footer, &view.footer);
+    render_footer(frame, footer, &view.footer, scope);
     rendered
+}
+
+/// A [`ViewLayout::Board`]: the list as a row of tabs, and under it the
+/// drawing, given every cell that is left and cut at the edge.
+fn render_board(
+    frame: &mut ratatui::Frame<'_>,
+    view: &View,
+    area: Rect,
+    scope: uze_keys::Scope,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) -> Rendered {
+    let (tabs, heading_row, board, footer) = board_rows(area);
+    let mut rendered = Rendered::default();
+    render_modes(frame, tabs, &view.modes, hits);
+    if let Some(navigator) = view.navigator.as_ref() {
+        let room = tabs.width.saturating_sub(modes_width(&view.modes) + 2);
+        render_tabs(frame, Rect::new(tabs.x, tabs.y, room, 1), navigator, hits);
+    }
+    match &view.content {
+        Content::Message { text, hint, role } => {
+            render_message(frame, board, text, hint.as_deref(), color(*role));
+        }
+        Content::Lines {
+            heading,
+            scroll,
+            lines,
+            total,
+            ..
+        } => {
+            frame.render_widget(
+                Paragraph::new(TextSpan::styled(
+                    heading.to_owned(),
+                    theme::fg(Token::TextMuted),
+                )),
+                heading_row,
+            );
+            let gutter = gutter_width(lines);
+            for (row, (offset, line)) in lines
+                .iter()
+                .enumerate()
+                .skip(usize::from(*scroll))
+                .take(usize::from(board.height))
+                .enumerate()
+            {
+                let rect = Rect::new(board.x, board.y + row as u16, board.width, 1);
+                render_line(frame, rect, line, gutter, false);
+                hits.push((
+                    Rect::new(
+                        rect.x + gutter,
+                        rect.y,
+                        rect.width.saturating_sub(gutter),
+                        1,
+                    ),
+                    ViewHit::PlaceCaret {
+                        line: offset,
+                        cell: 0,
+                    },
+                ));
+            }
+            let bar = Scrollbar::measure(
+                Rect::new(board.right(), board.y, Scrollbar::width(), board.height),
+                usize::from(board.height),
+                *total,
+            );
+            rendered.content_bar = render_scrollbar(
+                frame,
+                bar,
+                usize::from(*scroll),
+                hits,
+                ViewHit::DragContentScrollbar,
+            );
+        }
+    }
+    render_footer(frame, footer, &view.footer, scope);
+    rendered
+}
+
+/// The list, laid along a row: a group is a quiet label, an item a
+/// segment drawn the way the mode segments are, so the two controls on
+/// this row read as the same kind of thing.
+fn render_tabs(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    navigator: &Navigator,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let mut x = area.x;
+    for row in &navigator.rows {
+        let (text, style, hit) = match row {
+            NavigatorRow::Group { name, .. } => (
+                format!(
+                    "{}{} ",
+                    if x == area.x { "" } else { "  " },
+                    name.to_uppercase()
+                ),
+                theme::fg(Token::TextFaint),
+                None,
+            ),
+            NavigatorRow::Item {
+                id, name, selected, ..
+            } => {
+                let (fill, ink) = match selected {
+                    true => (Token::SurfaceSelected, Token::TextBright),
+                    false => (Token::SurfaceBackground, Token::TextMuted),
+                };
+                let mut style = Style::default()
+                    .fg(theme::color(ink))
+                    .bg(theme::color(fill));
+                if *selected {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                (format!(" {name} "), style, Some(ViewHit::SelectItem(*id)))
+            }
+        };
+        let width = TextSpan::raw(&text).width() as u16;
+        if x.saturating_add(width) > area.right() {
+            break;
+        }
+        let rect = Rect::new(x, area.y, width, 1);
+        frame.render_widget(Paragraph::new(TextSpan::styled(text, style)), rect);
+        if let Some(hit) = hit {
+            hits.push((rect, hit));
+        }
+        x = x.saturating_add(width);
+    }
 }
 
 fn render_navigator(
@@ -548,7 +710,7 @@ fn render_lines(
             break;
         }
         let row = Rect::new(content.x, y, content.width, height);
-        render_line(frame, row, line, gutter);
+        render_line(frame, row, line, gutter, true);
         // One hit per *visual* row, not per line: a wrapped line covers
         // several, and which one the pointer is on is half of where in
         // the text it landed. The cell offset here is the row's own
@@ -860,7 +1022,13 @@ fn line_height(line: &ContentLine, width: u16, gutter: u16) -> u16 {
 
 /// One line: a gutter mark, one stable number column, then content wrapped
 /// to the width that is left.
-fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine, gutter: u16) {
+fn render_line(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    line: &ContentLine,
+    gutter: u16,
+    wrapped: bool,
+) {
     let (marker_style, background) = match line.tone {
         LineTone::Neutral => (theme::fg(Token::TextFaint), None),
         LineTone::Added => (
@@ -894,26 +1062,26 @@ fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine, g
             columns[0],
         );
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(content_spans))
-            .wrap(Wrap { trim: false })
-            .style(
-                Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground))),
-            ),
-        columns[1],
-    );
+    let mut text = Paragraph::new(Line::from(content_spans))
+        .style(Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground))));
+    // A drawing is cut at the edge; only prose is folded at it.
+    if wrapped {
+        text = text.wrap(Wrap { trim: false });
+    }
+    frame.render_widget(text, columns[1]);
 }
 
 /// A hairline top border plus the hint text directly under it — the same
 /// shape `management::render_footer` uses.
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command]) {
+fn render_footer(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    commands: &[Command],
+    scope: uze_keys::Scope,
+) {
     // The overlay is what is open, so its own scope is what a key would
     // resolve against — the same stack `Attach::scopes` builds.
-    let scopes = [
-        uze_keys::Scope::Global,
-        uze_keys::Scope::Workspace,
-        uze_keys::Scope::Code,
-    ];
+    let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Workspace, scope];
     let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
     frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
 }
@@ -924,7 +1092,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command
 /// is bound to. Kept here, beside the render that needs it, rather than in
 /// the extension, which knows nothing of either. Where two actions reach
 /// one command, the first row is the one a footer names.
-const COMMAND_ACTIONS: [(Command, uze_keys::Action); 22] = [
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 29] = [
     (Command::Close, uze_keys::Action::Dismiss),
     (Command::FocusNext, uze_keys::Action::FocusNext),
     (Command::FocusNext, uze_keys::Action::FocusPrevious),
@@ -947,6 +1115,16 @@ const COMMAND_ACTIONS: [(Command, uze_keys::Action); 22] = [
     (Command::Newline, uze_keys::Action::InsertNewline),
     (Command::EraseBack, uze_keys::Action::EraseBack),
     (Command::EraseForward, uze_keys::Action::EraseForward),
+    (Command::Pan(PanDirection::Left), uze_keys::Action::PanLeft),
+    (
+        Command::Pan(PanDirection::Right),
+        uze_keys::Action::PanRight,
+    ),
+    (Command::Pan(PanDirection::Up), uze_keys::Action::PanUp),
+    (Command::Pan(PanDirection::Down), uze_keys::Action::PanDown),
+    (Command::NextView, uze_keys::Action::NextDiagram),
+    (Command::PreviousView, uze_keys::Action::PreviousDiagram),
+    (Command::NextMode, uze_keys::Action::NextRendering),
 ];
 
 /// The action a command is named by. `None` for typing, which has no
@@ -1136,6 +1314,7 @@ mod tests {
             },
             footer: vec![Command::Close],
             modes: Vec::new(),
+            layout: ViewLayout::Sidebar,
         }
     }
 
@@ -1150,6 +1329,7 @@ mod tests {
                     frame.area(),
                     Some(24),
                     NavigatorScroll::default(),
+                    uze_keys::Scope::Code,
                     &mut hits,
                 );
             })
@@ -1176,6 +1356,7 @@ mod tests {
                     frame.area(),
                     Some(24),
                     NavigatorScroll::default(),
+                    uze_keys::Scope::Architect,
                     &mut hits,
                 );
             })
@@ -1191,17 +1372,30 @@ mod tests {
         (rows, hits)
     }
 
-    /// A diagram is only a diagram while every row stays one row: the
-    /// extension cuts to the space it was told about, and this holds the
-    /// host to having told it the truth. Then the click: the row and the
-    /// column the host resolves must land in the box drawn there.
+    /// A board is drawn as the extension cut it: the screen it was told
+    /// about is the screen it gets, so no row is folded and the last
+    /// column is still the drawing's. Then the click: the row and column
+    /// the host resolves must land in the box drawn there.
     #[test]
-    fn a_diagram_is_drawn_unwrapped_and_a_click_lands_in_the_box_under_it() {
+    fn a_board_is_drawn_as_it_was_cut_and_a_click_lands_in_the_box_under_it() {
         use uze_extensions::architect;
         let (width, height) = (150, 45);
-        let space = content_space(Rect::new(0, 0, width, height), Some(24));
+        let space = board_space(Rect::new(0, 0, width, height));
         let mut state = architect::ArchitectView::opening();
         let (rows, hits) = draw_sized(&architect::view(&state, space), width, height);
+        if std::env::var_os("UZE_SHOW_BOARD").is_some() {
+            println!("{}", rows.join("\n"));
+        }
+        assert!(
+            rows[1].contains("FLOWCHART") && rows[1].contains("Install pipeline"),
+            "the diagrams are a row of tabs: {}",
+            rows[1]
+        );
+        let footer = rows[usize::from(height) - 3].as_str();
+        assert!(
+            footer.contains("tab next diagram") && footer.contains("v rendering"),
+            "the footer names the board's own keys: {footer}"
+        );
 
         let title_row = rows
             .iter()
@@ -1229,6 +1423,7 @@ mod tests {
                 line,
                 cell: cell + usize::from(title_column - rect.x),
             }),
+            space,
         );
         let Content::Lines { heading, .. } = architect::view(&state, space).content else {
             panic!("a diagram is lines");
@@ -1536,6 +1731,7 @@ mod tests {
                     frame.area(),
                     Some(24),
                     NavigatorScroll::default(),
+                    uze_keys::Scope::Code,
                     &mut hits,
                 );
             })
@@ -1603,6 +1799,7 @@ mod tests {
                     frame.area(),
                     Some(24),
                     NavigatorScroll::default(),
+                    uze_keys::Scope::Code,
                     &mut Vec::new(),
                 );
             })
@@ -1714,8 +1911,16 @@ mod tests {
         let mut settled = NavigatorScroll::default();
         terminal
             .draw(|frame| {
-                settled = render(frame, view, frame.area(), Some(24), scroll, &mut Vec::new())
-                    .navigator_scroll;
+                settled = render(
+                    frame,
+                    view,
+                    frame.area(),
+                    Some(24),
+                    scroll,
+                    uze_keys::Scope::Code,
+                    &mut Vec::new(),
+                )
+                .navigator_scroll;
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
