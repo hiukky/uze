@@ -2191,19 +2191,22 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    // The end of the path is what says where you are, so it is the head
-    // that gives way in a column this narrow.
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
-    let room = rect.width.saturating_sub(used + TRAILING_PAD + 1);
-    crate::ui::push_trailing(
-        &mut spans,
-        rect.width,
-        elide_head(
-            &crate::ui::display_project_path(picker.base()),
-            room as usize,
-        ),
-        theme::color(Token::TextDim),
-    );
+    // Where the typing starts from, and only until there is typing: the
+    // line says everything else itself (see `RootPicker`). A path pinned
+    // to the right of the line all the way through said where the prompt
+    // was in a second place, which is the half that went stale the
+    // moment the two could disagree.
+    if needle.is_empty() {
+        let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
+        let room = rect.width.saturating_sub(used + TRAILING_PAD + 1);
+        spans.push(Span::styled(
+            elide_head(
+                &crate::ui::display_project_path(picker.base()),
+                room as usize,
+            ),
+            theme::fg(Token::TextDim),
+        ));
+    }
     fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     // In the hue of the kind it would create, like the gutter of a space

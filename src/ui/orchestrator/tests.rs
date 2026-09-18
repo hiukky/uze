@@ -5353,28 +5353,51 @@ mod workspace_tests {
         );
     }
 
-    /// A root several levels deep is longer than the sidebar is wide, and
-    /// the segment being typed is the half that must survive.
+    /// A root several levels deep is longer than the sidebar is wide, so
+    /// its head gives way — and the moment something is typed the line is
+    /// only that. The root stood pinned to the right of the line all the
+    /// way through, saying where the prompt was in a second place; the
+    /// two could disagree, and the one that went stale was the pinned
+    /// half.
     #[test]
-    fn a_long_root_gives_way_to_what_is_being_typed() {
+    fn a_long_root_gives_way_and_then_gives_the_line_over_to_what_is_typed() {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-elide");
         std::fs::create_dir_all(root.join("a-very-long-directory-name/inner")).unwrap();
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
-        picker.descend();
+        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
+        let prompt_row = |model: &WorkspaceModel| {
+            sidebar(model, &identities_fixture())
+                .rows
+                .into_iter()
+                .find(|row| row.contains(&cursor))
+                .expect("the prompt row is drawn")
+        };
+
+        let mut picker = RootPicker::opened_in(
+            &root
+                .join("a-very-long-directory-name")
+                .display()
+                .to_string(),
+            None,
+        );
+        model.root_picker = Some(picker);
+        let prompt = prompt_row(&model);
+        assert!(
+            prompt.contains('\u{2026}'),
+            "where the typing starts from, head first to give way: {prompt}"
+        );
+
+        picker = model.root_picker.take().expect("the prompt is open");
         for character in "inn".chars() {
             picker.typed(character);
         }
         model.root_picker = Some(picker);
-
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
-        let prompt = rows
-            .iter()
-            .find(|row| row.contains(&cursor))
-            .expect("the prompt row is drawn");
+        let prompt = prompt_row(&model);
         assert!(prompt.contains("inn\u{258f}"), "{prompt}");
-        assert!(prompt.contains('\u{2026}'), "the head gave way: {prompt}");
+        assert!(
+            !prompt.contains('\u{2026}'),
+            "and the root is not repeated beside what was typed: {prompt}"
+        );
     }
 
     #[test]

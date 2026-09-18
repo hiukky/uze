@@ -4,7 +4,15 @@
 //! exists — so the prompt is a filter over real directories rather than a
 //! free-text path. What the user types names a directory to list and a
 //! segment to match inside it: the list narrows on every keystroke, `Tab`
-//! descends into the row it lands on, and `Enter` creates the space there.
+//! completes the row it lands on, and `Enter` creates the space there.
+//!
+//! **The input is the path.** A separator is a character like any other:
+//! the text before the last one names the directory to list, the text
+//! after it is matched inside it, and nothing the prompt is doing lives
+//! anywhere the typed line does not show. A `/` used to descend into
+//! whichever row happened to be selected and clear the line, which is an
+//! implicit `Tab` nobody asked for — it took what was being typed and
+//! answered with something else.
 //!
 //! The choice is always a listed row, never the directory being listed —
 //! which is why deleting the trailing separator is how you pick that
@@ -27,12 +35,18 @@ pub(super) struct Candidate {
 /// filesystem when it changes which directory is being listed — typing a
 /// name filters what was already read.
 pub(super) struct RootPicker {
-    /// The directory the listing is read from. Not part of what is typed:
-    /// a prompt that opens with a path already in it asks to be deleted
+    /// Where a typed path starts from. Not part of what is typed: a
+    /// prompt that opens with a path already in it asks to be deleted
     /// before it can be used, and the only thing worth typing here is the
-    /// name being looked for.
-    base: PathBuf,
+    /// name being looked for. `Backspace` on an empty line moves it up.
+    origin: PathBuf,
+    /// Everything the operator typed, separators included — a path from
+    /// `origin`, or from `$HOME` once it starts with `~` or `/`.
     input: String,
+    /// The directory `input` names, derived on every [`Self::refresh`]:
+    /// what the listing is read from, and what `Enter` takes while
+    /// nothing inside it is chosen.
+    base: PathBuf,
     /// Whether anything the operator did has chosen a row yet. Until then
     /// the listing shows what is there without claiming one of them, and
     /// `Enter` takes the directory being listed.
@@ -83,8 +97,10 @@ impl RootPicker {
         // against home — which would answer "home" for a project sitting
         // directly under the root.
         let trimmed = prefill.trim_end_matches('/');
+        let origin = expand_home(if trimmed.is_empty() { prefill } else { trimmed });
         let mut picker = Self {
-            base: expand_home(if trimmed.is_empty() { prefill } else { trimmed }),
+            base: origin.clone(),
+            origin,
             input: String::new(),
             touched: false,
             listed: PathBuf::new(),
@@ -119,7 +135,7 @@ impl RootPicker {
                 // moved to since — that is what the profile answers,
                 // and reading `picked` here would read it mid-refresh,
                 // before this pass has resolved it.
-                None if holds_a_repository(self.marked.as_deref().unwrap_or(&self.base)) => {
+                None if holds_a_repository(self.marked.as_deref().unwrap_or(&self.origin)) => {
                     SpaceKind::Worktree
                 }
                 None => SpaceKind::Workspace,
@@ -185,6 +201,30 @@ impl RootPicker {
         &self.base
     }
 
+    /// The directory the listing comes from and the segment matched
+    /// inside it: everything before the last separator, and everything
+    /// after it.
+    fn split_input(&self) -> (PathBuf, &str) {
+        match self.input.rfind('/') {
+            Some(cut) => {
+                let (directory, segment) = self.input.split_at(cut + 1);
+                (self.resolve(directory), segment)
+            }
+            None => (self.origin.clone(), self.input.as_str()),
+        }
+    }
+
+    /// Where a typed directory lands: `~` and a leading separator leave
+    /// `origin` behind the way they do in a shell, and everything else is
+    /// read from where the prompt opened.
+    fn resolve(&self, typed: &str) -> PathBuf {
+        if typed.starts_with('~') || typed.starts_with('/') {
+            expand_home(typed)
+        } else {
+            self.origin.join(typed)
+        }
+    }
+
     pub(super) fn selected(&self) -> usize {
         self.selected
     }
@@ -235,12 +275,6 @@ impl RootPicker {
     }
 
     pub(super) fn typed(&mut self, character: char) {
-        // A separator is how a name being typed becomes the directory to
-        // look in — the same move `Tab` makes on the row it lands on.
-        if character == '/' {
-            self.descend();
-            return;
-        }
         self.input.push(character);
         self.refresh();
     }
@@ -251,25 +285,34 @@ impl RootPicker {
     }
 
     /// Deletes the last character typed — or, with nothing typed, leaves
-    /// the directory being listed for the one above it: the way back out of
-    /// a directory `Tab` walked into.
+    /// the directory the prompt starts from for the one above it: the way
+    /// out of the directory it opened on. Everywhere else the way out is
+    /// the separator, which is on the line and deletes like any other
+    /// character.
     pub(super) fn backspace(&mut self) {
         if self.input.pop().is_none()
-            && let Some(parent) = self.base.parent()
+            && let Some(parent) = self.origin.parent()
         {
-            self.base = parent.to_path_buf();
+            self.origin = parent.to_path_buf();
         }
         self.refresh();
     }
 
-    /// Descends into the selected directory: the input becomes that
-    /// directory, and the list becomes its children.
+    /// Completes the selected row into the line: its name replaces the
+    /// segment being matched, and the separator after it makes the line
+    /// name that directory, so the list becomes its children.
+    ///
+    /// Completion writes into the input rather than into state beside it
+    /// — what the prompt is listing is always what the line says.
     pub(super) fn descend(&mut self) {
         let Some(candidate) = self.selection().and_then(|index| self.candidate(index)) else {
             return;
         };
-        self.base = candidate.path.clone();
-        self.input.clear();
+        let name = candidate.name.clone();
+        let segment = self.input.rfind('/').map_or(0, |cut| cut + 1);
+        self.input.truncate(segment);
+        self.input.push_str(&name);
+        self.input.push('/');
         self.refresh();
     }
 
@@ -321,7 +364,10 @@ impl RootPicker {
             // stays open rather than quietly creating the space one level
             // up.
             None => {
-                if !self.input.is_empty() || !self.base.is_dir() {
+                // The *segment*, not the whole line: a path typed out
+                // with its separator at the end names the directory it
+                // ends in, and `Enter` there takes it.
+                if !self.split_input().1.is_empty() || !self.base.is_dir() {
                     return None;
                 }
                 self.base.clone()
@@ -343,11 +389,13 @@ impl RootPicker {
     }
 
     fn refresh(&mut self) {
+        let (base, segment) = self.split_input();
+        let needle = segment.to_lowercase();
+        self.base = base;
         if self.base != self.listed {
             self.listing = read_directories(&self.base);
             self.listed = self.base.clone();
         }
-        let needle = self.input.to_lowercase();
         let mut leading = Vec::new();
         let mut inner = Vec::new();
         for (index, candidate) in self.listing.iter().enumerate() {
@@ -379,8 +427,9 @@ impl RootPicker {
         self.matched = leading;
         self.selected = 0;
         // Typing is choosing: the best match leads the list, and it is the
-        // one `Enter` takes.
-        self.touched = !self.input.is_empty();
+        // one `Enter` takes. A line ending in a separator has typed no
+        // segment, so it has chosen nothing inside what it names.
+        self.touched = !needle.is_empty();
         // Nothing typed, so the prompt is back on the project the
         // operator is standing in. The listing is re-read whenever the
         // kind changes — including when the profile lands and decides it
