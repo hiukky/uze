@@ -6,7 +6,7 @@
 //! ([`ManagementMemory`]), what one opening is ([`TuiModel`]), and how it
 //! is drawn into the rectangle the workspace hands it ([`render_modal`]).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,7 @@ use uze_application::{FirstStepsLayout, ManagementLayout, UzeHome};
 
 use super::hit::Hit;
 use super::keys::KeyboardSupport;
-use super::model::{self, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
+use super::model::{self, Overlay, Remembered, Route, Status, TuiModel};
 use super::worker::{
     Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
     spawn_startup,
@@ -62,6 +62,10 @@ pub(crate) struct ManagementMemory {
     /// has a width of its own, so this is not the workspace sidebar's
     /// value and is not written to the layout file with it.
     menu_width: Option<u16>,
+    /// The project the last resolution was about. A remembered answer is
+    /// only an answer about the project it was asked for, so opening the
+    /// modal over a different one asks again however recent it was.
+    resolved_for: Option<PathBuf>,
 }
 
 impl ManagementMemory {
@@ -76,9 +80,15 @@ impl ManagementMemory {
     /// of the operator as an empty list under a "refreshing" line.
     pub(crate) fn warming(home: &UzeHome) -> Self {
         let memory = Self::unresolved();
-        spawn_startup(home.clone(), memory.sender.clone(), context_root());
+        // The launch directory, because the workspace has not attached
+        // yet and there is no space to be standing in. What the modal is
+        // actually about is decided at its first opening, which asks
+        // again when the two differ (see [`Self::open`]).
+        let root = context_root();
+        spawn_startup(home.clone(), memory.sender.clone(), root.clone());
         Self {
             in_flight: true,
+            resolved_for: Some(root),
             ..memory
         }
     }
@@ -93,6 +103,7 @@ impl ManagementMemory {
             remembered: None,
             in_flight: false,
             menu_width: None,
+            resolved_for: None,
         }
     }
 
@@ -108,11 +119,13 @@ impl ManagementMemory {
     pub(crate) fn open(
         &mut self,
         home: &UzeHome,
+        root: &Path,
         layout: &ManagementLayout,
         first_steps: &FirstStepsLayout,
         keyboard: KeyboardSupport,
     ) -> TuiModel {
         let mut model = TuiModel {
+            context_root: root.to_path_buf(),
             sidebar_width: self.menu_width,
             first_steps_collapsed: first_steps.collapsed,
             first_steps_closed: first_steps.closed,
@@ -124,7 +137,14 @@ impl ManagementMemory {
             keyboard,
             ..TuiModel::recall(self.remembered.take(), layout)
         };
-        if opening_re_resolves(model.remembered.resolved_at) && !self.in_flight {
+        // A resolution is an answer about one project, so a different one
+        // asks again however recently the last answered — and asks even
+        // with one in flight, because that one is about the project this
+        // is not.
+        let elsewhere = self.resolved_for.as_deref() != Some(root);
+        if (opening_re_resolves(model.remembered.resolved_at) || elsewhere)
+            && (!self.in_flight || elsewhere)
+        {
             // Behind the frame: every list is already on screen, so
             // nothing about this reads as the plugins having gone away.
             spawn_refresh(
@@ -132,21 +152,23 @@ impl ManagementMemory {
                 self.sender.clone(),
                 model.context_root.clone(),
             );
+            self.resolved_for = Some(model.context_root.clone());
             self.in_flight = true;
         }
         model.maintenance_in_flight = self.in_flight;
-        if model.remembered.resolved_at.is_none() {
-            // The one case where the operator arrives before any answer
-            // does: opening the modal within the first moments of the
-            // session. Nothing to draw yet, so the wait is at least named
-            // — and the queued answer, if it landed while the modal was
-            // closed, replaces this on the first tick.
+        // Two cases, one answer. Nothing resolved yet is the operator
+        // arriving within the first moments of the session; a different
+        // project is the operator arriving somewhere the remembered
+        // answer is not about. Either way the wait is named rather than
+        // drawn as an empty environment, and the queued answer replaces
+        // this on the first tick.
+        if model.remembered.resolved_at.is_none() || elsewhere {
             model.status = Status::Working("Refreshing environment…".to_owned());
-            // Read here rather than waited on from the startup worker,
-            // which reaches it only after seeding plugins and
-            // auto-updating (see `worker::recent_prompts`): one small
-            // file, and the Overview otherwise says "no history yet" —
-            // the same words it uses when there genuinely is none.
+            // Read here rather than waited on from the worker, which
+            // reaches it only after seeding plugins, auto-updating and
+            // detecting harnesses (see `worker::recent_prompts`): one
+            // small file, and the Overview otherwise says "no history
+            // yet" — the same words it uses when there genuinely is none.
             model.remembered.prompt_history = recent_prompts(home.clone(), &model.context_root);
         }
         model
@@ -593,7 +615,7 @@ fn render_sidebar(
         height: bottom - inner.y,
         ..inner
     });
-    for route in ROUTES {
+    for route in model::routes() {
         let rect = if narrow {
             let Some(rect) = rows.next(1) else { break };
             rect

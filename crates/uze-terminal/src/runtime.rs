@@ -24,8 +24,8 @@ use thiserror::Error;
 
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, NewSpace, PROTOCOL_VERSION,
-    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeat, TabId,
-    TerminalColor,
+    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Seating, Session, SpaceId, SpaceSeat,
+    TabId, TerminalColor,
     launch::Launch,
     process_probe,
     state::{OpenedSpace, PLACEHOLDER_PANE_SIZE, SpaceSeed, TabSeed},
@@ -196,7 +196,7 @@ pub fn open_space(seat: SpaceSeat) -> Result<String, RuntimeError> {
             version: PROTOCOL_VERSION,
             columns: 0,
             rows: 0,
-            seat: Some(seat),
+            seating: crate::Seating::Open(seat),
         },
     )?;
     let label = loop {
@@ -1036,7 +1036,7 @@ impl Server {
                 version,
                 columns,
                 rows,
-                seat,
+                seating,
             })) if version == PROTOCOL_VERSION => {
                 let client = self
                     .next_client
@@ -1045,20 +1045,35 @@ impl Server {
                     .then(|| (within_pane_bounds(columns), within_pane_bounds(rows)));
                 let mut selection = Selection::default();
                 let mut sized_at_creation = false;
-                if let Some(seat) = seat {
-                    match self.ensure_space(&seat, drawn.unwrap_or(PLACEHOLDER_PANE_SIZE)) {
-                        Ok(OpenedSpace::Existing(space)) => selection.space = Some(space),
-                        Ok(OpenedSpace::Created(NewSpace { space, .. })) => {
-                            selection.space = Some(space);
-                            sized_at_creation = true;
-                        }
-                        Err(error) => {
-                            events.reply(ClientEvent::Error {
-                                message: format!(
-                                    "could not open a space at {}: {error}",
-                                    seat.root.display()
-                                ),
-                            });
+                match seating {
+                    // Nothing to say about where to land: the session's own
+                    // selection answers.
+                    Seating::WhereItLeftOff => {}
+                    // A place, not a request. A seat with no space is a
+                    // workspace this client has nothing to add to, so it
+                    // lands where the session already is.
+                    Seating::At(seat) => {
+                        selection.space = self
+                            .session
+                            .lock()
+                            .expect("session poisoned")
+                            .space_for(&seat);
+                    }
+                    Seating::Open(seat) => {
+                        match self.ensure_space(&seat, drawn.unwrap_or(PLACEHOLDER_PANE_SIZE)) {
+                            Ok(OpenedSpace::Existing(space)) => selection.space = Some(space),
+                            Ok(OpenedSpace::Created(NewSpace { space, .. })) => {
+                                selection.space = Some(space);
+                                sized_at_creation = true;
+                            }
+                            Err(error) => {
+                                events.reply(ClientEvent::Error {
+                                    message: format!(
+                                        "could not open a space at {}: {error}",
+                                        seat.root.display()
+                                    ),
+                                });
+                            }
                         }
                     }
                 }
@@ -3090,14 +3105,95 @@ mod tests {
         assert_eq!(process, "claude");
     }
 
-    /// A client that attaches without naming a root takes the session as
-    /// it stands. Nothing is created for it, and nothing the operator
-    /// closed comes back.
+    /// What a client says about where it is deciding *where it lands*, and
+    /// only [`Seating::Open`] may bring a space into being.
     ///
-    /// This is the server half of what makes closing a space stick: the
-    /// workspace client attaches again after the runtime went away, and an
-    /// attach that named the launch directory every time reopened the
-    /// space closed just before it.
+    /// This is the server half of what makes closing a space stick.
+    /// Naming a seat on every attach reopened the space closed just
+    /// before it — within a run, when the runtime went away and the
+    /// client attached again, and across runs, where the launch directory
+    /// remade a space the operator had removed and quit. Both are the
+    /// same failure: a close that does not stay closed is
+    /// indistinguishable from a close that did not work.
+    #[test]
+    fn only_asking_to_open_a_space_may_create_one() {
+        let scratch = uze_testkit::temp::socket_scratch("attach-seating");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let elsewhere = scratch.join("elsewhere");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &elsewhere, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+        let (server, _damage) =
+            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let server = Arc::new(server);
+
+        let attach = |seating: crate::Seating| {
+            let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+            let serving = {
+                let server = Arc::clone(&server);
+                std::thread::spawn(move || server.handle_client(client))
+            };
+            let mut writer = driver.try_clone().unwrap();
+            let mut reader = std::io::BufReader::new(driver);
+            send_request(
+                &mut writer,
+                &crate::ClientRequest::Attach {
+                    version: crate::PROTOCOL_VERSION,
+                    columns: 80,
+                    rows: 24,
+                    seating,
+                },
+            )
+            .unwrap();
+            let landed = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+                .find_map(|event| match event {
+                    crate::ClientEvent::Snapshot { session } => {
+                        Some(session.selected_space().root.clone())
+                    }
+                    _ => None,
+                })
+                .expect("the client attached");
+            let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+            let _ = serving.join();
+            landed
+        };
+        let spaces = || {
+            server
+                .session
+                .lock()
+                .expect("session poisoned")
+                .workspace
+                .spaces
+                .len()
+        };
+
+        assert_eq!(spaces(), 1, "the bootstrap space, and nothing else");
+
+        let landed = attach(crate::Seating::At(worktree_seat(&elsewhere)));
+        assert_eq!(spaces(), 1, "landing somewhere unopened created a space");
+        assert_eq!(
+            landed, project,
+            "and the client lands where the session already was"
+        );
+
+        let landed = attach(crate::Seating::WhereItLeftOff);
+        assert_eq!(spaces(), 1, "saying nothing created a space");
+        assert_eq!(landed, project);
+
+        let landed = attach(crate::Seating::At(worktree_seat(&project)));
+        assert_eq!(spaces(), 1, "a seat that is already open opens nothing");
+        assert_eq!(landed, project, "and is what the client lands on");
+
+        let landed = attach(crate::Seating::Open(worktree_seat(&elsewhere)));
+        assert_eq!(spaces(), 2, "asking to open a space did not open one");
+        assert_eq!(landed, elsewhere, "and the client lands in it");
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     /// Stopping a pane ends what its program left behind in its process
     /// group, not only the program: a worker deaf to the hangup would
@@ -3196,7 +3292,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 80,
                 rows: 24,
-                seat: None,
+                seating: crate::Seating::WhereItLeftOff,
             },
         )
         .unwrap();
@@ -3405,7 +3501,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 80,
                 rows: 24,
-                seat: None,
+                seating: crate::Seating::WhereItLeftOff,
             },
         )
         .unwrap();
@@ -3889,7 +3985,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 0,
                 rows: 0,
-                seat: None,
+                seating: crate::Seating::WhereItLeftOff,
             },
         )
         .unwrap();
@@ -4797,7 +4893,7 @@ mod tests {
                 version: crate::PROTOCOL_VERSION,
                 columns: 0,
                 rows: 0,
-                seat: None,
+                seating: crate::Seating::WhereItLeftOff,
             },
         )
         .unwrap();
@@ -5049,7 +5145,7 @@ mod tests {
             version: crate::PROTOCOL_VERSION,
             columns: 200,
             rows: 50,
-            seat: Some(worktree_seat(Path::new("/some/ordinary/project/path"))),
+            seating: crate::Seating::Open(worktree_seat(Path::new("/some/ordinary/project/path"))),
         })
         .unwrap();
         assert!(

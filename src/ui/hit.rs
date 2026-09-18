@@ -134,7 +134,6 @@ impl TuiModel {
             }
             Hit::MarketplaceRow(index) => {
                 self.remembered.plugin_screen.selected = index;
-                self.remembered.plugin_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
@@ -152,7 +151,6 @@ impl TuiModel {
                 {
                     self.remembered.plugin_screen.selected = position;
                 }
-                self.remembered.plugin_screen.drawer_open = true;
                 let _ = self.set_route(Route::Plugins);
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
@@ -165,18 +163,14 @@ impl TuiModel {
                 .and_then(|entry| entry.homepage.clone())
                 .map_or(Intent::None, Intent::OpenLink),
             Hit::ExtensionRow(index) => {
-                // Selection opens the drawer immediately — `move_selection`
-                // does the same for keyboard navigation, so both input
-                // paths agree. No intent: the drawer's content is static
-                // catalog metadata, nothing to fetch.
+                // No intent: the drawer's content is static catalog
+                // metadata, nothing to fetch.
                 self.remembered.extension_screen.selected = index;
-                self.remembered.extension_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }
             Hit::HarnessRow(index) => {
                 self.remembered.harness_screen.selected = index;
-                self.remembered.harness_screen.drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }

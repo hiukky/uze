@@ -142,15 +142,29 @@ impl Attach<'_> {
     // --- The management modal --------------------------------------------
 
     /// Opens space creation, from the pointer or the keyboard alike: the
-    /// picker starts where the selected space is rooted.
+    /// picker lists where projects like this one live, standing on the
+    /// one the operator is in.
+    ///
+    /// The directory *beside* the selected space's root, because a new
+    /// space is another project and projects sit beside each other —
+    /// which for a checkout under `~` is `~` itself, the same premise the
+    /// prompt already resolves typing against. It used to list the space's
+    /// own subdirectories (`crates`, `docs`, `src`), so reaching another
+    /// project meant walking back out of this one first. Home is the
+    /// fallback for a workspace with nothing selected, and marking the
+    /// space's own root keeps the other half: a second space over the
+    /// project already open is still one `Enter` away.
     fn open_root_picker(&mut self) {
-        let prefill = self
+        let standing_in = self
             .model
             .session
             .as_ref()
-            .map(|session| crate::ui::display_project_path(&session.selected_space().root))
-            .unwrap_or_else(|| "~".to_owned());
-        self.model.root_picker = Some(RootPicker::opened_in(&prefill));
+            .map(|session| session.selected_space().root.clone());
+        let beside = standing_in
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map_or_else(|| "~".to_owned(), |parent| parent.display().to_string());
+        self.model.root_picker = Some(RootPicker::opened_in(&beside, standing_in.as_deref()));
         self.ask_root_profile();
         self.model.dirty = true;
     }
@@ -169,8 +183,23 @@ impl Attach<'_> {
             closed: self.model.first_steps_closed,
             taken: self.model.steps_taken.clone(),
         };
+        // The project the modal is about is the one the operator is
+        // standing in — the space's root, not the directory this process
+        // was started from. Those are routinely different (a shell opens
+        // at home; the work is in a repository), and the Overview read
+        // its prompt history, its context status and its project's
+        // plugins against the wrong one of them.
+        let root = self
+            .model
+            .session
+            .as_ref()
+            .map(|session| session.selected_space().root.clone())
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
         self.model.manage = Some(self.manage_memory.open(
             self.home,
+            &root,
             &self.model.management_layout,
             &first_steps,
             self.keyboard,
@@ -1071,7 +1100,7 @@ impl Attach<'_> {
                 };
                 let showing = self.model.code.as_ref().map(code::CodeView::showing);
                 match code_door(showing, wanted) {
-                    CodeDoor::Close => self.model.code = None,
+                    CodeDoor::Close => self.model.close_code(),
                     CodeDoor::Switch => {
                         if let Some(view) = self.model.code.as_mut() {
                             view.show(wanted);
@@ -1102,7 +1131,7 @@ impl Attach<'_> {
                 code::CodeOutcome::Close
             )
         {
-            self.model.code = None;
+            self.model.close_code();
         }
         self.model.dirty = true;
     }
@@ -1432,7 +1461,7 @@ impl Attach<'_> {
                 } else if let Some(view) = self.model.code.as_mut()
                     && matches!(code::handle_mouse(view, view_hit), code::CodeOutcome::Close)
                 {
-                    self.model.code = None;
+                    self.model.close_code();
                 }
                 self.model.dirty = true;
             }

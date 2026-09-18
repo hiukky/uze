@@ -253,8 +253,13 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Management, "/", Action::StartFilter),
         bind(Scope::Management, "t", Action::OpenThemePicker),
         bind(Scope::Management, "m", Action::AddMarketplace),
-        bind(Scope::Management, "q", Action::Quit),
-        bind(Scope::Management, "ctrl+c", Action::Quit),
+        // Management is a modal over the workspace, so the letter that
+        // leaves it leaves *it* — the theme picker's `q` means the same
+        // thing one surface further in. Quitting uze from here is
+        // `ctrl+q`, which is global and says so; a bare letter that ended
+        // the session from inside a modal was the one key in the product
+        // that could not be pressed by mistake twice.
+        bind(Scope::Management, "q", Action::Dismiss),
         // --- Management, per screen -------------------------------------
         bind(Scope::Overview, "x", Action::ClearPromptHistory),
         bind(Scope::Plugins, "i", Action::InstallPlugin),
@@ -479,6 +484,23 @@ mod tests {
                 "preserved-work.confirm-discard=y",
             ]
         );
+    }
+
+    #[test]
+    fn leaving_uze_is_never_one_bare_keystroke_away() {
+        // Management owns the whole keyboard, which is why its actions may
+        // hold bare letters — but it is a modal over a session full of
+        // running agents, and the one action that cannot be taken back is
+        // the one that must not be a single letter. `q` there used to end
+        // the session; it now closes the modal, like the theme picker's.
+        let bare: Vec<String> = default_keymap()
+            .bindings()
+            .iter()
+            .filter(|binding| binding.action == Action::Quit)
+            .filter(|binding| !binding.chord.mods.ctrl && !binding.chord.mods.alt)
+            .map(|binding| format!("{}={}", binding.scope.name(), binding.chord))
+            .collect();
+        assert!(bare.is_empty(), "quitting is one keystroke away: {bare:?}");
     }
 
     #[test]

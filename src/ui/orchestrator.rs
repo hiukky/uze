@@ -888,6 +888,30 @@ fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>
     });
 }
 
+/// What starting `uze` in a directory asks of the workspace.
+///
+/// A directory somebody chose is a request: `cd` into a project, start
+/// uze, and the project is there. The home directory is not a choice — it
+/// is where a shell starts when nobody said otherwise — so starting there
+/// lands on the home space when one is open and adds nothing when none
+/// is. Without the distinction, a home space closed on purpose came back
+/// on the next launch, which is indistinguishable from closing it not
+/// having worked.
+///
+/// Compared the way `uze_terminal::space_label` compares it, so the rule
+/// applies to exactly the space that would have been called *home*.
+///
+/// This never leaves the workspace empty: a server with nothing persisted
+/// bootstraps a space at the seat it was started with, before any client
+/// attaches.
+fn seating_at(seat: uze_terminal::SpaceSeat) -> uze_terminal::Seating {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if home.is_some_and(|home| home == seat.root) {
+        return uze_terminal::Seating::At(seat);
+    }
+    uze_terminal::Seating::Open(seat)
+}
+
 /// Whether this attach asks the server for a space rooted at the launch
 /// directory.
 ///
@@ -896,6 +920,9 @@ fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>
 /// reopen a space the operator closed in between — the launch directory
 /// would resurrect it, and closing it would look broken rather than
 /// deliberate.
+///
+/// Even the first attach only *asks*; whether asking may create is
+/// [`seating_at`]'s question.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Landing {
     /// The run's first attach: the directory `uze` was started in gets a
@@ -967,9 +994,9 @@ pub(crate) fn attach_workspace(
             version: PROTOCOL_VERSION,
             columns,
             rows,
-            seat: match landing {
-                Landing::AtLaunchDirectory => Some(seat),
-                Landing::WhereItLeftOff => None,
+            seating: match landing {
+                Landing::AtLaunchDirectory => seating_at(seat),
+                Landing::WhereItLeftOff => uze_terminal::Seating::WhereItLeftOff,
             },
         },
     )
@@ -1995,6 +2022,13 @@ struct Remembered {
     git_pending: Option<PathBuf>,
     /// Per-pane reconstruction of the line being typed, flushed on Enter.
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
+    /// Where the viewer was on each checkout's code surface, keyed by the
+    /// checkout — reviewing one agent's work and coming back to another's
+    /// is two places, not one. Kept here rather than in the client layout
+    /// because a path a file once had is a claim about a tree that is
+    /// being rewritten while nobody is looking; within a session it is
+    /// worth returning to, and across runs it is worth nothing.
+    code_places: BTreeMap<PathBuf, code::CodePlace>,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -4199,6 +4233,20 @@ fn open_commit_detail(
 /// Asked for, not read: the reads are `schedule_changes_refresh`'s and
 /// `schedule_file_request`'s, on threads. Formatting the path is not a
 /// read, so the surface opens already knowing which checkout it is about.
+impl WorkspaceModel {
+    /// Closes the code surface, keeping where the viewer was on this
+    /// checkout — every way out goes through here, or coming back would
+    /// start over or not depending on which one was used.
+    fn close_code(&mut self) {
+        let Some(view) = self.code.take() else {
+            return;
+        };
+        self.remembered
+            .code_places
+            .insert(view.root().to_path_buf(), view.place());
+    }
+}
+
 fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let Some(session) = model.session.as_ref() else {
         return;
@@ -4206,7 +4254,14 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let tab = session.selected_tab();
     let cwd = tab.pane.cwd.clone();
     let display_root = crate::ui::display_project_path(&cwd);
-    model.code = Some(code::CodeView::opening(cwd, display_root, mode));
+    let place = model.remembered.code_places.get(&cwd).cloned();
+    let view = code::CodeView::opening(cwd, display_root, mode);
+    model.code = Some(match place {
+        Some(place) => view.resuming(place),
+        None => view,
+    });
+    // The scroll is not restored with the place: the first frame reveals
+    // whatever is selected, which is where the viewer was looking anyway.
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }

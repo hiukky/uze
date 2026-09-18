@@ -72,6 +72,38 @@ pub(crate) const ROUTES: [Route; 7] = [
     Route::Appearance,
 ];
 
+/// Whether the Shortcuts screen has anything to say about a surface.
+///
+/// The keymap is the whole vocabulary, screens this build hides included
+/// — a keymap file written on one build has to keep meaning the same
+/// thing on another. What a person reads is only the surfaces they can
+/// reach, or the shortcuts screen would document a screen that is not
+/// there.
+///
+/// Derived from the screen that owns the scope rather than stated again
+/// here: a screen already says which feature it waits on, and a second
+/// list saying it too is a list that can disagree with the first.
+pub(crate) fn scope_is_offered(scope: uze_keys::Scope) -> bool {
+    ROUTES
+        .into_iter()
+        .find(|route| route.scopes().contains(&scope))
+        .is_none_or(|route| routes().contains(&route))
+}
+
+/// The screens this build offers, in sidebar order.
+///
+/// [`ROUTES`] is the vocabulary — every screen the code knows — and this
+/// is what a person can reach. A screen still being decided names a
+/// feature (`uze_application::Feature`), and a release build leaves it
+/// out: what is downloaded offers nothing half-built, and the build that
+/// does offer it says so with the screen's badge.
+pub(crate) fn routes() -> Vec<Route> {
+    ROUTES
+        .into_iter()
+        .filter(|route| route.feature().is_none_or(uze_application::feature_enabled))
+        .collect()
+}
+
 impl Route {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -103,26 +135,70 @@ impl Route {
     /// decides which screen to open, so it is where "not settled yet" has
     /// to be said — a warning found only after arriving is a warning that
     /// came too late.
+    ///
+    /// A screen behind a feature is exactly the unsettled kind, so the
+    /// two answers are one: the feature decides whether the screen is on
+    /// offer at all, and the badge says so wherever it is.
     pub(crate) fn badge(self) -> Option<&'static str> {
+        self.feature().map(|_| "Beta")
+    }
+
+    /// The keyboard surfaces this screen answers for: its own first, then
+    /// any surface that exists only inside it.
+    ///
+    /// One place says which scopes belong to which screen — the stack a
+    /// keystroke is resolved against reads it, and so does the question
+    /// of whether this build offers the surface at all.
+    pub(crate) fn scopes(self) -> &'static [uze_keys::Scope] {
+        use uze_keys::Scope;
         match self {
-            Route::Profiles => Some("Beta"),
+            Route::Overview => &[Scope::Overview],
+            Route::Plugins => &[Scope::Plugins],
+            Route::Extensions => &[Scope::Extensions],
+            Route::Harnesses => &[Scope::Harnesses],
+            // The preference editor is a surface of this screen and of
+            // nowhere else, which is why hiding the screen hides it too.
+            Route::Profiles => &[Scope::Profiles, Scope::ProfileEditor],
+            Route::Keys => &[Scope::Keys],
+            Route::Appearance => &[Scope::Appearance],
+        }
+    }
+
+    /// The scope this screen puts on the stack while it is the one open.
+    pub(crate) fn scope(self) -> uze_keys::Scope {
+        self.scopes()
+            .first()
+            .copied()
+            .expect("every screen answers for a scope of its own")
+    }
+
+    /// The feature this screen waits on, or `None` for one this build
+    /// offers unconditionally.
+    pub(crate) fn feature(self) -> Option<uze_application::Feature> {
+        match self {
+            Route::Profiles => Some(uze_application::Feature::Profiles),
             _ => None,
         }
     }
 
+    /// Where this screen sits among the ones on offer. A screen this
+    /// build hides answers zero rather than panicking: the sidebar is
+    /// drawn from `routes()`, so being asked about one at all is already
+    /// a path that should not exist.
     pub(crate) fn index(self) -> usize {
-        ROUTES
+        routes()
             .iter()
             .position(|route| *route == self)
-            .expect("every route is listed in ROUTES")
+            .unwrap_or(0)
     }
 
     /// The route one step along the sidebar, wrapping at either end. Only
     /// the direction of `delta` counts.
     pub(crate) fn neighbour(self, delta: isize) -> Self {
-        let count = ROUTES.len();
+        let offered = routes();
+        let count = offered.len();
         let step = if delta > 0 { 1 } else { count - 1 };
-        ROUTES[(self.index() + step) % count]
+        offered[(self.index() + step) % count]
     }
 
     /// The name this route is remembered by between runs (see
@@ -141,8 +217,11 @@ impl Route {
         }
     }
 
+    /// The screen a remembered id names, or `None` — including for one
+    /// this build does not offer, so a layout written by a development
+    /// build opens a downloaded one on its default screen.
     pub(crate) fn from_id(id: &str) -> Option<Self> {
-        ROUTES.into_iter().find(|route| route.id() == id)
+        routes().into_iter().find(|route| route.id() == id)
     }
 }
 
@@ -204,19 +283,16 @@ pub(crate) struct ListScreen {
     pub(crate) filter: String,
     /// A position in the list as it is filtered now.
     pub(crate) selected: usize,
-    /// Whether the detail drawer is slid into view. Opens on selection,
-    /// closes on `Esc` — the list reclaims the full width while it's closed.
-    pub(crate) drawer_open: bool,
     /// Where the drawer's edge was dragged to; `None` for its default.
     pub(crate) drawer_width: Option<u16>,
 }
 
 impl ListScreen {
-    /// The screen as a new visit finds it: its drawer as the layout left
-    /// it, and no search — leaving a search puts the list back.
-    fn reopen(&mut self, drawer_open: bool, drawer_width: Option<u16>) {
+    /// The screen as a new visit finds it: its drawer at the width the
+    /// layout left it, and no search — leaving a search puts the list
+    /// back.
+    fn reopen(&mut self, drawer_width: Option<u16>) {
         self.filter.clear();
-        self.drawer_open = drawer_open;
         self.drawer_width = drawer_width;
     }
 }
@@ -605,7 +681,7 @@ pub(crate) struct TuiModel {
 
 impl Default for TuiModel {
     /// A model with nothing resolved, shaped as `ManagementLayout`'s own
-    /// default — the drawers a screen opens with are stated once, there.
+    /// default — the widths a screen opens with are stated once, there.
     fn default() -> Self {
         Self::recall(None, &ManagementLayout::default())
     }
@@ -731,16 +807,15 @@ impl TuiModel {
             release_revision: 0,
         };
         let remembered = &mut model.remembered;
-        remembered.plugin_screen.reopen(
-            layout.marketplace_drawer_open,
-            layout.marketplace_drawer_width,
-        );
+        remembered
+            .plugin_screen
+            .reopen(layout.marketplace_drawer_width);
         remembered
             .extension_screen
-            .reopen(layout.extension_drawer_open, layout.extension_drawer_width);
+            .reopen(layout.extension_drawer_width);
         remembered
             .harness_screen
-            .reopen(layout.harnesses_drawer_open, layout.harness_drawer_width);
+            .reopen(layout.harness_drawer_width);
         model
     }
 
@@ -750,9 +825,6 @@ impl TuiModel {
         let remembered = &self.remembered;
         ManagementLayout {
             route: Some(self.route.id().to_owned()),
-            marketplace_drawer_open: remembered.plugin_screen.drawer_open,
-            extension_drawer_open: remembered.extension_screen.drawer_open,
-            harnesses_drawer_open: remembered.harness_screen.drawer_open,
             marketplace_drawer_width: remembered.plugin_screen.drawer_width,
             extension_drawer_width: remembered.extension_screen.drawer_width,
             harness_drawer_width: remembered.harness_screen.drawer_width,
@@ -969,14 +1041,14 @@ impl TuiModel {
         }
     }
 
-    /// The fetch the open Plugins drawer is missing right now, or
-    /// `Intent::None`. The drawer opens by default and the list arrives
-    /// from a background refresh, so a row can be selected without any
-    /// navigation event having asked for its detail — this is checked
-    /// every frame so the drawer never sits on "loading…" waiting for a
-    /// click that would only re-request what it already needs.
+    /// The fetch the Plugins drawer is missing right now, or
+    /// `Intent::None`. The list arrives from a background refresh, so a
+    /// row can be selected without any navigation event having asked for
+    /// its detail — this is checked every frame so the drawer never sits
+    /// on "loading…" waiting for a click that would only re-request what
+    /// it already needs.
     pub(crate) fn drawer_inspect_intent(&self) -> super::worker::Intent {
-        if self.route != Route::Plugins || !self.remembered.plugin_screen.drawer_open {
+        if self.route != Route::Plugins {
             return super::worker::Intent::None;
         }
         let intent = self.marketplace_inspect_intent();
@@ -1285,6 +1357,7 @@ impl TuiModel {
             )
         });
         pairs.dedup();
+        pairs.retain(|(scope, _)| scope_is_offered(*scope));
         let chord_in = |keymap: &uze_keys::Keymap, scope, action| {
             keymap
                 .bindings()
@@ -1682,15 +1755,6 @@ impl TuiModel {
             return;
         };
         screen.selected = step_within(screen.selected, delta, len);
-        if len == 0 {
-            return;
-        }
-        // A list's drawer opens as soon as something is selected — matches
-        // the design's click-to-select-and-open (the Plugins drawer is
-        // bookended by install/update/remove, so a selection there always
-        // has an action in reach). Extensions' drawer is static catalog
-        // detail, opened the same way.
-        screen.drawer_open = true;
     }
 
     fn clamp_prompt_selection(&mut self) {
@@ -1820,7 +1884,6 @@ impl TuiModel {
         // selection means anything.
         if route == Route::Harnesses {
             self.remembered.harness_screen.selected = 0;
-            self.remembered.harness_screen.drawer_open = true;
         }
         if route == Route::Profiles {
             self.profile_panel = ProfilePanel::List;

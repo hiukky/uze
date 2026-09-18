@@ -50,7 +50,7 @@
 //! which is what keeps it from eating a buffer someone is typing into.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -170,6 +170,28 @@ pub struct CodeView {
     confirming_discard: bool,
 }
 
+/// Where a viewer was on a checkout's code surface, so that opening it
+/// again is returning to it rather than starting over.
+///
+/// Opaque to the host, which keeps one per checkout: it takes one from
+/// [`CodeView::place`] as the surface closes and hands it back to
+/// [`CodeView::resuming`] the next time that checkout is opened.
+///
+/// What it holds is navigation and nothing else — the file being read,
+/// the directories opened to reach it, the ones folded away, and how far
+/// down it. Deliberately not the content mode: the mode is the door that
+/// was used (`Ctrl+G` reviews, `Ctrl+E` navigates), and a door that
+/// remembered where it last led would stop being one. Deliberately not a
+/// buffer either: an unsaved edit belongs to the surface that has it
+/// open, and reopening a closed one must not resurrect typing.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CodePlace {
+    selected: Option<PathBuf>,
+    expanded: BTreeSet<PathBuf>,
+    folded: BTreeSet<String>,
+    scroll: u16,
+}
+
 /// What a viewer did inside an open [`CodeView`] that a re-read of the
 /// changes must not undo.
 ///
@@ -215,6 +237,54 @@ impl CodeView {
             view.expand(view.root.clone());
         }
         view
+    }
+
+    /// The same surface, put back where [`CodePlace`] says the viewer
+    /// left this checkout.
+    ///
+    /// Every restored directory is asked for again rather than assumed:
+    /// what a listing said last time is a claim about a tree that has
+    /// been under an agent's hands since, and this surface never draws a
+    /// read it did not just make. The requests go through the same queue
+    /// a click on a disclosure uses, so nothing here touches a disk.
+    pub fn resuming(mut self, place: CodePlace) -> Self {
+        let CodePlace {
+            selected,
+            expanded,
+            folded,
+            scroll,
+        } = place;
+        self.changes.folded = folded;
+        // Sorted, so a directory is asked for after the one containing it.
+        for directory in expanded {
+            self.expand(directory);
+        }
+        let Some(path) = selected else {
+            return self;
+        };
+        self.selected = Some(path);
+        self.read_selection_as_what_it_is();
+        match self.navigator() {
+            NavigatorMode::Files => self.load_selection(None),
+            // The list and the diff both arrive from the refresh the host
+            // schedules the moment the surface opens.
+            NavigatorMode::Changes => self.changes.diff_pending = true,
+        }
+        // After the read is asked for, not before: opening a file puts the
+        // content back at the top, and this is the one case where the top
+        // is not where the viewer was.
+        self.scroll = scroll;
+        self
+    }
+
+    /// Where the viewer is, for the host to hand back to [`Self::resuming`].
+    pub fn place(&self) -> CodePlace {
+        CodePlace {
+            selected: self.selected.clone(),
+            expanded: self.files.expanded.clone(),
+            folded: self.changes.folded.clone(),
+            scroll: self.scroll,
+        }
     }
 
     /// The list that goes with what the content is showing.
@@ -323,6 +393,7 @@ impl CodeView {
         if self.selected.is_none() {
             self.selected = self.changes.files.first().map(|file| file.path.clone());
             self.changes.diff_pending = self.selected.is_some();
+            self.read_selection_as_what_it_is();
         }
     }
 
@@ -348,6 +419,10 @@ impl CodeView {
                             .rows(&self.root)
                             .first()
                             .map(|row| row.path.clone());
+                        // Landing on the first row is a selection like any
+                        // other, and a tree whose first row is a README is
+                        // the commonest way into this surface.
+                        self.read_selection_as_what_it_is();
                     }
                 }
                 Err(message) if path == self.root => self.error = Some(message),
@@ -426,6 +501,26 @@ impl CodeView {
         self.changes.diff = Vec::new();
         self.changes.diff_pending = true;
         self.open = None;
+        self.read_selection_as_what_it_is();
+    }
+
+    /// Puts the content mode where the new selection wants it: a markdown
+    /// file is a document before it is a file, so it is read as one.
+    ///
+    /// Arriving at a README and being shown its markup is the wrong
+    /// default — the markup is what `p` is for, and that choice lasts as
+    /// long as the file it was made about. Diff is never touched: a
+    /// document's changes are still changes, and the navigator would have
+    /// to change lists to show anything else.
+    fn read_selection_as_what_it_is(&mut self) {
+        if self.content == ContentMode::Diff {
+            return;
+        }
+        self.content = if self.selected_is_markdown() {
+            ContentMode::Preview
+        } else {
+            ContentMode::Contents
+        };
     }
 
     /// Shows `mode` for whatever is selected, bringing the selection with
@@ -528,7 +623,14 @@ impl CodeView {
 
     /// Opens a directory, reading it the first time it is opened.
     fn expand(&mut self, path: PathBuf) {
-        if !self.files.listings.contains_key(&path) {
+        // Neither read nor already asked for: a directory opened twice
+        // before the first answer lands — which is what resuming a place
+        // does to the root — is one read, not two.
+        let asked = self
+            .queue
+            .iter()
+            .any(|request| matches!(request, FileRequest::List(queued) if *queued == path));
+        if !asked && !self.files.listings.contains_key(&path) {
             self.queue.push_back(FileRequest::List(path.clone()));
         }
         self.files.expanded.insert(path);
@@ -571,6 +673,7 @@ impl CodeView {
                 let row = &rows[next];
                 if row.directory {
                     self.selected = Some(row.path.clone());
+                    self.read_selection_as_what_it_is();
                 } else {
                     self.select(row.path.clone());
                 }

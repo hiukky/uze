@@ -41,7 +41,7 @@ mod workspace_tests {
         WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
         answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
         evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_commit_detail, pane_relative, pending_tab_drop,
+        open_code, open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -523,6 +523,73 @@ mod workspace_tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// Glance at the code, close it, come back: the commonest gesture in
+    /// the product, and the one that used to cost the whole walk down the
+    /// tree again. The place is per checkout, so another agent's surface
+    /// is another place rather than the same one moved.
+    #[test]
+    fn coming_back_to_a_checkouts_code_returns_to_where_it_was_left() {
+        use uze_extensions::{DirEntry, code};
+
+        let (mut model, first, second) = two_agents_with_shells();
+        let answer_listing = |model: &mut WorkspaceModel, root: &str| {
+            let view = model.code.as_mut().expect("the surface is open");
+            view.take_request();
+            view.absorb(code::FileAnswer::Listed {
+                path: PathBuf::from(root),
+                entries: Ok(vec![
+                    DirEntry {
+                        directory: false,
+                        name: "a.rs".to_owned(),
+                    },
+                    DirEntry {
+                        directory: false,
+                        name: "b.rs".to_owned(),
+                    },
+                ]),
+            });
+        };
+
+        let space = crate::ui::extension_view::content_space(
+            Rect::new(0, 0, 120, 40),
+            model.code_tree_width,
+        );
+
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+        answer_listing(&mut model, "/repo/.worktrees/a");
+        // Walked away from the row the tree opened on, which is the part
+        // that must survive the round trip.
+        code::handle_command(
+            model.code.as_mut().expect("open"),
+            uze_extensions::view::Command::SelectNext,
+            space,
+        );
+        let walked_to = model.code.as_ref().expect("open").place();
+
+        model.close_code();
+        assert!(model.code.is_none());
+
+        // Another agent's checkout is a different place, not this one.
+        model.session.as_mut().expect("session").select_tab(second);
+        open_code(&mut model, code::ContentMode::Contents);
+        answer_listing(&mut model, "/repo/.worktrees/b");
+        assert_ne!(
+            model.code.as_ref().expect("open").place(),
+            walked_to,
+            "a checkout never visited opens on its own first row"
+        );
+        model.close_code();
+
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+        assert_eq!(
+            model.code.as_ref().expect("open").place(),
+            walked_to,
+            "and the one left mid-walk is where it was left"
+        );
     }
 
     /// A click inside the explorer has to resolve to the row the frame
@@ -2041,7 +2108,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-picker-kinds");
         std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("workspace")),
@@ -3945,8 +4015,8 @@ mod workspace_tests {
     }
 
     /// Creating a space is reachable from the keyboard, and the chord opens
-    /// exactly what the pointer's `new` opens: the picker, rooted where
-    /// the selected space is.
+    /// exactly what the pointer's `new` opens: the picker, listing where
+    /// the selected space's neighbours are and standing on the space.
     #[test]
     fn the_new_space_chord_opens_the_picker_the_pointer_opens() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-new-space-chord"));
@@ -3963,10 +4033,14 @@ mod workspace_tests {
             .root_picker
             .as_ref()
             .expect("the picker opened");
+        // Where a project beside this one would be. Whether the space's
+        // own root is then marked is a question about real directories,
+        // and `root_picker`'s own tests answer it over a temp tree — this
+        // session's `/repo` is a name, not a directory.
         assert_eq!(
             picker.base(),
-            Path::new("/repo"),
-            "rooted where the selected space is, as the pointer's control roots it"
+            Path::new("/"),
+            "listing where a project beside this one would be"
         );
         assert!(
             picker.input().is_empty(),
@@ -4111,30 +4185,43 @@ mod workspace_tests {
             "nothing of the workspace answered"
         );
 
-        // Esc backs out one layer at a time: the screen's open drawer
-        // first, then — with nothing inside the modal left to close — the
-        // modal itself.
+        // Esc leaves the modal. A screen's detail drawer is a column of
+        // it, not a layer over it, so there is nothing for Esc to back out
+        // of first — which is what makes one press enough.
         let esc = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
             crossterm::event::KeyModifiers::NONE,
         );
-        let drawer_open = |driven: &Driven<'_>| {
-            let manage = driven.attach.model.manage.as_ref().expect("open");
-            manage
-                .list(manage.route)
-                .is_some_and(|screen| screen.drawer_open)
-        };
-        if drawer_open(&driven) {
-            driven.press_key(esc);
-            assert!(
-                driven.attach.model.manage.is_some() && !drawer_open(&driven),
-                "the first Esc closes the drawer, not the modal"
-            );
-        }
         driven.press_key(esc);
         assert!(
             driven.attach.model.manage.is_none(),
-            "with nothing inside it open, Esc closes the modal"
+            "Esc closes the modal from the screen it was on"
+        );
+    }
+
+    /// The modal is about the project the operator is standing in.
+    ///
+    /// The process's own directory is not that project: a shell opens at
+    /// home and the work is in a repository, so the Overview read its
+    /// prompt history — and its context status, and the project's
+    /// plugins — against a directory nothing had been recorded for, and
+    /// said "no history yet" over a full file.
+    #[test]
+    fn the_modal_is_about_the_space_it_was_opened_over() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-root"));
+        let mut driven = driven(agent_session_in("/repo"), &home);
+        driven.press_key(key_event(manage_chord()));
+
+        assert_eq!(
+            driven
+                .attach
+                .model
+                .manage
+                .as_ref()
+                .expect("the modal opened")
+                .context_root,
+            PathBuf::from("/repo"),
+            "the modal speaks about the space, not about where uze was started"
         );
     }
 
@@ -4227,7 +4314,7 @@ mod workspace_tests {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
         assert_eq!(hue_of_new(&mut model), theme::color(Token::Accent));
 
-        model.root_picker = Some(RootPicker::opened_in("~"));
+        model.root_picker = Some(RootPicker::opened_in("~", None));
 
         assert_eq!(
             hue_of_new(&mut model),
@@ -4971,7 +5058,10 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
 
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
@@ -5051,7 +5141,7 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
         for character in "cr".chars() {
             picker.typed(character);
         }
@@ -5109,7 +5199,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-picker-kind-click");
         std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
         driven.frame();
         let control = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceKind(_)));
@@ -5148,7 +5241,10 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(format!("directory-{index:02}"))).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
         driven.frame();
         let last_row = |driven: &Driven<'_>| {
@@ -5206,7 +5302,10 @@ mod workspace_tests {
             .position(|row| row.contains("repo"))
             .expect("the first space's header is drawn");
 
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let Sidebar { rows, buffer, .. } = sidebar(&model, &identities_fixture());
         let kind_row = rows
             .iter()
@@ -5254,7 +5353,7 @@ mod workspace_tests {
     #[test]
     fn the_prompt_opens_empty_over_the_directory_it_is_rooted_at() {
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in("~"));
+        model.root_picker = Some(RootPicker::opened_in("~", None));
 
         let rows = sidebar(&model, &identities_fixture()).rows;
         let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
@@ -5285,7 +5384,10 @@ mod workspace_tests {
         std::fs::create_dir_all(root.join("engine")).unwrap();
         let mut model = agent_session_in("/repo");
 
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("engine")),
@@ -5311,7 +5413,7 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-elide");
         std::fs::create_dir_all(root.join("a-very-long-directory-name/inner")).unwrap();
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
         picker.descend();
         for character in "inn".chars() {
             picker.typed(character);
@@ -6445,16 +6547,26 @@ mod workspace_tests {
             );
         }
 
-        // The selected block is filled up to its gutter, never under it:
-        // the line is the block's edge.
+        // The fill runs under the gutter: the line is drawn inside the
+        // block rather than alongside it. Filling up to the line and no
+        // further left the line sitting on the column's own background,
+        // which reads as a decoration outside the card with a gap between
+        // them — the card's edge is where the fill ends, and the fill has
+        // to end past the line for the line to be in it.
         let header = space_header(&hits, SpaceId(3));
         for row in header.y..header.y + 3 {
-            assert_ne!(
+            assert_eq!(
                 buffer[(header.x, row)].bg,
                 buffer[(header.x + 1, row)].bg,
-                "row {row}: the gutter's cell stays off the fill: {rows:?}"
+                "row {row}: the gutter sits outside the block's fill: {rows:?}"
             );
         }
+        let outside = space_header(&hits, SpaceId(1));
+        assert_ne!(
+            buffer[(outside.x, outside.y)].bg,
+            buffer[(header.x, header.y)].bg,
+            "a space nobody is in is not filled at all: {rows:?}"
+        );
     }
 
     /// The column reads space > agent: the header's fold against the
@@ -6942,6 +7054,34 @@ mod workspace_tests {
         );
     }
 
+    /// Starting `uze` somewhere is a request for a space there, except
+    /// where nobody chose the directory. A shell opens at home, so a
+    /// launch from home is "start the app", not "add my home directory to
+    /// the workspace" — and a home space closed on purpose used to be
+    /// remade by the next launch, which reads as the close not working.
+    #[test]
+    fn starting_at_home_lands_in_the_workspace_rather_than_adding_to_it() {
+        use uze_terminal::{Seating, SpaceKind, SpaceSeat};
+
+        let home = PathBuf::from(std::env::var_os("HOME").expect("a home directory"));
+        let seat = |root: &Path| SpaceSeat {
+            root: root.to_path_buf(),
+            kind: SpaceKind::Workspace,
+        };
+
+        assert_eq!(
+            crate::ui::orchestrator::seating_at(seat(&home)),
+            Seating::At(seat(&home)),
+            "the home directory is where a shell starts, not a space to open"
+        );
+        let project = home.join("some-project");
+        assert_eq!(
+            crate::ui::orchestrator::seating_at(seat(&project)),
+            Seating::Open(seat(&project)),
+            "a directory somebody chose is a request for a space in it"
+        );
+    }
+
     /// Walking away from an agent and coming back returns to the tab it
     /// was left on. A space holds one selection, so a shell opened beside
     /// an agent used to be forgotten the moment the user looked at
@@ -7126,7 +7266,10 @@ mod workspace_tests {
         let mut model = session_rooted_at(root.path());
         // The directory being listed is what an untouched prompt lands on
         // (see `RootPicker`) — here, the space's own root.
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
 
         driven.frame();
@@ -7151,7 +7294,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("orchestrator-space-new-root");
         std::fs::create_dir_all(root.join("inner")).unwrap();
         let mut model = session_rooted_at(root.path());
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
 
         driven.frame();

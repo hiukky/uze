@@ -24,15 +24,7 @@ impl TuiModel {
     /// only thing a test needs to construct to ask what a key does.
     pub(crate) fn scopes(&self) -> Vec<Scope> {
         let mut scopes = vec![Scope::Global, Scope::Management];
-        scopes.push(match self.route {
-            Route::Overview => Scope::Overview,
-            Route::Plugins => Scope::Plugins,
-            Route::Extensions => Scope::Extensions,
-            Route::Harnesses => Scope::Harnesses,
-            Route::Profiles => Scope::Profiles,
-            Route::Keys => Scope::Keys,
-            Route::Appearance => Scope::Appearance,
-        });
+        scopes.push(self.route.scope());
         if self.keys_capture {
             // Every keystroke is the answer here, including ones bound
             // elsewhere — that is the point of a capture.
@@ -414,9 +406,14 @@ impl TuiModel {
     }
 
     /// Closes the innermost thing that is open — a capture, a filter, a
-    /// preview, a drawer — and, when nothing is, the modal itself: the
-    /// key that backs out of everything else backs out of the surface
-    /// too, which is what makes it read as one.
+    /// preview — and, when nothing is, the modal itself: the key that
+    /// backs out of everything else backs out of the surface too, which
+    /// is what makes it read as one.
+    ///
+    /// A screen's detail drawer is not one of those things. It is a column
+    /// of the screen rather than a layer over it, so Esc on a screen
+    /// showing one leaves the modal, and the next visit finds the drawer
+    /// at the width it was dragged to.
     fn dismiss(&mut self) -> Intent {
         if self.keys_capture {
             self.keys_capture = false;
@@ -430,8 +427,7 @@ impl TuiModel {
         }
         if self.route == Route::Profiles {
             // The preview closes first, then the panel collapses back to
-            // the List, mirroring every other route's "Esc closes the
-            // drawer, doesn't touch focus" rule.
+            // the List: both are layers over the screen, unlike a drawer.
             if self.profile_preview_open {
                 self.profile_preview_open = false;
                 return Intent::None;
@@ -442,15 +438,7 @@ impl TuiModel {
             }
             return Intent::CloseModal;
         }
-        // Slides the open drawer away — the fetched detail stays cached, so
-        // reopening the same selection is instant.
-        match self.list_mut(self.route) {
-            Some(screen) if screen.drawer_open => {
-                screen.drawer_open = false;
-                Intent::None
-            }
-            _ => Intent::CloseModal,
-        }
+        Intent::CloseModal
     }
 
     /// Enter's meaning depends on the route: open a plugin row's delivery
@@ -463,16 +451,9 @@ impl TuiModel {
                 if self.selected_marketplace_plugin().is_none() {
                     return Intent::None;
                 }
-                self.remembered.plugin_screen.drawer_open = true;
                 self.marketplace_inspect_intent()
             }
-            Route::Extensions => {
-                if self.selected_extension().is_none() {
-                    return Intent::None;
-                }
-                self.remembered.extension_screen.drawer_open = true;
-                Intent::None
-            }
+            Route::Extensions => Intent::None,
             // List: jump straight into editing, the same way Enter opens a
             // drawer elsewhere. Editor: change the highlighted value.
             // Harnesses: no-op — toggling is the toggle action's job,

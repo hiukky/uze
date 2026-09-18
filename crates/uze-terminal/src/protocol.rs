@@ -11,7 +11,7 @@ use crate::{PaneId, Session, SpaceId, TabId};
 /// [`crate::attach`] replaces a server of another build before connecting;
 /// this is what a client that connects without it — a `uze` nested in a
 /// pane, a test — still meets.
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
 /// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
@@ -53,6 +53,29 @@ impl Default for Palette {
     }
 }
 
+/// Where an attaching client lands, and whether saying so may bring a
+/// space into being.
+///
+/// The two are a different question and used to be one. A seat that always
+/// created meant the directory a client happened to start in was a request
+/// for a space there — so a space closed on purpose came back the next time
+/// `uze` was started from it, which is indistinguishable from the close not
+/// having worked. Naming the intent is what lets the same message mean
+/// "take me there" for a `uze` typed inside a pane and "I am starting here"
+/// for one started from a shell.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Seating {
+    /// Whatever the server already has selected: an attach with nothing to
+    /// say about where to land, such as one after the runtime went away.
+    WhereItLeftOff,
+    /// The space at this seat when one is open there, and otherwise
+    /// nothing at all — the workspace is left exactly as it stands.
+    At(crate::SpaceSeat),
+    /// The space at this seat, opened when none is there. A request, not
+    /// an observation.
+    Open(crate::SpaceSeat),
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
     /// The colours the attached client actually draws with.
@@ -72,10 +95,8 @@ pub enum ClientRequest {
         /// space and leaves, never drawing).
         columns: u16,
         rows: u16,
-        /// Where this client was started, resolved to its workspace root:
-        /// the server makes sure a space sits there and selects it for this
-        /// client. `None` keeps the server's default selection.
-        seat: Option<crate::SpaceSeat>,
+        /// Where this client is to land.
+        seating: Seating,
     },
     Detach,
     Input {
@@ -315,7 +336,7 @@ mod tests {
             version: PROTOCOL_VERSION,
             columns: 80,
             rows: 24,
-            seat: Some(crate::SpaceSeat {
+            seating: Seating::Open(crate::SpaceSeat {
                 root: std::path::PathBuf::from("/tmp/w"),
                 kind: crate::SpaceKind::Worktree,
             }),

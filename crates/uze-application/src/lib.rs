@@ -23,6 +23,7 @@ pub use uze_core::{
     },
     context::PlannedAction,
     conversation::Claim,
+    features::{ALL_FEATURES, Feature},
     integration::{AttachmentState, PublicationStatus},
     naming::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
@@ -41,6 +42,12 @@ pub use uze_core::{
     workspace::workspace_root_or_self,
     worktree::{CompletionBehavior, isolated_checkout},
 };
+
+/// Whether this build offers an unfinished surface — see
+/// [`uze_core::features`], which holds the rule and the reason.
+pub fn feature_enabled(feature: Feature) -> bool {
+    uze_core::features::enabled(feature)
+}
 
 /// The repository a directory's tasks hang off, resolved lexically.
 ///
