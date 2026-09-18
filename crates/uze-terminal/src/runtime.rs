@@ -65,7 +65,7 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
         // conversations.
         Arrival::Connect => match connect_waiting(&socket) {
             Ok(stream) => return Ok(stream),
-            Err(error) => match claim_holder() {
+            Err(cause) => match claim_holder() {
                 Some(pid) => {
                     tracing::warn!(
                         pid,
@@ -75,7 +75,7 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
                     );
                     retire(pid, &socket);
                 }
-                None => return Err(unreachable(error, &socket)),
+                None => return Err(unreachable(&socket, Some(cause))),
             },
         },
         Arrival::Replace(pid) => retire(pid, &socket),
@@ -93,11 +93,13 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
 /// longer vouches for. Whoever holds the workspace then has to be found
 /// by hand, so the message says so rather than reporting `No such file
 /// or directory` about a path the operator never typed.
-fn unreachable(error: RuntimeError, socket: &Path) -> RuntimeError {
+fn unreachable(socket: &Path, cause: Option<RuntimeError>) -> RuntimeError {
+    let because = cause.map_or_else(String::new, |cause| format!(" ({cause})"));
     RuntimeError::Protocol(format!(
-        "a uze is already serving this workspace, but nothing answers at {} ({error}). \
-         It is serving an endpoint this build does not use — end it (`uze terminal stop`, \
-         or kill the `uze terminal serve` process) and open uze again.",
+        "a uze is serving this workspace and answers nowhere this build looks — not at \
+         {}{because} — and the claim does not name it, so it is older than this build's \
+         record of who serves. Find it with `pgrep -fa \'uze terminal serve\'`, end it, and \
+         open uze again.",
         socket.display()
     ))
 }
@@ -286,11 +288,17 @@ pub fn stop() -> Result<(), RuntimeError> {
             // running: a server on an endpoint this build no longer names
             // still holds the workspace, and a `stop` that reported
             // success while it did is what left restarting the machine as
-            // the only way out. What the claim names is what is stopped.
-            if let Some(pid) = claim_holder() {
-                retire(pid, &socket);
-            }
-            return Ok(());
+            // the only way out. What the claim names is what is stopped;
+            // a claim that names nobody — a server older than the record
+            // — is said, never reported as success.
+            return match claim_holder() {
+                Some(pid) => {
+                    retire(pid, &socket);
+                    Ok(())
+                }
+                None if workspace_is_claimed() => Err(unreachable(&socket, None)),
+                None => Ok(()),
+            };
         }
         Err(error) => return Err(error.into()),
     };
@@ -2938,6 +2946,42 @@ mod tests {
         );
         assert!(!old.process.wait().unwrap().success(), "it was ended");
 
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The server every machine already has: one from a release that
+    /// predates the claim's record of who holds it. It answers at an
+    /// endpoint this build does not compute and names nobody, so nothing
+    /// here can end it — and saying "nothing to stop" is what sent an
+    /// operator to restart their machine. It is said instead.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_claim_this_build_cannot_name_is_reported_rather_than_called_stopped() {
+        let scratch = uze_testkit::temp::socket_scratch("stop-unnamed");
+        let uze_home = scratch.join("home");
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let holder = ClaimHolder::spawn_as(&another_build_of_this_binary(&scratch), &uze_home);
+        // What a server older than `record_claimant` leaves: the lock held,
+        // and nothing written in it.
+        std::fs::write(super::workspace_lock_path(), b"").unwrap();
+        assert!(workspace_is_claimed());
+        assert_eq!(super::claim_holder(), None);
+
+        let refused = super::stop().expect_err("a claim nobody can name is not a clean stop");
+        let said = refused.to_string();
+        assert!(
+            said.contains("serving this workspace") && said.contains("pgrep"),
+            "the message names the situation and how to end it: {said}"
+        );
+        assert!(
+            workspace_is_claimed(),
+            "and nothing was signalled on a claim this build cannot vouch for"
+        );
+
+        holder.release();
         let _ = std::fs::remove_dir_all(&scratch);
     }
 

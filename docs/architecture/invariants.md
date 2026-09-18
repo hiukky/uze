@@ -1254,10 +1254,17 @@ refused as though it had met another server. Only the server holding the
 claim unlinks the endpoint, binding over whatever it finds there; a client
 never does, so a listener nobody can vouch for — every listener, where the
 process table cannot be read — is connected to rather than taken down. A
-process is signalled only when the kernel names it as the socket's peer
-(`SO_PEERCRED`, which nothing can forge) and the process table says, right
-before the signal, that it runs `uze` of another build — or any `uze`, when
-the claim is free and it is serving a workspace deleted under it. A pid that
+process is signalled on one of two proofs, never on a claim alone. The
+kernel names it as the socket's peer (`SO_PEERCRED`, which nothing can
+forge) and the process table says, right before the signal, that it runs
+`uze` of another build — or any `uze`, when the claim is free and it is
+serving a workspace deleted under it. Or the claim itself records it: a
+server writes its own pid into the claim it holds, which is what makes a
+server at an endpoint this build cannot compute something `stop` can stop
+and `attach` can replace rather than a workspace shut until the machine
+restarts. That record is a lead, not the proof — it is corroborated
+against the process table before the signal, exactly as the peer is, and
+a claim that records nobody is reported rather than guessed at. A pid that
 does not name exactly one process is never signalled: `kill(-1, …)` is every
 process the user owns. The directory the endpoint lives in is proved to be
 this user's own, unreachable by anyone else, and not a symlink, before a
@@ -1266,6 +1273,8 @@ socket carrying every pane's contents is put in it.
 > `crates/uze-terminal/src/runtime.rs::an_attach_replaces_only_a_server_it_can_name`
 > `crates/uze-terminal/src/runtime.rs::an_asker_is_never_mistaken_for_a_server`
 > `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_holds_no_claim`
+> `crates/uze-terminal/src/runtime.rs::a_server_answering_at_no_endpoint_this_build_names_is_still_stopped`
+> `crates/uze-terminal/src/runtime.rs::a_claim_this_build_cannot_name_is_reported_rather_than_called_stopped`
 > `crates/uze-terminal/src/runtime.rs::a_stale_socket_is_reclaimed_by_the_server_that_binds`
 > `crates/uze-terminal/src/runtime.rs::a_server_of_another_build_is_retired_and_lets_go_of_the_workspace`
 > `crates/uze-terminal/src/runtime.rs::a_process_that_is_not_uze_is_never_signalled`

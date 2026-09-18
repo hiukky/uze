@@ -491,6 +491,28 @@ pub struct SetAside {
     pub reason: String,
 }
 
+/// Whether a document this build cannot read is one it may set aside.
+///
+/// Bytes that are not the document at all, and a document from a schema
+/// this build is *ahead* of: what is lost there is bookkeeping this build
+/// would rewrite anyway.
+///
+/// Never a document from a schema ahead of this one. Setting that aside
+/// takes a newer UZE's record away from it, and two builds on one machine
+/// — the ordinary state of this repository, `target/debug/uze` beside
+/// `~/.cargo/bin/uze` — would then take turns destroying each other's
+/// records, one adoption at a time. The older build reports and leaves it
+/// where it is.
+fn may_be_set_aside(reason: &UzeError) -> bool {
+    match reason {
+        UzeError::Json { .. } => true,
+        UzeError::UnsupportedStateSchema {
+            found, expected, ..
+        } => found < expected,
+        _ => false,
+    }
+}
+
 /// Moves the document aside so the project can be recorded again, and
 /// says what was moved.
 ///
@@ -594,7 +616,7 @@ pub fn locked_reporting<T>(
     let _held = MutationGuard::acquire(&path)?;
     let (mut store, recovery) = match read_document(&path) {
         Ok(document) => (document.unwrap_or_default(), Recovery::default()),
-        Err(reason @ (UzeError::Json { .. } | UzeError::UnsupportedStateSchema { .. })) => {
+        Err(reason) if may_be_set_aside(&reason) => {
             (TaskStore::default(), set_aside(&path, &reason)?)
         }
         Err(error) => return Err(error),
@@ -866,6 +888,50 @@ mod tests {
             load(&home, &root).unwrap().tasks.len(),
             1,
             "what the mutation wrote is what the next pass reads"
+        );
+    }
+
+    /// A document from a schema *ahead* of this build is left exactly
+    /// where it is. Two builds on one machine is the ordinary state of
+    /// this repository — a release beside a debug build — and a rule that
+    /// set aside whatever it could not read would have them take turns
+    /// destroying each other's records, one adoption at a time, each
+    /// saying "recovered" as it went.
+    #[test]
+    fn a_document_from_a_newer_uze_is_refused_rather_than_set_aside() {
+        let home = home("tasks-newer-schema");
+        let root = uze_testkit::temp::scratch("tasks-newer-schema-project");
+        let path = store_path(&home, &root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let written = format!(
+            r#"{{"schema_version": {}, "tasks": [], "tenants": [], "futures": []}}"#,
+            SCHEMA_VERSION + 1
+        );
+        fs::write(&path, &written).unwrap();
+
+        let refused = locked(&home, &root, |store| {
+            store.upsert(task("from the older build"));
+            Ok(())
+        })
+        .expect_err("a newer document is not this build's to rewrite");
+        assert!(
+            matches!(refused, UzeError::UnsupportedStateSchema { .. }),
+            "{refused}"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            written,
+            "and the newer build's record is untouched"
+        );
+        assert!(
+            !path
+                .parent()
+                .unwrap()
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains("unreadable")),
+            "nothing was set aside"
         );
     }
 
