@@ -55,9 +55,29 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
     // succeeds, and one built to another framing may never answer an
     // `Attach` well enough to refuse it.
     match arrival(workspace_is_claimed(), listener_at(&socket)) {
-        Arrival::Connect => {
-            return connect_waiting(&socket).map_err(|error| unreachable(error, &socket));
-        }
+        // The claim says a server is alive. `connect_waiting` gives it the
+        // two seconds its endpoint watch needs to put a wiped socket back;
+        // past that the server is alive somewhere this build cannot reach
+        // — an endpoint named by rules an older one used — and the
+        // workspace is shut until it ends. Ending it is not a loss: the
+        // shape of every space and pane is persisted, so the server that
+        // replaces it restores them and its agents resume their own
+        // conversations.
+        Arrival::Connect => match connect_waiting(&socket) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => match claim_holder() {
+                Some(pid) => {
+                    tracing::warn!(
+                        pid,
+                        socket = %socket.display(),
+                        "a server holds this workspace and answers nowhere this build looks; \
+                         retiring it"
+                    );
+                    retire(pid, &socket);
+                }
+                None => return Err(unreachable(error, &socket)),
+            },
+        },
         Arrival::Replace(pid) => retire(pid, &socket),
         Arrival::Start => {}
     }
@@ -68,13 +88,11 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
 /// Says what a failed connect to a claimed workspace actually means,
 /// which the error from the socket cannot.
 ///
-/// The claim is held, so a server is alive; nothing answers where this
-/// build looks for it. Either it is serving an endpoint named by rules
-/// this one no longer uses — an older `uze`, or one started in a session
-/// whose `XDG_RUNTIME_DIR` differed — or its socket was taken and it did
-/// not put it back. Both are invisible from here, and both leave the
-/// operator holding `No such file or directory` about a path they never
-/// typed.
+/// Only reached where the claim names nobody this process can act on: a
+/// server older than [`record_claimant`], or a pid the process table no
+/// longer vouches for. Whoever holds the workspace then has to be found
+/// by hand, so the message says so rather than reporting `No such file
+/// or directory` about a path the operator never typed.
 fn unreachable(error: RuntimeError, socket: &Path) -> RuntimeError {
     RuntimeError::Protocol(format!(
         "a uze is already serving this workspace, but nothing answers at {} ({error}). \
@@ -255,7 +273,8 @@ pub fn open_space(seat: SpaceSeat) -> Result<String, RuntimeError> {
 /// journey run end on a failure it was right to ignore.
 pub fn stop() -> Result<(), RuntimeError> {
     let _span = tracing::info_span!("terminal.stop").entered();
-    let mut stream = match UnixStream::connect(socket_path()?) {
+    let socket = socket_path()?;
+    let mut stream = match UnixStream::connect(&socket) {
         Ok(stream) => stream,
         Err(error)
             if matches!(
@@ -263,6 +282,14 @@ pub fn stop() -> Result<(), RuntimeError> {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
             ) =>
         {
+            // Nothing answers here, which is not the same as nothing
+            // running: a server on an endpoint this build no longer names
+            // still holds the workspace, and a `stop` that reported
+            // success while it did is what left restarting the machine as
+            // the only way out. What the claim names is what is stopped.
+            if let Some(pid) = claim_holder() {
+                retire(pid, &socket);
+            }
             return Ok(());
         }
         Err(error) => return Err(error.into()),
@@ -443,10 +470,13 @@ struct WorkspaceLock {
 
 impl WorkspaceLock {
     fn acquire() -> Result<Self, RuntimeError> {
-        let file = open_workspace_lock()?;
+        let mut file = open_workspace_lock()?;
         loop {
             match flock(&file, libc::LOCK_EX | libc::LOCK_NB) {
-                Ok(()) => return Ok(Self { _file: file }),
+                Ok(()) => {
+                    record_claimant(&mut file);
+                    return Ok(Self { _file: file });
+                }
                 Err(LockRefusal::Interrupted) => {}
                 Err(LockRefusal::Unsupported(error)) => return Err(RuntimeError::Io(error)),
                 Err(LockRefusal::Contended) => {
@@ -462,6 +492,38 @@ impl WorkspaceLock {
             }
         }
     }
+}
+
+/// Writes this server's pid into the claim it has just taken.
+///
+/// The lock alone proves a server is alive and says nothing about which
+/// one, and `flock` names no holder. A client that cannot reach the
+/// endpoint then has no way to end what is holding the workspace — the
+/// state an operator lands in whenever the endpoint's own rules change
+/// between builds, where `uze terminal stop` looked at the new endpoint,
+/// found nothing, and reported nothing to stop while the old server held
+/// the workspace shut. Restarting the machine was the only way out.
+///
+/// Best-effort by construction: the claim is the lock, never this. What
+/// is written here is a lead, and every reader corroborates it against
+/// the process table before acting on it (see [`claim_holder`]).
+fn record_claimant(file: &mut fs::File) {
+    let pid = std::process::id();
+    let _ = file.set_len(0);
+    let _ = write!(file, "{pid}");
+    let _ = file.flush();
+}
+
+/// The pid recorded in the claim, when the process table still says it is
+/// a `uze`. `None` where nothing was recorded, the pid died, or it was
+/// recycled by something else — in which case the claim is either free or
+/// held by a server that predates this record, and the caller has to say
+/// so rather than signal a stranger.
+fn claim_holder() -> Option<u32> {
+    let recorded = fs::read_to_string(workspace_lock_path()).ok()?;
+    let pid: u32 = recorded.trim().parse().ok()?;
+    signalable(pid).filter(|target| runs_uze(*target))?;
+    Some(pid)
 }
 
 /// Whether a live server holds the workspace claim. A filesystem that
@@ -2836,6 +2898,43 @@ mod tests {
         assert!(
             !workspace_is_claimed(),
             "the retired server let go of the workspace before retire returned"
+        );
+        assert!(!old.process.wait().unwrap().success(), "it was ended");
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A server holding the workspace at an endpoint this build does not
+    /// name — what every change to the endpoint's own rules leaves behind
+    /// — is still what `stop` stops. It used to look at the new endpoint,
+    /// find nothing, and report success while the workspace stayed shut:
+    /// the operator was told there was nothing to stop, could not open
+    /// uze, and restarting the machine was the only way out.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_server_answering_at_no_endpoint_this_build_names_is_still_stopped() {
+        let scratch = uze_testkit::temp::socket_scratch("stop-claimed");
+        let uze_home = scratch.join("home");
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let mut old = ClaimHolder::spawn_as(&another_build_of_this_binary(&scratch), &uze_home);
+        assert!(workspace_is_claimed());
+        assert_eq!(
+            super::claim_holder(),
+            Some(old.pid()),
+            "the claim names who holds it, which `flock` cannot"
+        );
+        // It bound no endpoint at all, which is what an endpoint named by
+        // other rules looks like from here.
+        assert!(!socket_path().unwrap().exists());
+
+        assert!(super::stop().is_ok(), "stopping it is not a failure");
+
+        assert!(
+            !workspace_is_claimed(),
+            "and the workspace is free for the next server"
         );
         assert!(!old.process.wait().unwrap().success(), "it was ended");
 
