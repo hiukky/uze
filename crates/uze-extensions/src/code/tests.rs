@@ -1046,13 +1046,13 @@ fn a_document_offers_its_two_modes_and_a_click_picks_one() {
         "a document offers both ways of reading it"
     );
     assert!(
-        offered[1].active,
-        "and opens on its source, because opening a file is for changing it"
+        offered[0].active,
+        "and opens as the document it is, not as the markup describing it"
     );
 
-    handle_mouse(&mut view, Some(ViewHit::SelectMode(0)));
-    assert_eq!(view.content, ContentMode::Preview);
-    assert!(super::view(&view, space()).modes[0].active);
+    handle_mouse(&mut view, Some(ViewHit::SelectMode(1)));
+    assert_eq!(view.content, ContentMode::Contents);
+    assert!(super::view(&view, space()).modes[1].active);
 
     // A file that is not a document has one way of being read. Picked by
     // pointing at it: the focus is on the content now, so an arrow would
@@ -1062,6 +1062,155 @@ fn a_document_offers_its_two_modes_and_a_click_picks_one() {
     assert!(
         super::view(&view, space()).modes.is_empty(),
         "nothing to choose between for a file that is not a document"
+    );
+}
+
+/// Every way into a document lands on the document. The rule is the
+/// selection's, not one entry point's, so it holds for the row the tree
+/// opens on, for the next row, and after the reader has asked to see the
+/// markup of the file before.
+#[test]
+fn a_document_is_read_as_one_however_it_was_reached() {
+    let machine = FakeMachine::default()
+        .with_file("/w/README.md", "# Title\n")
+        .with_file("/w/main.rs", "fn main() {}\n")
+        .with_file("/w/NOTES.markdown", "# Notes\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+
+    assert_eq!(
+        view.selected,
+        Some(PathBuf::from("/w/README.md")),
+        "the tree opens on its first row"
+    );
+    assert_eq!(
+        view.content,
+        ContentMode::Preview,
+        "and a README is a document before it is a file"
+    );
+
+    // Asking for the markup lasts as long as the file it was asked about.
+    press(&mut view, Command::TogglePreview);
+    assert_eq!(view.content, ContentMode::Contents);
+
+    press(&mut view, Command::SelectNext);
+    settle(&mut view, &machine);
+    assert_eq!(view.selected, Some(PathBuf::from("/w/main.rs")));
+    assert_eq!(
+        view.content,
+        ContentMode::Contents,
+        "a file that is not a document is read as a file"
+    );
+
+    press(&mut view, Command::SelectNext);
+    settle(&mut view, &machine);
+    assert_eq!(view.selected, Some(PathBuf::from("/w/NOTES.markdown")));
+    assert_eq!(
+        view.content,
+        ContentMode::Preview,
+        "`.markdown` is the same document `.md` is, and the source asked \
+         for on another file was about that file"
+    );
+}
+
+/// Closing the surface and opening it again is returning to it: the file
+/// being read, the directories opened to reach it, and how far down it.
+/// Without this the commonest gesture in the product — glance at the diff,
+/// close, come back — costs the whole walk down the tree again.
+#[test]
+fn reopening_a_checkout_returns_to_where_the_viewer_was() {
+    let machine = FakeMachine::default()
+        .with_directory("/w/src")
+        .with_file("/w/src/deep.rs", "one\ntwo\nthree\n")
+        .with_file("/w/README.md", "# hi\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+
+    press(&mut view, Command::Expand);
+    settle(&mut view, &machine);
+    press(&mut view, Command::SelectNext);
+    settle(&mut view, &machine);
+    assert_eq!(view.selected, Some(PathBuf::from("/w/src/deep.rs")));
+    view.scroll = 2;
+
+    // What the host keeps when the surface closes.
+    let place = view.place();
+    drop(view);
+
+    let mut view = files_at("/w").resuming(place);
+    settle(&mut view, &machine);
+
+    assert_eq!(
+        view.selected,
+        Some(PathBuf::from("/w/src/deep.rs")),
+        "the file being read is the file being read"
+    );
+    assert_eq!(
+        item_names_of_tree(&view),
+        ["src", "deep.rs", "README.md"],
+        "and the directory opened to reach it is still open"
+    );
+    assert_eq!(view.scroll, 2, "at the line it was left at");
+    assert_eq!(
+        view.open.as_ref().map(|open| open.lines.len()),
+        Some(3),
+        "the contents were read again rather than assumed"
+    );
+}
+
+/// The door still decides what the surface is showing. A place that
+/// carried the mode would make `Ctrl+G` mean "wherever I was last time",
+/// which is the one thing a door must not mean.
+#[test]
+fn a_restored_place_does_not_outrank_the_door_it_came_through() {
+    let machine = FakeMachine::default().with_file("/w/a.rs", "one\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    assert_eq!(view.content, ContentMode::Contents);
+
+    let place = view.place();
+    let view =
+        CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff).resuming(place);
+
+    assert_eq!(view.content, ContentMode::Diff);
+    assert_eq!(
+        view.selected,
+        Some(PathBuf::from("/w/a.rs")),
+        "the file came with it, which is what makes the switch worth having"
+    );
+    assert!(
+        view.changes.diff_pending,
+        "and its diff is what the surface is now waiting for"
+    );
+}
+
+/// Reviewing a document is still reviewing. The preview reads one file as
+/// it is on disk and a diff is about two of them, so the half that answers
+/// for changes keeps its mode whatever the selection is.
+#[test]
+fn a_documents_diff_is_still_a_diff() {
+    let machine = FakeMachine::default().with_file("/w/README.md", "# Title\n");
+    let mut view = CodeView::opening(PathBuf::from("/w"), "/w".to_owned(), ContentMode::Diff);
+    view.changes.files = vec![
+        ChangedFile {
+            status: FileStatus::Modified,
+            path: PathBuf::from("/w/a.rs"),
+        },
+        ChangedFile {
+            status: FileStatus::Modified,
+            path: PathBuf::from("/w/README.md"),
+        },
+    ];
+    view.selected = Some(PathBuf::from("/w/a.rs"));
+
+    view.select(PathBuf::from("/w/README.md"));
+    settle(&mut view, &machine);
+
+    assert_eq!(view.selected, Some(PathBuf::from("/w/README.md")));
+    assert_eq!(
+        view.content,
+        ContentMode::Diff,
+        "a document selected in the changes is still being reviewed"
     );
 }
 
