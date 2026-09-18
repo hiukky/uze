@@ -24,6 +24,37 @@ build does not know SHALL be reported as that, never as a parse failure.
 - **THEN** UZE SHALL treat it as unreadable by the rule its class carries
   below, not as a document of the current version
 
+#### Scenario: A document written before its kind declared a version
+
+- **WHEN** a document carries no version field at all
+- **THEN** UZE SHALL read it as version 1 of its kind
+- **AND THEN** it SHALL NOT be reported unreadable for that reason alone
+
+### Requirement: Only a version this build is ahead of may be set aside
+
+Recovery moves in one direction. A document from a version older than this
+build's is this build's to set aside and record again; a document from a
+version *newer* than this build's SHALL be left exactly as it is, and the
+operation that needed it SHALL be refused with that reason.
+
+Two builds on one machine is an ordinary state — a release beside a
+development build — and a rule that set aside whatever it could not read
+would have them take turns destroying each other's records, each saying
+it had recovered.
+
+#### Scenario: An older build meets a newer build's document
+
+- **WHEN** a build reads a document whose version is newer than its own
+- **THEN** the document SHALL NOT be moved, rewritten or emptied
+- **AND THEN** the operation SHALL be refused, naming the version found
+  and the version this build writes
+
+#### Scenario: A newer build meets an older build's document
+
+- **WHEN** a build reads a document whose version is older than its own
+- **THEN** the rule for the document's class applies: a rebuildable one is
+  set aside and recorded again, an irreplaceable one refuses
+
 ### Requirement: Rebuildable state is set aside, never a dead end
 
 State UZE can reconstruct from the machine — the record of a project's
@@ -75,13 +106,21 @@ running.
 
 #### Scenario: A server at an endpoint this build does not compute
 
-- **WHEN** a live server holds a workspace at an endpoint named by rules
-  this build no longer uses
+- **WHEN** a live server that recorded itself holds a workspace at an
+  endpoint named by rules this build no longer uses
 - **THEN** `uze terminal stop` SHALL end that server
 - **AND THEN** opening UZE SHALL replace it with one that answers where
   this build looks, restoring the spaces and panes it was serving
 - **AND THEN** neither SHALL require the operator to find a process or
   restart the machine
+
+#### Scenario: The resource predates the anchor that would name it
+
+- **WHEN** what holds the resource was left by a version that recorded
+  nothing for this build to act on
+- **THEN** UZE SHALL report the situation, the resource it looked for and
+  how to find what holds it
+- **AND THEN** it SHALL NOT report the operation as having succeeded
 
 ### Requirement: An upgrade failure names what happened and what to do
 
@@ -126,6 +165,16 @@ it reports.
 - **THEN** the agents' branches and commits SHALL still be there
 - **AND THEN** the operator SHALL be able to create an agent without any
   intervening step
+
+#### Scenario: The previous release predates the recovery being proven
+
+- **WHEN** the released binary is older than the mechanism a scenario
+  needs — it records no claimant, or writes a document of a schema this
+  build also writes
+- **THEN** the scenario SHALL prove what this build *reports* in that
+  state, which is what the operator meets
+- **AND THEN** it SHALL NOT be written as though the recovery ran, and
+  SHALL name the release from which the recovery itself becomes provable
 
 #### Scenario: A new state document has no upgrade scenario
 

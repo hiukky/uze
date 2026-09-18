@@ -56,6 +56,21 @@ Alternative considered: one answer for everything ("always set aside").
 Rejected — applied to receipts it would destroy the only proof UZE has
 that an artifact is its to remove.
 
+### Direction is part of the answer, and an absent version is version 1
+
+Two builds on one machine is not an edge case here — it is the daily loop
+of this repository, a release beside a development build. A rule that set
+aside whatever it could not read would have them take turns destroying
+each other's records, each reporting that it had recovered. So recovery
+moves one way: a version this build is *ahead* of may be set aside; a
+version ahead of *this* build is refused and left untouched.
+
+And every document already on every machine carries no version field at
+all. Read strictly, "every document declares a version" would make all of
+them unreadable on the first run of this change — the proposal
+reproducing the failure it describes. An absent version is version 1, for
+every class, stated once so nobody smuggles in a per-file reader later.
+
 ### The version is read before the document, out of a shared shape
 
 Every document gets `{"schema_version": n, …}` and a probe that reads only
@@ -104,14 +119,32 @@ resources that already moved.
 
 A fixture of "what the old version wrote" is a copy of what somebody
 believed it wrote. The journeys tier already runs the real binary in a
-disposable world; the upgrade chapter runs the *released* one first (the
-last tag, built or downloaded once and cached), then this build against
-the machine it left. The check is what is on disk afterwards, as every
-journey's is.
+disposable world; the upgrade chapter downloads the *released* one, runs
+it first, then this build against the machine it left. The check is what
+is on disk afterwards, as every journey's is.
 
 Alternative considered: keep committed sample documents per version.
 Rejected as the weaker half of the same idea — worth adding later for the
 classes a full run cannot reach cheaply, but not as the primary evidence.
+
+**What the current release can actually prove.** `v0.0.0-alpha.6` writes
+task schema 2, the same as this build, and records no claimant. So
+against it the chapter cannot show a document being set aside at all, and
+the endpoint case can only show what this build *reports* — the claim
+names nobody, so there is nothing to retire. Each scenario says which
+release makes its recovery provable, and the recovery scenarios join the
+chapter when a release carrying the mechanism exists. Writing them as
+though the recovery ran would be a suite that passes on a premise the
+machine does not have.
+
+**The world has to be short enough for the endpoint to move.** A journey
+world's `$UZE_HOME` socket path is ~110 bytes against a 100-byte limit,
+so `socket_path` skips the home candidate and lands where the runner sets
+`XDG_RUNTIME_DIR` — the same place the old release lands. Inside a
+journey both builds would agree on the endpoint and the scenario would
+pass for a reason that does not exist on a real machine (a home is ~58
+bytes). The chapter needs a short world root, and a check on which
+directory holds the socket.
 
 ## Risks / Trade-offs
 
@@ -134,14 +167,39 @@ classes a full run cannot reach cheaply, but not as the primary evidence.
 
 ## Migration Plan
 
-There is no migration code. On first run of a build carrying this change:
+There is no migration code. What actually happens depends on which
+release the machine is coming from, and the honest version of that is:
 
-1. A task document from an older schema is set aside and the project's
-   agents are re-adopted from its checkouts. The operator sees one notice.
-2. A server running at the previous endpoint is retired by the first
-   attach and replaced by one at the new endpoint; spaces and panes are
-   restored.
-3. `doctor` reports what was set aside until the operator removes it.
+**From `v0.0.0-alpha.6`** (the current release: task schema 2, no
+recorded claimant, endpoint under the session's runtime directory):
+
+1. The task document reads normally — same schema — so nothing is set
+   aside.
+2. A server left running holds the workspace at the old endpoint and
+   records nobody. This build cannot name it, so it reports that, names
+   the endpoint it looked at and how to find the process; the operator
+   ends it once. This is the state the change makes *legible*; it cannot
+   make it automatic without the record the old release never wrote.
+3. From the first release that records a claimant, the same state is
+   recovered without the operator: retired and replaced, panes restored.
+
+**From a release older than alpha.6** (task schema 1): the task document
+is set aside, the project's agents are re-adopted from its checkouts, and
+the operator sees one notice — the failure that started this change.
+
+**In both**: `doctor` reports what was set aside until the operator
+removes it.
+
+## Candidate ADRs
+
+- **The three classes and their answers.** A rule every persisted
+  document inherits is exactly the kind of decision that is costly to
+  change later: it decides what UZE may destroy on an upgrade. Flagged
+  here; written at archive, once it has held.
+- **The claim as the anchor for located resources** — signalling a
+  recorded pid corroborated against the process table, alongside the
+  kernel-named peer, widens a bar `docs/architecture/invariants.md`
+  states today.
 
 ## Resolved Questions
 
