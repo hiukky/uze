@@ -1165,6 +1165,77 @@ mod tests {
         (rows, hits)
     }
 
+    fn draw_sized(view: &View, width: u16, height: u16) -> (Vec<String>, Vec<(Rect, ViewHit)>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    view,
+                    frame.area(),
+                    Some(24),
+                    NavigatorScroll::default(),
+                    &mut hits,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        (rows, hits)
+    }
+
+    /// A diagram is only a diagram while every row stays one row: the
+    /// extension cuts to the space it was told about, and this holds the
+    /// host to having told it the truth. Then the click: the row and the
+    /// column the host resolves must land in the box drawn there.
+    #[test]
+    fn a_diagram_is_drawn_unwrapped_and_a_click_lands_in_the_box_under_it() {
+        use uze_extensions::architect;
+        let (width, height) = (150, 45);
+        let space = content_space(Rect::new(0, 0, width, height), Some(24));
+        let mut state = architect::ArchitectView::opening();
+        let (rows, hits) = draw_sized(&architect::view(&state, space), width, height);
+
+        let title_row = rows
+            .iter()
+            .position(|row| row.contains("Workspace TUI"))
+            .expect("the box is drawn") as u16;
+        let drawn = &rows[usize::from(title_row)];
+        let title_column = drawn[..drawn.find("Workspace TUI").unwrap()]
+            .chars()
+            .count() as u16;
+        let (rect, hit) = hits
+            .iter()
+            .find(|(rect, hit)| {
+                matches!(hit, ViewHit::PlaceCaret { .. })
+                    && rect.y == title_row
+                    && rect.x <= title_column
+                    && title_column < rect.x + rect.width
+            })
+            .expect("the row is a click target");
+        let ViewHit::PlaceCaret { line, cell } = *hit else {
+            unreachable!()
+        };
+        architect::handle_mouse(
+            &mut state,
+            Some(ViewHit::PlaceCaret {
+                line,
+                cell: cell + usize::from(title_column - rect.x),
+            }),
+        );
+        let Content::Lines { heading, .. } = architect::view(&state, space).content else {
+            panic!("a diagram is lines");
+        };
+        assert!(heading.contains("selected Workspace TUI"), "{heading}");
+    }
+
     /// The whole point of the contract: an extension names a row, the host
     /// decides where it went, so the host is the only side that can answer
     /// a click.

@@ -34,7 +34,7 @@ use uze_application::{
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
-    ExtensionHit, code,
+    ExtensionHit, architect, code,
     view::{ScrollDirection, ViewHit},
 };
 use uze_keys::{Action, Chord, Key};
@@ -2200,6 +2200,11 @@ struct WorkspaceModel {
     /// discards" rule — it covers the full frame, so there is no outside;
     /// `Esc` (or either shortcut that opens it) is the only dismissal.
     code: Option<code::CodeView>,
+    /// Open state of the architect surface. It borrows the code surface's
+    /// frame — the navigator width, its scroll, the scrollbars — because
+    /// the two are never open together and the frame is the host's, not
+    /// either extension's.
+    architect: Option<architect::ArchitectView>,
     /// User-dragged navigator width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
     /// above, kept on the model rather than on the view itself so it
@@ -4273,6 +4278,13 @@ impl WorkspaceModel {
     }
 }
 
+fn open_architect(model: &mut WorkspaceModel) {
+    model.close_code();
+    model.architect = Some(architect::ArchitectView::opening());
+    model.code_tree_scroll = extension_view::NavigatorScroll::default();
+    model.dirty = true;
+}
+
 fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let Some(session) = model.session.as_ref() else {
         return;
@@ -4282,6 +4294,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let display_root = crate::ui::display_project_path(&cwd);
     let place = model.remembered.code_places.get(&cwd).cloned();
     let view = code::CodeView::opening(cwd, display_root, mode);
+    model.architect = None;
     model.code = Some(match place {
         Some(place) => view.resuming(place),
         None => view,

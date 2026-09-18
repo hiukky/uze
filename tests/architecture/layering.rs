@@ -457,6 +457,12 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
              are the document's structure drawn as text, content rather \
              than chrome, the way syntax colour is",
         ),
+        (
+            "crates/uze-extensions/src/architect/canvas.rs",
+            "a diagram's own lines — the boxes and edges *are* the content, \
+             the way a rendered document's rule is, and the one file that \
+             writes them also carries the ASCII set they fall back to",
+        ),
     ];
 
     let root = repository_root();

@@ -4,11 +4,12 @@
 //! harness registry: one crate, one module per extension, one registry
 //! entry point ([`registry::ExtensionRegistry`]) naming the set.
 //!
-//! One extension ships today — [`code`], which draws three surfaces of
-//! the active checkout: what changed in it, what it contains, and its
-//! commit timeline. A second is another module with its own `CATALOG`
-//! entry, one registration in `ExtensionRegistry::builtin`, and one
-//! [`ExtensionHit`] variant per surface it draws, not a new crate.
+//! Two ship today. [`code`] draws three surfaces of the active checkout:
+//! what changed in it, what it contains, and its commit timeline.
+//! [`architect`] is a proof of concept that draws architecture diagrams
+//! in cells. Another is a module with its own `CATALOG` entry, one
+//! registration in `ExtensionRegistry::builtin`, and one [`ExtensionHit`]
+//! variant per surface it draws, not a new crate.
 //!
 //! # Where a file goes
 //!
@@ -40,6 +41,7 @@
 //! along with the two-sided "keep these in sync by eye" it required. See
 //! [`view`] for the rest of the reasoning.
 
+pub mod architect;
 pub mod code;
 pub mod registry;
 pub mod view;
@@ -64,6 +66,8 @@ pub enum ExtensionHit {
     /// file list than in a list of commits, and the host is the only side
     /// that knows which of the two it drew.
     CodeTimeline(view::ViewHit),
+    /// The architect extension's full-frame surface.
+    Architect(view::ViewHit),
 }
 
 /// One entry of a directory listing, as [`Host::list_dir`] answers it.

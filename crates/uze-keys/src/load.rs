@@ -308,6 +308,7 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "ctrl+w", Action::CloseTab),
         bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
         bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Workspace, "alt+a", Action::ToggleArchitect),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
         // The container of agents, beside the agent's own chord: `s` for
         // space, on the same modifier.
@@ -338,6 +339,7 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Code, "pagedown", Action::ScrollPageDown),
         bind(Scope::Code, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Code, "alt+a", Action::ToggleArchitect),
         bind(Scope::Code, "e", Action::EditFile),
         bind(Scope::Code, "p", Action::TogglePreview),
         bind(Scope::Code, "d", Action::DeleteFile),

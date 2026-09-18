@@ -154,6 +154,28 @@ pub(super) fn render(
     // immediately hidden underneath it, so skip it outright rather than
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
+    if let Some(architect) = &model.architect {
+        let mut view_hits = Vec::new();
+        let area = frame.area();
+        let view = uze_extensions::architect::view(
+            architect,
+            crate::ui::extension_view::content_space(area, model.code_tree_width),
+        );
+        metrics.code = Some(crate::ui::extension_view::render(
+            frame,
+            &view,
+            area,
+            model.code_tree_width,
+            model.code_tree_scroll,
+            &mut view_hits,
+        ));
+        hits.extend(
+            view_hits
+                .into_iter()
+                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Architect(hit)))),
+        );
+        return;
+    }
     if let Some(code) = &model.code {
         // The extension answers with content; the host lays it out and
         // therefore is the only side that can say which rectangle a click

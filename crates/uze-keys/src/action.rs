@@ -223,6 +223,8 @@ actions! {
         "Changes", "Open or close the changes in the selected tab's checkout";
     ToggleFiles => "toggle-files", false,
         "Files", "Open or close the files of the selected tab's checkout";
+    ToggleArchitect => "toggle-architect", false,
+        "Architect", "Open or close the project's architecture diagrams";
 
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,
