@@ -55,12 +55,33 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
     // succeeds, and one built to another framing may never answer an
     // `Attach` well enough to refuse it.
     match arrival(workspace_is_claimed(), listener_at(&socket)) {
-        Arrival::Connect => return connect_waiting(&socket),
+        Arrival::Connect => {
+            return connect_waiting(&socket).map_err(|error| unreachable(error, &socket));
+        }
         Arrival::Replace(pid) => retire(pid, &socket),
         Arrival::Start => {}
     }
     start_server(seat)?;
     connect_waiting(&socket)
+}
+
+/// Says what a failed connect to a claimed workspace actually means,
+/// which the error from the socket cannot.
+///
+/// The claim is held, so a server is alive; nothing answers where this
+/// build looks for it. Either it is serving an endpoint named by rules
+/// this one no longer uses — an older `uze`, or one started in a session
+/// whose `XDG_RUNTIME_DIR` differed — or its socket was taken and it did
+/// not put it back. Both are invisible from here, and both leave the
+/// operator holding `No such file or directory` about a path they never
+/// typed.
+fn unreachable(error: RuntimeError, socket: &Path) -> RuntimeError {
+    RuntimeError::Protocol(format!(
+        "a uze is already serving this workspace, but nothing answers at {} ({error}). \
+         It is serving an endpoint this build does not use — end it (`uze terminal stop`, \
+         or kill the `uze terminal serve` process) and open uze again.",
+        socket.display()
+    ))
 }
 
 /// What [`attach`] does about the endpoint it found.
@@ -126,23 +147,34 @@ fn identify(pid: u32) -> Listener {
 /// "user" means to UZE: a second home is a second world, with a server of
 /// its own.
 ///
-/// The directory is whichever of three candidates can hold the socket:
-/// the runtime directory the session names, an owner-scoped directory in
-/// the system temp dir, and `/tmp`. Two things disqualify one — being
-/// unwritable, and being too long.
+/// The endpoint goes beside the workspace it serves, under `$UZE_HOME`,
+/// for the two reasons [`workspace_lock_path`] gives for the claim: a
+/// cleaner that can reach it has taken the workspace too, and it is the
+/// same path for every terminal, whatever their environment says.
 ///
-/// Length matters more than it looks. `XDG_RUNTIME_DIR` is somebody
-/// else's variable and can be arbitrarily deep, and the system temp dir
-/// on macOS is a per-user `/var/folders/<hash>/T` that already spends
-/// half the budget before UZE adds anything. Falling back does not
-/// weaken isolation: the socket is named after a hash of `UZE_HOME`, so
-/// two homes stay two endpoints wherever they land.
+/// Both halves of that were costing sessions. `XDG_RUNTIME_DIR` is
+/// somebody else's variable — on WSL it is routinely set to a
+/// `/run/user/<uid>` that does not exist — so the endpoint fell to the
+/// temp dir, where `systemd-tmpfiles` takes it out from under a live
+/// server (see [`spawn_endpoint_watch`]); and two terminals whose
+/// environments disagree about `XDG_RUNTIME_DIR` or `TMPDIR` computed
+/// two different endpoints for one workspace, so the second one found
+/// nothing listening at a path the first had never used.
+///
+/// The three older candidates remain, for the one thing `$UZE_HOME`
+/// cannot promise: length. `sockaddr_un.sun_path` is ~100 bytes and a
+/// home is wherever the operator put it, so a path that would not fit
+/// steps to the runtime directory, the system temp dir, and `/tmp` in
+/// turn. Falling back does not weaken isolation: the socket is named
+/// after a hash of `UZE_HOME`, so two homes stay two endpoints wherever
+/// they land.
 pub fn socket_path() -> Result<PathBuf, RuntimeError> {
     let identity = identity_of(&uze_home_dir());
     let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
     let owner = current_uid();
 
     let candidates = [
+        uze_home_dir().join("state").join("terminal"),
         env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
@@ -605,10 +637,46 @@ fn relaunch_command_for_process(process: &str) -> Option<Vec<String>> {
     Some(vec![trimmed.to_owned()])
 }
 
+/// The binary to start a server with: this one, unless this one is no
+/// longer on disk.
+///
+/// `current_exe` reads `/proc/self/exe`, and a binary replaced under a
+/// running process — a `make install` while a client is up, which is the
+/// ordinary state of this repository's own development — resolves to
+/// `<path> (deleted)`. Spawning that answers `No such file or directory`,
+/// from a command that never named a file: the operator is told a path is
+/// missing and given no way to tell which. [`runs_this_executable`]
+/// already knows this state exists; this is the other half of knowing it.
+///
+/// The replacement is `uze` as `PATH` resolves it — the same binary the
+/// operator just installed over this one, which is the one they want
+/// serving anyway.
+fn server_executable() -> Result<PathBuf, RuntimeError> {
+    let current = env::current_exe()?;
+    if current.exists() {
+        return Ok(current);
+    }
+    which_uze().ok_or_else(|| {
+        RuntimeError::Protocol(format!(
+            "{} is gone (replaced while it ran) and no `uze` on PATH replaces it",
+            current.display()
+        ))
+    })
+}
+
+/// `uze` as `PATH` resolves it, resolved here rather than left to the
+/// shell: `Command::new("uze")` would search the *server's* environment,
+/// and the server is spawned with the client's.
+fn which_uze() -> Option<PathBuf> {
+    env::split_paths(&env::var_os("PATH")?)
+        .map(|directory| directory.join("uze"))
+        .find(|candidate| candidate.is_file())
+}
+
 fn start_server(seat: &SpaceSeat) -> Result<(), RuntimeError> {
     use std::os::unix::process::CommandExt;
 
-    let executable = env::current_exe()?;
+    let executable = server_executable()?;
     std::process::Command::new(executable)
         .args(["terminal", "serve", "--root"])
         .arg(&seat.root)
@@ -2572,6 +2640,42 @@ mod tests {
         );
     }
 
+    /// One workspace, one endpoint, whatever each terminal's environment
+    /// says. `XDG_RUNTIME_DIR` and `TMPDIR` are set per session and can
+    /// differ between two terminals of one login — and then the two
+    /// computed two different sockets for one `UZE_HOME`. The second
+    /// found nothing listening at a path the first had never bound, while
+    /// the claim beside the workspace told it a server was alive, so it
+    /// connected to nothing and answered `No such file or directory`.
+    #[test]
+    fn two_terminals_that_disagree_about_the_environment_share_one_endpoint() {
+        let home = uze_testkit::temp::socket_scratch("endpoint-home");
+        let elsewhere = uze_testkit::temp::socket_scratch("endpoint-xdg");
+        let one = {
+            let mut env = uze_testkit::env::scope();
+            env.set("UZE_HOME", &home);
+            env.set("XDG_RUNTIME_DIR", &elsewhere);
+            socket_path().expect("an endpoint can always be named")
+        };
+        let other = {
+            let mut env = uze_testkit::env::scope();
+            env.set("UZE_HOME", &home);
+            env.remove("XDG_RUNTIME_DIR");
+            socket_path().expect("an endpoint can always be named")
+        };
+
+        assert_eq!(one, other, "the workspace decides, not the session");
+        assert!(
+            one.starts_with(&home),
+            "and it sits beside the workspace it serves, where no cleaner \
+             reaches it without taking the workspace too: {}",
+            one.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
     /// `XDG_RUNTIME_DIR` is somebody else's variable and can be arbitrarily
     /// deep. A socket path that does not fit `sun_path` fails at `bind` with
     /// an error naming the limit and not the directory — which reached a
@@ -2583,6 +2687,10 @@ mod tests {
         let deep = uze_testkit::temp::socket_scratch("deep").join("a".repeat(120));
         std::fs::create_dir_all(&deep).unwrap();
         let mut env = uze_testkit::env::scope();
+        // Both of the candidates that come before `/tmp`: a home is
+        // wherever the operator put it, and so is somebody else's
+        // runtime directory.
+        env.set("UZE_HOME", &deep);
         env.set("XDG_RUNTIME_DIR", &deep);
 
         let socket = socket_path().expect("a too-long runtime directory is not fatal");
@@ -2617,6 +2725,10 @@ mod tests {
     fn stopping_a_runtime_that_is_not_running_is_not_a_failure() {
         let scratch = uze_testkit::temp::socket_scratch("stop-idempotent");
         let mut env = uze_testkit::env::scope();
+        // The endpoint follows `UZE_HOME`, and `stop` ends whatever serves
+        // it: without a scratch home this test would stop the developer's
+        // own session.
+        env.set("UZE_HOME", &scratch);
         env.set("XDG_RUNTIME_DIR", &scratch);
 
         let socket = socket_path().expect("an endpoint can always be named");
@@ -4444,6 +4556,10 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, &candidate).unwrap();
 
         let mut env = uze_testkit::env::scope();
+        // `UZE_HOME` leads the candidates, so it is pointed somewhere too
+        // long to hold a socket: what is under test is the runtime
+        // directory behind it.
+        env.set("UZE_HOME", scratch.join("h".repeat(120)));
         env.set("XDG_RUNTIME_DIR", &xdg);
         let socket = socket_path().expect("a bad candidate is stepped over, not fatal");
         assert!(
