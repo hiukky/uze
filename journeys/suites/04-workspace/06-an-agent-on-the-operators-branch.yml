@@ -34,16 +34,15 @@ scenes:
       - click: new
         say: open the picker for a new space
         in: sidebar
-        expect: ' at '
-      - click: workspace
+        expect: '▏'  # the prompt's own cursor, which nothing else draws
+      # The prompt opens on the project, which is a repository, so it names
+      # the worktree kind; the control at the row's end flips it.
+      - click: "⇄"
         say: choose the workspace kind
         in: sidebar
-        expect: '› workspace'
-      # The picker lists the directories inside the prefilled root; the
-      # root itself is picked by deleting the trailing separator, which
-      # makes it a segment matched inside its own parent.
-      - key: BSpace
-        say: pick the project directory itself rather than a directory inside it
+        expect: workspace
+      # Nothing chosen in the listing, so the prompt is on the directory it
+      # opened in — the project itself.
       - key: Enter
         say: create the space
       - wait: screen
@@ -60,11 +59,10 @@ scenes:
 
   - scene: an agent placed in the workspace space is a tenant of the project directory
     when:
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the new-agent picker from the tab strip
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Claude Code

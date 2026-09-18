@@ -2234,10 +2234,13 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
     );
     fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    // In the hue of the kind it would create, like the gutter of a space
+    // already open: the mark says which of the two this row is answering
+    // for, not just that it is the row being typed into.
     frame.render_widget(
         Paragraph::new(theme::glyph(Symbol::TreeVertical)).style(
             Style::default()
-                .fg(theme::color(Token::Accent))
+                .fg(theme::color(kind_hue(picker.kind())))
                 .bg(theme::color(Token::SurfaceRaised)),
         ),
         Rect::new(rect.x, rect.y, 1, 1),

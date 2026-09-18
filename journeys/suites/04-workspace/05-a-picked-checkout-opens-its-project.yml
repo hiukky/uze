@@ -46,7 +46,7 @@ scenes:
       - click: new
         say: open the new-space prompt
         in: sidebar
-        expect: " at "
+        expect: '▏'  # the prompt's own cursor, which nothing else draws
       - type: "{project}/.worktrees/t0pick"
         say: name the agent's checkout itself
         clear: all

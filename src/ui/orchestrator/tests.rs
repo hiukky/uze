@@ -5085,8 +5085,9 @@ mod workspace_tests {
         );
         assert_eq!(
             buffer[(0, kind as u16 + 1)].fg,
-            theme::color(Token::Accent),
-            "the row being typed into carries the accent"
+            theme::color(Token::SpaceWorkspace),
+            "the row being typed into is marked in the hue of the kind it \
+             would create"
         );
 
         // "craude" is what "cr" is the head of; "scribble" matched further in.
