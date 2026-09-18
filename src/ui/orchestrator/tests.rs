@@ -1905,14 +1905,48 @@ mod workspace_tests {
         );
         assert_eq!(
             agents[2],
-            agents[1] + 2,
-            "a spacer row between siblings: {rows:?}"
+            agents[1] + 1,
+            "the next agent follows directly: two rows per item, no gap: {rows:?}"
         );
         let branch = theme::glyph(theme::Symbol::TreeBranch);
         assert!(
             !rows.iter().any(|row| row.contains(&branch)),
             "flat: nothing branches off the gutter: {rows:?}"
         );
+    }
+
+    /// Two rows per agent and no gap between them, so what says which
+    /// item the keyboard is on has to be the item itself: its two rows
+    /// carry a trace of the space's own hue over the panel every other
+    /// row sits on. Light enough to be read through — it is a selection,
+    /// not a highlight — and the kind's, so the tint says what the space
+    /// is as well as where you are.
+    #[test]
+    fn the_agent_receiving_keystrokes_wears_its_kinds_hue_over_the_space() {
+        let model = workspace_space_session();
+        let Sidebar {
+            buffer, hits, rows, ..
+        } = sidebar(&model, &tenant_identities());
+        let agents = agent_rows(&hits);
+        let plain = theme::color(Token::SurfaceRaisedSubtle);
+        let tinted = crate::ui::theme::tinted(Token::SpaceWorkspace, Token::SurfaceRaisedSubtle);
+        assert_ne!(tinted, plain, "the tint is a surface of its own");
+
+        // `agent 2` is the space's context agent (see `workspace_space_session`).
+        for row in [agents[2], agents[3]] {
+            assert_eq!(
+                buffer[(2, row)].bg,
+                tinted,
+                "both rows of the item in front: {rows:?}"
+            );
+        }
+        for row in [agents[0], agents[1]] {
+            assert_eq!(
+                buffer[(2, row)].bg,
+                plain,
+                "and every other agent keeps the space's own panel: {rows:?}"
+            );
+        }
     }
 
     /// Outside a Git repository there is no branch to name, and the row

@@ -154,6 +154,27 @@ pub(crate) fn softened(token: Token, into: Token) -> Color {
     )
 }
 
+/// A surface that carries a hue without becoming one.
+///
+/// What the row the keyboard is on wears: the same panel every other row
+/// of the space sits on, with a trace of the hue that says which kind of
+/// space it is. Far lighter than [`softened`], which is a control at rest
+/// and has a label of its own to stay behind — this one is read *through*,
+/// by every word on the row, so the moment it competes with them it has
+/// stopped being a selection and started being a highlight.
+pub(crate) fn tinted(token: Token, into: Token) -> Color {
+    /// How much of the hue reaches the surface, out of 255. Barely: the
+    /// row is read *through* this, so anything that registers as a colour
+    /// of its own has stopped being a selection and started being a
+    /// highlight.
+    const HUE: u8 = 13;
+
+    let hue = uze_theme::active().color(token);
+    let surface = uze_theme::active().color(into);
+    let blended = hue.over(surface, HUE);
+    Color::Rgb(blended.0, blended.1, blended.2)
+}
+
 /// The channels behind a drawn colour — for the one operation that has to
 /// do arithmetic on one rather than pass it through.
 fn channels(color: Color, absent: Token) -> (u8, u8, u8) {

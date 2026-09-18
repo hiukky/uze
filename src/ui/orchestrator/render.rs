@@ -861,7 +861,6 @@ fn agent_rows(agents: u16) -> u16 {
 /// which of its states are on.
 struct SidebarAgent<'a> {
     tab: &'a Tab,
-    is_last: bool,
     /// The agent the space is about (see `space_context_agent`).
     selected: bool,
     /// Selected *and* in the active space: the one agent receiving
@@ -970,7 +969,6 @@ impl<'a> SidebarAgent<'a> {
         });
         Self {
             tab,
-            is_last,
             selected,
             is_current,
             status: model.agent_tab_status(tab.pane.id, is_current),
@@ -1060,10 +1058,11 @@ fn render_space_caption(
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
 
-/// Each agent a two-row item — status and name over the branch or the
-/// directory — with a spacer row between siblings, for either kind, all of
-/// it beside the space's gutter (see [`space_gutter`]). Selection in the tree is the block
-/// fill of the active space plus the status glyph; the drop indicator
+/// Each agent a two-row item — status and name over the harness running
+/// it — one item straight after the next, for either kind, all of it
+/// beside the space's gutter (see [`space_gutter`]). Selection in the
+/// tree is the item's own fill, a trace of the space's hue over the
+/// panel the space sits on, plus the status glyph; the drop indicator
 /// during a drag is an accent bar down the item's leading column, on
 /// both of its rows so it reads as the whole item.
 ///
@@ -1091,6 +1090,16 @@ fn draw_tree(
         // line, in the accent, never a heavier one.
         let lit = agent.is_current || agent.drop_target;
         let flat = kind == SpaceKind::Workspace;
+        // The row the keyboard is on carries a trace of its space's own
+        // hue over the panel every other row sits on — the item is two
+        // rows and the status glyph is one cell, so the block is what
+        // reads as "here" at a glance. Nothing outside the active space
+        // is tinted: `is_current` is selected *and* receiving keystrokes.
+        let surface = if agent.is_current {
+            Some(theme::tinted(kind_hue(kind), Token::SurfaceRaisedSubtle))
+        } else {
+            is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
+        };
         // One blank column between the connector and the status glyph, in
         // either kind, so the two land in the same place: the tree's line
         // runs into the row rather than into the mark that answers for the
@@ -1139,12 +1148,8 @@ fn draw_tree(
             if let Some((mark, hue)) = &caption.task_mark {
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    label_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
+            if let Some(surface) = surface {
+                fill_row_bg(&mut spans, label_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
@@ -1213,38 +1218,14 @@ fn draw_tree(
                 spans.extend(sync);
                 spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             }
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    detail_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
+            if let Some(surface) = surface {
+                fill_row_bg(&mut spans, detail_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
             // The label and its dim branch/cwd caption read as one tree
             // item — clicking the caption line must select the tab too, not
             // just the label text above it.
             hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
-        }
-        // A light gap between sibling tabs. A bare blank row was tried and
-        // discarded — it broke the tree's own "│" connector into two
-        // disconnected stubs. Continuing that connector through the gap
-        // row keeps the tree intact while still giving each 2-row item a
-        // little room to breathe. Skipped for the last tab: it has no
-        // sibling below to connect to, and the space loop's own blank row
-        // already separates it from whatever comes next.
-        if !agent.is_last
-            && let Some(gap_rect) = rows.slot(1).visible()
-        {
-            let mut spans = vec![space_gutter(false, kind)];
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    gap_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), gap_rect);
         }
     }
 }
