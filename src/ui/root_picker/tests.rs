@@ -357,32 +357,37 @@ fn the_listed_directory_is_what_the_prompt_lands_on() {
     );
 }
 
-/// Every directory is offered, whichever kind is being created. The
-/// worktree kind used to keep only the rows that were repositories, and
-/// a repository that is not a direct child of the directory being listed
-/// was then unreachable: a `projects` folder holding nothing but
-/// repositories showed as empty, because `projects` is not one itself.
+/// A worktree space is cut from a repository, so the listing offers
+/// repositories — and the folders that lead to one, which is where they
+/// actually are. Keeping only the rows that *were* repositories made a
+/// `projects` folder holding nothing but checkouts draw as empty,
+/// because `projects` is not one itself. The other kind stands anywhere,
+/// and offers everything.
 #[test]
-fn every_directory_is_offered_whichever_kind_is_being_created() {
+fn a_worktree_offers_repositories_and_the_folders_that_lead_to_them() {
     let root = TempDir::new("root-picker-filter");
     std::fs::create_dir_all(root.join("projects/engine/.git")).unwrap();
-    std::fs::create_dir_all(root.join("notes")).unwrap();
+    std::fs::create_dir_all(root.join("notes/drafts")).unwrap();
     let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
+
+    // A plain directory names the tenancy, which offers both rows.
+    assert_eq!(names(&picker), ["notes", "projects"]);
 
     picker.choose_kind(SpaceKind::Worktree);
 
     assert_eq!(
         names(&picker),
-        ["notes", "projects"],
-        "the way to a repository is a row like any other"
+        ["projects"],
+        "what a slot can be cut from, and the way to it — never a folder \
+         with no repository under it at all"
     );
     assert_eq!(
         picker.chosen(),
         None,
-        "and what a slot cannot be cut from is not a root — which is what makes Enter walk in"
+        "the way to one is not a root itself, which is what makes Enter walk in"
     );
 
-    picker.select(1);
+    picker.select(0);
     picker.descend();
 
     assert_eq!(names(&picker), ["engine"]);
@@ -391,6 +396,13 @@ fn every_directory_is_offered_whichever_kind_is_being_created() {
         picker.chosen(),
         Some((root.join("projects/engine"), SpaceKind::Worktree)),
         "the repository under it is what a slot is cut from"
+    );
+
+    picker.choose_kind(SpaceKind::Workspace);
+    assert_eq!(
+        names(&picker),
+        ["engine"],
+        "and the other kind offers it too"
     );
 }
 
@@ -413,12 +425,10 @@ fn a_subdirectory_is_the_repository_for_a_worktree_and_itself_for_a_workspace() 
         Some((repository.clone(), SpaceKind::Worktree)),
         "a slot is cut from the repository"
     );
-    picker.select(0);
-    assert_eq!(names(&picker), ["docs"], "its subdirectories are offered");
-    assert_eq!(
-        picker.chosen(),
-        Some((repository.clone(), SpaceKind::Worktree)),
-        "and choosing one still cuts the slot from the repository it is in"
+    assert!(
+        names(&picker).is_empty(),
+        "and a subdirectory is no place to cut one from, nor the way to one: {:?}",
+        names(&picker)
     );
 
     picker.choose_kind(SpaceKind::Workspace);

@@ -2202,9 +2202,9 @@ mod workspace_tests {
         );
 
         // Looking for a repository from a directory that is not one is the
-        // whole point of the other kind: the flip is taken, and the rows
-        // stay — they are the way to the repositories under them — while
-        // there is nothing to create until one is reached.
+        // whole point of the other kind: the flip is taken, the listing
+        // narrows to what a slot can be cut from and the folders leading
+        // to one, and with neither there is nothing to create yet.
         model
             .root_picker
             .as_mut()
@@ -2216,8 +2216,8 @@ mod workspace_tests {
         );
         assert_eq!(
             model.root_picker.as_ref().map(RootPicker::match_count),
-            Some(1),
-            "the directory that is no repository is still the way to one"
+            Some(0),
+            "no repository under it, and nothing under that either"
         );
         assert_eq!(
             model.root_picker.as_ref().and_then(RootPicker::chosen),

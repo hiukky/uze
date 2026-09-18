@@ -55,6 +55,10 @@ pub(super) struct RootPicker {
     /// narrows the filter does not touch the filesystem again.
     listed: PathBuf,
     listing: Vec<Candidate>,
+    /// Which rows of `listing` a worktree space could come from, answered
+    /// once per row per listing: the walk below costs a few `stat`s, and
+    /// a keystroke only narrows what was already read.
+    reaches: std::collections::HashMap<PathBuf, bool>,
     /// Indices into `listing` matching the input's trailing segment, best
     /// match first.
     matched: Vec<usize>,
@@ -105,6 +109,7 @@ impl RootPicker {
             touched: false,
             listed: PathBuf::new(),
             listing: Vec::new(),
+            reaches: std::collections::HashMap::new(),
             matched: Vec::new(),
             selected: 0,
             marked: standing_in.map(Path::to_path_buf),
@@ -401,6 +406,7 @@ impl RootPicker {
         if self.base != self.listed {
             self.listing = read_directories(&self.base);
             self.listed = self.base.clone();
+            self.reaches.clear();
         }
         let mut leading = Vec::new();
         let mut inner = Vec::new();
@@ -418,6 +424,22 @@ impl RootPicker {
             }
         }
         leading.append(&mut inner);
+        // A worktree space is cut from a repository, so a row that is
+        // neither one nor the way to one is not an answer to what is
+        // being looked for. Applied to the row *itself* this hid the way:
+        // a `projects` folder holding nothing but repositories drew as
+        // empty, because `projects` is not one. So the question is asked
+        // of the rows below it too, as far as `REPOSITORY_REACH`.
+        if self.kind() == SpaceKind::Worktree {
+            let mut reaches = std::mem::take(&mut self.reaches);
+            leading.retain(|index| match self.listing.get(*index) {
+                Some(candidate) => *reaches
+                    .entry(candidate.path.clone())
+                    .or_insert_with(|| reaches_a_repository(&candidate.path, REPOSITORY_REACH)),
+                None => false,
+            });
+            self.reaches = reaches;
+        }
         self.matched = leading;
         self.selected = 0;
         // Typing is choosing: the best match leads the list, and it is the
@@ -447,6 +469,41 @@ impl RootPicker {
 /// `.git` as a directory, a worktree of one as a file pointing at it.
 fn holds_a_repository(directory: &Path) -> bool {
     directory.join(".git").exists()
+}
+
+/// How far below a row a repository still counts as reachable from it.
+/// Two, because that is where they are: a folder of projects, and a
+/// folder of folders of projects for anyone who groups them by client or
+/// by org. Deeper is a search, and this is a listing.
+const REPOSITORY_REACH: usize = 2;
+
+/// How many entries of one directory are looked at while answering. The
+/// walk is bounded on every axis on purpose — a `node_modules` on the way
+/// must cost a handful of `stat`s, not a traversal.
+const ENTRIES_SCANNED: usize = 64;
+
+/// Whether a worktree space could be created at `directory` or anywhere
+/// `depth` levels below it.
+fn reaches_a_repository(directory: &Path, depth: usize) -> bool {
+    if holds_a_repository(directory) {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .take(ENTRIES_SCANNED)
+        // A hidden directory is not offered as a row, so it is not a way
+        // to one either — and skipping it keeps the walk out of the
+        // caches and histories every home is full of.
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .any(|path| reaches_a_repository(&path, depth - 1))
 }
 
 fn read_directories(directory: &Path) -> Vec<Candidate> {
