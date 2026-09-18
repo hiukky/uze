@@ -2541,6 +2541,13 @@ impl Attach<'_> {
                     .set_notice(format!("tasks unreadable — {reason}"));
                 continue;
             }
+            // Said before the tasks are taken, because it is what those
+            // tasks are: records adopted from the checkouts on disk, with
+            // the labels and publication UZE had recorded left behind in
+            // a document it could not read.
+            if let Some(recovered) = evaluation.recovered {
+                self.model.set_notice(recovered);
+            }
             self.model
                 .remembered
                 .tasks

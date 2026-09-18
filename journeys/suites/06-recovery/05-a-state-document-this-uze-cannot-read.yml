@@ -1,0 +1,120 @@
+journey: a state document this uze cannot read costs neither the work nor the next agent
+tags: [gate, tui, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  The record of a project's agents is one JSON document under UZE's own
+  state directory, and it outlives the binary that wrote it: installing a
+  newer UZE replaces the binary, never the state. So a document written
+  under an older schema — or hand-edited, or left half-written by a
+  machine that went down — is a thing this build meets on a machine that
+  looks brand new.
+
+  Every mutation of a project goes through that one document: placing an
+  agent, delivering work, reconciling slots. Refusing the document
+  therefore refuses the product, in that repository, with no way back
+  from inside it — the operator is told a file they never wrote failed to
+  parse, and cannot create an agent at all.
+
+  What the machine must show instead: the bytes UZE could not read are
+  kept beside the document, the checkout that was already there is
+  adopted with its commits intact, and the agent the operator asked for
+  is placed.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 4
+
+scenes:
+  - scene: an agent with work committed in a checkout of its own
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "+ │ ✦"
+        say: open the new-agent picker from the tab strip
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: place a Claude agent
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 1
+        expect_timeout: 90
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'work in progress\n' > "$slot/notes.md"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat: work nobody wants to lose'
+        say: it commits something worth keeping
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: one checkout, the agent's own
+      - git: { branches: "agent/*", count: 1 }
+        about: on a branch of its own
+      - file: "{project}/.worktrees/*/notes.md"
+        count: 1
+        about: holding work that only the branch, never the document, records
+      - tasks: { count: 1, checkouts: 1 }
+        about: and the document records the one agent, in its slot
+
+  - scene: the document is set aside, and the agent the operator asks for is placed
+    when:
+      # Schema 1's document, which every UZE before this one wrote: this
+      # build reads a version it does not know, and before the fix it
+      # failed on a missing field instead — a parse error about a file
+      # nobody authored.
+      - shell: |
+          set -e
+          for document in {uze_home}/state/tasks/*.json; do
+            printf '{"schema_version": 1, "tasks": []}' > "$document"
+          done
+        say: the machine is left holding the state an older uze wrote
+      - click: "+ │ ✦"
+        say: open the picker again
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: place a second agent — the gesture that used to be refused
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 2
+        expect_timeout: 90
+        pause: 2.0
+    then:
+      - file: "{uze_home}/state/tasks/*.json.unreadable-*"
+        count: 1
+        contains: '"schema_version": 1'
+        about: |
+          the bytes UZE could not read are kept beside the document, under
+          a name that is no longer a task store to anything reading the
+          directory
+      - dir: "{project}/.worktrees/*"
+        count: 2
+        about: the agent asked for was placed, in a checkout of its own
+      - process: { matching: claude, cwd: "/.worktrees/", alive: true }
+        about: and its harness is running there
+      - git: { branches: "agent/*", count: 2 }
+        about: two branches, one per agent — the first one untouched
+      - file: "{project}/.worktrees/*/notes.md"
+        count: 1
+        about: with the work committed before the recovery exactly where it was
+      - tasks: { count: 2, checkouts: 2, one_task_per_checkout: true }
+        about: |
+          and the document reads again: the checkout that was already
+          there, adopted from the machine rather than from what was lost,
+          beside the agent just placed
+      - git: { in: "{project}", dirty: false }
+        about: none of which touched the operator's own checkout

@@ -571,6 +571,32 @@ caller getting the order wrong hands one agent's slot to another.
 > `tests/acceptance/engine.rs::one_reconciliation_pass_answers_a_repository_once_however_it_is_named`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_delivered_tasks_slot_stays_its_agents_while_a_pane_sits_in_it`
 
+### A task document this build cannot read never stops the project
+
+The document declares a schema version, and that version is read *before*
+the document — out of the one shape every version of it shares. Every
+field of a `Task` is required, so a strict parse of an older document
+fails with `missing field ...` before the version guard can look at it:
+the guard was dead for exactly the case it exists for, and what the
+operator saw was a parse error about a file they never wrote.
+
+A document this build cannot read — an older schema, a hand edit,
+corruption — is then set aside rather than refused. It used to fail every
+mutation of the project, which is every way an agent is created,
+delivered or reconciled: the product was unusable in that repository with
+no way back from inside it. The bytes are kept beside the document they
+came from, the record starts again from empty, and the same pass adopts
+every checkout Git still registers, so what is lost is UZE's own labels
+and publication records and never the work.
+
+The judgement is only ever made under the mutation lock, because that is
+what separates "unreadable" from "read while somebody was publishing it".
+
+> `crates/uze-core/src/project/task.rs::tests::an_older_schema_is_named_by_its_version_rather_than_by_a_missing_field`
+> `crates/uze-core/src/project/task.rs::tests::a_document_this_build_cannot_read_is_set_aside_rather_than_refused`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_unreadable_document_never_stops_an_agent_being_created`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_document_that_cannot_be_read_is_recovered_from_and_said`
+
 ### One task document, one writer at a time
 
 Evaluation, delivery, placement and occupancy reconciliation are four
