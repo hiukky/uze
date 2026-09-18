@@ -79,13 +79,15 @@ pub(crate) const ROUTES: [Route; 7] = [
 /// thing on another. What a person reads is only the surfaces they can
 /// reach, or the shortcuts screen would document a screen that is not
 /// there.
+///
+/// Derived from the screen that owns the scope rather than stated again
+/// here: a screen already says which feature it waits on, and a second
+/// list saying it too is a list that can disagree with the first.
 pub(crate) fn scope_is_offered(scope: uze_keys::Scope) -> bool {
-    match scope {
-        uze_keys::Scope::Profiles | uze_keys::Scope::ProfileEditor => {
-            uze_application::feature_enabled(uze_application::Feature::Profiles)
-        }
-        _ => true,
-    }
+    ROUTES
+        .into_iter()
+        .find(|route| route.scopes().contains(&scope))
+        .is_none_or(|route| routes().contains(&route))
 }
 
 /// The screens this build offers, in sidebar order.
@@ -139,6 +141,35 @@ impl Route {
     /// offer at all, and the badge says so wherever it is.
     pub(crate) fn badge(self) -> Option<&'static str> {
         self.feature().map(|_| "Beta")
+    }
+
+    /// The keyboard surfaces this screen answers for: its own first, then
+    /// any surface that exists only inside it.
+    ///
+    /// One place says which scopes belong to which screen — the stack a
+    /// keystroke is resolved against reads it, and so does the question
+    /// of whether this build offers the surface at all.
+    pub(crate) fn scopes(self) -> &'static [uze_keys::Scope] {
+        use uze_keys::Scope;
+        match self {
+            Route::Overview => &[Scope::Overview],
+            Route::Plugins => &[Scope::Plugins],
+            Route::Extensions => &[Scope::Extensions],
+            Route::Harnesses => &[Scope::Harnesses],
+            // The preference editor is a surface of this screen and of
+            // nowhere else, which is why hiding the screen hides it too.
+            Route::Profiles => &[Scope::Profiles, Scope::ProfileEditor],
+            Route::Keys => &[Scope::Keys],
+            Route::Appearance => &[Scope::Appearance],
+        }
+    }
+
+    /// The scope this screen puts on the stack while it is the one open.
+    pub(crate) fn scope(self) -> uze_keys::Scope {
+        self.scopes()
+            .first()
+            .copied()
+            .expect("every screen answers for a scope of its own")
     }
 
     /// The feature this screen waits on, or `None` for one this build

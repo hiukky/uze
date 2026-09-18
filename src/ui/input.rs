@@ -24,15 +24,7 @@ impl TuiModel {
     /// only thing a test needs to construct to ask what a key does.
     pub(crate) fn scopes(&self) -> Vec<Scope> {
         let mut scopes = vec![Scope::Global, Scope::Management];
-        scopes.push(match self.route {
-            Route::Overview => Scope::Overview,
-            Route::Plugins => Scope::Plugins,
-            Route::Extensions => Scope::Extensions,
-            Route::Harnesses => Scope::Harnesses,
-            Route::Profiles => Scope::Profiles,
-            Route::Keys => Scope::Keys,
-            Route::Appearance => Scope::Appearance,
-        });
+        scopes.push(self.route.scope());
         if self.keys_capture {
             // Every keystroke is the answer here, including ones bound
             // elsewhere — that is the point of a capture.

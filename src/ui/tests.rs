@@ -3500,6 +3500,22 @@ fn a_screen_behind_a_feature_is_absent_or_whole() {
         undocumented.is_empty(),
         "the shortcuts screen documents a surface this build hides: {undocumented:?}"
     );
+
+    // Whether a surface is on offer is answered by the screen that owns
+    // it, so a scope two screens claim would be answered twice, and
+    // differently once one of them is behind a feature.
+    let mut claimed: std::collections::BTreeMap<uze_keys::Scope, Route> =
+        std::collections::BTreeMap::new();
+    for route in ROUTES {
+        for scope in route.scopes() {
+            if let Some(other) = claimed.insert(*scope, route) {
+                panic!(
+                    "{} is claimed by both {other:?} and {route:?}",
+                    scope.name()
+                );
+            }
+        }
+    }
 }
 
 // The sidebar is where someone decides which screen to open, so a route

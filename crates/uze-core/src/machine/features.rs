@@ -29,39 +29,59 @@ use std::{collections::BTreeSet, env, sync::OnceLock};
 /// shell profile written for a newer uze is not an error.
 pub const FEATURES_ENV: &str = "UZE_FEATURES";
 
-/// One surface this build has not committed to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Feature {
-    /// The management modal's Profiles screen: the preference axes
-    /// (autonomy, sandbox, model) UZE applies to a harness. The domain
-    /// behind it is real; what is undecided is the surface — see the
-    /// screen's own Beta badge, which this replaces.
-    Profiles,
+/// One row per feature: its variant, the id the environment names it by,
+/// and what it is, for anything that lists them.
+///
+/// A macro so that declaring a feature is one line in one place. The list
+/// and the enum used to be written separately, which is a list that can
+/// be one entry behind the thing it claims to enumerate — and every
+/// question here ("is this id known?", "what does this build offer?") is
+/// answered by walking it.
+macro_rules! features {
+    ($(
+        $(#[$doc:meta])*
+        $variant:ident => $id:literal, $summary:literal;
+    )*) => {
+        /// One surface this build has not committed to.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+        pub enum Feature {
+            $($(#[$doc])* $variant,)*
+        }
+
+        /// Every feature this build knows.
+        pub const ALL_FEATURES: &[Feature] = &[$(Feature::$variant,)*];
+
+        impl Feature {
+            /// The id the environment variable names it by.
+            pub fn id(self) -> &'static str {
+                match self {
+                    $(Feature::$variant => $id,)*
+                }
+            }
+
+            /// What it is, in one line — for `uze doctor` and anything
+            /// else that has to say what this build is holding back.
+            pub fn summary(self) -> &'static str {
+                match self {
+                    $(Feature::$variant => $summary,)*
+                }
+            }
+
+            pub fn parse(id: &str) -> Option<Feature> {
+                match id {
+                    $($id => Some(Feature::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+    };
 }
 
-/// Every feature this build knows, for a listing that has to be complete.
-pub const ALL_FEATURES: &[Feature] = &[Feature::Profiles];
-
-impl Feature {
-    /// The id the environment variable names it by.
-    pub fn id(self) -> &'static str {
-        match self {
-            Feature::Profiles => "profiles",
-        }
-    }
-
-    pub fn summary(self) -> &'static str {
-        match self {
-            Feature::Profiles => "The Profiles screen: preference axes applied to a harness",
-        }
-    }
-
-    pub fn parse(id: &str) -> Option<Feature> {
-        ALL_FEATURES
-            .iter()
-            .copied()
-            .find(|feature| feature.id() == id)
-    }
+features! {
+    /// The management modal's Profiles screen: the preference axes
+    /// (autonomy, sandbox, model) UZE applies to a harness. The domain
+    /// behind it is real; what is undecided is the surface.
+    Profiles => "profiles", "The Profiles screen: preference axes applied to a harness";
 }
 
 /// Whether this build offers `feature`.
@@ -140,5 +160,8 @@ mod tests {
             assert_eq!(Feature::parse(feature.id()), Some(*feature));
             assert!(!feature.summary().is_empty());
         }
+        let ids: std::collections::BTreeSet<&str> =
+            ALL_FEATURES.iter().map(|feature| feature.id()).collect();
+        assert_eq!(ids.len(), ALL_FEATURES.len(), "two features share an id");
     }
 }
