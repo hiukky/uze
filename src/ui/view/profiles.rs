@@ -219,7 +219,7 @@ fn render_profile_tree(
         Paragraph::new(Span::styled("+ new", theme::fg(Token::Accent))).alignment(Alignment::Right),
         header[3],
     );
-    hits.push((header[3], Hit::NewProfile));
+    hits.push((header[3], Hit::OfferedAction(uze_keys::Action::NewProfile)));
     let subtitle = match (model.profile_preview_open, model.selected_profile()) {
         (true, Some(profile)) => preview_summary(model, &profile.id),
         _ => "Configure preferences and apply them across harnesses".to_owned(),
@@ -229,7 +229,7 @@ fn render_profile_tree(
         Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1),
     );
 
-    if model.profile_preview_open && !model.profiles.is_empty() {
+    if model.profile_preview_open && !model.remembered.profiles.is_empty() {
         let body = Rect::new(
             inner.x,
             inner.y.saturating_add(3),
@@ -264,7 +264,7 @@ fn render_profile_tree(
         return;
     }
 
-    if model.profiles.is_empty() {
+    if model.remembered.profiles.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No profiles yet — press n",
@@ -277,11 +277,11 @@ fn render_profile_tree(
 
     let mut y = inner.y.saturating_add(4);
     let bottom = inner.y + inner.height.saturating_sub(1);
-    for (index, profile) in model.profiles.iter().enumerate() {
+    for (index, profile) in model.remembered.profiles.iter().enumerate() {
         if y >= bottom {
             break;
         }
-        let selected = index == model.profiles_selected;
+        let selected = index == model.remembered.profiles_selected;
         if selected {
             let content_h: u16 = 4;
             // 1 top + content + 1 bottom padding inside the overlay
@@ -445,6 +445,7 @@ fn render_harnesses(
 ) {
     let focused = model.profile_panel == ProfilePanel::Harnesses;
     let harnesses: Vec<_> = model
+        .remembered
         .doctor
         .as_ref()
         .map(|doctor| {
@@ -558,7 +559,14 @@ fn render_harnesses(
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
         let mut spans = vec![
-            Span::styled(if cursor { "› " } else { "  " }, theme::fg(Token::Accent)),
+            Span::styled(
+                if cursor {
+                    format!("{} ", theme::glyph(Symbol::ChevronRight))
+                } else {
+                    " ".repeat(usize::from(theme::width(Symbol::ChevronRight)) + 1)
+                },
+                theme::fg(Token::Accent),
+            ),
             Span::styled(
                 if checked { "[x] " } else { "[ ] " },
                 Style::default().fg(if checked {
@@ -834,6 +842,7 @@ pub(crate) fn preview_lines(model: &TuiModel, width: u16) -> PreviewLines {
 
 fn harness_name(model: &TuiModel, integration: &str) -> String {
     model
+        .remembered
         .doctor
         .as_ref()
         .and_then(|doctor| {
@@ -1062,22 +1071,9 @@ fn caveats(axes: &[AxisPlan], width: u16) -> Vec<Line<'static>> {
 /// mark reads as one block.
 fn wrapped(text: &str, indent: usize, hang: usize, width: u16, color: Color) -> Vec<Line<'static>> {
     let room = (width as usize).saturating_sub(indent + hang).max(20);
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > room {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
+    crate::ui::fold(text, room)
         .into_iter()
+        .filter(|line| !line.is_empty())
         .enumerate()
         .map(|(index, line)| {
             let lead = if index == 0 { indent } else { indent + hang };

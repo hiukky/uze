@@ -1,10 +1,10 @@
 //! Canonical Agent capability routes remain explicit across every harness.
 
 use uze_core::{
-    capability::{Capability, CapabilityKind, Representation},
+    capability::Resource,
+    capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
     router::CompatibilityRoute,
     store::PackageId,
 };
@@ -21,7 +21,6 @@ fn agent(root: &std::path::Path) -> Resource {
         package_root.clone(),
         Capability {
             kind: CapabilityKind::Agent,
-            representation: Representation::Standard,
             path: package_root.join("agents/reviewer.md"),
             payload: b"---\nname: reviewer\n---\nReview.\n".to_vec(),
         },

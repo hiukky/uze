@@ -6,7 +6,7 @@
 //! - `agents.lock` parsing (`uze_core::project_lock`) for the consumer side
 //! - `marketplace.json` parsing (`acquisition::marketplace`) for the marketplace side
 //! - Store package ids (`installed_packages`) for installed vs required
-//! - `context_inspect` for the memory/portability half
+//! - `Context::inspect` for the memory/portability half
 //!
 //! This is deliberately a *projection*: files (agents.lock, marketplace.json,
 //! `.agents/`, paths, counts-by-inspection) are evidence used *here* to
@@ -18,17 +18,12 @@
 //! milliseconds (full per-receipt vendor inspection stays on the Doctor
 //! report, where it is served by the inspection cache — see ADR 018).
 
-#![allow(clippy::empty_line_after_doc_comments)]
-
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use uze_core::{
-    PackageSource, Result,
+    Result,
     acquisition::marketplace,
     project_lock,
     workspace::{self, WorkspaceKind},
@@ -68,20 +63,30 @@ impl UzeApplication {
         prompt_limit: usize,
     ) -> Result<MachineSnapshot> {
         let _span = tracing::info_span!("snapshot.machine").entered();
-        let plugins = self.plugins().list()?;
         // Full health on every refresh: the inspection cache makes the
         // per-receipt vendor probing milliseconds in steady state, so every
         // screen sees real attachment state (never a masked "unknown").
         let doctor = self.health().report();
+        // The plugin list is the one doctor already read, and like doctor's
+        // it skips a package it cannot read rather than emptying every
+        // screen over it.
+        let plugins = doctor.plugins.clone();
         let marketplaces = self.marketplace().list()?;
         let marketplace_plugins = self.marketplace().plugins()?;
         let profiles = self.profiles().list()?;
-        let workspace = self.workspace().summary(context_root).ok();
-        let root = workspace
+        let resolved = workspace::resolve_workspace(context_root).ok();
+        let root = resolved
             .as_ref()
-            .map(|workspace| workspace.root.clone())
+            .map(|resolved| resolved.root.clone())
             .unwrap_or_else(|| context_root.to_path_buf());
         let context_status = self.context().inspect(&root).ok();
+        let workspace = resolved.map(|resolved| {
+            self.workspace().summary_of(
+                context_root,
+                resolved,
+                context_status.as_ref().map(|status| &status.portability),
+            )
+        });
         let prompt_history = self.workspace().prompt_history(&root, prompt_limit);
         Ok(MachineSnapshot {
             plugins,
@@ -107,45 +112,60 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.summary", skip_all, fields(cwd = %cwd.display()), err)]
     pub fn summary(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
         let resolved = workspace::resolve_workspace(cwd)?;
-        let root = resolved.root.clone();
-        let has_lock = matches!(
+        let context = self.0.context().inspect(&resolved.root).ok();
+        Ok(self.summary_of(
+            cwd,
+            resolved,
+            context.as_ref().map(|status| &status.portability),
+        ))
+    }
+
+    /// [`summary`](Self::summary), for a caller that already resolved the
+    /// workspace and inspected its context.
+    fn summary_of(
+        &self,
+        cwd: &Path,
+        resolved: workspace::ResolvedWorkspace,
+        portability: Option<&Portability>,
+    ) -> OverviewWorkspaceSummary {
+        let root = resolved.root;
+        let declares_project = matches!(
             resolved.kind,
             WorkspaceKind::Consumer | WorkspaceKind::Hybrid
         );
-        let has_manifest = matches!(
+        let is_marketplace = matches!(
             resolved.kind,
             WorkspaceKind::Marketplace | WorkspaceKind::Hybrid
         );
-        Ok(OverviewWorkspaceSummary {
+        OverviewWorkspaceSummary {
             cwd: cwd.to_path_buf(),
-            root: root.clone(),
             kind: resolved.kind,
-            agents_directory_present: root.join(".agents").is_dir(),
-            project: self.project_overview(&root, has_lock),
-            marketplace: has_manifest.then(|| Self::marketplace_overview(&root)),
-        })
+            agents_directory_present: root
+                .join(uze_core::project_context::AGENTS_DIRECTORY_NAME)
+                .is_dir(),
+            project: self.project_overview(&root, declares_project, portability),
+            marketplace: is_marketplace.then(|| Self::marketplace_overview(&root)),
+            root,
+        }
     }
 
     /// The project half — always present, so a directory without
-    /// `agents.lock` still answers "not configured" instead of nothing.
-    fn project_overview(&self, root: &Path, has_lock: bool) -> ProjectOverview {
-        let loaded = has_lock.then(|| project_lock::load_lock(root));
+    /// `agents.yaml` still answers "not configured" instead of nothing.
+    fn project_overview(
+        &self,
+        root: &Path,
+        declares_project: bool,
+        portability: Option<&Portability>,
+    ) -> ProjectOverview {
+        let loaded = declares_project.then(|| project_lock::load_lock(root));
         let (environment, declared, installed, missing) = match loaded {
             Some(Ok(Some(lock))) => {
-                let installed_ids: BTreeSet<String> = self
-                    .0
-                    .installed_packages()
-                    .into_iter()
-                    .map(|package| package.id.as_str().to_owned())
-                    .collect();
                 let declared = lock.plugins.len();
-                let missing: Vec<String> = lock
-                    .plugins
-                    .iter()
-                    .filter(|(name, locked)| {
-                        !installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
-                    })
-                    .map(|(name, _)| name.clone())
+                let missing: Vec<String> = self
+                    .0
+                    .locked_plugins_missing(&lock)
+                    .into_iter()
+                    .map(|(name, _)| name.to_owned())
                     .collect();
                 let environment = if missing.is_empty() {
                     // Nothing declared, nothing required — or everything
@@ -162,13 +182,9 @@ impl Workspace<'_> {
             Some(Err(_)) | Some(Ok(None)) => (ProjectEnvironmentState::Invalid, 0, 0, Vec::new()),
             None => (ProjectEnvironmentState::NotConfigured, 0, 0, Vec::new()),
         };
-        let agents_md = root.join("AGENTS.md").is_file();
-        let portability = self
-            .0
-            .context()
-            .inspect(root)
-            .ok()
-            .map(|status| status.portability);
+        let agents_md = root
+            .join(uze_core::project_context::AGENTS_MD_FILE_NAME)
+            .is_file();
         // What `agents.yaml` asks for that the rest has not caught up to.
         // The client shows it and offers the action; it never applies it —
         // opening the client must write nothing into a repository somebody
@@ -177,7 +193,7 @@ impl Workspace<'_> {
             .0
             .project()
             .plan(root)
-            .map(drift_of)
+            .map(|plan| EnvironmentDrift::from(&plan))
             .unwrap_or_default();
         let environment = if environment == ProjectEnvironmentState::Ready && !drift.is_clear() {
             ProjectEnvironmentState::InstallRequired
@@ -187,7 +203,7 @@ impl Workspace<'_> {
         ProjectOverview {
             environment,
             drift,
-            memory: derive_memory(agents_md, portability.as_ref()),
+            memory: derive_memory(agents_md, portability),
             declared_plugins: declared,
             installed_plugins: installed,
             missing_plugins: missing,
@@ -195,10 +211,8 @@ impl Workspace<'_> {
     }
 
     fn marketplace_overview(root: &Path) -> OverviewMarketplace {
-        match UzeApplication::load_marketplace_manifest(&PackageSource::Local {
-            path: root.to_path_buf(),
-        }) {
-            Ok((_, manifest)) => {
+        match super::marketplace_catalogue::read_in_place(root) {
+            Ok(super::marketplace_catalogue::Catalogue { manifest, .. }) => {
                 let package_count = manifest.plugins.len();
                 let invalid_packages = manifest
                     .plugins
@@ -242,18 +256,6 @@ pub struct OverviewWorkspaceSummary {
     pub project: ProjectOverview,
     /// Present for `Marketplace`/`Hybrid` kinds.
     pub marketplace: Option<OverviewMarketplace>,
-}
-
-/// The plan's answer, as the overview carries it. Read from the same plan
-/// `uze status` reads, so the two surfaces cannot disagree about what is
-/// owed.
-fn drift_of(plan: crate::application::ProjectEnvironmentPlan) -> EnvironmentDrift {
-    EnvironmentDrift {
-        unresolved: plan.unresolved,
-        surplus: plan.surplus,
-        missing: Vec::new(),
-        stale_projection: plan.stale_projection.is_some(),
-    }
 }
 
 /// The user-facing state of the project half — derived here, rendered
@@ -325,7 +327,7 @@ pub enum MarketplaceState {
 }
 
 /// The `MemoryState` truth table, pure and testable: `AGENTS.md` presence
-/// plus the portability verdict `context_inspect` produced (or `None` when
+/// plus the portability verdict `Context::inspect` produced (or `None` when
 /// inspection was unavailable). `Issue` means "context exists but is not
 /// portable everywhere" — a bridge gap behind a present `AGENTS.md`, or
 /// vendor-specific files carrying content with no shared `AGENTS.md`.
@@ -445,10 +447,10 @@ mod tests {
         }
 
         /// Installs as though acquired through marketplace `marketplace` —
-        /// what a real `add_project_plugin` install does — so the Store's
+        /// what a real `Project::add` install does — so the Store's
         /// package id agrees with what `write_lock` declared, matching
         /// production behavior instead of the always-`local` shortcut
-        /// `add_plugin` takes for a bare `uze add <path>`.
+        /// `Plugins::add` takes for a bare `uze add <path>`.
         fn install_from(&self, source: &Path, marketplace: &str) {
             let materialized = self
                 .app
@@ -459,12 +461,11 @@ mod tests {
                 .unwrap();
             self.app
                 .plugins()
-                .install_materialized_from_marketplace(
+                .install_materialized(
                     materialized,
                     marketplace,
+                    None,
                     &AlwaysTrust,
-                    &[],
-                    false,
                     &uze_core::naming::NoNameCollisionAuthority,
                 )
                 .unwrap();

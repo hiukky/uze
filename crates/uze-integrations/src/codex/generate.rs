@@ -12,179 +12,20 @@
 //! directory (not an inline list), and `mcpServers` names one external file
 //! rather than embedding servers inline.
 
-use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
+use std::{fs, path::Path};
 
-use uze_core::{
-    Result, UzeError,
-    home::UzeHome,
-    integration::{AttachmentReceipt, ManagedArtifact},
-    project::Resource,
-    store::{StoredPackage, is_valid_qualified_id},
-};
+use uze_core::{Result, UzeError, store::StoredPackage};
 
-/// The second, UZE-owned marketplace this module publishes into —
-/// deliberately distinct from `MARKETPLACE_NAME` ("uze-local", reserved for
-/// explicit envelopes and never touched here) so a generated envelope can
-/// never be confused with, or silently override, an author-provided one.
-/// Named "uze-store" (shorter than the original "uze-local-generated").
-pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-store";
+use crate::shared::marketplace::manifest_fields;
+use crate::shared::skill::write_file;
 
-/// The `kind` this module stamps on its own receipts. Distinct from
-/// `marketplace-plugin` (the explicit-envelope kind) so a receipt's own
-/// shape already announces which lifecycle owns it before
-/// `detail["origin"]` is even read.
-pub(super) const GENERATED_PLUGIN_KIND: &str = "marketplace-plugin-generated";
-
-/// Root of every package's generated envelope directory, AND the catalogue
-/// root Codex is pointed at for the generated marketplace. Codex resolves a
-/// catalogue entry's `source.path` relative to the marketplace root and
-/// rejects both absolute and escaping relative paths (confirmed empirically
-/// against Codex 0.148.0, see `CodexIntegration::catalogue_root`'s doc
-/// comment) — that constraint is why generated package directories live
-/// directly under this root rather than under a Store-relative path. Lives
-/// under `$UZE_HOME/state/attachments/codex/generated/`, the same
-/// convention Claude's generated envelope uses, never under the Store.
-pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
-    crate::shared::path::attachment_root(uze_home, "codex").join("generated")
-}
-
-fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {
-    generated_root(uze_home).join(package_id)
-}
-
-/// Whether this package has anything UZE can safely represent as a
-/// generated native envelope: no explicit envelope of its own, and at
-/// least one of the two structural surfaces UZE synthesizes from (a
-/// conventional `skills/` directory, or a root `mcp.json`) — identical
-/// eligibility rule to Claude's, applied to Codex's own explicit-envelope
-/// marker file.
-pub(super) fn generatable(package: &StoredPackage) -> bool {
-    !package.root.join(".codex-plugin/plugin.json").is_file()
-        && (package.root.join("skills").is_dir() || package.root.join("mcp.json").is_file())
-}
-
-/// The intersection ADR-013 §2 requires (`provided = discovered ∩
-/// declared`), computed against the SEMANTIC surface a generated manifest
-/// can preserve — not by re-parsing a manifest this same module just wrote,
-/// so generation and coverage agree by construction (ADR-030 §13).
-///
-/// A Skill is covered iff it lives under the package's conventional
-/// `skills/` directory AND its `invoke:` policy can be preserved by the
-/// generated envelope: default and user-only (the envelope materializes the
-/// `agents/openai.yaml` sidecar) qualify; model-only degrades on Codex
-/// (explicit `$skill` invocation cannot be disabled) and is therefore never
-/// claimed — it falls through to capability-level delivery, which reports
-/// the Degradation honestly; the invalid combination is never claimed
-/// either. An MCP server is covered iff its name appears in the package's
-/// own `mcp.json`.
-pub(super) fn generated_exact_coverage(
-    package: &StoredPackage,
-    resources: &[&Resource],
-) -> BTreeSet<String> {
-    let declared_mcp: BTreeSet<String> = fs::read(package.root.join("mcp.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("mcpServers")
-                .and_then(serde_json::Value::as_object)
-                .map(|servers| servers.keys().cloned().collect())
-        })
-        .unwrap_or_default();
-
-    let mut provided = BTreeSet::new();
-    for resource in resources {
-        match resource.capability.kind {
-            uze_core::capability::CapabilityKind::AgentSkill => {
-                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
-                else {
-                    continue;
-                };
-                let Some(parent) = relative.parent() else {
-                    continue;
-                };
-                if parent.starts_with("skills") && codex_policy_is_envelope_preservable(resource) {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Mcp => {
-                if let Some(name) = &resource.resource_name
-                    && declared_mcp.contains(name)
-                {
-                    provided.insert(resource.identity());
-                }
-            }
-            _ => {}
-        }
-    }
-    provided
-}
-
-/// Whether the generated envelope can preserve one Skill's canonical
-/// invocation policy for Codex (ADR-030 §13). All valid combinations except
-/// model-only qualify: Codex's own `agents/openai.yaml` sidecar covers
-/// `model=false`, the default needs nothing, and `user=false` cannot be
-/// enforced anywhere on Codex.
-fn codex_policy_is_envelope_preservable(resource: &Resource) -> bool {
-    let policy = resource.skill_invocation();
-    !policy.is_invalid() && !(policy.model && !policy.user)
-}
-
-/// The generated `.codex-plugin/plugin.json` document. Name/version/
-/// description come from the package's own canonical `plugin.json`
-/// (`package.manifest`), never invented. `skills` is declared as the fixed
-/// `"./skills/"` convention (mirroring the real explicit-envelope fixture
-/// shape, `tests/_fixtures/foreign/codex/native-plugin/.codex-plugin/plugin.json`);
-/// `mcpServers` names the generated `.mcp.json` sibling file, written only
-/// when the package actually has a root `mcp.json` to project.
-fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
-    let (description, version) = read_name_fields(package);
-
-    let mut document = serde_json::json!({
-        "name": package.active_name.as_str(),
-        "version": version,
-        "description": description,
-    });
-
-    if package.root.join("skills").is_dir() {
-        document["skills"] = serde_json::json!("./skills/");
-    }
-    if package.root.join("mcp.json").is_file() {
-        document["mcpServers"] = serde_json::json!("./.mcp.json");
-    }
-
-    document
-}
-
-fn read_name_fields(package: &StoredPackage) -> (String, String) {
-    fs::read(&package.manifest)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .map(|value| {
-            let description = value
-                .get("description")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("UZE-managed Codex plugin, generated from a vendor-neutral package.")
-                .to_owned();
-            let version = value
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("0.1.0")
-                .to_owned();
-            (description, version)
-        })
-        .unwrap_or_else(|| {
-            (
-                "UZE-managed Codex plugin, generated from a vendor-neutral package.".to_owned(),
-                "0.1.0".to_owned(),
-            )
-        })
-}
-
-/// Materializes (or refreshes) one package's generated envelope directory.
-/// Idempotent and deterministic: recreated wholesale from the Store package
-/// on every call, never incrementally patched — the directory is entirely
-/// UZE-owned and non-authoritative (ADR-013 §5).
+/// Writes the generated `.codex-plugin/plugin.json` and the surfaces it
+/// declares into a fresh envelope directory. Name/version/description come
+/// from the package's own canonical `plugin.json`, never invented. `skills`
+/// is the fixed `"./skills/"` convention (the shape of the explicit-envelope
+/// fixture, `tests/_fixtures/foreign/codex/native-plugin/.codex-plugin/plugin.json`);
+/// `mcpServers` names a `.mcp.json` sibling, written only when the package
+/// has a root `mcp.json` to project.
 ///
 /// The envelope carries real bytes, never symlinks into the Store. `codex
 /// plugin add` stages its own copy of the envelope under
@@ -195,42 +36,41 @@ fn read_name_fields(package: &StoredPackage) -> (String, String) {
 /// Rebuilding wholesale from the Store on every materialization is what
 /// keeps the envelope non-authoritative; `codex plugin add` re-stages the
 /// cache from it even for an unchanged version (verified against 0.152.1).
-pub(super) fn materialize_generated_package(
-    uze_home: &UzeHome,
-    package: &StoredPackage,
-) -> Result<PathBuf> {
-    let dir = generated_package_dir_for_id(uze_home, package.id.as_str());
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write {
-            path: dir.clone(),
-            source,
-        })?;
+pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Result<()> {
+    let (description, version) = manifest_fields(
+        &package.manifest,
+        "UZE-managed Codex plugin, generated from a vendor-neutral package.",
+    );
+    let mut manifest = serde_json::json!({
+        "name": package.active_name.as_str(),
+        "version": version,
+        "description": description,
+    });
+    if package.root.join("skills").is_dir() {
+        manifest["skills"] = serde_json::json!("./skills/");
+    }
+    let mcp_source = package.root.join("mcp.json");
+    if mcp_source.is_file() {
+        manifest["mcpServers"] = serde_json::json!("./.mcp.json");
     }
     let plugin_dir = dir.join(".codex-plugin");
     fs::create_dir_all(&plugin_dir).map_err(|source| UzeError::Write {
         path: plugin_dir.clone(),
         source,
     })?;
-    let manifest = generated_manifest_document(package);
-    fs::write(
-        plugin_dir.join("plugin.json"),
-        serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
-    )
-    .map_err(|source| UzeError::Write {
-        path: plugin_dir.join("plugin.json"),
-        source,
-    })?;
-
+    write_file(
+        &plugin_dir.join("plugin.json"),
+        &serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
+    )?;
     let package_root = fs::canonicalize(&package.root).map_err(|source| UzeError::Read {
         path: package.root.clone(),
         source,
     })?;
-    materialize_generated_skills(package, &package_root, &dir)?;
-    let mcp_source = package.root.join("mcp.json");
+    materialize_generated_skills(package, &package_root, dir)?;
     if mcp_source.is_file() {
         mirror_file(&mcp_source, &dir.join(".mcp.json"))?;
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// Materializes the generated envelope's `skills/` surface (ADR-030 §13).
@@ -299,38 +139,14 @@ fn materialize_user_only_skill_dir(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let (description, body) = crate::shared::skill::parse_skill_body(&bytes);
     let name = crate::shared::skill::frontmatter_value(&bytes, "name")
         .unwrap_or_else(|| skill_name.to_owned());
-    let mut document = String::from("---\n");
-    document.push_str(&format!("name: {name}\n"));
-    if let Some(description) = description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
-        document.push_str(&format!("description: \"{escaped}\"\n"));
-    }
-    document.push_str("---\n");
-    document.push_str(&body);
-    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
-        path: target_dir.join("SKILL.md"),
-        source: source_error,
-    })?;
-    let policy_file = target_dir.join("agents/openai.yaml");
+    crate::shared::skill::write_file(
+        &target_dir.join("SKILL.md"),
+        crate::shared::skill::render_skill_wrapper(&name, &bytes, &[]).as_bytes(),
+    )?;
     if !policy.model {
-        fs::create_dir_all(policy_file.parent().expect("policy file has a parent")).map_err(
-            |source_error| UzeError::Write {
-                path: policy_file
-                    .parent()
-                    .expect("policy file has a parent")
-                    .to_path_buf(),
-                source: source_error,
-            },
-        )?;
-        fs::write(&policy_file, super::skills::EXPLICIT_ONLY_POLICY_YAML).map_err(
-            |source_error| UzeError::Write {
-                path: policy_file,
-                source: source_error,
-            },
-        )?;
+        crate::shared::skill::write_explicit_only_sidecar(target_dir)?;
     }
     for entry in sorted_entries(canonical_dir)? {
         let name = entry.file_name();
@@ -425,164 +241,51 @@ fn sorted_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
     Ok(entries)
 }
 
-/// Removes one package's generated envelope directory by id alone — used at
-/// detach time, when only the receipt's `package_id` (not a full
-/// `StoredPackage`) is available. Safe unconditionally: this directory is
-/// never anything but a Derived Artifact (ADR-013 §5).
-pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
-    // The id comes from the receipt ledger, not a constructor: refuse one
-    // that could not have been a real package id instead of joining it into
-    // a path and removing whatever the traversal lands on.
-    if !is_valid_qualified_id(package_id) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "refusing to remove generated envelope for malformed package id `{package_id}`"
-        )));
-    }
-    let dir = generated_package_dir_for_id(uze_home, package_id);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write { path: dir, source })?;
-    }
-    Ok(())
-}
-
-/// Packages eligible for the generated marketplace's catalogue: no explicit
-/// envelope of their own, and something structurally safe to generate from.
-/// Mirrors `plugin::publishable`'s role for the explicit marketplace.
-fn generated_publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
-    packages
-        .iter()
-        .filter(|package| generatable(package))
-        .collect()
-}
-
-/// The catalogue document, in the same shape as `plugin::catalogue_document`
-/// (Codex requires `policy`/`category` on every entry), but with
-/// `source.path` relative to the generated marketplace's own root — each
-/// generated package directory lives directly under it, exactly like
-/// Claude's `"./<id>"` convention.
-fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
-    let plugins: Vec<serde_json::Value> = generated_publishable(packages)
-        .into_iter()
-        .map(|package| {
-            serde_json::json!({
-                "name": package.active_name.as_str(),
-                "source": { "source": "local", "path": format!("./{}", package.id.as_str()) },
-                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
-                "category": "Developer tools"
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": GENERATED_MARKETPLACE_NAME,
-        "interface": { "displayName": "UZE Local (generated)" },
-        "plugins": plugins,
-    })
-}
-
-/// Rebuilds every generatable package's derived directory and the generated
-/// marketplace catalogue referencing them. Safe to call repeatedly: each
-/// package directory is rebuilt wholesale, and a package that stopped being
-/// `generatable` (e.g. it gained an explicit envelope) simply drops out of
-/// the catalogue — its now-orphaned directory is cleaned up at detach time
-/// by `remove_generated_package_by_id`, not by this function.
-pub(super) fn write_generated_catalogue(
-    uze_home: &UzeHome,
-    packages: &[StoredPackage],
-) -> Result<()> {
-    let root = generated_root(uze_home);
-    fs::create_dir_all(&root).map_err(|source| UzeError::Write {
-        path: root.clone(),
-        source,
-    })?;
-    for package in generated_publishable(packages) {
-        materialize_generated_package(uze_home, package)?;
-    }
-    let catalogue_path = root.join(".agents/plugins/marketplace.json");
-    let parent = catalogue_path
-        .parent()
-        .expect("catalogue path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    uze_core::persistence::write_atomic(
-        &catalogue_path,
-        &serde_json::to_vec_pretty(&generated_catalogue_document(packages))
-            .expect("catalogue is serializable"),
-    )
-}
-
-/// Whether every package the generated catalogue names still has its
-/// envelope on disk. The catalogue matching is not enough on its own once
-/// republishing is gated on it: a hand-removed envelope would otherwise
-/// stay missing until something else rewrote the view.
-pub(super) fn generated_packages_present(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
-    generated_publishable(packages).into_iter().all(|package| {
-        generated_package_dir_for_id(uze_home, package.id.as_str())
-            .join(".codex-plugin/plugin.json")
-            .is_file()
-    })
-}
-
-pub(super) fn generated_catalogue_matches(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
-    let catalogue_path = generated_root(uze_home).join(".agents/plugins/marketplace.json");
-    let expected = generated_catalogue_document(packages);
-    match fs::read(&catalogue_path) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
-            .is_ok_and(|actual| actual == expected),
-        Err(_) => generated_publishable(packages).is_empty(),
-    }
-}
-
-pub(super) fn generated_package_receipt(
-    integration_id: &str,
-    package: &StoredPackage,
-    marketplace_root: &Path,
-    generated_dir: &Path,
-    selector: &str,
-) -> AttachmentReceipt {
-    AttachmentReceipt {
-        package_id: package.id.as_str().to_owned(),
-        resource_identity: None,
-        integration: integration_id.to_owned(),
-        strategy: "native-plugin-marketplace-generated".to_owned(),
-        artifact: ManagedArtifact::IntegrationOwned {
-            kind: GENERATED_PLUGIN_KIND.to_owned(),
-            selector: selector.to_owned(),
-            detail: [
-                (
-                    "marketplace_root".to_owned(),
-                    serde_json::json!(marketplace_root),
-                ),
-                // The path Codex actually reports back as the installed
-                // plugin's `source.path` is the GENERATED directory it was
-                // catalogued from, not the canonical Store package root —
-                // unlike the explicit-envelope path, where those two are
-                // the same directory. Recording the Store root here would
-                // make `inspect_codex_plugin`'s source comparison see
-                // permanent drift against Codex's own truthful report.
-                ("package_root".to_owned(), serde_json::json!(generated_dir)),
-                ("origin".to_owned(), serde_json::json!("generated")),
-            ]
-            .into_iter()
-            .collect(),
-        },
-    }
-}
-
 #[cfg(test)]
 mod generated_native_tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
+    use super::super::plugin::CodexMarketplace;
     use super::*;
+    use crate::shared::marketplace;
+    use uze_core::store::StoredPackage;
+
+    fn generatable(package: &StoredPackage) -> bool {
+        marketplace::generatable::<CodexMarketplace>(package)
+    }
+
+    fn generated_root(uze_home: &UzeHome) -> PathBuf {
+        marketplace::generated_root::<CodexMarketplace>(uze_home)
+    }
+
+    fn generated_exact_coverage(
+        package: &StoredPackage,
+        resources: &[&Resource],
+    ) -> BTreeSet<String> {
+        marketplace::generated_exact_coverage::<CodexMarketplace>(package, resources)
+    }
+
+    fn materialize_generated_package(
+        uze_home: &UzeHome,
+        package: &StoredPackage,
+    ) -> uze_core::Result<PathBuf> {
+        marketplace::materialize_generated_package::<CodexMarketplace>(uze_home, package)
+    }
+
+    fn remove_generated_package_by_id(
+        uze_home: &UzeHome,
+        package_id: &str,
+    ) -> uze_core::Result<()> {
+        marketplace::remove_generated_package::<CodexMarketplace>(uze_home, package_id)
+    }
 
     fn temp_root(label: &str) -> PathBuf {
         uze_testkit::temp::scratch(label)
@@ -638,7 +341,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -652,7 +354,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -896,7 +597,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("extra/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -907,7 +607,13 @@ mod generated_native_tests {
         assert!(!covered.contains(&r_out.identity()));
 
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = CodexIntegration::new(_root.join("agents"), uze_home);
+        let integration = CodexIntegration::new(_root.join("agents"), uze_home.clone());
+        uze_core::state::record(
+            &uze_home,
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_out);
         assert!(!matches!(
             fallback.mechanism,
@@ -991,7 +697,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/deploy/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -1046,7 +751,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg_root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },
@@ -1077,7 +781,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Hook,
-                representation: Representation::Standard,
                 path: pkg.root.join("hooks/pre-commit"),
                 payload: Vec::new(),
             },

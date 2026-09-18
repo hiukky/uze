@@ -65,6 +65,7 @@ green. Tests run against real repositories through `uze_testkit::git`.
 - [x] 9.3 Cover placement: the first agent is isolated, three agents get three distinct checkouts and none is the primary, the operator's uncommitted work survives agents running, a shell tab creates no checkout, a repository without a commit launches in place with the warning, the diff overlay scopes to the tab's checkout.
 
 - [x] 9.4 Keep listing a shell tab whose foreground process is a known harness, but as an unmanaged harness: name and real directory, no task state, no delivery action. Managed means the tab was created by `+ agent`, which today the tab's generated label and the slot its pane sits in say; an explicit task identifier on the tab arrives with the terminal protocol bump.
+- [ ] 9.5 Remove the impossible-isolation fallback: placement into a worktree space refuses with the reason instead of starting the agent in the primary, and the projected text addresses the reader on the operator's branch. *Carried out by `add-space-kinds` (tasks 4.1, 6.1); check when it lands.*
 
 ## 10. Readiness and delivery
 

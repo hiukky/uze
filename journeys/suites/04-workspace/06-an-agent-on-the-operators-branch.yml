@@ -1,0 +1,128 @@
+journey: an agent of a workspace space works on the operator's own branch
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  A space is created as one of two kinds. A worktree space is what every
+  other journey in this chapter drives: each agent in a slot of its own.
+  A workspace space is the other choice, made in the same picker: its
+  agents work in the space's own directory, on whatever branch it is on,
+  beside the operator — no checkout, no branch, no task, nothing for UZE
+  to deliver, because the commits already land where the operator is.
+
+  Every check reads the machine: the directories under `.worktrees`, what
+  Git registers as a worktree and a branch, the task store UZE writes and
+  the tenants it records beside the tasks, and the process table. The
+  chip that chooses the kind is a gesture, so it states what it expects to
+  see; nothing about the screen is asserted.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 4
+
+scenes:
+  - scene: a second space over the same project is created as a workspace space
+    when:
+      - open: "{uze}"
+        say: uze opens on the project, in a worktree space
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: new
+        say: open the picker for a new space
+        in: sidebar
+        expect: '▏'  # the prompt's own cursor, which nothing else draws
+      # The prompt opens on the project, which is a repository, so it names
+      # the worktree kind; the control at the row's end flips it.
+      - click: "⇄"
+        say: choose the workspace kind
+        in: sidebar
+        expect: workspace
+      # Nothing chosen in the listing, so the prompt is on the directory it
+      # opened in — the project itself.
+      - key: Enter
+        say: create the space
+      - wait: screen
+        until: 'demo-app 2'
+        in: sidebar
+        timeout: 20
+        say: the second space appears under its numbered label
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: creating a space creates no checkout, whichever kind it is
+      - tenants: { count: 0 }
+        about: and records no tenant until an agent is placed
+
+  - scene: an agent placed in the workspace space is a tenant of the project directory
+    when:
+      - click: "+ │ ✦"
+        say: open the new-agent picker from the tab strip
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 1
+        expect_timeout: 90
+        pause: 1.5
+    then:
+      - process: { matching: claude, cwd: "{project}", alive: true }
+        about: the agent's process runs in the project directory itself
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: no checkout was created for it
+      - git: { worktrees: 1 }
+        about: Git registers only the primary checkout
+      - git: { branches: "agent/*", count: 0 }
+        about: and no agent branch
+      - tasks: { count: 0 }
+        about: a tenant is not a task
+      - tenants: { count: 1, live: 1 }
+        about: one live tenant is recorded for the project directory
+
+  - scene: a commit made in the tree is on the operator's branch, with nothing to deliver
+    when:
+      - shell: |
+          set -e
+          cd {project}
+          printf 'pub fn pong() -> &str { "ping" }\n' > src/tenant.rs
+          git add src/tenant.rs
+          git commit -qm "feat: answer from the tenant"
+        say: work committed in the project directory, as the tenant would commit it
+    then:
+      - cmd:
+          run: cd {project} && git log --format=%s main | grep -q 'answer from the tenant'
+        about: the commit is on the branch the operator is on
+      - git: { branches: "agent/*", count: 0 }
+        about: still no agent branch to deliver from
+      - tasks: { count: 0 }
+        about: and nothing for delivery to pick up
+
+  - scene: closing the tenant's tab ends the tenant
+    when:
+      - rclick: agent 1
+        say: right-click the tenant's row
+        in: sidebar
+        occurrence: last
+        expect: Close tab
+      - click: Close tab
+        in: sidebar
+        say: confirm close
+        # Nothing on screen appears when a row goes, so the gate is the
+        # tenant's row no longer being drawn anywhere.
+        expect: '\A(?![\s\S]*agent 1)'
+        expect_timeout: 20
+        pause: 2.0
+    then:
+      - tenants: { count: 1, live: 0 }
+        about: the tenant is recorded as ended, and still recorded
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: nothing was ever created on disk for it

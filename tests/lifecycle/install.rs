@@ -4,8 +4,11 @@
 use std::{fs, path::PathBuf};
 
 use uze_core::{
-    UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
-    integration::IntegrationPort, router::CompatibilityRoute,
+    UzeHome, UzeStore,
+    capability::CapabilityKind,
+    exposure::{ExposureMechanism, ManagedArtifact},
+    integration::IntegrationPort,
+    router::CompatibilityRoute,
 };
 
 use uze_integrations::{
@@ -20,9 +23,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn fixture() -> PathBuf {
@@ -31,22 +36,19 @@ fn fixture() -> PathBuf {
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
-fn installed(home: &UzeHome) -> (uze_core::StoredPackage, uze_core::EffectiveEnvironment) {
+fn installed(home: &UzeHome) -> (uze_core::StoredPackage, Vec<uze_core::Resource>) {
     let store = UzeStore::new(home.clone());
     let package = install(&store, fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    (package, environment)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (package, resources)
 }
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     uze_core::state::record(
         home,
+        integration.id(),
         uze_core::state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -56,7 +58,7 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
 fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let root = temp("shared-store");
     let home = UzeHome::at(&root);
-    let (package, environment) = installed(&home);
+    let (package, resources) = installed(&home);
     assert_eq!(package.id.as_str(), "uze-plugin-first-conformance@local");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
@@ -68,25 +70,18 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .len(),
         1
     );
-    assert_eq!(environment.resources.len(), 2);
+    assert_eq!(resources.len(), 2);
     assert!(
-        environment
-            .resources
+        resources
             .iter()
             .any(|r| r.capability.kind == CapabilityKind::AgentSkill)
     );
     assert!(
-        environment
-            .resources
+        resources
             .iter()
             .any(|r| r.capability.kind == CapabilityKind::Mcp)
     );
-    assert!(
-        environment
-            .resources
-            .iter()
-            .all(|r| r.package_root() == Some(package.root.as_path()))
-    );
+    assert!(resources.iter().all(|r| r.package_root == package.root));
     assert!(
         package.root.join(".codex-plugin/plugin.json").is_file(),
         "original native envelope is preserved"
@@ -113,7 +108,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     mark_setup(&home, &claude);
     mark_setup(&home, &opencode);
 
-    let resources: Vec<_> = environment.resources.iter().collect();
+    let resources: Vec<_> = resources.iter().collect();
     let codex_package = codex
         .package_exposure_plan(&package, &resources)
         .expect("Codex consumes source-provided native envelope");
@@ -166,17 +161,16 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .iter()
             .find(|p| matches!(
                 p.mechanism,
-                ExposureMechanism::ManagedUserScopeReference { .. }
+                ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
             ))
             .unwrap()
             .mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
-    assert!(
-        claude_routes
-            .iter()
-            .any(|p| matches!(p.mechanism, ExposureMechanism::ManagedVendorConfig { .. }))
-    );
+    assert!(claude_routes.iter().any(|p| matches!(
+        p.mechanism,
+        ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry { .. })
+    )));
 
     assert!(
         opencode
@@ -198,7 +192,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     );
     assert!(matches!(
         opencode.exposure_plan(skill).mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
     assert_eq!(
         opencode.exposure_plan(mcp).route,
@@ -206,7 +200,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     );
     assert!(matches!(
         opencode.exposure_plan(mcp).mechanism,
-        ExposureMechanism::ManagedVendorConfig { .. }
+        ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry { .. })
     ));
 
     // Prove the adversarial delivery writes one native OpenCode config entry

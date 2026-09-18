@@ -1,19 +1,10 @@
-//! The single answer to "what project context exists here, and where is
-//! its root".
+//! What portable project context exists here, and where its root is.
 //!
-//! Before this module the question had three different answers living in
-//! three places — `workspace::resolve_workspace` (lock/manifest only),
-//! `project_root::resolve_project_root` (lock > AGENTS.md > .git), and a
-//! bespoke upward walk in the Claude runtime shim that stopped at `.git`.
-//! They disagreed, so whether a harness "saw" a project's `AGENTS.md`
-//! depended on which of the three a given call site happened to use, and
-//! the runtime projection additionally refused to deliver a project's
-//! `.agents/` unless an `AGENTS.md` happened to sit beside it.
-//!
-//! One rule now: the root comes from `project_root::resolve_project_root`
-//! (the same rule every project-scoped CLI command already resolves with),
-//! and the two portable context resources — `AGENTS.md` and `.agents/` —
-//! are observed independently at that root. Neither gates the other.
+//! The root is `project_root::resolve_project_root`'s answer — the rule
+//! every project-scoped command resolves with — and the two portable
+//! context resources, `AGENTS.md` and `.agents/`, are observed
+//! independently at that root. Neither gates the other: a project with only
+//! `.agents/skills/` still has context to deliver.
 
 use std::path::{Path, PathBuf};
 
@@ -46,21 +37,6 @@ impl ProjectContext {
     pub fn has_any(&self) -> bool {
         self.agents_md.is_some() || self.agents_directory.is_some()
     }
-
-    /// The `.agents/<resource>` directories that actually exist, in the
-    /// canonical order of [`AGENTS_DIRECTORY_RESOURCES`].
-    pub fn agents_directory_resources(&self) -> Vec<(&'static str, PathBuf)> {
-        let Some(directory) = self.agents_directory.as_ref() else {
-            return Vec::new();
-        };
-        AGENTS_DIRECTORY_RESOURCES
-            .iter()
-            .filter_map(|resource| {
-                let path = directory.join(resource);
-                path.is_dir().then_some((*resource, path))
-            })
-            .collect()
-    }
 }
 
 /// Resolves the project context containing `cwd`. Infallible by design:
@@ -71,13 +47,6 @@ impl ProjectContext {
 pub fn resolve(cwd: &Path) -> ProjectContext {
     let root = crate::project_root::resolve_project_root(cwd)
         .unwrap_or_else(|_| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
-    at_root(root)
-}
-
-/// Observes the resources at an already-resolved root, skipping the
-/// upward walk. For a caller that resolved the root through
-/// `resolve_project_root` itself and must not risk landing somewhere else.
-pub fn at_root(root: PathBuf) -> ProjectContext {
     let agents_md = root.join(AGENTS_MD_FILE_NAME);
     let agents_directory = root.join(AGENTS_DIRECTORY_NAME);
     ProjectContext {
@@ -105,21 +74,13 @@ mod tests {
         assert!(context.agents_md.is_none());
         assert!(context.agents_directory.is_some());
         assert!(context.has_any());
-        assert_eq!(
-            context
-                .agents_directory_resources()
-                .iter()
-                .map(|(resource, _)| *resource)
-                .collect::<Vec<_>>(),
-            vec!["skills"]
-        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_nested_directory_resolves_to_the_project_root_not_itself() {
         let root = uze_testkit::temp::scratch("nested");
-        fs::write(root.join("AGENTS.md"), "x\n").unwrap();
+        fs::write(root.join(AGENTS_MD_FILE_NAME), "x\n").unwrap();
         let nested = root.join("crates/deep");
         fs::create_dir_all(&nested).unwrap();
         let context = resolve(&nested);
@@ -152,7 +113,7 @@ mod tests {
     fn a_subdirectory_of_a_repository_resolves_to_the_repository() {
         let root = uze_testkit::temp::scratch("repo-subdir");
         fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join("AGENTS.md"), "x\n").unwrap();
+        fs::write(root.join(AGENTS_MD_FILE_NAME), "x\n").unwrap();
         fs::create_dir_all(root.join(".agents/skills")).unwrap();
         let nested = root.join("crates/deep/src");
         fs::create_dir_all(&nested).unwrap();
@@ -171,7 +132,7 @@ mod tests {
         // depending on where it happens to be nested.
         let outer = uze_testkit::temp::scratch("nested-repo");
         fs::create_dir_all(outer.join(".git")).unwrap();
-        fs::write(outer.join("AGENTS.md"), "# outer\n").unwrap();
+        fs::write(outer.join(AGENTS_MD_FILE_NAME), "# outer\n").unwrap();
         let inner = outer.join("vendor");
         fs::create_dir_all(inner.join(".git")).unwrap();
         let context = resolve(&inner);

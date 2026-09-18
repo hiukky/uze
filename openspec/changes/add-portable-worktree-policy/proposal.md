@@ -72,8 +72,10 @@ launch are decided alongside this change but belong to the
 
 ## Non-goals
 
-- No mode that seats an agent in the primary checkout. An agent on the
-  operator's own tree is the operator running a harness in a shell tab.
+- No *seat*: no agent is given the primary checkout because it happened to
+  be first, and no placement falls back to it. (An agent on the operator's
+  own tree became a kind of space the operator chooses — see
+  `add-space-kinds` — which is a decision, not a fallback.)
 - No rename command, agentic or otherwise. The readable name exists only
   where it matters, at publication.
 - No warmed pool, no background replenishment. Reuse is what makes a slot

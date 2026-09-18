@@ -857,6 +857,7 @@ VERBS = (
     "json",
     "git",
     "tasks",
+    "tenants",
     "process",
     "capture",
     "cmd",
@@ -990,6 +991,42 @@ class Checker:
                     f"{where}: expected {'dirty' if spec['git']['dirty'] else 'clean'}, it is not",
                 )
         return True, ", ".join(detail) or "ok"
+
+    def tenants(self) -> list:
+        stores = sorted((self.world.uze_home / "state" / "tasks").glob("*.json"))
+        out = []
+        for store in stores:
+            try:
+                out += json.loads(store.read_text()).get("tenants", [])
+            except json.JSONDecodeError:
+                pass
+        return sorted(out, key=lambda tenant: tenant.get("created_at_unix", 0))
+
+    def _tenants(self, spec: dict) -> tuple[bool, str]:
+        """The tenants UZE recorded for the world's roots — agents of a
+        workspace space, which have no checkout and no task. `count` is
+        every tenant ever recorded, `live` those no reconciliation has
+        ended."""
+        wanted = spec["tenants"]
+        tenants = self.tenants()
+        shape = [
+            f"{tenant['id']}:{tenant['harness']}@{tenant.get('root')}"
+            + ("" if tenant.get("ended_at_unix") is None else ":ended")
+            for tenant in tenants
+        ]
+        if "count" in wanted and len(tenants) != wanted["count"]:
+            return (
+                False,
+                f"expected {wanted['count']} tenants, found {len(tenants)}: {shape}",
+            )
+        if "live" in wanted:
+            live = [tenant for tenant in tenants if tenant.get("ended_at_unix") is None]
+            if len(live) != wanted["live"]:
+                return (
+                    False,
+                    f"expected {wanted['live']} live tenants, found {len(live)}: {shape}",
+                )
+        return True, ", ".join(shape) or "no tenants"
 
     def _tasks(self, spec: dict) -> tuple[bool, str]:
         wanted = spec["tasks"]

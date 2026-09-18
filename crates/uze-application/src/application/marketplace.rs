@@ -1,13 +1,143 @@
-//! Marketplace — extracted from application.rs without semantic change.
+//! Marketplaces: registering one, reading what it offers, and installing
+//! from it.
 
-#![allow(clippy::empty_line_after_doc_comments)]
+use std::path::{Path, PathBuf};
 
-use uze_core::{PackageSource, Result, UzeError, store::StoredPackage, trust::TrustAuthority};
+use uze_core::{
+    PackageSource, Result, UzeError,
+    acquisition::{self, MaterializedPackage, Provenance, ResolvedSource, marketplace},
+    manifest::BUILT_IN_MARKETPLACE,
+    naming::NameCollisionAuthority,
+    store::StoredPackage,
+    trust::TrustAuthority,
+};
 
 use crate::bootstrap;
 
+use super::marketplace_catalogue::read_in_place;
 use super::services::Marketplace;
 use super::*;
+
+/// A marketplace resolved far enough to read from: the repository behind
+/// it, and the narrowing the declaration asked for.
+pub(crate) struct MarketplaceRequest {
+    pub(crate) repository: marketplace::MarketplaceRepository,
+    pub(crate) reference: Option<String>,
+    pub(crate) subdirectory: Option<PathBuf>,
+}
+
+impl MarketplaceRequest {
+    /// What a machine-registered or declared source resolves to. A source
+    /// that is not a repository is refused here.
+    pub(crate) fn of(source: &PackageSource) -> Result<Self> {
+        let repository = marketplace::repository_of(source)?;
+        let (reference, subdirectory) = match source {
+            PackageSource::Git {
+                reference,
+                subdirectory,
+                ..
+            } => (reference.clone(), subdirectory.clone()),
+            _ => (None, None),
+        };
+        Ok(Self {
+            repository,
+            reference,
+            subdirectory,
+        })
+    }
+
+    /// One plugin's bytes, taken from a *clone* of the marketplace at a
+    /// commit — for a local marketplace exactly as for a remote one.
+    ///
+    /// Reading a local checkout in place was the alternative, and it is
+    /// what made a local marketplace unpinnable: the bytes on disk are
+    /// whatever their author last saved, so nothing could say they are the
+    /// bytes that were installed, and nothing could say whether something
+    /// newer exists. A clone at a commit answers both, and a local clone
+    /// is cheap (Git hardlinks it).
+    ///
+    /// The provenance records the repository's `identity` — the URL
+    /// another machine resolves it by — which is not always where these
+    /// bytes were fetched from. The returned package is the checkout
+    /// narrowed to the plugin's directory, so cleanup still owns the whole
+    /// checkout (`MaterializedPackage::retarget`) and the bytes live until
+    /// the Store has ingested them.
+    pub(crate) fn materialize_plugin(&self, plugin: &str) -> Result<MaterializedPackage> {
+        let fetch = PackageSource::Git {
+            url: self.repository.fetch.clone(),
+            reference: self.reference.clone(),
+            subdirectory: self.subdirectory.clone(),
+        };
+        let mut checkout = acquisition::acquire(&fetch)?;
+        let ResolvedSource::Git { commit, .. } = checkout.provenance().resolved.clone() else {
+            return Err(UzeError::AcquisitionFailed(
+                "a marketplace clone must resolve to a commit".to_owned(),
+            ));
+        };
+        let catalogue = read_in_place(checkout.root())?;
+        let plugin_root =
+            marketplace::resolve_plugin_source(&catalogue.manifest, plugin, checkout.root())?;
+        let within_marketplace = plugin_root
+            .strip_prefix(checkout.root())
+            .map(Path::to_path_buf)
+            .ok();
+        let identity = self.repository.identity.clone();
+        checkout.retarget(
+            plugin_root,
+            Provenance {
+                requested: PackageSource::Git {
+                    url: identity.clone(),
+                    reference: self.reference.clone(),
+                    subdirectory: within_marketplace.clone(),
+                },
+                resolved: ResolvedSource::Git {
+                    url: identity,
+                    commit,
+                    subdirectory: within_marketplace,
+                },
+            },
+        );
+        Ok(checkout)
+    }
+}
+
+/// A marketplace source as the operator spelled it: a URL (optionally
+/// `@reference` and `#subdirectory`), or a local directory holding a
+/// marketplace manifest.
+fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
+    let looks_remote = source_str.starts_with("https://")
+        || source_str.starts_with("http://")
+        || source_str.starts_with("git://")
+        || source_str.starts_with("ssh://")
+        || source_str.starts_with("file://");
+    if !looks_remote {
+        let path = PathBuf::from(source_str)
+            .canonicalize()
+            .map_err(|_| UzeError::MissingPath(PathBuf::from(source_str)))?;
+        let manifest_path = path.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
+        if !manifest_path.is_file() {
+            return Err(UzeError::MissingManifest(manifest_path));
+        }
+        return Ok(PackageSource::Local { path });
+    }
+    let (locator, subdirectory) = match source_str.split_once('#') {
+        Some((locator, sub)) => (locator, Some(PathBuf::from(sub))),
+        None => (source_str, None),
+    };
+    let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
+    let (url, reference) = match locator[scheme_end..].rfind('@') {
+        Some(at) => {
+            let at = scheme_end + at;
+            (&locator[..at], Some(locator[at + 1..].to_owned()))
+        }
+        None => (locator, None),
+    };
+    Ok(PackageSource::Git {
+        url: url.to_owned(),
+        reference,
+        subdirectory,
+    })
+}
 
 impl Marketplace<'_> {
     /// `Ok(true)` when the marketplace was newly registered, `Ok(false)`
@@ -21,10 +151,12 @@ impl Marketplace<'_> {
     /// does not pay it a second time.
     #[tracing::instrument(name = "marketplace.add", skip_all, fields(source_str = %source_str), err)]
     pub fn add(&self, source_str: &str) -> Result<bool> {
-        let source = UzeApplication::parse_marketplace_source(source_str)?;
-        let (checkout, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
-        let name = manifest.name.clone();
-        if name == "uze-official" {
+        let source = parse_marketplace_source(source_str)?;
+        // A Git checkout is scratch its own `Drop` removes: held here until
+        // the catalogue cache has copied what it needs.
+        let checkout = acquisition::acquire(&source)?;
+        let name = read_in_place(checkout.root())?.manifest.name;
+        if name == BUILT_IN_MARKETPLACE {
             return Err(UzeError::ReservedMarketplace(name));
         }
         let added = uze_core::state::marketplace_add(&self.0.home, &name, source.clone())?;
@@ -38,7 +170,7 @@ impl Marketplace<'_> {
 
     #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]
     pub fn remove(&self, name: &str) -> Result<()> {
-        if name == "uze-official" {
+        if name == BUILT_IN_MARKETPLACE {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
         uze_core::state::marketplace_remove(&self.0.home, name)?;
@@ -51,8 +183,8 @@ impl Marketplace<'_> {
         let mut out = Vec::new();
         let official = bootstrap::entries()?;
         out.push(MarketplaceSummary {
-            name: "uze-official".to_owned(),
-            source: "embedded:uze-official".to_owned(),
+            name: BUILT_IN_MARKETPLACE.to_owned(),
+            source: format!("embedded:{BUILT_IN_MARKETPLACE}"),
             homepage: official.homepage,
             plugin_count: official.plugins.len(),
         });
@@ -85,15 +217,15 @@ impl Marketplace<'_> {
 
     /// One marketplace's own detail (source, plugin count) — distinct from
     /// inspecting one plugin *within* a marketplace
-    /// (`inspect_marketplace_plugin`). Filters the same per-entry
-    /// computation `marketplace_list` already does down to one named entry;
+    /// (`Marketplace::inspect_plugin`). Filters the same per-entry
+    /// computation `Marketplace::list` already does down to one named entry;
     /// no new state or invariant.
     #[tracing::instrument(name = "marketplace.inspect", skip_all, fields(name = %name), err)]
     pub fn inspect(&self, name: &str) -> Result<MarketplaceSummary> {
         self.list()?
             .into_iter()
             .find(|entry| entry.name == name)
-            .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
+            .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))
     }
 
     #[tracing::instrument(name = "marketplace.install_plugin", skip_all, fields(spec = %spec), err)]
@@ -105,42 +237,36 @@ impl Marketplace<'_> {
         self.install_plugin_resolving(spec, authority, &uze_core::naming::NoNameCollisionAuthority)
     }
 
-    /// `plugin_install`, with an explicit answer for a bare-plugin-name
+    /// `Marketplace::install_plugin`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
-    /// (ADR-038) — see `add_plugin_resolving`.
+    /// (ADR-038) — see `Marketplace::install_plugin_resolving`.
     #[tracing::instrument(name = "marketplace.install_plugin_resolving", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin_resolving(
         &self,
         spec: &str,
         authority: &dyn TrustAuthority,
-        name_authority: &dyn uze_core::naming::NameCollisionAuthority,
+        name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let (plugin_name, marketplace_name) =
-            uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
-        if marketplace_name == "uze-official" {
-            return self.install_from_resolving(&plugin_name, authority, name_authority);
-        }
-        let record = uze_core::state::marketplace_get(&self.0.home, &marketplace_name)?
-            .ok_or_else(|| {
-                UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
-            })?;
+        let (plugin_name, marketplace_name) = uze_core::store::parse_plugin_marketplace_spec(spec)?;
+        let source = if marketplace_name == BUILT_IN_MARKETPLACE {
+            None
+        } else {
+            let record = uze_core::state::marketplace_get(&self.0.home, &marketplace_name)?
+                .ok_or_else(|| UzeError::UnknownMarketplace(marketplace_name.to_owned()))?;
+            Some(record.source)
+        };
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized =
-            UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
-        let report = self.0.plugins().install_materialized_from_marketplace(
+        let materialized = match source {
+            None => bootstrap::materialize(&plugin_name)?,
+            Some(source) => MarketplaceRequest::of(&source)?.materialize_plugin(&plugin_name)?,
+        };
+        self.0.plugins().install_materialized(
             materialized,
             &marketplace_name,
+            None,
             authority,
-            &[],
-            false,
             name_authority,
-        )?;
-        uze_core::state::plugin_marketplace_record(
-            &self.0.home,
-            &report.plugin.id,
-            &marketplace_name,
-        )?;
-        Ok(report)
+        )
     }
 
     /// Every plugin from every marketplace this Store knows about — the
@@ -148,7 +274,7 @@ impl Marketplace<'_> {
     /// via `marketplace add` (`uze_core::state::marketplace_list`). A
     /// marketplace whose manifest can no longer be read (moved/deleted
     /// source) is skipped rather than failing the whole listing, mirroring
-    /// `marketplace_list`'s own `plugin_count: 0` fallback.
+    /// `Marketplace::list`'s own `plugin_count: 0` fallback.
     #[tracing::instrument(name = "marketplace.plugins", skip_all, err)]
     pub fn plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
         let installed_packages = self.0.installed_packages();
@@ -166,11 +292,12 @@ impl Marketplace<'_> {
             // qualified id it would have installed under — matching by bare
             // name alone would (and did) also match a same-named plugin
             // installed from an entirely different marketplace.
-            let installed_package = installed.get(format!("{}@uze-official", entry.name).as_str());
+            let installed_package =
+                installed.get(format!("{}@{BUILT_IN_MARKETPLACE}", entry.name).as_str());
             let update_available = installed_package
                 .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
             MarketplacePluginSummary {
-                marketplace: "uze-official".to_owned(),
+                marketplace: BUILT_IN_MARKETPLACE.to_owned(),
                 name: entry.name.clone(),
                 description: entry.description,
                 keywords: entry.keywords,
@@ -210,17 +337,15 @@ impl Marketplace<'_> {
             .into_iter()
             .find(|plugin| plugin.marketplace == marketplace && plugin.name == name)
             .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))?;
-        let materialized = if marketplace == "uze-official" {
+        let materialized = if marketplace == BUILT_IN_MARKETPLACE {
             bootstrap::materialize(name)?
         } else {
             // Read from the catalogue's own checkout: what is on offer is a
             // question about the catalogue, and it is answered without a
             // clone, the way the listing above was. Installing is what
             // clones at a commit.
-            let record =
-                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
-                    UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
-                })?;
+            let record = uze_core::state::marketplace_get(&self.0.home, marketplace)?
+                .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
             let catalogue = self.0.catalogue(marketplace, &record.source)?;
             let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
                 &catalogue.manifest,
@@ -248,37 +373,5 @@ impl Marketplace<'_> {
                 .collect(),
             summary,
         })
-    }
-
-    #[tracing::instrument(name = "marketplace.install_from", skip_all, fields(name = %name), err)]
-    pub fn install_from(
-        &self,
-        name: &str,
-        authority: &dyn TrustAuthority,
-    ) -> Result<AddPluginReport> {
-        self.install_from_resolving(name, authority, &uze_core::naming::NoNameCollisionAuthority)
-    }
-
-    /// `install_from_marketplace`, with an explicit answer for a
-    /// bare-plugin-name collision (ADR-038) — see `add_plugin_resolving`.
-    #[tracing::instrument(name = "marketplace.install_from_resolving", skip_all, fields(name = %name), err)]
-    pub fn install_from_resolving(
-        &self,
-        name: &str,
-        authority: &dyn TrustAuthority,
-        name_authority: &dyn uze_core::naming::NameCollisionAuthority,
-    ) -> Result<AddPluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.plugins().acquire(&PackageSource::Embedded {
-            id: name.to_owned(),
-        })?;
-        self.0.plugins().install_materialized_from_marketplace(
-            materialized,
-            "uze-official",
-            authority,
-            &[],
-            false,
-            name_authority,
-        )
     }
 }

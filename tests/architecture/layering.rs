@@ -47,7 +47,9 @@ const RULES: &[Rule] = &[
                 "src/shim.rs",
                 "a separate binary entry point, not presentation: the runtime \
                  shim resolves a harness's real executable and must name the \
-                 runtime contract to do it",
+                 runtime contract to do it; it is the launch boundary, and reads \
+                 the launch vocabulary from the terminal runtime, which owns the \
+                 variables a launch stamps",
             ),
             (
                 "src/bin/uze-harness-matrix.rs",
@@ -78,6 +80,48 @@ const RULES: &[Rule] = &[
                 "tooling, likewise named in AGENTS.md as a registry consumer",
             ),
         ],
+        budget: &[],
+    },
+    Rule {
+        name: "the agent identity variable has one owner: the terminal's launch vocabulary",
+        scope: "crates/uze-core/src",
+        forbidden: "UZE_AGENT",
+        reason: "the name of the variable a launch stamps is transport, not domain: \
+                 the terminal runtime owns the set of variables a launch carries and \
+                 a pane never inherits, and the shim and the agent's own commands read \
+                 the name from there. Core receives a verified claim and never learns \
+                 how it travelled; a second spelling here is a second owner, and two \
+                 owners of one name drift apart.",
+        remedy: "take a `conversation::Claim`. The reader that has the environment \
+                 builds it from `uze_terminal::launch::AGENT_IDENTITY_VARIABLE`.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "the application never spells the agent identity variable either",
+        scope: "crates/uze-application/src",
+        forbidden: "UZE_AGENT",
+        reason: "same owner, same reason: the application re-exports the claim's \
+                 vocabulary and never the transport's.",
+        remedy: "take a `Claim`; the client and the shim build it from the terminal's \
+                 launch vocabulary.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "the terminal runtime keeps a space's kind and never reads it",
+        scope: "crates/uze-terminal/src",
+        forbidden: "SpaceKind::",
+        reason: "what a space's kind means — how its agents are placed, how it is \
+                 drawn — is the client's business at placement and at drawing. The \
+                 server persists and reports the kind the way it does a label; a \
+                 server that branched on it would be a second owner of the meaning, \
+                 and the runtime would stop being the domain-free thing a pane's \
+                 survival rests on.",
+        remedy: "carry `SpaceKind` through as data; the type defines its own \
+                 spellings with `Self::`. Naming a variant anywhere else in the \
+                 runtime is the tell that a decision moved into the server.",
+        sanctioned: &[],
         budget: &[],
     },
     Rule {
@@ -361,7 +405,9 @@ fn the_workspace_client_reaches_for_git_only_from_a_thread() {
 /// into a render function is a mark nobody can change, and it is what made a
 /// terminal without a Nerd Font — or an operator who simply wants ASCII —
 /// something UZE had no answer for. Every one of these is a
-/// `uze_theme::Symbol` now, resolved through `src/ui/theme.rs`.
+/// `uze_theme::Symbol` now, resolved through `src/ui/theme.rs`. An
+/// extension is held to the same rule: it names a kind (`RowIcon`,
+/// `RowMark`) and the host draws the glyph.
 ///
 /// Deliberately not the whole set of non-ASCII characters. Arrows, the
 /// middot and the ellipsis appear in hint lines as *notation* — "↑↓ select"
@@ -390,6 +436,7 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
         '\u{25b8}', // ▸ collapsed
         '\u{25be}', // ▾ expanded
         '\u{276f}', // ❯ prompt
+        '\u{203a}', // › chevron
         '\u{2261}', // ≡ menu
         '\u{21c4}', // ⇄ swap
         '\u{21e1}', // ⇡ ahead
@@ -398,22 +445,41 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
         '\u{2192}', // → toward
     ];
 
+    /// Where a glyph legitimately becomes a string, and why.
+    const SANCTIONED: &[(&str, &str)] = &[
+        (
+            "src/ui/theme.rs",
+            "the adapter: the one place a symbol resolves to its glyph",
+        ),
+        (
+            "crates/uze-extensions/src/code/markdown.rs",
+            "a rendered document's own typography — a rule and a quote bar \
+             are the document's structure drawn as text, content rather \
+             than chrome, the way syntax colour is",
+        ),
+    ];
+
     let root = repository_root();
+    let sources = production_sources(&root.join("src/ui"))
+        .into_iter()
+        .chain(production_sources(&root.join("crates/uze-extensions/src")));
     let mut written = Vec::new();
-    for (path, contents) in production_sources(&root.join("src/ui")) {
+    for (path, contents) in sources {
         let relative = path
             .strip_prefix(&root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        // The adapter is where a glyph legitimately becomes a string.
-        if relative == "src/ui/theme.rs" {
+        if SANCTIONED.iter().any(|(file, _)| relative == *file) {
             continue;
         }
         for (number, line) in contents.lines().enumerate() {
             let code = line.split("//").next().unwrap_or_default();
             for mark in MARKS {
-                if code.contains(*mark) {
+                // Spelled as an escape it is the same glyph, and the form
+                // a scan for the character itself would never see.
+                let escaped = format!("\\u{{{:x}}}", *mark as u32);
+                if code.contains(*mark) || code.to_lowercase().contains(&escaped) {
                     written.push(format!("  {relative}:{}: {mark}", number + 1));
                 }
             }

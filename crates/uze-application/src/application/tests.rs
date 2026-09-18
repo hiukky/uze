@@ -18,10 +18,10 @@ use super::services::Plugins;
 use super::*;
 use uze_core::{
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::{AttachmentReceipt, ContextDelivery, HarnessDetection, ManagedArtifact},
-    project::Resource,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
 };
 
 /// `setup` probes `$SHELL` (`shell_path::detect_shell_rc`) to decide
@@ -52,11 +52,9 @@ impl IntegrationPort for SymlinkIntegration {
     fn capabilities(&self) -> uze_core::router::HarnessCapabilities {
         HarnessCapabilities::default()
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -94,11 +92,9 @@ impl IntegrationPort for AllResourceSymlinkIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test attachment is implemented directly".to_owned(),
             },
@@ -129,13 +125,9 @@ impl IntegrationPort for AllResourceSymlinkIntegration {
             }
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -160,11 +152,9 @@ impl IntegrationPort for PartialIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test attachment is implemented directly".to_owned(),
             },
@@ -188,13 +178,9 @@ impl IntegrationPort for PartialIntegration {
         })?;
         self.attached.set(true);
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -212,11 +198,9 @@ impl IntegrationPort for AbsentIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "an absent integration must not attach".to_owned(),
             },
@@ -288,6 +272,8 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     let expected = package.root.join("skills/uze-e2e");
@@ -300,7 +286,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: expected,
@@ -319,6 +304,8 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     let foreign = root.join("foreign");
@@ -331,7 +318,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: package.root.clone(),
@@ -363,12 +349,11 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let alpha = app
         .plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             "alpha",
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .unwrap();
@@ -378,12 +363,11 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let beta = app
         .plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             "beta",
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Replace),
         )
         .unwrap();
@@ -427,12 +411,11 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let alpha = app
         .plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             "alpha",
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .unwrap();
@@ -451,7 +434,6 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
             package_id: alpha_id.clone(),
             resource_identity: None,
             integration: "test".to_owned(),
-            strategy: "symlink".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: managed.clone(),
                 target: app
@@ -472,12 +454,11 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
 
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
-    let result = app.plugins().install_materialized_from_marketplace(
+    let result = app.plugins().install_materialized(
         acquired,
         "beta",
+        None,
         &uze_core::trust::AlwaysTrust,
-        &[],
-        false,
         &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Replace),
     );
     assert!(matches!(
@@ -514,7 +495,7 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
     fs::remove_dir_all(root).unwrap();
 }
 
-/// ADR-038: `update_plugin` re-resolves the source and reinstalls under
+/// ADR-038: `Plugins::update` re-resolves the source and reinstalls under
 /// the same marketplace-qualified id, but must never silently revert an
 /// aliased plugin back to its bare plugin name — the alias is a fact
 /// about *this* installation, not something an update should erase.
@@ -526,12 +507,11 @@ pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     app.plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             "alpha",
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .unwrap();
@@ -540,12 +520,11 @@ pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let beta = app
         .plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             "beta",
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Alias(
                 "conformance-beta".to_owned(),
             )),
@@ -618,11 +597,9 @@ impl IntegrationPort for PreparationRefusedOnce {
         Ok(())
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -635,12 +612,11 @@ fn install_conformance_fixture(app: &UzeApplication, marketplace: &str) {
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     app.plugins()
-        .install_materialized_from_marketplace(
+        .install_materialized(
             acquired,
             marketplace,
+            None,
             &uze_core::trust::AlwaysTrust,
-            &[],
-            false,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .unwrap();
@@ -784,11 +760,9 @@ impl IntegrationPort for NamedIntegration {
     fn capabilities(&self) -> uze_core::router::HarnessCapabilities {
         HarnessCapabilities::default()
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -816,7 +790,7 @@ pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown(
     assert_eq!(by_alias.integration, "named");
     let by_label = app.health().harness("Named Tool").unwrap();
     assert_eq!(by_label.integration, "named");
-    // `harness_list` must return exactly the same data `harness_inspect`
+    // `Health::harnesses` must return exactly the same data `Health::harness`
     // filters down to one entry from — same underlying computation.
     let listed = app.health().harnesses();
     assert_eq!(listed.len(), 2);
@@ -871,6 +845,8 @@ pub(crate) fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         .store
         .ingest(
             &uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap(),
+            "local",
+            None,
         )
         .unwrap();
     assert!(matches!(
@@ -1047,12 +1023,11 @@ pub(crate) fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_instal
         },
     );
 
-    let result = app.plugins().install_materialized_from_marketplace(
+    let result = app.plugins().install_materialized(
         materialized,
         "local",
+        None,
         &uze_core::trust::NoTrustAuthority,
-        &[],
-        false,
         &uze_core::naming::NoNameCollisionAuthority,
     );
     assert!(matches!(result, Err(UzeError::TrustRequired { .. })));
@@ -1148,13 +1123,8 @@ pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_updat
     let root = uze_testkit::temp::scratch("protected-update");
     let home = UzeHome::at(&root);
     let app = UzeApplication::new(home, Vec::new());
-    app.plugins()
-        .add(
-            uze_core::PackageSource::Embedded {
-                id: "uze".to_owned(),
-            },
-            &uze_core::trust::AlwaysTrust,
-        )
+    app.marketplace()
+        .install_plugin("uze@uze-official", &uze_core::trust::AlwaysTrust)
         .unwrap();
 
     let err = app.plugins().remove("uze").unwrap_err();
@@ -1261,11 +1231,9 @@ impl IntegrationPort for FakeIntegration {
         self.detection.clone()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },
@@ -1342,9 +1310,8 @@ fn prepare_detected_integrations_probes_each_integration_at_most_once() {
     let fake = FakeIntegration::new("fake-c", true, calls.clone());
     let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
 
-    let results = app.prepare_detected_integrations(None).unwrap();
+    app.prepare_detected_integrations().unwrap();
 
-    assert!(results[0].configured);
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
@@ -1460,11 +1427,9 @@ impl IntegrationPort for HealthySymlinkIntegration {
             version: Some("9.9.9".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "healthy test does not use exposure_plan".to_owned(),
             },
@@ -1494,13 +1459,9 @@ impl IntegrationPort for HealthySymlinkIntegration {
             }
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test-healthy".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -1526,11 +1487,9 @@ impl IntegrationPort for ForeignFailingIntegration {
             version: Some("1.1.19".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "foreign test".to_owned(),
             },
@@ -1542,9 +1501,7 @@ impl IntegrationPort for ForeignFailingIntegration {
         // any other package should succeed so per-package resilience can be
         // observed (the same shape as the real Antigravity preflight which
         // only blocks the conflicting name).
-        if let uze_core::ResourceOrigin::Package { id, .. } = &resource.origin
-            && id.as_str().eq("uze")
-        {
+        if resource.package_id.as_str().eq("uze") {
             return Ok(None);
         }
         let path = self.root.join(resource.name());
@@ -1564,13 +1521,9 @@ impl IntegrationPort for ForeignFailingIntegration {
             })?;
         }
         Ok(Some(AttachmentReceipt {
-            package_id: match &resource.origin {
-                uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                uze_core::ResourceOrigin::Project { .. } => unreachable!(),
-            },
+            package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
             integration: self.id().to_owned(),
-            strategy: "test-foreign".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path,
                 target: resource.capability.path.clone(),
@@ -1601,11 +1554,9 @@ impl IntegrationPort for ShimConflictingIntegration {
             version: Some("1.0.0".to_owned()),
         }
     }
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "shim test".to_owned(),
             },
@@ -1929,11 +1880,9 @@ impl IntegrationPort for DeclaringIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "test does not attach".to_owned(),
             },

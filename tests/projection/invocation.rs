@@ -23,14 +23,14 @@ use std::{
 
 use uze_application::UzeApplication;
 use uze_core::{
-    PackageSource, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageSource, Resource, UzeHome, UzeStore,
     capability::CapabilityKind,
+    capability::Resource as ProjectResource,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
         ManagedArtifact, qualified_capability_name,
     },
-    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
     router::{CompatibilityRoute, HarnessCapabilities},
     state,
@@ -50,19 +50,20 @@ fn workflow_fixture() -> PathBuf {
 }
 
 fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze_core::Result<StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(&PackageSource::local(
-        path,
-    ))?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     state::record(
         home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: Some("test".to_owned()),
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -73,10 +74,8 @@ fn stored_workflow(label: &str) -> (PathBuf, UzeHome, StoredPackage, Vec<Resourc
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
     let package = install(&store, workflow_fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    (root, home, package, environment.resources)
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    (root, home, package, resources)
 }
 
 fn skills_of(resources: &[Resource]) -> &Resource {
@@ -141,7 +140,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze_core::Result<()> {
         self.0.install(home, detection)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(
@@ -409,12 +411,10 @@ fn claude_shim_namespace_matches_plugin_and_never_double_prefixes() {
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         let package = install(&store, workflow_fixture()).unwrap();
-        let environment = UzeEngine::new(store)
-            .compose(std::slice::from_ref(&package.id))
-            .unwrap();
+        let resources = uze_core::engine::package_resources(&package).unwrap();
         let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
         mark_setup(&home, &claude);
-        let skill = skills_of(&environment.resources);
+        let skill = skills_of(&resources);
         let receipt = claude.attach_receipt(skill).unwrap().expect("attaches");
         let ManagedArtifact::SymlinkReference { path, .. } = &receipt.artifact else {
             panic!("expected symlink artifact");
@@ -517,10 +517,8 @@ fn mcp_naming_is_unchanged() {
     let store = UzeStore::new(UzeHome::at(&root));
     let mcp_fixture = uze_testkit::fixtures::canonical("mcp-plugin");
     let package = install(&store, mcp_fixture).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let mcp = &environment.resources[0];
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    let mcp = &resources[0];
     assert_eq!(mcp.capability.kind, CapabilityKind::Mcp);
     // MCP keeps the legacy fully-qualified dash form, untouched.
     let opencode = OpenCodeIntegration::new(

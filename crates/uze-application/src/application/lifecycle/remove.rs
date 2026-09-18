@@ -1,10 +1,10 @@
-//! Lifecycle — remove — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Removing a plugin, and tearing down the harness artifacts its receipts
+//! own.
 
 use uze_core::{
     PackageSource, Result, UzeError,
     integration::AttachmentState,
+    manifest::BUILT_IN_MARKETPLACE,
     reconciliation::{PackageRemovalPlan, plan_remove},
     state,
     store::StoredPackage,
@@ -22,34 +22,18 @@ impl Plugins<'_> {
         // Removal changes vendor-visible state; cached inspection verdicts
         // must not outlive it (ADR 018).
         self.0.inspection_cache.invalidate();
-        let report = self.detach_and_remove(id, false)?;
-        if matches!(report, RemovePluginReport::Removed { .. }) {
-            let _ = uze_core::state::plugin_marketplace_remove(&self.0.home, id);
-        }
-        Ok(report)
+        self.detach_and_remove(id, false)
     }
 
+    /// Whether an installed package is protected from removal. Only the
+    /// verified official origin is: an embedded provenance, not a
+    /// marketplace name — a local/Git package that merely shares the name
+    /// `uze` remains removable, so protection cannot be spoofed by naming.
     pub(crate) fn is_protected_package(package: &StoredPackage) -> bool {
-        // Only the verified official origin is protected: an embedded
-        // provenance whose id appears in the compiled marketplace snapshot.
-        // A local/git package that merely shares the name `uze` is not
-        // official and remains removable — prevents spoofing by name alone.
-        let embedded_id = match &package.provenance.requested {
-            PackageSource::Embedded { id } => id,
-            _ => return false,
-        };
-        if bootstrap::DEFAULT_PLUGIN_IDS.contains(&embedded_id.as_str()) {
-            return true;
-        }
-        if let Ok(official) = bootstrap::entries()
-            && official
-                .plugins
-                .iter()
-                .any(|entry| entry.name == *embedded_id)
-        {
-            return true;
-        }
-        false
+        matches!(
+            &package.provenance.requested,
+            PackageSource::Embedded { id } if is_protected_plugin(BUILT_IN_MARKETPLACE, id)
+        )
     }
 
     pub(crate) fn detach_and_remove(
@@ -76,57 +60,20 @@ impl Plugins<'_> {
             Err(error) => return Err(error),
         };
         if !allow_protected && Self::is_protected_package(&package) {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "official marketplace plugin `{}` is protected and cannot be removed",
-                package.id.as_str()
-            )));
+            return Err(UzeError::ProtectedPackage(package.id.as_str().to_owned()));
         }
-        let report = self.0.reconcile(package.id.as_str());
-        let plan = plan_remove(&report);
-        let (detached_receipts, already_missing_receipts) = match &plan {
-            PackageRemovalPlan::Safe {
-                detachable_receipts,
-                already_missing_receipts,
-            } => (
-                detachable_receipts.clone(),
-                already_missing_receipts.clone(),
-            ),
-            _ => (Vec::new(), Vec::new()),
-        };
-        if !matches!(plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked { report, plan });
-        }
-        for reconciled in &report.receipts {
-            if reconciled.inspection.state != AttachmentState::Matched {
-                continue;
-            }
-            let Some(integration) = self
-                .0
-                .integrations
-                .iter()
-                .find(|integration| integration.id() == reconciled.receipt.integration)
-            else {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.0.reconcile(package.id.as_str()),
-                    plan: PackageRemovalPlan::BlockedByInspection,
-                });
+        let (detached_receipts, already_missing_receipts, final_report) =
+            match self.0.detach_owned_receipts(package.id.as_str())? {
+                ReceiptTeardown::Refused { report, plan }
+                | ReceiptTeardown::Incomplete { report, plan } => {
+                    return Ok(RemovePluginReport::Blocked { report, plan });
+                }
+                ReceiptTeardown::Detached {
+                    detached_receipts,
+                    already_missing_receipts,
+                    final_report,
+                } => (detached_receipts, already_missing_receipts, final_report),
             };
-            let detached = integration.detach_receipt(&reconciled.receipt)?;
-            if detached.state != AttachmentState::Missing {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.0.reconcile(package.id.as_str()),
-                    plan: plan_remove(&self.0.reconcile(package.id.as_str())),
-                });
-            }
-        }
-        let final_report = self.0.reconcile(package.id.as_str());
-        let final_plan = plan_remove(&final_report);
-        if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked {
-                report: final_report,
-                plan: final_plan,
-            });
-        }
         for reconciled in &final_report.receipts {
             state::forget_receipt(&self.0.home, &reconciled.ledger_key)?;
         }
@@ -138,6 +85,89 @@ impl Plugins<'_> {
             plugin: package.id.as_str().to_owned(),
             detached_receipts,
             already_missing_receipts,
+        })
+    }
+}
+
+/// Whether `plugin`, offered by `marketplace`, belongs to the official set
+/// compiled into this binary — which re-seeds itself, so removing a member
+/// of it is not an operation that means anything.
+pub(crate) fn is_protected_plugin(marketplace: &str, plugin: &str) -> bool {
+    marketplace == BUILT_IN_MARKETPLACE
+        && bootstrap::entries()
+            .is_ok_and(|official| official.plugins.iter().any(|entry| entry.name == plugin))
+}
+
+/// Where detaching a package's receipts got to.
+pub(crate) enum ReceiptTeardown {
+    /// Nothing was touched: the receipts do not all reconcile as safe to
+    /// remove.
+    Refused {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
+    /// Detaching began and did not finish; `report` was taken afterwards.
+    Incomplete {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
+    /// Every artifact the receipts own is gone, verified by `final_report` —
+    /// which is what the ledger may be forgotten against, never the snapshot
+    /// taken before detaching.
+    Detached {
+        detached_receipts: Vec<String>,
+        already_missing_receipts: Vec<String>,
+        final_report: ReconciliationReport,
+    },
+}
+
+impl UzeApplication {
+    /// Detaches every artifact `package_id`'s receipts own, only when all of
+    /// them reconcile as safe to remove. Leaves the ledger alone: whether a
+    /// receipt that failed to be forgotten is an error is the caller's call.
+    ///
+    /// `Err` only when an integration fails to detach.
+    pub(crate) fn detach_owned_receipts(&self, package_id: &str) -> Result<ReceiptTeardown> {
+        let report = self.reconcile(package_id);
+        let (detachable_receipts, already_missing_receipts) = match plan_remove(&report) {
+            PackageRemovalPlan::Safe {
+                detachable_receipts,
+                already_missing_receipts,
+            } => (detachable_receipts, already_missing_receipts),
+            plan => return Ok(ReceiptTeardown::Refused { report, plan }),
+        };
+        for reconciled in &report.receipts {
+            if reconciled.inspection.state != AttachmentState::Matched {
+                continue;
+            }
+            let Some(integration) = self
+                .integrations
+                .iter()
+                .find(|integration| integration.id() == reconciled.receipt.integration)
+            else {
+                return Ok(ReceiptTeardown::Incomplete {
+                    report: self.reconcile(package_id),
+                    plan: PackageRemovalPlan::BlockedByInspection,
+                });
+            };
+            if integration.detach_receipt(&reconciled.receipt)?.state != AttachmentState::Missing {
+                let report = self.reconcile(package_id);
+                let plan = plan_remove(&report);
+                return Ok(ReceiptTeardown::Incomplete { report, plan });
+            }
+        }
+        let final_report = self.reconcile(package_id);
+        let final_plan = plan_remove(&final_report);
+        if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
+            return Ok(ReceiptTeardown::Incomplete {
+                report: final_report,
+                plan: final_plan,
+            });
+        }
+        Ok(ReceiptTeardown::Detached {
+            detached_receipts: detachable_receipts,
+            already_missing_receipts,
+            final_report,
         })
     }
 }

@@ -79,14 +79,25 @@ scenes:
         check: false
     then:
       - json: "{uze_home}/state/integrations.json"
-        at: integrations.*.harness
-        includes: [claude-code, codex, opencode, antigravity]
-        about: every registered harness is recorded
+        at: integrations.claude-code.version
+        exists: true
+        about: claude-code is recorded with the version it reported
       - json: "{uze_home}/state/integrations.json"
-        at: integrations.*.installed
-        equals: "true"
+        at: integrations.codex.version
+        exists: true
+        about: codex is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.opencode.version
+        exists: true
+        about: opencode is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.antigravity.version
+        exists: true
+        about: antigravity is recorded with the version it reported
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.*
         count: 4
-        about: each one marked installed, none guessed at
+        about: and nothing else — a record is what installed means
       - json: "{uze_home}/state/integrations.json"
         at: integrations.antigravity.version
         equals: "9.9.9"

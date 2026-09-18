@@ -328,11 +328,28 @@ pub struct Section {
     pub rows: Vec<SectionRow>,
 }
 
+/// What a [`SectionRow`]'s mark stands for, so the host can draw it.
+///
+/// A kind rather than a glyph, for the reason [`RowIcon`] is one: a glyph
+/// an extension wrote is a glyph no theme can change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RowMark {
+    /// The commit `HEAD` is on.
+    Head,
+    /// Any other commit.
+    Commit,
+    /// A step in a list of steps. One not yet done is drawn blank, as wide
+    /// as a done one, so the names beside both line up.
+    Step { done: bool },
+}
+
 /// One row of a [`Section`]: a mark, a name, and a value at the far edge.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SectionRow {
-    /// One glyph before the name, in its own role — the row's standing.
-    pub marker: Span,
+    /// Before the name — the row's standing.
+    pub mark: RowMark,
+    /// The hue the mark is drawn in.
+    pub mark_role: Role,
     pub name: Span,
     /// Right-aligned. Gives way last: the host elides the name to make
     /// room for it, because a row that only half-says *what* still says

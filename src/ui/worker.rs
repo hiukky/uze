@@ -20,7 +20,7 @@ use uze_application::{
     },
 };
 
-use super::model::{Focus, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
+use super::model::{Confirmation, Overlay, RefreshData, Status, TrustedRetry, TuiModel};
 use super::tui_application;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,11 +35,11 @@ pub(crate) enum Intent {
     Quit,
     /// Closes the modal — the same action that opened it, or the close
     /// mark on its title.
-    SwitchToWorkspace,
+    CloseModal,
     /// Leave management and re-select this tab in the workspace. Carries
     /// no space id: `Session::select_tab` moves the selected space along
     /// with the tab when they differ.
-    SwitchToWorkspaceTab(u64),
+    CloseToTab(u64),
     /// Delete the current workspace's recorded prompts.
     ClearPromptHistory,
     /// Write the operator's keyboard to `keys.json`. The keymap is already
@@ -114,8 +114,8 @@ impl Intent {
         match self {
             Self::None => "none",
             Self::Quit => "quit",
-            Self::SwitchToWorkspace => "switch_to_workspace",
-            Self::SwitchToWorkspaceTab(_) => "switch_to_workspace_tab",
+            Self::CloseModal => "close_modal",
+            Self::CloseToTab(_) => "close_to_tab",
             Self::ClearPromptHistory => "clear_prompt_history",
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
@@ -178,10 +178,7 @@ pub(crate) fn dispatch(
     // parent, so a refresh's spans belong to the press that asked for it.
     let _span = tracing::info_span!("tui.intent", intent = intent.name()).entered();
     match intent {
-        Intent::None
-        | Intent::Quit
-        | Intent::SwitchToWorkspace
-        | Intent::SwitchToWorkspaceTab(_) => {}
+        Intent::None | Intent::Quit | Intent::CloseModal | Intent::CloseToTab(_) => {}
         Intent::OpenThemePicker => {
             // Cheap enough to read here rather than on a thread: a JSON
             // read and a directory listing, the same work `uze theme list`
@@ -244,8 +241,8 @@ pub(crate) fn dispatch(
                 .and_then(|app| app.workspace().clear_prompt_history(&root))
             {
                 Ok(()) => {
-                    model.prompt_history.clear();
-                    model.overview_prompt_selected = 0;
+                    model.remembered.prompt_history.clear();
+                    model.remembered.overview_prompt_selected = 0;
                     model.overview_prompt_hovered = None;
                     model.status = Status::Success("Prompt history cleared".to_owned());
                 }
@@ -765,17 +762,19 @@ pub(crate) fn drain_worker_results(
                 detail,
                 retry,
             } => {
-                model.overlay = Overlay::TrustRequired {
-                    plugin,
-                    detail,
-                    retry,
+                model.overlay = Overlay::Confirm {
+                    kind: Confirmation::Trust {
+                        plugin,
+                        detail,
+                        retry,
+                    },
+                    focus: None,
                 };
-                model.focus = Focus::Overlay;
                 model.status = Status::Idle;
             }
             WorkerResult::ContextAnalyzed(Ok((status, plan))) => {
-                model.context_status = Some(status);
-                model.context_plan = Some(plan);
+                model.remembered.context_status = Some(status);
+                model.remembered.context_plan = Some(plan);
                 model.status = Status::Idle;
             }
             WorkerResult::ContextApplied(Ok((message, report))) => {
@@ -1072,6 +1071,119 @@ mod tests {
         assert_eq!(
             model.status,
             Status::Success("Synchronized 1 attachment".to_owned())
+        );
+    }
+
+    fn drained(results: Vec<WorkerResult>, mut model: TuiModel) -> TuiModel {
+        let (sender, receiver) = mpsc::channel();
+        for result in results {
+            sender.send(result).unwrap();
+        }
+        drain_worker_results(&mut model, &receiver);
+        model
+    }
+
+    /// Clearing the marker on failure would have the per-frame check ask
+    /// again at once, and again after that: a failed inspection stays
+    /// failed until the selection moves.
+    #[test]
+    fn a_failed_inspection_keeps_its_marker_so_it_is_not_retried_every_frame() {
+        let inspecting = Intent::InspectPlugin("flow@market".to_owned());
+        let model = drained(
+            vec![WorkerResult::PluginInspected(Err("unreadable".to_owned()))],
+            TuiModel {
+                inspection_in_flight: Some(inspecting.clone()),
+                ..TuiModel::default()
+            },
+        );
+
+        assert_eq!(model.inspection_in_flight, Some(inspecting));
+        assert_eq!(model.status, Status::Error("unreadable".to_owned()));
+    }
+
+    #[test]
+    fn a_failed_refresh_releases_maintenance_and_says_why() {
+        let model = drained(
+            vec![WorkerResult::Refreshed(Err("store unreadable".to_owned()))],
+            TuiModel {
+                maintenance_in_flight: true,
+                ..TuiModel::default()
+            },
+        );
+
+        assert!(!model.maintenance_in_flight, "a later refresh may run");
+        assert_eq!(model.status, Status::Error("store unreadable".to_owned()));
+    }
+
+    /// An auto-update is announced even though its badge lives on a screen
+    /// the operator may never open, and it outranks a repair in the one
+    /// status line there is.
+    #[test]
+    fn updated_plugins_are_announced_ahead_of_repaired_attachments() {
+        let data = RefreshData {
+            auto_updated: vec!["a@m".to_owned(), "b@m".to_owned()],
+            ..refreshed_with_repair()
+        };
+        let model = drained(vec![WorkerResult::Refreshed(Ok(data))], TuiModel::default());
+
+        assert_eq!(
+            model.status,
+            Status::Success("Updated 2 plugins".to_owned())
+        );
+        assert!(
+            model.status_expires_at.is_some(),
+            "the notice goes away on its own"
+        );
+    }
+
+    #[test]
+    fn a_refusal_for_trust_asks_before_retrying() {
+        let model = drained(
+            vec![WorkerResult::TrustRequired {
+                plugin: "flow@market".to_owned(),
+                detail: "runs hooks".to_owned(),
+                retry: TrustedRetry::Update("flow@market".to_owned()),
+            }],
+            TuiModel::default(),
+        );
+
+        assert!(matches!(
+            model.overlay,
+            Overlay::Confirm {
+                kind: Confirmation::Trust { ref plugin, .. },
+                focus: None,
+            } if plugin == "flow@market"
+        ));
+        assert_eq!(model.status, Status::Idle);
+    }
+
+    #[test]
+    fn the_apply_message_counts_harnesses_approximations_and_failures() {
+        use uze_application::PreferenceApplyOutcome;
+        let result = |outcome| ProfileApplyResult {
+            integration: "fixture".to_owned(),
+            outcome,
+        };
+        let results = vec![
+            result(PreferenceApplyOutcome::Applied {
+                changed_keys: Vec::new(),
+            }),
+            result(PreferenceApplyOutcome::AppliedWithApproximation {
+                changed_keys: Vec::new(),
+                notes: Vec::new(),
+            }),
+            result(PreferenceApplyOutcome::Failed {
+                reason: "read-only".to_owned(),
+            }),
+        ];
+
+        assert_eq!(
+            apply_message("default", &results),
+            "Applied profile \"default\" to 3 harnesses · 1 approximation · 1 failed"
+        );
+        assert_eq!(
+            apply_message("default", &results[..1]),
+            "Applied profile \"default\" to 1 harness"
         );
     }
 

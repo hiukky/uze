@@ -1,11 +1,10 @@
-//! Syntax highlighting, for the extensions that show a file's own text.
+//! Syntax highlighting, for the modes that show a file's own text.
 //!
-//! Its own module because two surfaces colour source code — the diff
-//! [`crate::code::diff`] draws and the file [`crate::code::editor`]
-//! opens — and the alternative was a second copy of the syntect
-//! plumbing, which is
-//! the shape where a fallback theme is fixed in one place and left wrong
-//! in the other.
+//! Its own module because the diff [`super::diff`] draws, the file
+//! [`super::editor`] opens and the code blocks [`super::markdown`] renders
+//! all colour source code, and the alternative was a copy of the syntect
+//! plumbing each — the shape where a fallback theme is fixed in one place
+//! and left wrong in the others.
 //!
 //! Everything here is loaded once per process and shared: `syntect`'s
 //! default syntax and theme sets are megabytes of parsed data, and

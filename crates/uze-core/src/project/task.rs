@@ -3,10 +3,13 @@
 //!
 //! # Identity is not the label
 //!
-//! A task's identifier is generated once and never changes; it keys the
-//! branch (`agent/<id>`), the checkout it runs in, and its persisted state.
-//! The label is derived from the prompt and names the tab. Keeping them
-//! apart is what makes a name free to change and a collision impossible.
+//! An agent's identifier is generated once and never changes; for a task
+//! it keys the branch (`agent/<id>`), the checkout it runs in, and its
+//! persisted state. The label is derived from the prompt and names the
+//! tab. Keeping them apart is what makes a name free to change and a
+//! collision impossible. The identifier is an *agent's*, not a task's: a
+//! [`tenant`](crate::tenant) carries one too, and it is the one thing the
+//! two kinds of record share.
 //!
 //! # Storage
 //!
@@ -23,6 +26,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BTreeSet,
     fmt, fs,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -35,36 +39,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result, UzeError, checkout::CheckoutId, digest, harness_runtime::project_id_for, home::UzeHome,
-    persistence::write_atomic, worktree::BRANCH_PREFIX,
+    persistence::write_atomic, tenant::Tenant, worktree::BRANCH_PREFIX,
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Long enough to read, short enough for a sidebar.
 const LABEL_MAX_CHARS: usize = 40;
 const IDENTIFIER_CHARS: usize = 6;
 
-/// A generated, immutable task identifier.
+/// A generated, immutable identifier for an agent UZE launched — what a
+/// launch carries, what a conversation is keyed by, and what a task and a
+/// tenant have in common.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
-pub struct TaskId(String);
+pub struct AgentId(String);
 
-impl TaskId {
+impl AgentId {
     pub fn generate() -> Self {
-        Self(generated_identifier(b"task"))
+        Self(generated_identifier(b"agent"))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// The branch the task's work lives on while it stays local.
-    pub fn branch(&self) -> String {
-        format!("{BRANCH_PREFIX}{}", self.0)
-    }
 }
 
-impl fmt::Display for TaskId {
+/// The branch a task's work lives on while it stays local and nobody has
+/// named it: the identifier under UZE's own prefix.
+fn generated_branch(id: &AgentId) -> String {
+    format!("{BRANCH_PREFIX}{}", id.as_str())
+}
+
+impl fmt::Display for AgentId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
@@ -131,7 +138,7 @@ pub enum TaskState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Task {
-    pub id: TaskId,
+    pub id: AgentId,
     pub label: String,
     pub base: Base,
     /// The base's tip when the branch was last rebased onto it — what a
@@ -210,11 +217,11 @@ impl Task {
     }
 
     pub fn new(prompt: Option<&str>, base: Base, base_commit: String, target: String) -> Self {
-        let id = TaskId::generate();
+        let id = AgentId::generate();
         let label = prompt
             .map(|prompt| label_from_prompt(prompt, &id))
             .unwrap_or_else(|| id.as_str().to_owned());
-        let branch = id.branch();
+        let branch = generated_branch(&id);
         Self {
             id,
             label,
@@ -244,7 +251,7 @@ pub fn now_unix() -> u64 {
 /// The first non-empty line of `prompt`, lower-cased, non-alphanumerics
 /// collapsed to single hyphens, cut at a word boundary; the identifier when
 /// nothing usable remains.
-pub fn label_from_prompt(prompt: &str, fallback: &TaskId) -> String {
+pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
     let Some(line) = prompt.lines().map(str::trim).find(|line| !line.is_empty()) else {
         return fallback.as_str().to_owned();
     };
@@ -274,10 +281,15 @@ pub fn label_from_prompt(prompt: &str, fallback: &TaskId) -> String {
     }
 }
 
+/// Every agent a project's launches recorded: the tasks in slots of their
+/// own, and the tenants of the project's own directory. One document, one
+/// lock, one sweep, because a launch of either kind is the same event and
+/// a reader handed an identifier does not know which kind it names.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskStore {
     pub schema_version: u32,
     pub tasks: Vec<Task>,
+    pub tenants: Vec<Tenant>,
 }
 
 impl Default for TaskStore {
@@ -285,16 +297,112 @@ impl Default for TaskStore {
         Self {
             schema_version: SCHEMA_VERSION,
             tasks: Vec::new(),
+            tenants: Vec::new(),
+        }
+    }
+}
+
+/// One record of the store, whichever kind: what a reader that was handed
+/// an identifier consults. Every variant knows the one directory the agent
+/// it records is allowed to stand in, so a reader verifying a claim matches
+/// on nothing — a later kind of record adds a variant and a directory here,
+/// never a branch in a reader.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentRecord<'a> {
+    Task(&'a Task),
+    Tenant(&'a Tenant),
+}
+
+/// Which kind of record an identifier named, for a reader that must treat
+/// the two differently and has no use for the record itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentKind {
+    Task,
+    Tenant,
+}
+
+impl AgentRecord<'_> {
+    pub fn kind(&self) -> AgentKind {
+        match self {
+            Self::Task(_) => AgentKind::Task,
+            Self::Tenant(_) => AgentKind::Tenant,
+        }
+    }
+
+    pub fn id(&self) -> &AgentId {
+        match self {
+            Self::Task(task) => &task.id,
+            Self::Tenant(tenant) => &tenant.id,
+        }
+    }
+
+    /// The directory the agent may stand in, under the project root the
+    /// store is keyed by: a task's own slot, a tenant's own root. `None`
+    /// for a task whose checkout is gone: nowhere is its own any more.
+    pub fn own_directory(&self, project_root: &Path) -> Option<PathBuf> {
+        match self {
+            Self::Task(task) => task
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.directory(project_root)),
+            Self::Tenant(tenant) => Some(tenant.root.clone()),
         }
     }
 }
 
 impl TaskStore {
-    pub fn get(&self, id: &TaskId) -> Option<&Task> {
+    pub fn get(&self, id: &AgentId) -> Option<&Task> {
         self.tasks.iter().find(|task| &task.id == id)
     }
 
-    pub fn get_mut(&mut self, id: &TaskId) -> Option<&mut Task> {
+    /// The task standing in `checkout` now: the newest to have been given
+    /// it. A slot outlives the tasks that ran in it and each went on naming
+    /// it; anything older is history, and answering for it would hand the
+    /// current agent's work to a task long gone.
+    pub fn slot_owner(&self, checkout: &CheckoutId) -> Option<&Task> {
+        self.tasks
+            .iter()
+            .filter(|task| task.checkout.as_ref() == Some(checkout))
+            .max_by_key(|task| task.created_at_unix)
+    }
+
+    /// Every task that is the [`slot_owner`](Self::slot_owner) of its own
+    /// checkout.
+    pub fn slot_owners(&self) -> BTreeSet<AgentId> {
+        self.tasks
+            .iter()
+            .filter_map(|task| self.slot_owner(task.checkout.as_ref()?))
+            .map(|owner| owner.id.clone())
+            .collect()
+    }
+
+    /// The record an identifier names, of whichever kind.
+    pub fn agent(&self, id: &str) -> Option<AgentRecord<'_>> {
+        self.tasks
+            .iter()
+            .find(|task| task.id.as_str() == id)
+            .map(AgentRecord::Task)
+            .or_else(|| {
+                self.tenants
+                    .iter()
+                    .find(|tenant| tenant.id.as_str() == id)
+                    .map(AgentRecord::Tenant)
+            })
+    }
+
+    pub fn tenant_mut(&mut self, id: &AgentId) -> Option<&mut Tenant> {
+        self.tenants.iter_mut().find(|tenant| &tenant.id == id)
+    }
+
+    /// Adds or replaces a tenant by identifier.
+    pub fn upsert_tenant(&mut self, tenant: Tenant) {
+        match self.tenant_mut(&tenant.id) {
+            Some(existing) => *existing = tenant,
+            None => self.tenants.push(tenant),
+        }
+    }
+
+    pub fn get_mut(&mut self, id: &AgentId) -> Option<&mut Task> {
         self.tasks.iter_mut().find(|task| &task.id == id)
     }
 
@@ -431,7 +539,7 @@ impl MutationGuard {
                 source,
             })?;
         let started = Instant::now();
-        while let Err(error) = try_lock_exclusive(&file) {
+        while let Err(error) = crate::persistence::try_lock_exclusive(&file) {
             if error.kind() != std::io::ErrorKind::WouldBlock {
                 return Err(UzeError::Write {
                     path,
@@ -461,28 +569,6 @@ impl Drop for MutationGuard {
     }
 }
 
-#[cfg(unix)]
-fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: `flock` is called on a file descriptor this process owns and
-    // keeps open for as long as the lock is held.
-    let outcome = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if outcome == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-/// Without an OS-level advisory lock the guard serializes only this
-/// process's own threads, which the register above already does; a
-/// cross-process guarantee is a Unix property here, matching the runtime's
-/// supported platforms.
-#[cfg(not(unix))]
-fn try_lock_exclusive(_file: &File) -> std::io::Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,7 +594,7 @@ mod tests {
     #[test]
     fn identifiers_are_short_path_safe_and_distinct() {
         let ids: HashSet<String> = (0..500)
-            .map(|_| TaskId::generate().as_str().to_owned())
+            .map(|_| AgentId::generate().as_str().to_owned())
             .collect();
         assert_eq!(ids.len(), 500);
         for id in &ids {
@@ -530,7 +616,7 @@ mod tests {
 
     #[test]
     fn a_long_prompt_is_cut_at_a_word_boundary() {
-        let id = TaskId::generate();
+        let id = AgentId::generate();
         let label = label_from_prompt(
             "Refactor the orchestrator so that every agent tab reads its state from a read model",
             &id,
@@ -542,7 +628,7 @@ mod tests {
 
     #[test]
     fn an_unusable_prompt_falls_back_to_the_identifier() {
-        let id = TaskId::generate();
+        let id = AgentId::generate();
         assert_eq!(label_from_prompt("   \n\n", &id), id.as_str());
         assert_eq!(label_from_prompt("!!! ???", &id), id.as_str());
         let unprompted = Task::new(None, Base::Ref("main".into()), "x".into(), "main".into());
@@ -602,7 +688,11 @@ mod tests {
 
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, br#"{"schema_version": 99, "tasks": []}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"schema_version": 99, "tasks": [], "tenants": []}"#,
+        )
+        .unwrap();
         let error = load(&home, &root).unwrap_err();
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),

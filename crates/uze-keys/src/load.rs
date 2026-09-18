@@ -13,7 +13,7 @@ use std::{fs, io, path::Path, sync::OnceLock};
 
 use crate::{
     action::Action,
-    chord::{Chord, ChordProblem},
+    chord::Chord,
     file::KeymapFile,
     keymap::{Binding, Keymap},
     scope::Scope,
@@ -121,8 +121,7 @@ pub fn resolve(file: &KeymapFile) -> Result<Loaded, Vec<Problem>> {
                     Err(problem) => {
                         readable = false;
                         errors.push(Problem::error(format!(
-                            "{scope_name}.{action_name}: {}",
-                            describe(&problem)
+                            "{scope_name}.{action_name}: {problem}"
                         )));
                     }
                 }
@@ -187,10 +186,6 @@ pub fn difference_from_default(keymap: &Keymap) -> KeymapFile {
         }
     }
     file
-}
-
-fn describe(problem: &ChordProblem) -> String {
-    problem.to_string()
 }
 
 fn bind(scope: Scope, chord: &str, action: Action) -> Binding {
@@ -309,6 +304,9 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
         bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
+        // The container of agents, beside the agent's own chord: `s` for
+        // space, on the same modifier.
+        bind(Scope::Workspace, "alt+s", Action::NewSpace),
         bind(Scope::Workspace, "f2", Action::RenameSelection),
         // The sidebar is vertical and holds spaces; the strip is
         // horizontal and holds tabs. Ctrl walks the container, Alt walks
@@ -373,6 +371,10 @@ fn default_bindings() -> Vec<Binding> {
         // Tab walks into the highlighted directory, so a root several
         // levels down is reached by narrowing rather than by typing.
         bind(Scope::RootPicker, "tab", Action::Expand),
+        // The kind chips under the directory: two choices side by side, so
+        // the keys that walk sideways walk them.
+        bind(Scope::RootPicker, "left", Action::FocusPrevious),
+        bind(Scope::RootPicker, "right", Action::FocusNext),
         bind(Scope::RootPicker, "enter", Action::Activate),
         bind(Scope::RootPicker, "esc", Action::Dismiss),
         bind(Scope::RootPicker, "backspace", Action::EraseBack),
@@ -414,7 +416,12 @@ mod tests {
         // asks whether that was intended.
         let unbound: Vec<String> = ALL_ACTIONS
             .iter()
-            .filter(|action| default_keymap().any_chord_for(**action).is_none())
+            .filter(|action| {
+                !default_keymap()
+                    .bindings()
+                    .iter()
+                    .any(|binding| binding.action == **action)
+            })
             .map(|action| action.name())
             .collect();
         assert_eq!(
@@ -426,8 +433,7 @@ mod tests {
                 "reset-key",
                 "install-project-environment",
                 "open-glossary",
-                "apply-profile",
-                "new-space"
+                "apply-profile"
             ],
             "an action gained or lost a chord; say so here on purpose"
         );

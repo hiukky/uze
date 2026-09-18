@@ -152,15 +152,6 @@ impl Keymap {
         self.chords_for(action, scopes).into_iter().next()
     }
 
-    /// The same question asked without a context, for surfaces that list
-    /// the whole vocabulary rather than what is open right now.
-    pub fn any_chord_for(&self, action: Action) -> Option<Chord> {
-        self.bindings
-            .iter()
-            .find(|binding| binding.action == action)
-            .map(|binding| binding.chord)
-    }
-
     /// Every action reachable with `scopes` open, in vocabulary order, each
     /// with the chord that reaches it. This is the index, and it is also
     /// the help: one list, so there is no second one to disagree with it.

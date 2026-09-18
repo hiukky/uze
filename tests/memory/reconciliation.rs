@@ -78,11 +78,9 @@ impl IntegrationPort for StubBridgeHarness {
             version: None,
         }
     }
-    fn exposure_plan(&self, resource: &uze_core::Resource) -> uze_core::exposure::ExposurePlan {
+    fn exposure_plan(&self, _resource: &uze_core::Resource) -> uze_core::exposure::ExposurePlan {
         uze_core::exposure::ExposurePlan {
-            representation: resource.capability.representation,
             route: uze_core::router::CompatibilityRoute::Unsupported,
-            verification: uze_core::router::VerificationStatus::NotExposed,
             mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
                 rationale: "test stub attaches nothing".to_owned(),
             },

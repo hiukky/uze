@@ -29,6 +29,7 @@
   the checkout is mid-rebase.
 - [x] 2.3 First-writer-wins is one guard in one place, not a check repeated
   at each call site. Every later mechanism asks the same predicate.
+- [ ] 2.4 `name_task` resolves the task from the identity the agent's launch carried, verified against the checkout, instead of from the directory alone. *Carried out by `identify-agents-at-launch` (task 4.1); check when it lands.*
 
 ## 3. The checkout's HEAD is the truth
 

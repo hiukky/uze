@@ -31,118 +31,63 @@
 //! matter, verified against 1.1.19) and the canonical description/body
 //! verbatim. Always a Derived Artifact under `$UZE_HOME`, never the Store.
 
-use std::{fs, path::Path, path::PathBuf};
+use std::path::{Path, PathBuf};
 
 use uze_core::{
-    Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    Result,
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
-use crate::shared::skill::parse_skill_body;
-
 use super::AntigravityIntegration;
-
-/// Root of every generated Skill wrapper directory. Under
-/// `$UZE_HOME/state/attachments/antigravity/skills/` — the same convention
-/// as every other integration's managed artifacts, never under the Store.
-pub(super) fn skill_wrapper_root(uze_home: &UzeHome) -> PathBuf {
-    crate::shared::path::attachment_root(uze_home, "antigravity").join("skills")
-}
-
-pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
-    let package_id = Resource::package_root(resource)
-        .and_then(|root| root.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown");
-    let name = resource
-        .logical_capability_name()
-        .unwrap_or_else(|| resource.name());
-    skill_wrapper_root(uze_home).join(package_id).join(name)
-}
-
-/// Antigravity's physical invocation label — the UZE semantic label
-/// (`flow:review`) verbatim. `agy plugin validate` accepts `:` in skill
-/// names (verified against 1.1.19).
-pub(super) fn antigravity_invocation_label(
-    uze_home: &UzeHome,
-    resource: &Resource,
-) -> Option<String> {
-    use uze_core::integration::{active_plugin_name, qualified_capability_name};
-    let active_name = active_plugin_name(uze_home, resource)?;
-    let logical = resource.logical_capability_name()?;
-    Some(qualified_capability_name(&active_name, &logical))
-}
-
-pub(super) fn antigravity_skill_exposure_name_candidates(
-    uze_home: &UzeHome,
-    resource: &Resource,
-) -> Vec<String> {
-    antigravity_invocation_label(uze_home, resource)
-        .into_iter()
-        .collect()
-}
+use crate::shared::skill::{
+    entry_name, generated_skill_dir, invalid_policy_plan, recreate_dir, render_skill_wrapper,
+    skill_label, skill_wrapper_root, write_file,
+};
 
 /// Deterministically materializes (or refreshes) one Skill's delivered
 /// wrapper: `SKILL.md` carrying the stable namespaced label as its `name`
 /// and the canonical description/body preserved — so the model-visible and
 /// slash-invocable name is `flow:review`, never a bare alias or a
 /// collision-prone `review` (the vendor derives the identity from front
-/// matter). Idempotent and rebuilt wholesale — the directory is entirely
-/// UZE-owned and non-authoritative (ADR-013 §5).
+/// matter, and `agy plugin validate` accepts `:` in skill names, verified
+/// against 1.1.19). Idempotent and rebuilt wholesale — the directory is
+/// entirely UZE-owned and non-authoritative (ADR-013 §5).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
 ) -> Result<PathBuf> {
-    let dir = generated_skill_dir(uze_home, resource);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write {
-            path: dir.clone(),
-            source,
-        })?;
-    }
-    fs::create_dir_all(&dir).map_err(|source| UzeError::Write {
-        path: dir.clone(),
-        source,
-    })?;
-    let label = antigravity_invocation_label(uze_home, resource).unwrap_or_else(|| resource.name());
-    let (description, body) = parse_skill_body(&resource.capability.payload);
-    let mut skill = String::from("---\n");
-    skill.push_str(&format!("name: {label}\n"));
-    if let Some(description) = description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
-        skill.push_str(&format!("description: \"{escaped}\"\n"));
-    }
+    let dir = generated_skill_dir(uze_home, "antigravity", resource);
+    recreate_dir(&dir)?;
+    let label = skill_label(uze_home, resource).unwrap_or_else(|| resource.name());
     let policy = resource.skill_invocation();
+    let mut markers = Vec::new();
     if !policy.user {
-        skill.push_str("disable-slash-command: true\n");
+        markers.push("disable-slash-command: true");
     }
     if !policy.model {
-        skill.push_str("disable-model-invocation: true\n");
+        markers.push("disable-model-invocation: true");
     }
-    skill.push_str("---\n");
-    skill.push_str(&body);
-    fs::write(dir.join("SKILL.md"), skill).map_err(|source| UzeError::Write {
-        path: dir.join("SKILL.md"),
-        source,
-    })?;
+    write_file(
+        &dir.join("SKILL.md"),
+        render_skill_wrapper(&label, &resource.capability.payload, &markers).as_bytes(),
+    )?;
     Ok(dir)
 }
 
-/// Cleans up a generated wrapper directory once nothing references it —
-/// called when a resource leaves the managed skills root. Only ever touches
-/// UZE-owned directories under `$UZE_HOME`.
 impl AntigravityIntegration {
+    /// Removes a generated wrapper directory once nothing references it —
+    /// called when a resource leaves the managed skills root.
     pub(super) fn cleanup_unused_wrapper(&self, target: &Path) -> Result<()> {
         crate::shared::path::cleanup_unused_wrapper(
             target,
             &crate::shared::path::attachment_root(&self.uze_home, "antigravity"),
             &self.skills_dir,
-            &skill_wrapper_root(&self.uze_home),
+            &skill_wrapper_root(&self.uze_home, "antigravity"),
             &|wrapper| wrapper.join("SKILL.md").is_file(),
         )
     }
@@ -150,61 +95,33 @@ impl AntigravityIntegration {
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return ExposurePlan {
-                representation: resource.capability.representation,
-                route: CompatibilityRoute::Unsupported,
-                verification: VerificationStatus::NotExposed,
-                mechanism: ExposureMechanism::Unsupported {
-                    rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
-                },
-                evidence: "Invalid canonical invocation policy: a Skill that nobody may invoke is not a projectable capability (ADR-030 §1).".to_owned(),
-            };
+            return invalid_policy_plan();
         }
         if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource
-                .resolved_exposure_name
-                .clone()
-                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+            && let Some(entry_name) = entry_name(self, resource)
         {
             let source = resource
                 .resolved_artifact_target
                 .clone()
-                .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource));
-            let (route, evidence) = if policy.is_default() {
-                (
-                    CompatibilityRoute::Native,
-                    "Antigravity CLI imports every markdown skill under ~/.gemini/antigravity-cli/skills as a global slash command, so a UZE-managed reference there is consumed natively. The generated wrapper carries the stable namespaced label and the canonical name/description/body."
-                        .to_owned(),
-                )
+                .unwrap_or_else(|| generated_skill_dir(&self.uze_home, "antigravity", resource));
+            let evidence = if policy.is_default() {
+                "Antigravity CLI imports every markdown skill under ~/.gemini/antigravity-cli/skills as a global slash command, so a UZE-managed reference there is consumed natively. The generated wrapper carries the stable namespaced label and the canonical name/description/body."
             } else if !policy.model {
-                (
-                    CompatibilityRoute::Native,
-                    "Antigravity natively preserves invoke.model=false with disable-model-invocation: true: the Skill stays `/`-invocable while the model is not offered it."
-                        .to_owned(),
-                )
+                "Antigravity natively preserves invoke.model=false with disable-model-invocation: true: the Skill stays `/`-invocable while the model is not offered it."
             } else {
-                (
-                    CompatibilityRoute::Native,
-                    "Antigravity natively preserves invoke.user=false with disable-slash-command: true: the Skill remains model-discoverable while `/` and `/name` resolution omit it."
-                        .to_owned(),
-                )
+                "Antigravity natively preserves invoke.user=false with disable-slash-command: true: the Skill remains model-discoverable while `/` and `/name` resolution omit it."
             };
             return ExposurePlan {
-                representation: resource.capability.representation,
-                route,
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source,
-                },
-                evidence,
+                route: CompatibilityRoute::Native,
+                mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                    path: self.skills_dir.join(entry_name),
+                    target: source,
+                }),
+                evidence: evidence.to_owned(),
             };
         }
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "Antigravity setup has not completed, so there is no global skills root for the Skill delivery yet."
                     .to_owned(),
@@ -218,7 +135,8 @@ impl AntigravityIntegration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use std::fs;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::store::PackageId;
 
     fn skill_resource(package_id: &str, path_string: &str, payload: &[u8]) -> Resource {
@@ -228,7 +146,6 @@ mod tests {
             PathBuf::from("/store/packages").join(package_id),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: PathBuf::from(path_string),
                 payload: payload.to_vec(),
             },

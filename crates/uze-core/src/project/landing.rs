@@ -24,7 +24,7 @@ use crate::{
     checkout::{self, commits_ahead, is_dirty},
     subprocess::run_shell_bounded,
     task::{Task, TaskState},
-    worktree::{CompletionBehavior, WORKTREES_DIRECTORY},
+    worktree::CompletionBehavior,
 };
 
 /// A gate that has not finished in this long is a hung gate.
@@ -137,7 +137,7 @@ fn join_paths(files: &[PathBuf]) -> String {
 /// The task's checkout directory, when it has one.
 pub fn slot_path(primary: &Path, task: &Task) -> Option<PathBuf> {
     let checkout = task.checkout.as_ref()?;
-    let path = primary.join(WORKTREES_DIRECTORY).join(checkout.as_str());
+    let path = checkout.directory(primary);
     path.is_dir().then_some(path)
 }
 
@@ -367,13 +367,10 @@ pub fn sync_target(primary: &Path, target: &str) -> TargetSync {
 }
 
 fn sync_target_locked(primary: &Path, target: &str) -> TargetSync {
-    let tracking = format!("refs/remotes/{REMOTE}/{target}");
-    // An explicit refspec, so the tracking ref moves whatever the remote's
-    // configured fetch refspecs say.
-    let refspec = format!("+refs/heads/{target}:{tracking}");
-    if let Err(reason) = git(primary, &["fetch", "--quiet", REMOTE, &refspec]) {
-        return TargetSync::Stalled { behind: 0, reason };
-    }
+    let tracking = match fetch_target(primary, target) {
+        Ok(tracking) => tracking,
+        Err(reason) => return TargetSync::Stalled { behind: 0, reason },
+    };
     if checkout::tip_of(primary, &tracking).is_empty() {
         return TargetSync::Unpublished;
     }
@@ -532,24 +529,29 @@ pub fn refresh(primary: &Path, task: &mut Task) -> Result<bool, DeliveryFailure>
             other => return Err(DeliveryFailure::NotReady(other)),
         }
         let tip = target_tip(primary, task, CompletionBehavior::Handoff)?;
-        if tip == task.base_commit || is_ancestor(primary, &tip, &task.branch) {
-            task.base_commit = tip;
-            return Ok(false);
-        }
         // The target already holds this work under commits of its own — a
         // squash or rebase merge. Replaying it there conflicts with itself.
         if checkout::is_integrated(primary, &tip, &task.branch) {
             return Ok(false);
         }
-        rebase_in_slot(primary, &slot, task, &tip)?;
-        Ok(true)
+        rebase_in_slot(primary, &slot, task, &tip)
     })
     .map_err(|error| DeliveryFailure::Git(error.to_string()))?
 }
 
+/// Fetches `target` from the remote into its tracking ref and names that
+/// ref. An explicit refspec, so the tracking ref moves whatever the
+/// remote's configured fetch refspecs say.
+fn fetch_target(primary: &Path, target: &str) -> Result<String, String> {
+    let tracking = format!("refs/remotes/{REMOTE}/{target}");
+    let refspec = format!("+refs/heads/{target}:{tracking}");
+    git(primary, &["fetch", "--quiet", REMOTE, &refspec])?;
+    Ok(tracking)
+}
+
 /// The target's tip where the target lives: the remote's after a fetch when
 /// delivery publishes a pull request, the local branch otherwise.
-pub fn target_tip(
+fn target_tip(
     primary: &Path,
     task: &Task,
     completion: CompletionBehavior,
@@ -558,11 +560,7 @@ pub fn target_tip(
         if !has_remote(primary) {
             return Err(DeliveryFailure::NoRemote);
         }
-        let tracking = format!("refs/remotes/{REMOTE}/{}", task.target);
-        // An explicit refspec, so the tracking ref moves whatever the
-        // remote's configured fetch refspecs say.
-        let refspec = format!("+refs/heads/{}:{tracking}", task.target);
-        git(primary, &["fetch", "--quiet", REMOTE, &refspec]).map_err(DeliveryFailure::Git)?;
+        let tracking = fetch_target(primary, &task.target).map_err(DeliveryFailure::Git)?;
         let tip = checkout::tip_of(primary, &tracking);
         if tip.is_empty() {
             return Err(DeliveryFailure::Git(format!(
@@ -582,15 +580,17 @@ pub fn target_tip(
     Ok(tip)
 }
 
+/// Rebases the task's branch onto `tip` in its checkout, and says whether
+/// anything moved: a branch already on `tip` only records it as its base.
 fn rebase_in_slot(
     primary: &Path,
     slot: &Path,
     task: &mut Task,
     tip: &str,
-) -> Result<(), DeliveryFailure> {
+) -> Result<bool, DeliveryFailure> {
     if tip == task.base_commit || is_ancestor(primary, tip, &task.branch) {
         task.base_commit = tip.to_owned();
-        return Ok(());
+        return Ok(false);
     }
     let moved = commits_ahead(primary, &task.base_commit, tip);
     // Work delivered by a squash or rebase merge sits below `base_commit`
@@ -609,7 +609,7 @@ fn rebase_in_slot(
     match uze_git::write(slot, &rebase) {
         Ok(output) if output.is_success() => {
             task.base_commit = tip.to_owned();
-            Ok(())
+            Ok(true)
         }
         Ok(output) => {
             if let Some(files) = paused_rebase(slot) {
@@ -757,7 +757,7 @@ pub fn gate_failure_message(task: &Task, command: &str, output: &str) -> String 
 /// (`feat(ui): one layout file` -> `feat/one-layout-file`); anything else
 /// keeps the project's prefix. This is the net under every other
 /// mechanism, not the mechanism: a named task never reaches it.
-pub fn readable_branch_name(primary: &Path, task: &Task) -> String {
+fn readable_branch_name(primary: &Path, task: &Task) -> String {
     let fallback = || format!("{}{}", crate::worktree::BRANCH_PREFIX, task.id.as_str());
     let Some((kind, subject)) = commit_derived_halves(primary, task) else {
         return fallback();
@@ -966,7 +966,7 @@ fn discover_request(primary: &Path, tip: &str) -> Option<u32> {
 /// Names no forge and no tool: the agent is in the repository and knows
 /// which one this is, and the projects that reach different forges are
 /// the reason this text does not pick one.
-pub fn open_request_message(task: &Task, branch: &str) -> String {
+fn open_request_message(task: &Task, branch: &str) -> String {
     format!(
         "Your branch is published as `{branch}` on `{REMOTE}`, rebased onto `{target}` and past \
          the project's checks. Open a pull request — a merge request, on a forge that calls it \
@@ -1476,27 +1476,8 @@ mod tests {
     /// of that remote, standing in for whoever else pushes to it.
     fn published(label: &str) -> (Repository, PathBuf) {
         let repository = repository(label);
-        let base = uze_testkit::temp::scratch(&format!("{label}-remote"));
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
-        let other = base.join("other");
-        repository.git(&[
-            "clone",
-            "--quiet",
-            origin.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ]);
-        repository.git_in(&other, &["config", "user.name", "Other"]);
-        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        repository.with_origin(TARGET);
+        let other = repository.clone_origin();
         (repository, other)
     }
 
@@ -1633,18 +1614,7 @@ mod tests {
     #[test]
     fn pr_publishes_and_leaves_the_request_to_the_agent() {
         let repository = repository("landing-pr");
-        let base = uze_testkit::temp::scratch("landing-pr-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+        let origin = repository.with_origin(TARGET);
 
         let primary = repository.root();
         let mut store = TaskStore::default();
@@ -1747,18 +1717,7 @@ mod tests {
     #[test]
     fn a_merge_request_is_discovered_the_same_way_a_pull_request_is() {
         let repository = repository("landing-mr");
-        let base = uze_testkit::temp::scratch("landing-mr-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            TARGET,
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+        repository.with_origin(TARGET);
 
         let primary = repository.root();
         let mut store = TaskStore::default();

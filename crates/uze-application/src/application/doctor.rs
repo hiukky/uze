@@ -1,6 +1,5 @@
-//! Doctor/status — extracted without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Machine health: `uze doctor`'s report, each harness's detail, and
+//! `uze status` for one project.
 
 use uze_core::{Result, integration::AttachmentState, state};
 
@@ -50,19 +49,23 @@ impl Health<'_> {
     /// actually attached (ADR-033 / doctor spec: a degraded hook must be
     /// actionable, never hidden behind a healthy-native row).
     fn hook_health(&self, reconciliation: &ReconciliationReport) -> Vec<HookHealth> {
-        use uze_core::{hook::PortableHook, integration::receipt_location, store::PackageId};
+        use uze_core::{hook::PortableHook, store::PackageId};
         let Ok(id) = PackageId::from_qualified(
             &reconciliation.package_id,
             std::path::Path::new("plugin.json"),
         ) else {
             return Vec::new();
         };
-        let Ok(environment) = self.0.engine().compose(std::slice::from_ref(&id)) else {
+        let Ok(resources) = self
+            .0
+            .store
+            .package(&id)
+            .and_then(|package| uze_core::engine::package_resources(&package))
+        else {
             return Vec::new();
         };
         let mut rows = Vec::new();
-        for resource in environment
-            .resources
+        for resource in resources
             .iter()
             .filter(|resource| resource.capability.kind == CapabilityKind::Hook)
         {
@@ -90,13 +93,13 @@ impl Health<'_> {
                                 ExposureMechanism::Unsupported { rationale } => {
                                     Some(rationale.clone())
                                 }
-                                _ => None,
+                                ExposureMechanism::Managed(_) => None,
                             }
                         }
                         _ => None,
                     },
                     delivery: hook_delivery_note(&plan.mechanism),
-                    artifact: attached.map(|entry| receipt_location(&entry.receipt)),
+                    artifact: attached.map(|entry| entry.receipt.artifact.location()),
                     state: attached.map(|entry| entry.inspection.state),
                 });
             }
@@ -105,9 +108,8 @@ impl Health<'_> {
         rows
     }
 
-    /// The cheap half of `doctor` — everything except per-receipt
-    /// attachment inspection (`attachments` left empty). Shared by
-    /// [`doctor`](Self::doctor), which adds the (cached) inspection layer.
+    /// Everything [`report`](Self::report) says except per-receipt
+    /// attachment inspection, which it adds on top.
     fn doctor_shell(&self) -> DoctorReport {
         let package_ids = self.0.store.package_ids();
         let (store, plugins) = match package_ids {
@@ -141,7 +143,7 @@ impl Health<'_> {
             }
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
-        let harnesses = self.harness_health();
+        let harnesses = self.harnesses();
         let ledger_error = state::receipts(&self.0.home, None)
             .err()
             .map(|error| error.to_string());
@@ -167,72 +169,55 @@ impl Health<'_> {
         }
     }
 
-    /// Per-harness detection/setup/provisioning detail — shared by
-    /// `doctor()` (the full report) and `harness_list`/`harness_inspect`
-    /// (the machine-level `harness` namespace's thin read models, which
-    /// slice this same computation rather than adding a second one).
-    fn harness_health(&self) -> Vec<HarnessHealth> {
+    /// Every registered harness's detection, setup, provisioning and
+    /// delivery detail.
+    #[tracing::instrument(name = "health.harnesses", skip_all)]
+    pub fn harnesses(&self) -> Vec<HarnessHealth> {
         let installed = self.0.installed_packages();
         self.0
             .integrations
             .iter()
-            .map(|integration| {
-                let runtime_shim_active = self.0.runtime_shim_is_active(integration.as_ref());
-                HarnessHealth {
-                    integration: integration.id().to_owned(),
-                    display_name: integration.display_name().to_owned(),
-                    description: integration.description().to_owned(),
-                    detection: self.0.detect_cached(integration.as_ref()),
-                    setup: integration_status(integration.status(&self.0.home)),
-                    strategy: state::get(&self.0.home, integration.id())
-                        .ok()
-                        .flatten()
-                        .map(|record| record.strategy),
-                    provisioning: state::provisioning(&self.0.home, integration.id())
-                        .ok()
-                        .flatten(),
-                    // Observed, not remembered. A package can be installed and
-                    // reconciled while a harness still cannot see it, and that is
-                    // exactly the state this field exists to surface.
-                    publication: integration.publication(&installed),
-                    capabilities: integration.capabilities(),
-                    runtime_shim_active,
-                    context_support: HarnessContextSupport::declared(
-                        integration.as_ref(),
-                        runtime_shim_active,
-                    ),
-                }
-            })
+            .map(|integration| self.harness_row(integration.as_ref(), &installed))
             .collect()
     }
 
-    #[tracing::instrument(name = "health.harnesses", skip_all)]
-    pub fn harnesses(&self) -> Vec<HarnessHealth> {
-        self.harness_health()
-    }
-
-    /// Matches by the stable integration id (`claude-code`), any alias
-    /// people actually type (`claude`), or the display label doctor shows
-    /// back (`Claude Code`) — the same names `uze setup` accepts plus what
-    /// `uze doctor`/the TUI print.
+    /// One harness's row of [`harnesses`](Self::harnesses), found by any name
+    /// [`UzeApplication::integration_named`] accepts.
     #[tracing::instrument(name = "health.harness", skip_all, fields(name = %name), err)]
     pub fn harness(&self, name: &str) -> Result<HarnessHealth> {
-        let id = self
-            .0
-            .integrations
-            .iter()
-            .find(|integration| {
-                integration.id() == name
-                    || integration.aliases().contains(&name)
-                    || integration.display_name() == name
-            })
-            .map(|integration| integration.id());
-        self.harness_health()
-            .into_iter()
-            .find(|harness| Some(harness.integration.as_str()) == id)
-            .ok_or_else(|| {
-                uze_core::UzeError::UnknownPackage(format!("harness `{name}` not found"))
-            })
+        let integration = self.0.integration_named(name).ok_or_else(|| {
+            uze_core::UzeError::UnknownPackage(format!("harness `{name}` not found"))
+        })?;
+        Ok(self.harness_row(integration, &self.0.installed_packages()))
+    }
+
+    fn harness_row(
+        &self,
+        integration: &dyn IntegrationPort,
+        installed: &[StoredPackage],
+    ) -> HarnessHealth {
+        let runtime_shim_active = self.0.runtime_shim_is_active(integration);
+        HarnessHealth {
+            integration: integration.id().to_owned(),
+            display_name: integration.display_name().to_owned(),
+            description: integration.description().to_owned(),
+            detection: self.0.detect_cached(integration),
+            setup: integration_status(integration.status(&self.0.home)),
+            strategy: state::get(&self.0.home, integration.id())
+                .ok()
+                .flatten()
+                .map(|record| record.strategy),
+            provisioning: state::provisioning(&self.0.home, integration.id())
+                .ok()
+                .flatten(),
+            // Observed, not remembered. A package can be installed and
+            // reconciled while a harness still cannot see it, and that is
+            // exactly the state this field exists to surface.
+            publication: integration.publication(installed),
+            capabilities: integration.capabilities(),
+            runtime_shim_active,
+            context_support: HarnessContextSupport::declared(integration, runtime_shim_active),
+        }
     }
 
     /// The human label for an integration id (`claude-code` → `Claude
@@ -241,14 +226,10 @@ impl Health<'_> {
     /// a label lookup must never fail a display.
     #[tracing::instrument(name = "health.integration_label", skip_all, fields(integration = %integration))]
     pub fn integration_label(&self, integration: &str) -> String {
-        self.0
-            .integrations
-            .iter()
-            .find(|candidate| candidate.id() == integration)
-            .map_or_else(
-                || integration.to_owned(),
-                |candidate| candidate.display_name().to_owned(),
-            )
+        self.0.integration_named(integration).map_or_else(
+            || integration.to_owned(),
+            |candidate| candidate.display_name().to_owned(),
+        )
     }
 
     #[tracing::instrument(name = "health.status", skip_all, fields(project_root = %project_root.display()), err)]
@@ -290,12 +271,7 @@ impl Health<'_> {
             .0
             .project()
             .plan(project_root)
-            .map(|plan| EnvironmentDrift {
-                unresolved: plan.unresolved,
-                surplus: plan.surplus,
-                missing: missing_plugins(&project_lock),
-                stale_projection: plan.stale_projection.is_some(),
-            })
+            .map(|plan| EnvironmentDrift::from(&plan))
             .unwrap_or_default();
         Ok(StatusReport {
             root: context.canonical.clone(),
@@ -310,17 +286,29 @@ impl Health<'_> {
     }
 }
 
-/// The locked plugins this machine's Store does not hold, by name. The
-/// lock status already answers this per plugin; drift only re-reads it.
-fn missing_plugins(status: &ProjectLockStatus) -> Vec<String> {
+fn integration_status(status: IntegrationStatus) -> String {
     match status {
-        ProjectLockStatus::Present { plugins } => plugins
-            .iter()
-            .filter(|plugin| !plugin.installed)
-            .map(|plugin| plugin.plugin.clone())
-            .collect(),
-        _ => Vec::new(),
+        IntegrationStatus::NotConfigured => "not configured",
+        IntegrationStatus::InstalledUnverified => "installed / unverified",
+        IntegrationStatus::InstalledVerified => "installed / verified",
     }
+    .to_owned()
+}
+
+fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
+    if !package.root.is_dir() {
+        return Some(format!(
+            "package `{}` store directory is missing",
+            package.id.as_str()
+        ));
+    }
+    if !package.manifest.is_file() {
+        return Some(format!(
+            "package `{}` plugin.json is missing",
+            package.id.as_str()
+        ));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -378,11 +366,9 @@ mod tests {
         fn capabilities(&self) -> HarnessCapabilities {
             HarnessCapabilities::default()
         }
-        fn exposure_plan(&self, _resource: &uze_core::project::Resource) -> ExposurePlan {
+        fn exposure_plan(&self, _resource: &uze_core::capability::Resource) -> ExposurePlan {
             ExposurePlan {
-                representation: uze_core::capability::Representation::Standard,
                 route: uze_core::router::CompatibilityRoute::Unsupported,
-                verification: uze_core::router::VerificationStatus::Unverified,
                 mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
                     rationale: "test does not attach".to_owned(),
                 },
@@ -518,7 +504,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
@@ -573,7 +558,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
@@ -624,7 +608,6 @@ mod tests {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
                 integration: "counting".to_owned(),
-                strategy: "test".to_owned(),
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
@@ -721,7 +704,11 @@ fn quarantined_sentences(entries: &[uze_core::store::QuarantinedRegistration]) -
 /// harness: the generated wrapper keeps working without UZE, but it needs
 /// its own system dependency present.
 fn hook_delivery_note(mechanism: &ExposureMechanism) -> Option<String> {
-    let ExposureMechanism::ManagedHookConfig { wrapper, .. } = mechanism else {
+    let ExposureMechanism::Managed(uze_core::integration::ManagedArtifact::HookConfigEntry {
+        wrapper,
+        ..
+    }) = mechanism
+    else {
         return None;
     };
     let dependency = uze_core::hook::WRAPPER_DEPENDENCY;
@@ -738,13 +725,13 @@ mod delivery_note_tests {
     use super::*;
 
     fn managed(wrapper: &str) -> ExposureMechanism {
-        ExposureMechanism::ManagedHookConfig {
+        ExposureMechanism::Managed(uze_core::integration::ManagedArtifact::HookConfigEntry {
             config_file: std::path::PathBuf::from("/config/settings.json"),
             entry_name: "demo:protect".to_owned(),
             event: uze_core::hook::HookEvent::PreToolUse,
             expected: "{}".to_owned(),
             wrapper: std::path::PathBuf::from(wrapper),
-        }
+        })
     }
 
     #[test]

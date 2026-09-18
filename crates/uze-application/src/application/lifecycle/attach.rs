@@ -1,18 +1,15 @@
-//! Lifecycle — attach — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Delivering an installed package to one harness: the package-native plan
+//! first, then each remaining resource, each artifact recorded by a
+//! receipt.
 
 use std::collections::BTreeSet;
 
 use uze_core::{
     Result,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::ExposureMechanism,
-    integration::{
-        AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact,
-        managed_artifact_exposure_name, receipt_location,
-    },
-    project::Resource,
+    integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
     state,
     store::StoredPackage,
 };
@@ -70,8 +67,8 @@ impl UzeApplication {
         package: &StoredPackage,
         integration: &dyn IntegrationPort,
     ) -> Result<()> {
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
+        let resources = uze_core::engine::package_resources(package)?;
+        let resources: Vec<_> = resources.iter().collect();
         self.deliver_package_to(package, &resources, integration, NativeDelivery::Allowed)?;
         Ok(())
     }
@@ -164,7 +161,7 @@ impl UzeApplication {
                         }
                     }
                     if let Some(receipt) = integration.attach_package(package, &plan)? {
-                        let location = receipt_location(&receipt);
+                        let location = receipt.artifact.location();
                         state::record_receipt(
                             &self.home,
                             package_receipt_key(package.id.as_str(), integration.id()),
@@ -188,7 +185,7 @@ impl UzeApplication {
             if !provided.contains(&resource.identity()) {
                 let resolved = self.resolve_exposure_name(resource, integration)?;
                 if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                    let location = receipt_location(&receipt);
+                    let location = receipt.artifact.location();
                     state::record_receipt(
                         &self.home,
                         resource_receipt_key(package.id.as_str(), integration.id(), resource),
@@ -259,7 +256,7 @@ impl UzeApplication {
             receipt.resource_identity.as_deref() == Some(resource_id.as_str())
                 && (receipt.integration == integration.id() || shares_root(&receipt.integration))
         }) {
-            resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
+            resolved.resolved_exposure_name = existing.artifact.exposure_name();
             resolved.resolved_artifact_target = match &existing.artifact {
                 ManagedArtifact::SymlinkReference { target, .. } => Some(target.clone()),
                 _ => None,
@@ -271,7 +268,7 @@ impl UzeApplication {
             .filter(|(_, receipt)| {
                 receipt.integration == integration.id() || shares_root(&receipt.integration)
             })
-            .filter_map(|(_, receipt)| managed_artifact_exposure_name(&receipt.artifact))
+            .filter_map(|(_, receipt)| receipt.artifact.exposure_name())
             .collect();
         // A shared root must converge on the same physical name no matter
         // which member happens to attach first. If any integration sharing
@@ -328,9 +325,8 @@ impl UzeApplication {
                 receipt.integration == integration.id() || shares_root(&receipt.integration)
             })
             .find_map(|(_, receipt)| {
-                (managed_artifact_exposure_name(&receipt.artifact).as_deref()
-                    == Some(entry.as_str()))
-                .then_some(receipt)
+                (receipt.artifact.exposure_name().as_deref() == Some(entry.as_str()))
+                    .then_some(receipt)
             });
         let Some(claimant) = claimant else {
             // Defensive fallback (should be unreachable): retain the
@@ -339,7 +335,7 @@ impl UzeApplication {
             return Ok(resolved);
         };
         let requested_target = match integration.exposure_plan(resource).mechanism {
-            ExposureMechanism::ManagedUserScopeReference { source, .. } => source,
+            ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { target, .. }) => target,
             _ => resource.capability.path.clone(),
         };
         Err(UzeError::ProjectionConflict(Box::new(
@@ -368,6 +364,14 @@ fn artifact_owned_target(receipt: &AttachmentReceipt) -> PathBuf {
     match &receipt.artifact {
         ManagedArtifact::SymlinkReference { target, .. } => target.clone(),
 
-        _ => receipt_location(receipt),
+        _ => receipt.artifact.location(),
     }
+}
+
+fn package_receipt_key(package: &str, integration: &str) -> String {
+    format!("{package}:{integration}:package")
+}
+
+fn resource_receipt_key(package: &str, integration: &str, resource: &uze_core::Resource) -> String {
+    format!("{package}:{integration}:{}", resource.identity())
 }

@@ -1,5 +1,5 @@
 //! Profiles/Preferences orchestration: `TUI -> UzeApplication -> Preferences
-//! -> PreferencePort -> integration adapters`. Mirrors `harness_health()`'s
+//! -> PreferencePort -> integration adapters`. Mirrors `Health::harnesses`'s
 //! "iterate `self.integrations`/adapters, no second detection loop" pattern
 //! and `setup()`'s per-harness partial-failure isolation.
 
@@ -79,11 +79,6 @@ impl Profiles<'_> {
                 preferences: record.preferences,
             })
             .collect())
-    }
-
-    #[tracing::instrument(name = "profiles.get", skip_all, fields(id = %id), err)]
-    pub fn get(&self, id: &str) -> Result<Option<profile_state::ProfileRecord>> {
-        profile_state::get(&self.0.home, id)
     }
 
     #[tracing::instrument(name = "profiles.create", skip_all, fields(id = %id), err)]
@@ -380,8 +375,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            app.profiles()
-                .get("a")
+            profile_state::get(&home, "a")
                 .unwrap()
                 .unwrap()
                 .preferences
@@ -389,8 +383,7 @@ mod tests {
             Autonomy::Unattended
         );
         assert_eq!(
-            app.profiles()
-                .get("b")
+            profile_state::get(&home, "b")
                 .unwrap()
                 .unwrap()
                 .preferences

@@ -8,15 +8,19 @@ use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan, ManagedArtifact},
     integration::IntegrationPort,
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     skill::SkillInvocationPolicy,
     state,
 };
 
 use super::ClaudeIntegration;
+use crate::shared::skill::{
+    entry_name, frontmatter_value, invalid_policy_plan, link_extras, link_or_repair,
+    render_skill_wrapper, setup_pending_plan, write_file,
+};
 
 impl ClaudeIntegration {
     /// Claude's shim is a one-skill plugin, so its proof of ownership is
@@ -40,87 +44,38 @@ impl ClaudeIntegration {
     pub(super) fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let policy = resource.skill_invocation();
         if policy.is_invalid() {
-            return unsupported_invalid_policy(resource);
+            return invalid_policy_plan();
         }
-        if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource
-                .resolved_exposure_name
-                .clone()
-                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
-        {
-            let shim_root = resource
-                .resolved_artifact_target
-                .clone()
-                .unwrap_or_else(|| {
-                    self.uze_home
-                        .state_dir()
-                        .join("attachments")
-                        .join("claude")
-                        .join(&entry_name)
-                });
-            let mut evidence = String::from(
-                "UZE materializes a small owned manifest shim (.claude-plugin/plugin.json plus a SKILL.md reference into the UZE store) and symlinks it once into <claude_home>/skills/. Claude auto-loads it on every future session with no --plugin-dir flag.",
+        if !state::is_installed(&self.uze_home, self.id()) {
+            return setup_pending_plan("Claude Code");
+        }
+        let Some(entry_name) = entry_name(self, resource) else {
+            return setup_pending_plan("Claude Code");
+        };
+        let shim_root = resource
+            .resolved_artifact_target
+            .clone()
+            .unwrap_or_else(|| {
+                crate::shared::path::attachment_root(&self.uze_home, "claude").join(&entry_name)
+            });
+        let mut evidence = String::from(
+            "UZE materializes a small owned manifest shim (.claude-plugin/plugin.json plus a SKILL.md reference into the UZE store) and symlinks it once into <claude_home>/skills/. Claude auto-loads it on every future session with no --plugin-dir flag.",
+        );
+        if !policy.is_default() {
+            evidence.push_str(
+                " The canonical invoke policy is translated into Claude's own frontmatter (disable-model-invocation: true when model=false, user-invocable: false when user=false) without touching the canonical Store bytes.",
             );
-            if !policy.is_default() {
-                evidence.push_str(
-                    " The canonical invoke policy is translated into Claude's own frontmatter (disable-model-invocation: true when model=false, user-invocable: false when user=false) without touching the canonical Store bytes.",
-                );
-            }
-            return ExposurePlan {
-                representation: resource.capability.representation,
-                route: route_for_policy(policy),
-                verification: VerificationStatus::Unverified,
-                mechanism: ExposureMechanism::ManagedUserScopeReference {
-                    discovery_root: self.skills_dir.clone(),
-                    entry_name,
-                    source: shim_root,
-                },
-                evidence,
-            };
         }
+        // Every valid policy is carried by Claude's own frontmatter markers,
+        // on a shim UZE generates rather than the Store bytes.
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::RuntimeBridge {
-                bridge: "Claude Code --plugin-dir".to_owned(),
-                arguments: vec![
-                    "--plugin-dir".to_owned(),
-                    resource
-                        .package_root()
-                        .expect("guarded above")
-                        .display()
-                        .to_string(),
-                ],
-            },
-            evidence: "Claude Code has not completed `uze setup`; falling back to the per-session --plugin-dir conformance probe rather than a managed attachment."
-                .to_owned(),
+            mechanism: ExposureMechanism::Managed(ManagedArtifact::SymlinkReference {
+                path: self.skills_dir.join(entry_name),
+                target: shim_root,
+            }),
+            evidence,
         }
-    }
-}
-
-/// Route classification for one canonical invocation policy on Claude Code.
-///
-/// Claude natively preserves every valid combination (ADR-030): a
-/// user-only Skill gets `disable-model-invocation: true`, a model-only
-/// Skill gets `user-invocable: false`, and the default needs nothing. An
-/// invalid declaration (nobody can invoke it) is never projected.
-pub(super) fn route_for_policy(policy: SkillInvocationPolicy) -> CompatibilityRoute {
-    if policy.is_invalid() {
-        return CompatibilityRoute::Unsupported;
-    }
-    CompatibilityRoute::Adaptable
-}
-
-fn unsupported_invalid_policy(resource: &Resource) -> ExposurePlan {
-    ExposurePlan {
-        representation: resource.capability.representation,
-        route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
-        },
-        evidence: "Invalid canonical invocation policy: a Skill that nobody may invoke is not a projectable capability (ADR-030 §1).".to_owned(),
     }
 }
 
@@ -168,15 +123,16 @@ pub(super) fn materialize_shim(
         source,
     })?;
 
+    // Claude resolves a skill's relative scripts and references against the
+    // shim, not against the Store, so they are linked beside its SKILL.md.
+    link_extras(canonical_skill_dir, shim_root, &[".claude-plugin"])?;
     let skill_link = shim_root.join("SKILL.md");
     if policy.is_default() {
         let skill_source = canonical_skill_dir.join("SKILL.md");
-        link_or_repair(&skill_link, &skill_source)?;
-        return Ok(());
+        return link_or_repair(&skill_link, &skill_source);
     }
     // Non-default policy: the delivered SKILL.md must carry Claude's own
-    // frontmatter markers, so it is materialized — never a symlink — while
-    // everything else in the canonical skill directory stays referenced.
+    // frontmatter markers, so it is materialized — never a symlink.
     let bytes = fs::read(canonical_skill_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
         path: canonical_skill_dir.join("SKILL.md"),
         source: error,
@@ -186,102 +142,67 @@ pub(super) fn materialize_shim(
         .and_then(|name| name.to_str())
         .unwrap_or(entry_name);
     let document = claude_wrapper_skill_document(&bytes, policy, fallback_name);
-    write_or_replace_file(&skill_link, document.as_bytes())?;
-    Ok(())
+    if skill_link.is_symlink() {
+        fs::remove_file(&skill_link).map_err(|source| UzeError::Write {
+            path: skill_link.clone(),
+            source,
+        })?;
+    }
+    write_file(&skill_link, document.as_bytes())
 }
 
 /// Renders the generated SKILL.md for one canonical Skill under a
-/// non-default invocation policy: the canonical `name`/`description` are
-/// preserved (with the description safely re-quoted — never
-/// raw-interpolated), Claude's own invocation markers are injected, and
-/// the canonical body is preserved verbatim. Used by both the capability
-/// shim and the generated native package envelope.
+/// non-default invocation policy: the canonical `name` and description are
+/// preserved and Claude's own invocation markers injected. Used by both the
+/// capability shim and the generated native package envelope.
 pub(super) fn claude_wrapper_skill_document(
     canonical_bytes: &[u8],
     policy: &SkillInvocationPolicy,
     fallback_name: &str,
 ) -> String {
-    let (description, body) = crate::shared::skill::parse_skill_body(canonical_bytes);
-    let name = crate::shared::skill::frontmatter_value(canonical_bytes, "name")
-        .unwrap_or_else(|| fallback_name.to_owned());
-    let mut frontmatter = String::from("---\n");
-    frontmatter.push_str(&format!("name: {name}\n"));
-    if let Some(description) = &description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(description);
-        frontmatter.push_str(&format!("description: \"{escaped}\"\n"));
-    }
+    let name =
+        frontmatter_value(canonical_bytes, "name").unwrap_or_else(|| fallback_name.to_owned());
+    let mut markers = Vec::new();
     if !policy.model {
-        frontmatter.push_str("disable-model-invocation: true\n");
+        markers.push("disable-model-invocation: true");
     }
     if !policy.user {
-        frontmatter.push_str("user-invocable: false\n");
+        markers.push("user-invocable: false");
     }
-    frontmatter.push_str("---\n");
-    frontmatter.push_str(&body);
-    frontmatter
+    render_skill_wrapper(&name, canonical_bytes, &markers)
 }
 
-fn link_or_repair(link: &Path, source: &Path) -> Result<()> {
-    match fs::symlink_metadata(link) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let current = fs::read_link(link).map_err(|source_error| UzeError::Read {
-                path: link.to_path_buf(),
-                source: source_error,
-            })?;
-            if current != source {
-                fs::remove_file(link).map_err(|source_error| UzeError::Write {
-                    path: link.to_path_buf(),
-                    source: source_error,
-                })?;
-                symlink(source, link)?;
-            }
-        }
-        Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            symlink(source, link)?;
-        }
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: link.to_path_buf(),
-                source: error,
-            });
-        }
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn write_or_replace_file(target: &Path, content: &[u8]) -> Result<()> {
-    match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            fs::remove_file(target).map_err(|source_error| UzeError::Write {
-                path: target.to_path_buf(),
-                source: source_error,
-            })?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target.to_path_buf(),
-                source: error,
-            });
+    /// A skill's relative scripts must resolve from the shim Claude loads,
+    /// whichever policy decides how its `SKILL.md` is delivered.
+    #[test]
+    fn the_shim_links_the_skills_supporting_files_beside_its_skill_md() {
+        for (label, body) in [
+            (
+                "claude-shim-default",
+                "---\nname: deploy\n---\nRun scripts/run.sh.\n",
+            ),
+            (
+                "claude-shim-user-only",
+                "---\nname: deploy\ninvoke:\n  model: false\n  user: true\n---\nRun scripts/run.sh.\n",
+            ),
+        ] {
+            let root = uze_testkit::temp::scratch(label);
+            let canonical = root.join("store/skills/deploy");
+            fs::create_dir_all(canonical.join("scripts")).unwrap();
+            fs::write(canonical.join("SKILL.md"), body).unwrap();
+            fs::write(canonical.join("scripts/run.sh"), "#!/bin/sh\n").unwrap();
+            let shim = root.join("shim");
+            let policy = uze_core::skill::parse_skill_invocation(body.as_bytes())
+                .unwrap_or(SkillInvocationPolicy::MODEL_AND_USER);
+            materialize_shim(&shim, &canonical, "flow:deploy", Some("flow"), &policy).unwrap();
+            assert!(shim.join("scripts").is_symlink(), "{label}");
+            assert!(shim.join("scripts/run.sh").is_file(), "{label}");
+            assert!(shim.join("SKILL.md").exists(), "{label}");
+            let _ = fs::remove_dir_all(root);
         }
     }
-    fs::write(target, content).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }

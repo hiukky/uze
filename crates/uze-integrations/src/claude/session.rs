@@ -97,13 +97,6 @@ pub(super) fn observe(projects_root: &Path, ctx: &ObservationContext) -> Option<
     newest.map(|(_, session)| session)
 }
 
-/// Not needed here: transcripts carry their own timestamps, so the launch
-/// time is guard enough for telling a new conversation from the one the
-/// previous task left in this checkout.
-pub(super) fn recorded_for(_cwd: &Path) -> Option<SessionId> {
-    None
-}
-
 /// Marks `path` as modified now, so a freshly created transcript is never
 /// filtered out by a launch recorded in the same second.
 #[cfg(test)]

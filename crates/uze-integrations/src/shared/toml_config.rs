@@ -114,10 +114,10 @@ pub(crate) fn merge(
     mutate: impl FnOnce(&mut DocumentMut) -> std::result::Result<(), String>,
 ) -> Result<()> {
     let mut document = read_document(path).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot update preferences: {reason}"))
+        UzeError::HarnessConfig(format!("cannot update preferences: {reason}"))
     })?;
     mutate(&mut document).map_err(|reason| {
-        UzeError::ExposureUnavailable(format!("cannot update preferences: {reason}"))
+        UzeError::HarnessConfig(format!("cannot update preferences: {reason}"))
     })?;
     write_document(path, &document)
 }

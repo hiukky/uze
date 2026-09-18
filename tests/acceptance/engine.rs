@@ -15,10 +15,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use uze_application::{DeliveryOutcome, Isolation, TaskStateView, UzeApplication, UzeHome};
+use uze_application::{
+    DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
+};
 use uze_terminal::{
-    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, attach, open_space,
-    read_event, send_request, socket_path,
+    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, open_space, read_event,
+    send_request, socket_path,
 };
 use uze_testkit::{env::ProcessEnvGuard, fake_harness::FakeHarness, temp::TestEnvironment};
 
@@ -78,7 +80,7 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()
             .expect("the real uze binary serves a terminal");
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the server's socket appears", || socket.exists());
         let (stream, reader) = connect(&project);
         let mut engine = Self {
@@ -123,8 +125,7 @@ impl Engine {
         let started = Instant::now();
         loop {
             match read_event(&mut self.reader).expect("the server keeps talking") {
-                Some(ClientEvent::Attached { session })
-                | Some(ClientEvent::Snapshot { session, .. })
+                Some(ClientEvent::Snapshot { session })
                 | Some(ClientEvent::SessionUpdated { session }) => {
                     self.session = Some(session);
                     return;
@@ -141,8 +142,12 @@ impl Engine {
     /// whose first process is the scripted agent, started in the slot.
     /// `start` is what the agent does before it goes quiet.
     fn launch(&mut self, start: &str) -> (String, PathBuf) {
-        let placement = self.app().workspace().place_new_agent(self.project(), &[]);
-        let Isolation::Slot { task, .. } = &placement.isolation else {
+        let placement = self
+            .app()
+            .workspace()
+            .place_new_agent(self.project(), PlacementKind::Slot, "claude-code", &[])
+            .expect("a slot is acquired");
+        let Placement::Slot { task, .. } = &placement.placement else {
             panic!("{placement:?}");
         };
         let slot = placement.cwd.clone();
@@ -168,6 +173,13 @@ impl Engine {
                 rows: 24,
                 cwd: Some(slot.clone()),
                 command: Some(vec!["agent".into()]),
+                // The launch carries the agent's identity, as the client's
+                // does: what the sweep reads back to know the task is still
+                // somebody's.
+                env: vec![(
+                    uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
+                    task.as_str().to_owned(),
+                )],
             },
         )
         .unwrap();
@@ -189,14 +201,9 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane)
-                    if pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot =>
-                {
-                    Some(pane.id)
-                }
-                _ => None,
-            })
+            .map(|tab| &tab.pane)
+            .find(|pane| pane.cwd.canonicalize().unwrap_or_else(|_| pane.cwd.clone()) == slot)
+            .map(|pane| pane.id)
     }
 
     /// Reads session updates until `accept` holds: the server also pushes
@@ -233,10 +240,7 @@ impl Engine {
             .into_iter()
             .flat_map(|session| &session.workspace.spaces)
             .flat_map(|space| &space.tabs)
-            .filter_map(|tab| match &tab.layout {
-                uze_terminal::Layout::Pane(pane) => Some(pane.cwd.clone()),
-                _ => None,
-            })
+            .map(|tab| tab.pane.cwd.clone())
             .collect()
     }
 
@@ -251,7 +255,7 @@ impl Engine {
             .spaces
             .iter()
             .flat_map(|space| &space.tabs)
-            .find(|tab| tab.focus.pane == pane)
+            .find(|tab| tab.pane.id == pane)
             .expect("the pane belongs to a tab")
             .id;
         send_request(&mut self.stream, &ClientRequest::CloseTab { tab }).unwrap();
@@ -287,7 +291,7 @@ impl Engine {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let project = self.project().to_path_buf();
-        let socket = socket_path(&project).unwrap();
+        let socket = socket_path().unwrap();
         wait_until("the dead server's socket is gone or stale", || {
             UnixStream::connect(&socket).is_err()
         });
@@ -320,16 +324,21 @@ impl Drop for Engine {
 }
 
 fn connect(project: &Path) -> (UnixStream, UnixStream) {
-    let mut stream = attach(project, 80, 24).expect("connects to the server started above");
+    // Straight to the socket: `attach` would replace a server that is not
+    // this executable, and the one started above is the real binary.
+    let mut stream =
+        UnixStream::connect(socket_path().unwrap()).expect("connects to the server started above");
     let reader = stream.try_clone().unwrap();
     send_request(
         &mut stream,
         &ClientRequest::Attach {
             version: PROTOCOL_VERSION,
-            workspace: WorkspaceId("engine-test".into()),
             columns: 80,
             rows: 24,
-            root: Some(project.to_path_buf()),
+            seat: Some(uze_terminal::SpaceSeat {
+                root: project.to_path_buf(),
+                kind: uze_terminal::SpaceKind::Worktree,
+            }),
         },
     )
     .unwrap();
@@ -430,7 +439,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     let released = engine
         .app()
         .workspace()
-        .release_abandoned_tasks(&project, &occupied);
+        .release_abandoned_tasks(&project, &occupied, &[]);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(!released[0].parked, "the checkout held nothing");
     assert_eq!(
@@ -449,7 +458,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
         engine
             .app()
             .workspace()
-            .release_abandoned_tasks(&project, &occupied)
+            .release_abandoned_tasks(&project, &occupied, &[])
             .is_empty(),
         "an agent sitting in its slot is not abandoned"
     );
@@ -460,7 +469,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     let released = engine
         .app()
         .workspace()
-        .release_abandoned_tasks(&project, &occupied);
+        .release_abandoned_tasks(&project, &occupied, &[]);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(released[0].parked, "it holds uncommitted work");
     assert_eq!(engine.state_of(&unsaved), TaskStateView::Parked);
@@ -499,7 +508,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
     let reconciliation = engine
         .app()
         .workspace()
-        .reconcile_occupancy(&look_in, &held);
+        .reconcile_occupancy(&look_in, &held, &[]);
 
     assert_eq!(
         reconciliation.released.len(),
@@ -525,7 +534,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
     let quiet = engine
         .app()
         .workspace()
-        .reconcile_occupancy(&look_in, &engine.occupied());
+        .reconcile_occupancy(&look_in, &engine.occupied(), &[]);
     assert!(
         quiet.changed.is_empty() && quiet.released.is_empty(),
         "a second pass over the same state changes nothing: {quiet:?}"
@@ -674,7 +683,11 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
         "unfinished\n",
         "parked, with every file preserved"
     );
-    let next = engine.app().workspace().place_new_agent(&project, &[]);
+    let next = engine
+        .app()
+        .workspace()
+        .place_new_agent(&project, PlacementKind::Slot, "claude-code", &[])
+        .expect("a slot is acquired");
     assert!(
         next.cwd != project.join(".worktrees/agent-2"),
         "a parked slot is never handed to a new agent"
@@ -688,23 +701,7 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
 fn pr_publishes_then_hands_the_request_to_its_agent_and_syncs_it_after() {
     let mut engine = Engine::start("  completion: pr\n");
     let project = engine.project().to_path_buf();
-    let origin = engine.env.root().join("origin.git");
-    engine.git(
-        &project,
-        &[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            "main",
-            origin.to_str().unwrap(),
-        ],
-    );
-    engine.git(
-        &project,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    engine.git(&project, &["push", "--quiet", "-u", "origin", "main"]);
+    uze_testkit::git::publish_to_origin(&project, "main");
 
     let (id, slot) = engine.launch(&commit_script("feature.rs", "feature\\n"));
     wait_for_states(&engine, &[&id], &TaskStateView::Ready);
@@ -786,7 +783,7 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     let (mut second, mut second_reader) = connect(&other);
     let second_view = loop {
         match read_event(&mut second_reader).unwrap() {
-            Some(ClientEvent::Attached { session }) => break session,
+            Some(ClientEvent::Snapshot { session }) => break session,
             Some(ClientEvent::Error { message }) => panic!("{message}"),
             Some(_) => {}
             None => panic!("hung up"),
@@ -833,7 +830,11 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     // A nested launch: what `uze` does when UZE_PANE is set.
     let nested = engine.env.root().join("nested-project");
     fs::create_dir_all(&nested).unwrap();
-    let label = open_space(&nested).expect("the running server opens a space");
+    let label = open_space(uze_terminal::SpaceSeat {
+        root: nested.clone(),
+        kind: uze_terminal::SpaceKind::Worktree,
+    })
+    .expect("the running server opens a space");
     assert_eq!(label, "nested-project");
     engine.wait_for_session_where("three spaces exist", |session| {
         session.workspace.spaces.len() == 3

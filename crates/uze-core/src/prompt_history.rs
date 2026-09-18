@@ -328,6 +328,8 @@ fn local_day_start(now_secs: u64) -> u64 {
     let Ok(time) = libc::time_t::try_from(now_secs) else {
         return utc_day_start(now_secs);
     };
+    // SAFETY: `tm` is plain integers and a nullable pointer, for which
+    // all-zero bytes are a valid value; `localtime_r` overwrites it below.
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: both pointers are valid for the duration of the call, and
     // `localtime_r` writes only into the `tm` it is handed.

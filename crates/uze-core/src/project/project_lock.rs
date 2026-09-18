@@ -214,10 +214,9 @@ pub fn stale_against(
 /// offline promise — two documents compared, nothing else asked.
 ///
 /// Scoped to the marketplaces the manifest actually declares, and this is
-/// the load-bearing part: silence is not a claim. A lock inherited from
-/// before the manifest existed, or one whose marketplace nobody has
-/// declared, is a project that has said nothing about those plugins — not
-/// a project asking for all of them to be taken away. Only a marketplace
+/// the load-bearing part: silence is not a claim. A locked plugin whose
+/// marketplace the manifest does not declare belongs to a project that has
+/// said nothing about it — not one asking for it to be taken away. Only a marketplace
 /// the manifest names can make one of its plugins surplus, which is
 /// exactly the edit a person makes when they mean it.
 pub fn surplus_against(
@@ -313,12 +312,6 @@ pub fn remove_lock(root: &Path) -> Result<()> {
 }
 
 pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
-    if lock.version != SUPPORTED_LOCK_VERSION {
-        return Err(UzeError::UnsupportedLockVersion {
-            found: lock.version,
-            expected: SUPPORTED_LOCK_VERSION,
-        });
-    }
     let path = lock_path_for(root);
     // Deterministic YAML: BTreeMap ensures sorted keys, serde_yaml preserves order.
     let mut yaml = serde_yaml::to_string(lock).map_err(|e| UzeError::MalformedLock {
@@ -332,35 +325,6 @@ pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
         yaml.push('\n');
     }
     crate::persistence::write_atomic(&path, yaml.as_bytes())
-}
-
-/// Parses `plugin@marketplace` shorthand. Marketplace is required.
-pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
-    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
-        UzeError::InvalidPluginSpec(format!("`{spec}` must be `name@marketplace`"))
-    })?;
-    if plugin.is_empty() || marketplace.is_empty() {
-        return Err(UzeError::InvalidPluginSpec(format!(
-            "`{spec}` must be `name@marketplace` with non-empty parts"
-        )));
-    }
-    // Validate charset similar to PackageId but allow same set.
-    for c in plugin.chars() {
-        if !(c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(UzeError::InvalidPackageName {
-                path: PathBuf::from("agents.lock"),
-                name: plugin.to_owned(),
-            });
-        }
-    }
-    for c in marketplace.chars() {
-        if !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
-            return Err(UzeError::InvalidPluginSpec(format!(
-                "invalid marketplace name `{marketplace}`"
-            )));
-        }
-    }
-    Ok((plugin.to_owned(), marketplace.to_owned()))
 }
 
 #[cfg(test)]
@@ -477,16 +441,6 @@ mod tests {
         let written = fs::read_to_string(lock_path_for(&root)).unwrap();
         fs::remove_dir_all(&root).ok();
         assert!(written.ends_with('\n'), "{written:?}");
-    }
-
-    #[test]
-    fn parse_plugin_marketplace_requires_at() {
-        assert!(parse_plugin_marketplace_spec("flow").is_err());
-        assert!(parse_plugin_marketplace_spec("flow@").is_err());
-        assert!(parse_plugin_marketplace_spec("@ai").is_err());
-        let (p, m) = parse_plugin_marketplace_spec("flow@ai").unwrap();
-        assert_eq!(p, "flow");
-        assert_eq!(m, "ai");
     }
 
     /// The whole file, spelled out. This is the contract, so it is asserted

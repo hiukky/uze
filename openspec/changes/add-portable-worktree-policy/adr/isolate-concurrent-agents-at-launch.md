@@ -37,11 +37,13 @@ under `UzeHome`, keyed on the resolved root.
 Every agent UZE launches in a Git repository with a commit starts in an
 isolated checkout of its own, created before its harness starts. The primary
 checkout belongs to the operator and is never assigned to an agent. Nobody
-is asked, nothing is configured, and no harness has to cooperate. Where
-isolation is impossible — no repository, no commit, no Git — the agent
-starts in place and its tab says it is not isolated. There is no mode that
-seats an agent in the primary checkout: an agent on the operator's own tree
-is the operator running a harness in a shell tab, which is not a UZE agent.
+is asked, nothing is configured, and no harness has to cooperate. Where a
+slot cannot be acquired — no repository, no commit, no Git, the cap
+reached — the agent is not started and the reason is said: the operator's
+tree is never a fallback. There is no *seat*: no agent is given the primary
+checkout for being first. An agent on the operator's own tree is a kind of
+space the operator chooses at creation (`add-space-kinds`): a tenant, with
+an identity and a conversation and nothing to deliver, never a task.
 
 A checkout is a slot, and a task is what comes and goes. `.worktrees/<id>`
 is long-lived and named by a generated identifier that never changes. A new

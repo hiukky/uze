@@ -23,14 +23,17 @@ text would make the guarantee depend on a model reading, believing and
 executing prose. The projected text keeps the one job placement cannot do:
 addressing writers UZE never sees.
 
-**Every agent is isolated; the primary checkout is the operator's.** The seat
-rule is removed. Its benefit — the first agent sees uncommitted work — is
-the collision the policy exists to prevent, with the operator as the other
-writer. Its cost — a fresh checkout per agent — is removed by slots below,
-which leaves the seat with no defence. An agent on the operator's own tree
-is a legitimate need ("write the commit for what I changed") and is served
-by the operator running a harness in a shell tab, which is not a UZE agent
-and has nothing to deliver.
+**Every agent of a worktree space is isolated; the primary checkout is the
+operator's.** The seat rule is removed. Its benefit — the first agent sees
+uncommitted work — is the collision the policy exists to prevent, with the
+operator as the other writer. Its cost — a fresh checkout per agent — is
+removed by slots below, which leaves the seat with no defence. An agent on
+the operator's own tree was first left to the operator running a harness in
+a shell tab; `add-space-kinds` made it a kind of space instead — chosen per
+space, never a fallback, and never a task: a *tenant*, with an identity and
+a conversation and nothing to deliver. What this change decided still
+holds for every agent placed in a slot, and the seat — an agent quietly
+given the primary because it was first — stays removed.
 
 **A checkout is a slot; a task is what comes and goes.** `.worktrees/<id>`
 is long-lived and named by a generated identifier that never changes.

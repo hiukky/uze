@@ -236,6 +236,19 @@ success with it. `@token/aa` is what lets a *tint* do the same — the
 selected row is `@accent/17`, so it follows your accent instead of carrying
 UZE's own green into your theme.
 
+**`surface.scrim` is the veil a modal's backdrop wears.** The screen a
+modal interrupts is blended toward it, away from the theme's own polarity —
+a dark theme's backdrop lifts, a light theme's sinks — so the layer
+underneath is a different colour from the modal rather than more of it.
+
+**A space's kind is a hue of its own.** `space.worktree` and
+`space.workspace` are what the sidebar lights along the selected agent of a
+space, and what the "+ new" prompt says the space it would create is — so
+the two kinds are told apart by colour before the word is read.
+`space.worktree` is `@accent` in the built-in theme, the kind UZE opens on;
+declare `space.workspace` in a palette of your own, or the default's teal
+comes along with it.
+
 **The terminal's own sixteen are the exception.** `ansi.1`–`ansi.6` and
 their bright forms are literal colours, not references, because a program
 inside a pane that emits index 2 means *green* — whatever your theme calls

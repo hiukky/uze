@@ -29,11 +29,10 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the new-agent picker
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Claude Code

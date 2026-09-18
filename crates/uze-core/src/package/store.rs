@@ -12,8 +12,79 @@ use crate::{
     acquisition::{MaterializedPackage, Provenance},
     error::{Result, UzeError},
     home::UzeHome,
-    importer::{AgentPluginImporter, ForeignImporter},
 };
+
+/// What UZE reads of a package's `plugin.json`: the name it declares, and
+/// where the manifest sits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginManifest {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Reads the Agent Plugins manifest at `root`, refusing one that is absent,
+/// unnamed, or that references a path outside the package — the check every
+/// acquisition passes before a byte is stored.
+pub fn read_plugin_manifest(root: &Path) -> Result<PluginManifest> {
+    let path = root.join("plugin.json");
+    if !path.is_file() {
+        return Err(UzeError::MissingManifest(root.to_path_buf()));
+    }
+    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+            path: path.clone(),
+            source,
+        })?;
+    validate_references(&value, &path)?;
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| UzeError::MissingPackageName(path.clone()))?
+        .to_owned();
+    Ok(PluginManifest { name, path })
+}
+
+fn validate_references(value: &serde_json::Value, manifest: &Path) -> Result<()> {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (key, value) in entries {
+                let key = key.to_ascii_lowercase();
+                if (key.contains("path") || key.contains("file"))
+                    && let serde_json::Value::String(reference) = value
+                {
+                    validate_reference(reference, manifest)?;
+                }
+                validate_references(value, manifest)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_references(value, manifest)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_reference(reference: &str, manifest: &Path) -> Result<()> {
+    let path = Path::new(reference);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(UzeError::UnsafePathReference {
+            path: manifest.to_path_buf(),
+            reference: reference.to_owned(),
+        });
+    }
+    Ok(())
+}
 
 /// An installed plugin identity, qualified by its marketplace.
 ///
@@ -115,6 +186,23 @@ fn is_valid_name_component(value: &str) -> bool {
         })
 }
 
+/// Parses the `plugin@marketplace` spelling an operator types. Both halves
+/// are required and held to the same rule a [`PackageId`] is.
+pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
+    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
+        UzeError::InvalidPluginSpec(format!("`{spec}` must be `name@marketplace`"))
+    })?;
+    for part in [plugin, marketplace] {
+        if !is_valid_name_component(part) {
+            return Err(UzeError::InvalidPluginSpec(format!(
+                "`{spec}` must be `name@marketplace`, and `{part}` is not a valid name: \
+                 letters, digits, `-` and `_`, not starting with `-`"
+            )));
+        }
+    }
+    Ok((plugin.to_owned(), marketplace.to_owned()))
+}
+
 /// Whether `value` is a valid qualified `name@marketplace` package id — the
 /// same rule the constructors and the ledger deserializer enforce. Public so
 /// integrations can re-check an id that arrives from state (a receipt's
@@ -177,13 +265,10 @@ pub struct QuarantinedRegistration {
 }
 
 impl QuarantinedRegistration {
-    /// What to do about it. The one shape this has been seen in is an entry
-    /// written by an older UZE whose field names have since changed, and the
-    /// way out of that is the same for every other shape: the registry is
-    /// rebuilt from what is installed, so losing an entry costs a re-register
-    /// and nothing else.
-    pub const REMEDY: &'static str =
-        "written by an older UZE; remove it and run `uze install` to re-register";
+    /// What to do about it, whatever made the entry unreadable: the registry
+    /// is rebuilt from what is installed, so losing an entry costs a
+    /// re-register and nothing else.
+    pub const REMEDY: &'static str = "remove it and run `uze install` to re-register";
 }
 
 /// One registry entry.
@@ -216,55 +301,25 @@ impl UzeStore {
     /// arrives attached to the materialized package, is persisted verbatim,
     /// and is compared only through `Provenance::same_origin` — this module
     /// never reads a field of it or matches a source mechanism.
-    pub fn ingest(&self, package: &MaterializedPackage) -> Result<StoredPackage> {
-        let _span = tracing::info_span!("store.ingest", root = %package.root().display()).entered();
-        self.ingest_from_marketplace(package, "local")
-    }
-
-    /// Ingests a materialized plugin under the marketplace that resolved it,
-    /// active under its own bare plugin name. Fails with
-    /// `PluginNameCollision` when that name is already active under a
-    /// different marketplace-qualified identity — see
-    /// `ingest_with_active_name` for the `alias`/`replace` resolutions.
-    pub fn ingest_from_marketplace(
-        &self,
-        package: &MaterializedPackage,
-        marketplace: &str,
-    ) -> Result<StoredPackage> {
-        self.ingest_with_active_name(package, marketplace, None)
-    }
-
-    /// Ingests a materialized plugin, optionally under an explicit local
-    /// `active_name` alias rather than its own bare plugin name — the
-    /// `alias` collision resolution (ADR-038). `None` behaves exactly like
-    /// [`ingest_from_marketplace`]: the bare plugin name is both the
-    /// collision check and the name recorded.
-    pub fn ingest_with_active_name(
+    ///
+    /// The plugin is recorded under the marketplace that resolved it, active
+    /// under its own bare name unless `active_name` gives an alias — the
+    /// `alias` collision resolution (ADR-038). Fails with
+    /// `PluginNameCollision` when the name it would answer to is already
+    /// active under a different marketplace-qualified identity.
+    pub fn ingest(
         &self,
         package: &MaterializedPackage,
         marketplace: &str,
         active_name: Option<&str>,
     ) -> Result<StoredPackage> {
+        let _span = tracing::info_span!("store.ingest", root = %package.root().display()).entered();
         let source = package.root();
-        let manifest = source.join("plugin.json");
-        let imported = AgentPluginImporter
-            .import(source)?
-            .ok_or_else(|| UzeError::MissingManifest(source.to_path_buf()))?;
-        let manifest_value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest).map_err(|source_error| {
-                UzeError::Read {
-                    path: manifest.clone(),
-                    source: source_error,
-                }
-            })?)
-            .map_err(|source_error| UzeError::Json {
-                path: manifest.clone(),
-                source: source_error,
-            })?;
-        let name = manifest_value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?;
+        let PluginManifest {
+            name,
+            path: manifest,
+        } = read_plugin_manifest(source)?;
+        let name = name.as_str();
         let id = PackageId::from_marketplace_plugin(marketplace, name, &manifest)?;
         let requested_active = active_name.unwrap_or(name);
         if let Some(alias) = active_name
@@ -343,10 +398,6 @@ impl UzeStore {
             source: source_error,
         })?;
 
-        // The importer has already performed external-manifest safety checks.
-        // Keeping this value live makes that boundary explicit and prevents an
-        // accidental installation of an empty, non-Agent-Plugin directory.
-        let _ = imported;
         let ingested = (|| {
             copy_tree(source, &destination)?;
             registry.packages.insert(
@@ -436,13 +487,8 @@ impl UzeStore {
     }
 
     /// Removes registry entries whose backing directory is gone — a
-    /// registration that survives whatever stopped writing its bytes
-    /// (an interrupted install, manual cleanup, or an id-format change
-    /// leaving an old entry's directory unreachable under the current
-    /// `plugin_dir` formula — the exact fallout of this project's own
-    /// marketplace-qualification, which computes `plugin_dir` from
-    /// `id.marketplace()`/`id.plugin_name()` and left every
-    /// pre-qualification id's directory unreachable under it).
+    /// registration that survived whatever stopped writing its bytes (an
+    /// interrupted install, manual cleanup).
     ///
     /// A registry entry is the Store's sole claim that a package is
     /// installed; once its directory is gone, that claim is simply false,
@@ -470,7 +516,7 @@ impl UzeStore {
     }
 
     /// Copies a package's stored bytes to `destination` — symlinks, modes
-    /// and all, exactly as [`ingest_with_active_name`](Self::ingest_with_active_name)
+    /// and all, exactly as [`ingest`](Self::ingest)
     /// wrote them, so the copy is itself a materialized package.
     ///
     /// What an update keeps aside while the package replacing it installs:
@@ -706,10 +752,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         } else if metadata.is_file() {
             copy_file(&source_path, &destination_path)?;
         } else {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "plugin store cannot preserve special filesystem entry `{}`",
-                source_path.display()
-            )));
+            return Err(UzeError::UnpreservableEntry(source_path));
         }
     }
     Ok(())
@@ -733,30 +776,57 @@ fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     let target = fs::read_link(source).map_err(|source_error| UzeError::Read {
         path: source.to_path_buf(),
         source: source_error,
     })?;
-    std::os::unix::fs::symlink(target, destination).map_err(|source_error| UzeError::Write {
-        path: destination.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
-    Err(UzeError::ExposureUnavailable(format!(
-        "plugin contains symlink `{}` which this platform cannot preserve",
-        source.display()
-    )))
+    crate::persistence::create_symlink(&target, destination)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::UzeHome;
+
+    #[test]
+    fn reads_the_declared_name_of_a_plugin_manifest() {
+        let root = uze_testkit::temp::scratch("manifest-name");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("plugin.json"), "{\"name\":\"demo\"}\n").unwrap();
+        let manifest = read_plugin_manifest(&root).unwrap();
+        assert_eq!(manifest.name, "demo");
+        assert_eq!(manifest.path, root.join("plugin.json"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_parent_directory_manifest_reference() {
+        let root = uze_testkit::temp::scratch("manifest-unsafe");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("plugin.json"),
+            "{\"name\":\"demo\",\"scriptPath\":\"../outside.sh\"}",
+        )
+        .unwrap();
+        assert!(matches!(
+            read_plugin_manifest(&root),
+            Err(UzeError::UnsafePathReference { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_plugin_spec_requires_both_valid_halves() {
+        assert!(parse_plugin_marketplace_spec("flow").is_err());
+        assert!(parse_plugin_marketplace_spec("flow@").is_err());
+        assert!(parse_plugin_marketplace_spec("@ai").is_err());
+        assert!(parse_plugin_marketplace_spec("fl/ow@ai").is_err());
+        assert!(parse_plugin_marketplace_spec("flow@-ai").is_err());
+        let (plugin, marketplace) = parse_plugin_marketplace_spec("flow@ai").unwrap();
+        assert_eq!(plugin, "flow");
+        assert_eq!(marketplace, "ai");
+    }
 
     #[test]
     fn package_id_rejects_invalid_names() {
@@ -910,15 +980,13 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// The published alpha spelled `provenance` as `"source"`. One such
-    /// entry used to fail the whole file, so `status`, `plugin list`,
-    /// `plugin remove` and `install` all died on a machine that had ever
-    /// installed one — with no way out, since the commands that would clear
-    /// it were the ones that could not run. The entry is now quarantined
-    /// like an unreadable key, and named with what to do about it.
+    /// An entry whose fields this UZE cannot read must not fail the whole
+    /// file: the commands that would clear it are the ones that would stop
+    /// running. It is quarantined like an unreadable key, and named with
+    /// what to do about it.
     #[test]
-    fn an_entry_written_by_an_older_uze_is_quarantined_and_named() {
-        let root = uze_testkit::temp::scratch("registry-older-uze");
+    fn an_entry_with_unreadable_fields_is_quarantined_and_named() {
+        let root = uze_testkit::temp::scratch("registry-unreadable-fields");
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         home.ensure_layout().unwrap();
@@ -943,7 +1011,7 @@ mod tests {
 
         let ids = store
             .package_ids()
-            .expect("an entry an older UZE wrote must not fail the whole registry load");
+            .expect("an unreadable entry must not fail the whole registry load");
         assert_eq!(
             ids.iter().map(PackageId::as_str).collect::<Vec<_>>(),
             vec!["flow@local"],

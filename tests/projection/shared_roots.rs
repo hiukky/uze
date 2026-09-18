@@ -10,9 +10,9 @@ use std::{
 use uze_application::UzeApplication;
 use uze_core::{
     PackageSource, UzeHome,
+    capability::Resource as ProjectResource,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort},
-    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
     router::HarnessCapabilities,
     store::StoredPackage,
@@ -105,7 +105,10 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn status(&self, home: &UzeHome) -> uze_core::integration::IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
+    fn attach(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<uze_core::integration::ManagedArtifact>> {
         self.0.attach(resource)
     }
     fn attach_package(
@@ -451,13 +454,12 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         fs::create_dir_all(agents_home.join("skills")).unwrap();
         std::os::unix::fs::symlink(&legacy_wrapper, agents_home.join("skills/flow:legacy"))
             .unwrap();
-        let resource_identity = uze_core::project::Resource::from_package(
+        let resource_identity = uze_core::capability::Resource::from_package(
             uze_core::store::PackageId::from_plugin_name("flow", &fixture_root.join("plugin.json"))
                 .unwrap(),
             fixture_root.clone(),
             uze_core::capability::Capability {
                 kind: uze_core::capability::CapabilityKind::AgentSkill,
-                representation: uze_core::capability::Representation::Standard,
                 path: fixture_root.join("skills/legacy/SKILL.md"),
                 payload: Vec::new(),
             },
@@ -470,7 +472,6 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
                 package_id: "flow".to_owned(),
                 resource_identity: Some(resource_identity),
                 integration: "codex".to_owned(),
-                strategy: "managed-user-scope-reference".to_owned(),
                 artifact: uze_core::integration::ManagedArtifact::SymlinkReference {
                     path: agents_home.join("skills/flow:legacy"),
                     target: legacy_wrapper.clone(),

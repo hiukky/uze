@@ -14,12 +14,12 @@
 //! byte copy; see [`super::plugin`]'s module doc for why that stays a
 //! Derived Artifact).
 
-use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
+    capability::Resource,
     home::UzeHome,
-    project::Resource,
     store::{StoredPackage, is_valid_qualified_id},
 };
 
@@ -67,13 +67,10 @@ pub(super) fn canonical_mcp_servers(package: &StoredPackage) -> Option<BTreeSet<
 /// The intersection ADR-013 §2 requires, computed against the SEMANTIC
 /// surface a generated plugin preserves: canonical `skills/` are carried
 /// verbatim, and the MCP servers declared in canonical `mcp.json` are
-/// translated into the generated `mcp_config.json`. Coverage is
-/// semantic-aware (ADR-030 §13): a Skill is covered only when its
-/// `invoke:` policy is the default — Antigravity has no explicit-only
-/// mechanism and cannot hide a Skill from the model or the user, so a
-/// non-default policy degrades and is never claimed; it falls through to
-/// capability-level delivery, which reports it honestly. Coverage and
-/// generation agree by construction.
+/// translated into the generated `mcp_config.json`. The `skills/` tree is
+/// carried unchanged, so only a package whose Skills all carry the default
+/// policy reaches here (`package_exposure_plan` decomposes any other).
+/// Coverage and generation agree by construction.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -83,9 +80,7 @@ pub(super) fn generated_exact_coverage(
     for resource in resources {
         match resource.capability.kind {
             uze_core::capability::CapabilityKind::AgentSkill => {
-                if under(package, &resource.capability.path, "skills")
-                    && resource.skill_invocation().is_default()
-                {
+                if super::plugin::under_skills_dir(package, &resource.capability.path) {
                     provided.insert(resource.identity());
                 }
             }
@@ -104,16 +99,6 @@ pub(super) fn generated_exact_coverage(
         }
     }
     provided
-}
-
-fn under(package: &StoredPackage, path: &Path, conventional: &str) -> bool {
-    let Ok(relative) = path.strip_prefix(&package.root) else {
-        return false;
-    };
-    let Some(parent) = relative.parent() else {
-        return false;
-    };
-    parent.starts_with(conventional)
 }
 
 /// The generated `plugin.json` document. Name is the canonical manifest's
@@ -211,7 +196,7 @@ pub(super) fn materialize_generated_plugin(
 
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
-        symlink(&skills_source, &dir.join("skills"))?;
+        uze_core::persistence::create_symlink(&skills_source, &dir.join("skills"))?;
     }
     if canonical_mcp_servers(package).is_some() {
         let mcp = translated_mcp_config(package);
@@ -255,29 +240,16 @@ pub(super) fn remove_generated_plugin_by_id(uze_home: &UzeHome, package_id: &str
     Ok(())
 }
 
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
-}
-
 #[cfg(test)]
 mod generated_native_tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::AntigravityIntegration;
     use super::*;
@@ -344,7 +316,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -358,7 +329,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -414,7 +384,6 @@ mod generated_native_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path: pkg.root.join("skills/commit/SKILL.md"),
                 payload: b"---\nname: commit\ninvoke:\n  model: false\n  user: true\n---\n"
                     .to_vec(),

@@ -1,5 +1,5 @@
-//! L1 contract: one Store installation, one `EffectiveEnvironment`, and the
-//! managed exposure each peer `IntegrationPort` prepares from it.
+//! L1 contract: one Store installation, the resources it contributes, and the
+//! exposure each peer `IntegrationPort` plans from it.
 //!
 //! Deterministic by construction. No harness binary is spawned, no model is
 //! invoked, no credential is read, and nothing here is gated behind an opt-in
@@ -19,7 +19,7 @@ use std::{
 };
 
 use uze_core::{
-    PackageId, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageId, Resource, UzeHome, UzeStore,
     exposure::ExposureMechanism,
     integration::{IntegrationPort, default_exposure_name_candidates},
 };
@@ -36,9 +36,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 struct SharedStoreFixture {
@@ -104,13 +106,11 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
 
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
-    let environment = UzeEngine::new(store)
-        .compose_project(&workspace)
+    let resources = uze_core::engine::package_resources(&installed)
         .expect("empty caller project composes with the installed package");
-    let resource = environment
-        .resources
+    let resource = resources
         .into_iter()
-        .find(|resource| resource.package_root().is_some())
+        .next()
         .expect("fixture contributes one store-owned skill");
     assert_clean_workspace(&workspace);
 
@@ -125,72 +125,12 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
     }
 }
 
+/// Before `uze setup` no peer has a managed attachment to reach, so each
+/// plans the same store resource as Unsupported and says how to get one —
+/// never a per-session projection into the caller's workspace.
 #[test]
-fn same_store_environment_is_planned_for_claude_and_codex_as_peers() {
-    let fixture = shared_store_fixture("same-store-contract");
-    let claude = ClaudeIntegration::new(fixture.root.join("claude-home"), fixture.home.clone())
-        .exposure_plan(&fixture.resource);
-    let codex = CodexIntegration::new(fixture.root.join("agents-home"), fixture.home.clone())
-        .exposure_plan(&fixture.resource);
-
-    assert!(matches!(
-        claude.mechanism,
-        ExposureMechanism::RuntimeBridge { .. }
-    ));
-    assert!(matches!(
-        codex.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
-    assert!(fixture.skill_path.starts_with(&fixture.package_path));
-    assert_eq!(
-        fixture.resource.identity(),
-        format!(
-            "package:{}:skills/uze-e2e/SKILL.md",
-            fixture.package_id.as_str()
-        )
-    );
-}
-
-#[test]
-fn projection_keeps_real_project_cwd_and_cleans_its_managed_artifact() {
-    let fixture = shared_store_fixture("projection-lifecycle");
-    let plan = CodexIntegration::new(fixture.root.join("agents-home"), fixture.home.clone())
-        .exposure_plan(&fixture.resource);
-    let mut prepared = plan
-        .prepare(&fixture.home, "codex", "agent-skill", &fixture.workspace)
-        .expect("Codex fallback can prepare a managed symlink");
-
-    // The artifact's path is read off the receipt UZE left on disk, never
-    // asked of the object that created it.
-    let record = prepared
-        .runtime_directory
-        .as_ref()
-        .expect("runtime metadata exists")
-        .join("managed-exposure.json");
-    assert!(record.is_file());
-    let artifact = PathBuf::from(
-        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&record).unwrap())
-            .expect("the exposure record is valid JSON")["target"]
-            .as_str()
-            .expect("the record names the managed artifact"),
-    );
-    assert_eq!(prepared.working_directory, fixture.workspace);
-    assert!(artifact.is_symlink());
-    prepared.cleanup().expect("managed projection cleans up");
-    assert!(!artifact.exists());
-    assert_clean_workspace(&fixture.workspace);
-}
-
-/// Every peer prepares the *same* store resource, in the caller's real
-/// working directory, and leaves nothing of its own behind. This is the
-/// plugin-first invariant: no harness-specific copy is created in the
-/// project, and cleanup restores the workspace exactly.
-///
-/// Sequential by necessity, not by convenience — see
-/// `a_second_peer_refuses_to_clobber_an_existing_projection`.
-#[test]
-fn every_peer_prepares_one_store_resource_without_touching_the_caller_workspace() {
-    let fixture = shared_store_fixture("peer-preparation");
+fn every_peer_plans_one_store_resource_as_setup_required_without_touching_the_workspace() {
+    let fixture = shared_store_fixture("peer-planning");
     let plans = [
         (
             "claude",
@@ -214,47 +154,22 @@ fn every_peer_prepares_one_store_resource_without_touching_the_caller_workspace(
     ];
 
     for (id, plan) in plans {
-        let mut prepared = plan
-            .prepare(&fixture.home, id, "agent-skill", &fixture.workspace)
-            .unwrap_or_else(|error| panic!("{id} prepares the shared store resource: {error:?}"));
-        assert_eq!(
-            prepared.working_directory, fixture.workspace,
-            "{id} redirected the caller's working directory"
-        );
-        prepared
-            .cleanup()
-            .unwrap_or_else(|error| panic!("{id} cleans only its managed artifact: {error:?}"));
-        assert_clean_workspace(&fixture.workspace);
+        let ExposureMechanism::Unsupported { rationale } = &plan.mechanism else {
+            panic!(
+                "{id}: expected an Unsupported plan, got {:?}",
+                plan.mechanism
+            );
+        };
+        assert!(rationale.contains("uze setup"), "{id}: {rationale}");
     }
-}
-
-/// Codex and OpenCode both project into `.agents/skills/`, so their managed
-/// artifacts occupy the same path for the same resource. UZE must refuse the
-/// second preparation rather than overwrite an artifact it did not create —
-/// silently clobbering would make the first peer's `cleanup()` delete the
-/// second peer's projection, or leave a dangling one behind.
-#[test]
-fn a_second_peer_refuses_to_clobber_an_existing_projection() {
-    let fixture = shared_store_fixture("projection-collision");
-    let mut codex = CodexIntegration::new(fixture.root.join("agents-home"), fixture.home.clone())
-        .exposure_plan(&fixture.resource)
-        .prepare(&fixture.home, "codex", "agent-skill", &fixture.workspace)
-        .expect("Codex prepares first");
-
-    let collision = OpenCodeIntegration::new(
-        fixture.home.root().join("opencode-agents"),
-        fixture.home.root().join("opencode-config/opencode.json"),
-        fixture.home.clone(),
-    )
-    .exposure_plan(&fixture.resource)
-    .prepare(&fixture.home, "opencode", "agent-skill", &fixture.workspace);
-
-    assert!(
-        collision.is_err(),
-        "a peer overwrote another peer's managed projection instead of refusing"
+    assert!(fixture.skill_path.starts_with(&fixture.package_path));
+    assert_eq!(
+        fixture.resource.identity(),
+        format!(
+            "package:{}:skills/uze-e2e/SKILL.md",
+            fixture.package_id.as_str()
+        )
     );
-
-    codex.cleanup().expect("the first peer still cleans up");
     assert_clean_workspace(&fixture.workspace);
 }
 
@@ -281,13 +196,11 @@ fn a_derived_mcp_entry_name_leaves_room_for_a_tool_name() {
         .expect("MCP fixture is a valid Agent Plugin 1.0 package");
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
-    let environment = UzeEngine::new(store)
-        .compose_project(&workspace)
-        .expect("MCP-only package composes");
-    let resource = environment
-        .resources
+    let resources =
+        uze_core::engine::package_resources(&installed).expect("MCP-only package composes");
+    let resource = resources
         .into_iter()
-        .find(|resource| resource.package_root().is_some())
+        .next()
         .expect("fixture contributes one store-owned MCP resource");
 
     let entry_name = default_exposure_name_candidates(&resource)

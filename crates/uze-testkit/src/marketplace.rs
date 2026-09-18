@@ -4,7 +4,27 @@
 //! The product rejects direct path/Git installs, so tests must stage a
 //! single-plugin marketplace to exercise the real user flow.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use crate::fixtures::copy_tree;
+
+/// Writes a marketplace repository at `directory`: its `marketplace.json`,
+/// each plugin directory copied to `plugins/<name>`, all of it committed —
+/// a marketplace is a Git repository, a staged one included. Answers with
+/// the commit.
+pub fn stage(directory: &Path, marketplace_json: &str, plugins: &[(String, PathBuf)]) -> String {
+    fs::create_dir_all(directory)
+        .unwrap_or_else(|error| panic!("create {}: {error}", directory.display()));
+    fs::write(directory.join("marketplace.json"), marketplace_json)
+        .unwrap_or_else(|error| panic!("write marketplace.json: {error}"));
+    for (name, source) in plugins {
+        copy_tree(source, &directory.join("plugins").join(name));
+    }
+    crate::git::commit_everything_in(directory)
+}
 
 /// Stages `package` as a one-plugin marketplace named `test` under `root`
 /// and returns the command sequences a test must run, in order:
@@ -12,9 +32,6 @@ use std::{fs, path::Path};
 pub fn marketplace_install_args(root: &Path, package: &Path) -> (Vec<String>, Vec<String>) {
     let market = root.join("market");
     let name = package_manifest_name(package);
-    let plugins_dir = market.join("plugins");
-    fs::create_dir_all(&plugins_dir).unwrap();
-    copy_tree(package, &plugins_dir.join(&name));
     let manifest = serde_json::json!({
         "name": "test",
         "description": "Test marketplace staged by uze-testkit.",
@@ -26,13 +43,11 @@ pub fn marketplace_install_args(root: &Path, package: &Path) -> (Vec<String>, Ve
             }
         ],
     });
-    fs::write(
-        market.join("marketplace.json"),
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-    // A marketplace is a Git repository — a staged one is no exception.
-    crate::git::commit_everything_in(&market);
+    stage(
+        &market,
+        &serde_json::to_string_pretty(&manifest).unwrap(),
+        &[(name.clone(), package.to_path_buf())],
+    );
     (
         vec![
             "market".to_owned(),
@@ -59,19 +74,6 @@ pub fn package_manifest_name(package: &Path) -> String {
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
         .unwrap_or_else(|| panic!("package plugin.json has no name: {}", package.display()))
-}
-
-fn copy_tree(source: &Path, destination: &Path) {
-    fs::create_dir_all(destination).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
 }
 
 #[cfg(test)]

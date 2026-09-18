@@ -1,6 +1,5 @@
-//! Lifecycle — update — extracted from application.rs without semantic change.
-
-#![allow(clippy::empty_line_after_doc_comments)]
+//! Replacing an installed plugin with what its original request resolves
+//! to now, and applying the updates this machine can settle on its own.
 
 use std::fs;
 
@@ -30,11 +29,8 @@ impl Plugins<'_> {
         let materialized = self.acquire(&installed.provenance.requested)?;
 
         let previous = {
-            let environment = self
-                .0
-                .engine()
-                .compose(std::slice::from_ref(&installed.id))?;
-            let resources: Vec<&uze_core::Resource> = environment.resources.iter().collect();
+            let resources = uze_core::engine::package_resources(&installed)?;
+            let resources: Vec<&uze_core::Resource> = resources.iter().collect();
             trust::executable_capabilities(&resources)
         };
         self.0
@@ -46,7 +42,7 @@ impl Plugins<'_> {
         // be prepared is a failure with no consequence at all while the
         // package is still installed. Reached after the removal it was a
         // plugin gone from the machine with nothing left to heal it.
-        self.0.prepare_detected_integrations(None)?;
+        self.0.prepare_detected_integrations()?;
 
         // What is left can still fail with the package already removed — the
         // ingest running out of disk, a revision whose environment will not
@@ -72,13 +68,10 @@ impl Plugins<'_> {
         // official-plugin protection and any project lock both key on the
         // marketplace-qualified id staying exactly what it was.
         let requested_active_name = (active_name != bare_name).then_some(active_name.as_str());
-        let installing = self.install_materialized_from_marketplace_as(
+        let installing = self.install_authorized(
             materialized,
             installed.id.marketplace(),
             requested_active_name,
-            &trust::AlwaysTrust,
-            &[],
-            true,
             &uze_core::naming::NoNameCollisionAuthority,
         );
         let report = match installing {
@@ -144,13 +137,10 @@ impl Plugins<'_> {
     ) -> Result<()> {
         let recovered =
             MaterializedPackage::borrowed(superseded.to_path_buf(), installed.provenance.clone());
-        self.install_materialized_from_marketplace_as(
+        self.install_authorized(
             recovered,
             installed.id.marketplace(),
             requested_active_name,
-            &trust::AlwaysTrust,
-            &[],
-            true,
             &uze_core::naming::NoNameCollisionAuthority,
         )
         .map(|_| ())
@@ -173,7 +163,7 @@ impl Plugins<'_> {
     ///   that shipped inside the binary already being run. Nothing here
     ///   reaches the network, so a Git- or path-sourced plugin is never
     ///   re-resolved behind the operator's back; those still update only
-    ///   through an explicit `update_plugin`.
+    ///   through an explicit `Plugins::update`.
     /// - **Only under `NoTrustAuthority`.** A revision that introduces new
     ///   executable capability is refused and reported, exactly as a
     ///   non-interactive bootstrap refuses one (see
@@ -183,7 +173,7 @@ impl Plugins<'_> {
     ///
     /// Best-effort per plugin: one failure never stops the rest, and a
     /// blocked or refused update leaves the installed revision untouched —
-    /// `update_plugin` already inspects before it detaches.
+    /// `Plugins::update` already inspects before it detaches.
     ///
     /// This is not called from the CLI dispatch path: `ensure_default_plugins`
     /// runs before every command, read-only ones included, and a diagnostic
@@ -194,18 +184,11 @@ impl Plugins<'_> {
             .0
             .installed_packages()
             .into_iter()
-            .filter(|package| {
-                matches!(
-                    package.provenance.requested,
-                    uze_core::PackageSource::Embedded { .. }
-                )
-            })
-            .filter(|package| {
-                self.0
-                    .plugin_summary(package)
-                    .ok()
-                    .and_then(|summary| summary.update_available)
-                    == Some(true)
+            .filter(|package| match &package.provenance.requested {
+                uze_core::PackageSource::Embedded { id } => {
+                    crate::bootstrap::has_update(id, &package.root).unwrap_or(false)
+                }
+                _ => false,
             })
             .map(|package| package.id.as_str().to_owned())
             .collect();

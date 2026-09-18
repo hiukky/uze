@@ -81,9 +81,17 @@ fn no_internal_integration_call_site_spawns_a_bare_vendor_executable() {
                 continue;
             }
             for vendor in VENDOR_NAMES {
-                let needle = format!("Command::new(\"{vendor}\")");
-                if line.contains(&needle) {
-                    violations.push(format!("{}:{}: {needle}", path.display(), line_number + 1));
+                for needle in [
+                    format!("Command::new(\"{vendor}\")"),
+                    format!("ProcessSpec::new(\"{vendor}\""),
+                ] {
+                    if line.contains(&needle) {
+                        violations.push(format!(
+                            "{}:{}: {needle}",
+                            path.display(),
+                            line_number + 1
+                        ));
+                    }
                 }
             }
         }
@@ -191,7 +199,49 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
         "Antigravity detect() must resolve the real binary, never its own shim"
     );
 
+    for (integration, name) in [
+        (&claude as &dyn IntegrationPort, "claude"),
+        (&codex, "codex"),
+        (&antigravity, "agy"),
+    ] {
+        let expected = real_dir.join(name).canonicalize().unwrap();
+        let expected = expected.to_string_lossy();
+        for spec in provisioning_commands(integration) {
+            if spec.program != "sh" {
+                assert_eq!(
+                    spec.program, expected,
+                    "{name} provisioning must run the real binary, never a bare name PATH resolves to the shim"
+                );
+            }
+        }
+    }
+
     let _ = fs::remove_dir_all(root);
+}
+
+/// Every command one `provision` call asks to run, recorded rather than run.
+#[cfg(unix)]
+fn provisioning_commands(
+    integration: &dyn IntegrationPort,
+) -> Vec<uze_core::provisioning::ProcessSpec> {
+    struct Recording(std::sync::Mutex<Vec<uze_core::provisioning::ProcessSpec>>);
+    impl uze_core::provisioning::ProcessRunner for Recording {
+        fn run(
+            &self,
+            spec: &uze_core::provisioning::ProcessSpec,
+        ) -> uze_core::Result<uze_core::provisioning::ProcessResult> {
+            self.0.lock().unwrap().push(spec.clone());
+            Ok(uze_core::provisioning::ProcessResult {
+                success: true,
+                timed_out: false,
+            })
+        }
+    }
+    let runner = Recording(std::sync::Mutex::new(Vec::new()));
+    integration.provision(&runner).unwrap();
+    let commands = runner.0.into_inner().unwrap();
+    assert!(!commands.is_empty(), "provisioning ran nothing");
+    commands
 }
 
 /// The same literal-call-shape scan, applied to the deterministic suite
@@ -228,9 +278,17 @@ fn no_deterministic_test_spawns_a_bare_vendor_executable() {
                 continue;
             }
             for vendor in VENDOR_NAMES {
-                let needle = format!("Command::new(\"{vendor}\")");
-                if line.contains(&needle) {
-                    violations.push(format!("{}:{}: {needle}", path.display(), line_number + 1));
+                for needle in [
+                    format!("Command::new(\"{vendor}\")"),
+                    format!("ProcessSpec::new(\"{vendor}\""),
+                ] {
+                    if line.contains(&needle) {
+                        violations.push(format!(
+                            "{}:{}: {needle}",
+                            path.display(),
+                            line_number + 1
+                        ));
+                    }
                 }
             }
         }

@@ -17,29 +17,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Which of uze's two keyboards an action belongs to.
-///
-/// The distinction is not cosmetic. In management uze owns the whole
-/// keyboard, so an action may hold a bare letter. In the workspace every
-/// bare key belongs to the program running in the pane, so an action there
-/// must carry a modifier or a function key. `Both` is for the handful of
-/// actions that mean the same thing in either place.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Mode {
-    Management,
-    Workspace,
-    Both,
-}
-
-impl Mode {
-    /// Whether an action of this mode is live in `other`'s keyboard.
-    pub fn covers(self, other: Mode) -> bool {
-        self == Mode::Both || other == Mode::Both || self == other
-    }
-}
-
 macro_rules! actions {
-    ($($variant:ident => $name:literal, $mode:expr, $destructive:expr, $label:literal, $description:literal;)*) => {
+    ($($variant:ident => $name:literal, $destructive:expr, $label:literal, $description:literal;)*) => {
         /// Everything uze's keyboard can reach.
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub enum Action {
@@ -84,14 +63,6 @@ macro_rules! actions {
                 }
             }
 
-            /// Which keyboard this action belongs to.
-            pub fn mode(self) -> Mode {
-                match self {
-                    $(Action::$variant => $mode,)*
-                    Action::SelectTab(_) => Mode::Workspace,
-                }
-            }
-
             /// Whether performing this destroys something. A destructive
             /// action never holds an unmodified letter and is never the
             /// entry a menu opens highlighted.
@@ -130,167 +101,167 @@ macro_rules! actions {
 
 actions! {
     // --- Global ---------------------------------------------------------
-    OpenActionIndex => "open-action-index", Mode::Both, false,
+    OpenActionIndex => "open-action-index", false,
         "Everything you can do", "List every action available here, with the key that reaches it";
-    SwitchMode => "switch-mode", Mode::Both, false,
+    SwitchMode => "switch-mode", false,
         "Manage", "Open or close the management modal over the workspace";
-    Quit => "quit", Mode::Both, false,
+    Quit => "quit", false,
         "Quit", "Leave uze, detaching from the session rather than ending it";
 
     // --- Navigation, in either keyboard ---------------------------------
-    SelectNext => "select-next", Mode::Both, false,
+    SelectNext => "select-next", false,
         "Next", "Move the selection down one";
-    SelectPrevious => "select-previous", Mode::Both, false,
+    SelectPrevious => "select-previous", false,
         "Previous", "Move the selection up one";
-    FocusNext => "focus-next", Mode::Both, false,
+    FocusNext => "focus-next", false,
         "Next pane", "Move focus to the next part of the screen";
-    FocusPrevious => "focus-previous", Mode::Both, false,
+    FocusPrevious => "focus-previous", false,
         "Previous pane", "Move focus to the previous part of the screen";
-    Activate => "activate", Mode::Both, false,
+    Activate => "activate", false,
         "Open", "Open, inspect, or confirm whatever is selected";
-    Dismiss => "dismiss", Mode::Both, false,
+    Dismiss => "dismiss", false,
         "Close", "Close what is open, without acting on it";
-    Expand => "expand", Mode::Both, false,
+    Expand => "expand", false,
         "Expand", "Unfold the selected row";
-    Collapse => "collapse", Mode::Both, false,
+    Collapse => "collapse", false,
         "Collapse", "Fold the selected row";
-    ScrollPageDown => "scroll-page-down", Mode::Both, false,
+    ScrollPageDown => "scroll-page-down", false,
         "Page down", "Scroll the focused view down a page";
-    ScrollPageUp => "scroll-page-up", Mode::Both, false,
+    ScrollPageUp => "scroll-page-up", false,
         "Page up", "Scroll the focused view up a page";
-    EraseBack => "erase-back", Mode::Both, false,
+    EraseBack => "erase-back", false,
         "Erase", "Delete the character before the cursor";
 
     // --- Management, screen-wide ----------------------------------------
-    NextScreen => "next-screen", Mode::Management, false,
+    NextScreen => "next-screen", false,
         "Next screen", "Move to the next screen in the sidebar, from wherever you are";
-    PreviousScreen => "previous-screen", Mode::Management, false,
+    PreviousScreen => "previous-screen", false,
         "Previous screen", "Move to the previous screen in the sidebar, from wherever you are";
-    FocusSidebar => "focus-sidebar", Mode::Management, false,
+    FocusSidebar => "focus-sidebar", false,
         "Back to the sidebar", "Move focus from the content back to the route list";
-    FocusContent => "focus-content", Mode::Management, false,
+    FocusContent => "focus-content", false,
         "Into the content", "Move focus from the route list into the screen";
-    Refresh => "refresh", Mode::Management, false,
+    Refresh => "refresh", false,
         "Refresh", "Re-read the machine: harnesses, plugins, marketplaces";
-    StartFilter => "start-filter", Mode::Management, false,
+    StartFilter => "start-filter", false,
         "Search", "Narrow the list by typing";
-    OpenThemePicker => "open-theme-picker", Mode::Management, false,
+    OpenThemePicker => "open-theme-picker", false,
         "Appearance", "Choose the theme every uze surface draws in";
-    ConfirmYes => "confirm-yes", Mode::Management, false,
+    ConfirmYes => "confirm-yes", false,
         "Yes", "Answer the open question with yes";
-    ConfirmNo => "confirm-no", Mode::Management, false,
+    ConfirmNo => "confirm-no", false,
         "No", "Answer the open question with no";
 
     // --- Management, things done to a key ------------------------------
-    ChangeKey => "change-key", Mode::Management, false,
+    ChangeKey => "change-key", false,
         "Change key", "Bind the next key pressed to the selected action";
-    ResetKey => "reset-key", Mode::Management, false,
+    ResetKey => "reset-key", false,
         "Reset key", "Put back the key uze ships with for the selected action";
 
     // --- Management, things done to a package ---------------------------
-    InstallPlugin => "install-plugin", Mode::Management, false,
+    InstallPlugin => "install-plugin", false,
         "Install", "Install the selected plugin onto this machine";
-    UpdatePlugin => "update-plugin", Mode::Management, false,
+    UpdatePlugin => "update-plugin", false,
         "Update", "Update the selected plugin to what its marketplace offers";
-    RemovePlugin => "remove-plugin", Mode::Management, true,
+    RemovePlugin => "remove-plugin", true,
         "Remove", "Remove the selected plugin from this machine";
-    AddMarketplace => "add-marketplace", Mode::Management, false,
+    AddMarketplace => "add-marketplace", false,
         "Add marketplace", "Register a marketplace by path or URL";
 
     // --- Management, things done to a project ---------------------------
-    InstallProjectEnvironment => "install-project-environment", Mode::Management, false,
+    InstallProjectEnvironment => "install-project-environment", false,
         "Install the project's environment", "Install what this project declares but the machine lacks";
-    ClearPromptHistory => "clear-prompt-history", Mode::Management, true,
+    ClearPromptHistory => "clear-prompt-history", true,
         "Clear history", "Forget the prompts this machine has recorded";
 
     // --- Management, things done to a harness ---------------------------
-    SetupHarness => "setup-harness", Mode::Management, false,
+    SetupHarness => "setup-harness", false,
         "Set up", "Prepare the selected harness to receive what uze delivers";
-    AnalyzeContext => "analyze-context", Mode::Management, false,
+    AnalyzeContext => "analyze-context", false,
         "Analyze context", "Read what this project's context would become";
-    ApplyContextPlan => "apply-context-plan", Mode::Management, false,
+    ApplyContextPlan => "apply-context-plan", false,
         "Apply the plan", "Write the analyzed context into the project";
-    OpenGlossary => "open-glossary", Mode::Management, false,
+    OpenGlossary => "open-glossary", false,
         "What these words mean", "Explain the labels this screen uses";
 
     // --- Management, things done to a profile ---------------------------
-    NewProfile => "new-profile", Mode::Management, false,
+    NewProfile => "new-profile", false,
         "New profile", "Create a profile of preferences";
-    DeleteProfile => "delete-profile", Mode::Management, true,
+    DeleteProfile => "delete-profile", true,
         "Delete", "Delete the selected profile";
-    ApplyProfile => "apply-profile", Mode::Management, false,
+    ApplyProfile => "apply-profile", false,
         "Apply", "Make the selected profile active and write it into the checked harnesses";
-    PreviewProfile => "preview-profile", Mode::Management, false,
+    PreviewProfile => "preview-profile", false,
         "Preview", "Show what the selected profile writes into each harness";
-    ToggleProfileHarness => "toggle-profile-harness", Mode::Management, false,
+    ToggleProfileHarness => "toggle-profile-harness", false,
         "Toggle harness", "Include or exclude the highlighted harness";
-    NextValue => "next-value", Mode::Management, false,
+    NextValue => "next-value", false,
         "Next value", "Change the highlighted preference to the next value";
-    PreviousValue => "previous-value", Mode::Management, false,
+    PreviousValue => "previous-value", false,
         "Previous value", "Change the highlighted preference to the previous value";
 
     // --- Workspace, the container ---------------------------------------
-    NewShellTab => "new-shell-tab", Mode::Workspace, false,
+    NewShellTab => "new-shell-tab", false,
         "New shell", "Open a shell beside what is running";
-    CloseTab => "close-tab", Mode::Workspace, true,
+    CloseTab => "close-tab", true,
         "Close tab", "Close the selected tab";
-    NewAgent => "new-agent", Mode::Workspace, false,
+    NewAgent => "new-agent", false,
         "New agent", "Start an agent in a checkout of its own";
-    NewSpace => "new-space", Mode::Workspace, false,
+    NewSpace => "new-space", false,
         "New space", "Open a space at a directory";
-    RenameSelection => "rename-selection", Mode::Workspace, false,
+    RenameSelection => "rename-selection", false,
         "Rename", "Rename the selected tab or space";
-    NextSpace => "next-space", Mode::Workspace, false,
+    NextSpace => "next-space", false,
         "Next space", "Move to the next space in the sidebar";
-    PreviousSpace => "previous-space", Mode::Workspace, false,
+    PreviousSpace => "previous-space", false,
         "Previous space", "Move to the previous space in the sidebar";
-    NextAgent => "next-agent", Mode::Workspace, false,
+    NextAgent => "next-agent", false,
         "Next agent", "Move to the next agent in this space";
-    PreviousAgent => "previous-agent", Mode::Workspace, false,
+    PreviousAgent => "previous-agent", false,
         "Previous agent", "Move to the previous agent in this space";
-    ToggleChanges => "toggle-changes", Mode::Workspace, false,
+    ToggleChanges => "toggle-changes", false,
         "Changes", "Open or close the changes in the selected tab's checkout";
-    ToggleFiles => "toggle-files", Mode::Workspace, false,
+    ToggleFiles => "toggle-files", false,
         "Files", "Open or close the files of the selected tab's checkout";
 
     // --- The code surface, and typing into a file ------------------------
-    EditFile => "edit-file", Mode::Workspace, false,
+    EditFile => "edit-file", false,
         "Edit", "Open the selected file's contents and start typing";
-    TogglePreview => "toggle-preview", Mode::Workspace, false,
+    TogglePreview => "toggle-preview", false,
         "Preview", "Show a markdown file as the document it describes, and back";
-    SaveFile => "save-file", Mode::Workspace, false,
+    SaveFile => "save-file", false,
         "Save", "Write what was typed back to the file";
-    DeleteFile => "delete-file", Mode::Workspace, true,
+    DeleteFile => "delete-file", true,
         "Delete", "Delete the selected file, having been asked once";
-    ConfirmDelete => "confirm-delete", Mode::Workspace, true,
+    ConfirmDelete => "confirm-delete", true,
         "Confirm delete", "Confirm deleting the file, having been asked once";
-    CaretLeft => "caret-left", Mode::Workspace, false,
+    CaretLeft => "caret-left", false,
         "Left", "Move the caret one character left";
-    CaretRight => "caret-right", Mode::Workspace, false,
+    CaretRight => "caret-right", false,
         "Right", "Move the caret one character right";
-    CaretLineStart => "caret-line-start", Mode::Workspace, false,
+    CaretLineStart => "caret-line-start", false,
         "Line start", "Move the caret to the start of its line";
-    CaretLineEnd => "caret-line-end", Mode::Workspace, false,
+    CaretLineEnd => "caret-line-end", false,
         "Line end", "Move the caret to the end of its line";
-    InsertNewline => "insert-newline", Mode::Workspace, false,
+    InsertNewline => "insert-newline", false,
         "New line", "Split the line at the caret";
-    EraseForward => "erase-forward", Mode::Workspace, false,
+    EraseForward => "erase-forward", false,
         "Delete", "Delete the character under the caret";
 
     // --- Workspace, the work --------------------------------------------
-    DeliverTask => "deliver-task", Mode::Workspace, false,
+    DeliverTask => "deliver-task", false,
         "Deliver", "Deliver the selected task the way the project says";
-    DeliverAllTasks => "deliver-all-tasks", Mode::Workspace, false,
+    DeliverAllTasks => "deliver-all-tasks", false,
         "Deliver all", "Deliver every deliverable task in this space";
-    TogglePreservedWork => "toggle-preserved-work", Mode::Workspace, false,
+    TogglePreservedWork => "toggle-preserved-work", false,
         "Preserved work", "Show the work no live tab is in front of";
-    ResumeTask => "resume-task", Mode::Workspace, false,
+    ResumeTask => "resume-task", false,
         "Resume", "Put the selected preserved task back into a slot";
-    FinishTask => "finish-task", Mode::Workspace, false,
+    FinishTask => "finish-task", false,
         "Mark done", "Record the selected task as finished";
-    DiscardTask => "discard-task", Mode::Workspace, true,
+    DiscardTask => "discard-task", true,
         "Discard", "Destroy the selected task's uncommitted work";
-    ConfirmDiscard => "confirm-discard", Mode::Workspace, true,
+    ConfirmDiscard => "confirm-discard", true,
         "Confirm discard", "Confirm destroying the work, having been asked once";
 }
 

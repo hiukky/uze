@@ -2,37 +2,37 @@
 //! UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 //! (see ADR-006): Claude auto-loads any directory there containing
 //! `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-//! with no per-session flag. Until `uze setup` has completed, exposure falls
-//! back to the `--plugin-dir` conformance probe from ADR-005.
+//! with no per-session flag. Until `uze setup` has completed, a Skill is
+//! reported Unsupported with that instruction.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
 //! [`skills`] (the managed skills-dir shim), [`plugin`] (the native
 //! `.claude-plugin/marketplace.json` catalogue and its exact-coverage
-//! computation), [`provision`] (install/update via the official installer),
-//! and [`runtime`] (the experimental `--add-dir` runtime projection). This
+//! computation), and [`runtime`] (the experimental `--add-dir` runtime
+//! projection). This
 //! file is the composition root: the `ClaudeIntegration` struct and its
 //! `IntegrationPort` impl, delegating to each submodule.
 
 use std::{fs, path::Path};
 
+use crate::shared::plan::unsupported;
 use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::{RuntimeContext, resolve_real_executable},
+    harness_runtime::RuntimeContext,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
-        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
-        qualified_exposure_name_candidates,
+        default_exposure_name_candidates, qualified_exposure_name_candidates,
     },
     preference::{
         PreferenceApplyOutcome, PreferencePlan, PreferencePort, PreferenceTranslation, Preferences,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::HarnessCapabilities,
     state,
     store::StoredPackage,
 };
@@ -41,41 +41,26 @@ mod generate;
 mod mcp;
 mod plugin;
 mod preferences;
-mod provision;
 mod runtime;
 mod session;
 mod skills;
 
 pub use mcp::detach_mcp_entry;
 
-use crate::hooks as hook_projection;
-use crate::shared::process::run_quiet;
-use generate::{
-    GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
-    generated_exact_coverage, generated_package_receipt, generated_packages_present,
-    generated_root, materialize_generated_package, remove_generated_package_by_id,
-    write_generated_catalogue,
-};
+use crate::hooks::{HookEntry, HookTarget};
+use crate::shared::agent::{agent_name, markdown_agent_plan};
+use crate::shared::marketplace;
+use crate::shared::process::{VersionToken, detect_version, real_executable};
+use crate::shared::provision::provision_cli;
 use mcp::attach_mcp_entry;
-use plugin::{
-    claude_catalogue_document, claude_marketplace_exists, claude_package_receipt,
-    claude_plugin_installed, claude_publishable, detail_path, inspect_claude_plugin,
-    remove_claude_plugin, run_claude_marketplace_add, write_claude_catalogue,
-};
-use provision::{detect_binary, provision_cli};
+use plugin::ClaudeMarketplace;
 use skills::materialize_shim;
-const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
-/// The owner every catalogue UZE writes into Claude's marketplace UI
-/// declares. Named once so the two documents that carry it cannot drift
-/// into attributing UZE's local marketplace to someone else.
-const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
-
 /// Claude Code peer integration. Its transparent-attachment strategy is a
 /// UZE-managed "skills-dir plugin" reference at `<claude_home>/skills/<name>`
 /// (see ADR-006): Claude auto-loads any directory there containing
 /// `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
-/// with no per-session flag. Until `uze setup` has completed, exposure falls
-/// back to the `--plugin-dir` conformance probe from ADR-005.
+/// with no per-session flag. Until `uze setup` has completed, a Skill is
+/// reported Unsupported with that instruction.
 #[derive(Clone)]
 pub struct ClaudeIntegration {
     skills_dir: std::path::PathBuf,
@@ -135,107 +120,8 @@ impl ClaudeIntegration {
         ))
     }
 
-    fn catalogue_root(&self) -> std::path::PathBuf {
-        self.uze_home.store_dir()
-    }
-
-    fn catalogue_path(&self) -> std::path::PathBuf {
-        self.catalogue_root()
-            .join(".claude-plugin/marketplace.json")
-    }
-
-    /// The real `claude` executable, resolved explicitly rather than through
-    /// a bare `Command::new("claude")` PATH lookup. Once `uze setup claude`
-    /// has ever succeeded, `~/.uze/shims` sits ahead of the real binary on
-    /// `PATH` (see `UzeApplication::ensure_runtime_shim`), so a bare lookup
-    /// here would re-enter UZE's own runtime shim instead of the vendor CLI.
-    /// The shim then prepends `--add-dir <dir>` before whatever argument
-    /// follows — for `["update"]`, since `--add-dir` is a variadic option,
-    /// the real CLI swallows `update` into that directory list instead of
-    /// recognizing it as a subcommand, and falls through to its default
-    /// action: starting a full interactive session instead of checking for
-    /// updates. Falls back to the bare name (previous behavior) if no real
-    /// binary can be found outside the shims directory.
     fn provisioning_executable(&self) -> String {
-        resolve_real_executable(&["claude"], &self.uze_home.shims_dir())
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "claude".to_owned())
-    }
-
-    /// Installs a package whose source ships its own `.claude-plugin/
-    /// plugin.json`, through the existing `uze-local` marketplace rooted at
-    /// the Store itself. Unchanged behavior — extracted verbatim from the
-    /// pre-generation `attach_package` so the explicit-envelope path stays
-    /// exactly as proven by the existing 12 native-package tests.
-    fn attach_explicit_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let catalogue_root = self.catalogue_root();
-        if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
-            run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
-        }
-        let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.active_name.as_str());
-        if claude_plugin_installed(executable, &self.command_home, &selector) {
-            return Ok(Some(claude_package_receipt(
-                self.id(),
-                package,
-                &catalogue_root,
-                &selector,
-            )));
-        }
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("claude plugin install `{selector}`"),
-            &["plugin", "install", selector.as_str()],
-        )?;
-        Ok(Some(claude_package_receipt(
-            self.id(),
-            package,
-            &catalogue_root,
-            &selector,
-        )))
-    }
-
-    /// Installs a package with no author-provided envelope through the
-    /// second, UZE-owned `uze-store` marketplace, materializing
-    /// (or refreshing) its generated envelope directory first.
-    fn attach_generated_package(
-        &self,
-        executable: &Path,
-        package: &StoredPackage,
-    ) -> Result<Option<AttachmentReceipt>> {
-        materialize_generated_package(&self.uze_home, package)?;
-        let marketplace_root = generated_root(&self.uze_home);
-        if !claude_marketplace_exists(executable, &self.command_home, &marketplace_root) {
-            run_claude_marketplace_add(executable, &self.command_home, &marketplace_root)?;
-        }
-        let selector = format!(
-            "{}@{GENERATED_MARKETPLACE_NAME}",
-            package.active_name.as_str()
-        );
-        if claude_plugin_installed(executable, &self.command_home, &selector) {
-            return Ok(Some(generated_package_receipt(
-                self.id(),
-                package,
-                &marketplace_root,
-                &selector,
-            )));
-        }
-        run_quiet(
-            executable,
-            &self.command_home,
-            &format!("claude plugin install `{selector}`"),
-            &["plugin", "install", selector.as_str()],
-        )?;
-        Ok(Some(generated_package_receipt(
-            self.id(),
-            package,
-            &marketplace_root,
-            &selector,
-        )))
+        real_executable("claude", &self.uze_home.shims_dir(), None)
     }
 }
 
@@ -291,7 +177,6 @@ impl IntegrationPort for ClaudeIntegration {
             ]
                 .into_iter()
                 .collect(),
-            verification: VerificationStatus::Unverified,
             evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file as entries running the generated `hooks/exec` wrapper, which carries the portable ABI with no UZE binary on the execution path (ADR-040; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -299,11 +184,11 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
-        hook_projection::claude_capabilities()
+        HookTarget::Claude.capabilities()
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary(&self.provisioning_executable())
+        claude_version(&self.provisioning_executable())
     }
 
     /// `id()` is `claude-code`; the binary people actually have on `PATH`
@@ -342,10 +227,6 @@ impl IntegrationPort for ClaudeIntegration {
         session::resume_args(session)
     }
 
-    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
-        session::recorded_for(cwd)
-    }
-
     fn observe_session(
         &self,
         ctx: &uze_core::integration::ObservationContext,
@@ -374,6 +255,7 @@ impl IntegrationPort for ClaudeIntegration {
         provision_cli(
             runner,
             &executable,
+            "Claude Code",
             self.detect(),
             ProcessSpec::new(
                 "sh",
@@ -382,6 +264,7 @@ impl IntegrationPort for ClaudeIntegration {
             .with_inherited_output(),
             ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
+            claude_version,
         )
     }
 
@@ -392,29 +275,21 @@ impl IntegrationPort for ClaudeIntegration {
         })?;
         state::record(
             home,
+            self.id(),
             state::IntegrationRecord {
-                harness: self.id().to_owned(),
                 version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
-                installed: true,
             },
         )
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        if resource.package_root().is_none() {
-            return unsupported(
-                resource,
-                "Claude Code needs a UZE-stored Agent Plugin package for this attachment.",
-            );
-        }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
             CapabilityKind::Hook => self.hook_exposure_plan(resource),
-            _ => unsupported(
-                resource,
+            CapabilityKind::Instruction => unsupported(
                 "Claude Code attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
@@ -434,9 +309,7 @@ impl IntegrationPort for ClaudeIntegration {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
-            return Vec::new();
-        };
+        let active_name = active_plugin_name(&self.uze_home, resource);
         qualified_exposure_name_candidates(resource, &active_name)
     }
 
@@ -445,35 +318,7 @@ impl IntegrationPort for ClaudeIntegration {
         package: &StoredPackage,
         resources: &[&Resource],
     ) -> Option<PackageExposurePlan> {
-        if package.root.join(".claude-plugin/plugin.json").is_file() {
-            let provided = plugin::claude_exact_coverage(package, resources);
-            return Some(PackageExposurePlan {
-                package_id: package.id.clone(),
-                route: CompatibilityRoute::Native,
-                verification: VerificationStatus::Unverified,
-                provided_resource_identities: provided,
-                evidence: "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time."
-                    .to_owned(),
-            });
-        }
-        // No author-provided envelope. Rather than falling straight to
-        // capability decomposition, check whether UZE can safely synthesize
-        // one (ADR-013 §3: Explicit Native Package >
-        // Generated Native Package > Native Capability > Safe Adaptation >
-        // Unsupported). This method stays read-only either way — it
-        // computes what *would* be covered, never materializes anything.
-        if !generatable(package) {
-            return None;
-        }
-        let provided = generated_exact_coverage(package, resources);
-        Some(PackageExposurePlan {
-            package_id: package.id.clone(),
-            route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            provided_resource_identities: provided,
-            evidence: "No .claude-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Claude marketplace."
-                .to_owned(),
-        })
+        marketplace::package_plan::<ClaudeMarketplace>(package, resources)
     }
 
     fn attach_package(
@@ -482,88 +327,59 @@ impl IntegrationPort for ClaudeIntegration {
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
-        let executable = Path::new(&executable);
-        if package.root.join(".claude-plugin/plugin.json").is_file() {
-            return self.attach_explicit_package(executable, package);
-        }
-        self.attach_generated_package(executable, package)
+        marketplace::attach_package::<ClaudeMarketplace>(
+            Path::new(&executable),
+            &self.command_home,
+            &self.uze_home,
+            self.id(),
+            package,
+        )
+        .map(Some)
     }
 
     fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
-        write_claude_catalogue(&self.catalogue_path(), packages)?;
-        write_generated_catalogue(&self.uze_home, packages)
+        marketplace::republish::<ClaudeMarketplace>(&self.uze_home, packages)
     }
 
     fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
-        let expected = claude_catalogue_document(packages);
-        let explicit_published = match fs::read(self.catalogue_path()) {
-            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(actual) if actual == expected => Ok(()),
-                Ok(_) => Err(
-                    "the Claude marketplace does not match the installed package set; re-run `uze setup claude`"
-                        .to_owned(),
-                ),
-                Err(error) => Err(format!(
-                    "the Claude marketplace is unreadable ({error}); re-run `uze setup claude`"
-                )),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if claude_publishable(packages).is_empty() {
-                    Ok(())
-                } else {
-                    Err(
-                        "no Claude marketplace has been written for the installed packages; re-run `uze setup claude`"
-                            .to_owned(),
-                    )
-                }
-            }
-            Err(error) => Err(error.to_string()),
-        };
-        if let Err(reason) = explicit_published {
-            return PublicationStatus::Unpublished(reason);
-        }
-        if !generated_catalogue_matches(&self.uze_home, packages)
-            || !generated_packages_present(&self.uze_home, packages)
-        {
-            return PublicationStatus::Unpublished(
-                "the generated Claude marketplace does not match the installed package set; re-run `uze setup claude`"
-                    .to_owned(),
-            );
-        }
-        PublicationStatus::Published
+        marketplace::publication::<ClaudeMarketplace>(&self.uze_home, packages)
     }
 
-    fn attach(&self, resource: &Resource) -> Result<Option<std::path::PathBuf>> {
-        let plan = self.exposure_plan(resource);
-        match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference {
-                source, entry_name, ..
-            } => {
-                if resource.capability.kind != CapabilityKind::AgentSkill {
-                    return Ok(Some(plan.mechanism.attach()?));
+    fn attach(&self, resource: &Resource) -> Result<Option<ManagedArtifact>> {
+        let ExposureMechanism::Managed(artifact) = self.exposure_plan(resource).mechanism else {
+            return Ok(None);
+        };
+        let attached = match &artifact {
+            ManagedArtifact::SymlinkReference { path, target } => {
+                if resource.capability.kind == CapabilityKind::AgentSkill {
+                    let skill_source_dir = resource
+                        .capability
+                        .path
+                        .parent()
+                        .expect("SKILL.md has a parent");
+                    let entry_name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .expect("a managed Skill entry has a UTF-8 name");
+                    // The shim's own plugin directory gets the stable
+                    // namespaced label (`flow:review`), while the *manifest
+                    // plugin name* stays the namespace (`flow`): Claude then
+                    // exposes the skill as `/flow:review` (ADR-026) instead
+                    // of double namespacing it (`/flow:flow:review`).
+                    let namespace = active_plugin_name(&self.uze_home, resource);
+                    let policy = resource.skill_invocation();
+                    materialize_shim(
+                        target,
+                        skill_source_dir,
+                        entry_name,
+                        Some(&namespace),
+                        &policy,
+                    )?;
                 }
-                let skill_source_dir = resource
-                    .capability
-                    .path
-                    .parent()
-                    .expect("SKILL.md has a parent");
-                // The shim's own plugin directory gets the stable namespaced
-                // label (`flow:review`), while the *manifest plugin name*
-                // stays the namespace (`flow`): Claude then exposes the
-                // skill as `/flow:review` (ADR-026) instead of double
-                // namespacing it (`/flow:flow:review`).
-                let namespace = active_plugin_name(&self.uze_home, resource);
-                let policy = resource.skill_invocation();
-                materialize_shim(
-                    source,
-                    skill_source_dir,
-                    entry_name,
-                    namespace.as_deref(),
-                    &policy,
-                )?;
-                Ok(Some(plan.mechanism.attach()?))
+                artifact.attach_standard()?;
+                true
             }
-            ExposureMechanism::ManagedVendorConfig {
+            ManagedArtifact::VendorConfigEntry {
                 entry_name,
                 command,
                 args,
@@ -576,28 +392,32 @@ impl IntegrationPort for ClaudeIntegration {
                     entry_name,
                     command,
                     args,
-                )
+                )?;
+                true
             }
-            ExposureMechanism::ManagedHookConfig {
+            ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
                 wrapper,
             } => {
-                let path = hook_projection::attach_event_entry(
+                HookTarget::Claude.attach_entry(
                     &self.uze_home,
                     self.id(),
-                    config_file,
-                    *event,
-                    entry_name,
-                    expected,
-                    Some(("claude", wrapper.as_path())),
+                    &HookEntry {
+                        config_file,
+                        entry_name,
+                        event: *event,
+                        expected,
+                        wrapper,
+                    },
                 )?;
-                Ok(Some(path))
+                true
             }
-            _ => Ok(None),
-        }
+            _ => false,
+        };
+        Ok(attached.then_some(artifact))
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
@@ -622,37 +442,31 @@ impl IntegrationPort for ClaudeIntegration {
             ),
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
-            } => {
-                // A damaged ledger entry must block inspection, never
-                // panic doctor/remove.
-                hook_projection::inspect_event_entry(
-                    config_file,
-                    *event,
-                    expected,
-                    Some(("claude", wrapper.as_path())),
-                )
-            }
+            } => HookTarget::Claude.inspect_entry(&HookEntry {
+                config_file,
+                entry_name,
+                event: *event,
+                expected,
+                wrapper,
+            }),
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
                 detail,
-            } if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND => {
-                let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
-                    return plugin::blocked("plugin receipt has no marketplace root".to_owned());
-                };
+            } if marketplace::receipt_origin::<ClaudeMarketplace>(kind).is_some() => {
                 let executable = self.provisioning_executable();
-                inspect_claude_plugin(
+                marketplace::inspect_package::<ClaudeMarketplace>(
                     Path::new(&executable),
                     &self.command_home,
                     selector,
-                    &marketplace_root,
+                    detail,
                 )
             }
-            _ => inspect_standard_receipt(receipt),
+            _ => receipt.artifact.inspect_standard(),
         }
     }
 
@@ -672,39 +486,40 @@ impl IntegrationPort for ClaudeIntegration {
             }
             ManagedArtifact::HookConfigEntry {
                 config_file,
+                entry_name,
                 event,
                 expected,
                 wrapper,
-                ..
-            } => {
-                let detached = hook_projection::remove_event_entry(
+            } => HookTarget::Claude.detach_entry(
+                &self.uze_home,
+                self.id(),
+                &HookEntry {
                     config_file,
-                    *event,
+                    entry_name,
+                    event: *event,
                     expected,
-                    Some(("claude", wrapper.as_path())),
-                )?;
-                hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "claude");
-                Ok(detached)
-            }
+                    wrapper,
+                },
+            ),
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
-                if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND =>
+                if let Some(origin) = marketplace::receipt_origin::<ClaudeMarketplace>(kind) =>
             {
                 let executable = self.provisioning_executable();
-                remove_claude_plugin(Path::new(&executable), &self.command_home, selector)?;
-                if kind == GENERATED_PLUGIN_KIND {
-                    // The generated envelope directory is a Derived Artifact
-                    // (ADR-013 §5): non-authoritative, rebuildable, and
-                    // never the canonical Store — safe to remove outright
-                    // now that Claude no longer references it.
-                    remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
-                }
+                marketplace::detach_package::<ClaudeMarketplace>(
+                    Path::new(&executable),
+                    &self.command_home,
+                    &self.uze_home,
+                    receipt,
+                    selector,
+                    origin,
+                )?;
                 Ok(AttachmentInspection {
                     state: AttachmentState::Missing,
                     reason: "Claude native plugin detached".to_owned(),
                 })
             }
             _ => {
-                let detached = detach_standard_receipt(receipt)?;
+                let detached = receipt.artifact.detach_standard()?;
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
@@ -721,35 +536,28 @@ impl ClaudeIntegration {
         let entry_name = resource
             .resolved_exposure_name
             .clone()
-            .or_else(|| resource.logical_capability_name())
-            .unwrap_or_else(|| resource.name());
-        ExposurePlan {
-            representation: resource.capability.representation,
-            route: CompatibilityRoute::Native,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedUserScopeReference {
-                discovery_root: self.agents_dir.clone(),
-                entry_name: format!("{entry_name}.md"),
-                source: resource.capability.path.clone(),
-            },
-            evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
-        }
+            .unwrap_or_else(|| agent_name(resource));
+        markdown_agent_plan(
+            &self.agents_dir,
+            &entry_name,
+            resource,
+            "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.",
+        )
     }
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        hook_projection::hook_exposure_plan(
+        HookTarget::Claude.entry_plan(
             &self.uze_home,
             resource,
-            &self.hook_capabilities(),
             self.hooks_config_path(),
-            "claude",
-            // Claude's hook entries accept `command` + `args`, so the
-            // wrapper is started directly: nothing to quote, no shell.
-            true,
-            false,
             "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
         )
     }
+}
+
+/// `claude --version` prints "2.1.239 (Claude Code)" — the version leads.
+fn claude_version(program: &str) -> HarnessDetection {
+    detect_version(program, VersionToken::First)
 }
 
 impl PreferencePort for ClaudeIntegration {
@@ -780,82 +588,19 @@ impl PreferencePort for ClaudeIntegration {
     }
 }
 
-fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
-    ExposurePlan {
-        representation: resource.capability.representation,
-        route: CompatibilityRoute::Unsupported,
-        verification: VerificationStatus::NotExposed,
-        mechanism: ExposureMechanism::Unsupported {
-            rationale: rationale.to_owned(),
-        },
-        evidence: rationale.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod lifecycle_tests {
     use std::path::Path;
-    use std::sync::Mutex;
 
     use uze_core::exposure::McpEnvironmentReference;
     use uze_core::home::UzeHome;
     use uze_core::integration::{
         AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact,
     };
-    use uze_core::provisioning::{ProcessResult, ProcessRunner, ProcessSpec};
 
     use super::mcp::inspect_claude_mcp;
-    use super::provision::provision_cli;
     use super::{ClaudeIntegration, fs};
 
-    struct RecordingRunner {
-        commands: Mutex<Vec<ProcessSpec>>,
-    }
-
-    impl ProcessRunner for RecordingRunner {
-        fn run(&self, spec: &ProcessSpec) -> Result<ProcessResult, uze_core::UzeError> {
-            self.commands.lock().unwrap().push(spec.clone());
-            Ok(ProcessResult {
-                success: true,
-                timed_out: false,
-            })
-        }
-    }
-
-    #[test]
-    fn missing_harness_uses_its_documented_official_install_route_then_verifies() {
-        let runner = RecordingRunner {
-            commands: Mutex::new(Vec::new()),
-        };
-        let result = provision_cli(
-            &runner,
-            "claude-test-does-not-exist",
-            uze_core::integration::HarnessDetection::default(),
-            ProcessSpec::new("sh", ["-c", "official-install"]),
-            ProcessSpec::new("claude", ["update"]),
-            "official-native-installer",
-        )
-        .unwrap();
-        if cfg!(unix) {
-            assert_eq!(
-                result.action,
-                uze_core::provisioning::ProvisionAction::Install
-            );
-            assert_eq!(
-                result.status,
-                uze_core::provisioning::ProvisionStatus::Verified
-            );
-            let commands = runner.commands.lock().unwrap();
-            assert_eq!(commands[0].program, "sh");
-            assert_eq!(
-                commands[0].output,
-                uze_core::provisioning::ProcessOutput::Quiet,
-                "the helper's synthetic test command is intentionally quiet"
-            );
-            assert_eq!(commands[1].program, "claude-test-does-not-exist");
-            assert_eq!(commands[1].arguments, ["--version"]);
-        }
-    }
     fn check(value: &str) -> AttachmentState {
         let root = uze_testkit::temp::scratch("claude-config");
         fs::create_dir_all(&root).unwrap();
@@ -927,7 +672,6 @@ mod lifecycle_tests {
             package_id: "example".to_owned(),
             resource_identity: Some("skill:example".to_owned()),
             integration: integration.id().to_owned(),
-            strategy: "managed-user-scope-reference".to_owned(),
             artifact: ManagedArtifact::SymlinkReference {
                 path: reference,
                 target: shim.clone(),

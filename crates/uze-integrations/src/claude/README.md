@@ -19,7 +19,7 @@ delivery).
 | Skills | SUPPORTED | Native envelope (VIA_PACKAGE) or managed skills-dir symlink (NATIVE_CAPABILITY) | EMPIRICAL — real `claude -p` run returned the exact proof token end-to-end (ADR-006) |
 | MCP | SUPPORTED (config), PARTIAL (behavioral) | Native envelope (VIA_PACKAGE) or `claude mcp add --scope user --transport stdio` (SAFE_ADAPTATION) | EMPIRICAL for config/discovery (`claude mcp get`/`list` confirmed `✔ Connected` live, ADR-007); a real tool call needed a non-default `--allowedTools=mcp__...` flag and a secondary headless-discovery quirk was never fully closed |
 | Context (runtime) | EXPERIMENTAL | `--add-dir` + `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` (RUNTIME_PROJECTION) | EMPIRICAL — extensive real-CLI evidence (ADR-014); `/compact` retention across a session is the one open gap |
-| Agents | NOT_IMPLEMENTED | — `CapabilityKind::Agent` is recognized only by `uze-core::importers`, never routed here | CODE_FACT |
+| Agents | NOT_IMPLEMENTED | — `CapabilityKind::Agent` is never routed here | CODE_FACT |
 | Hooks | SUPPORTED | Native — one merged entry per canonical group in `~/.claude/settings.json`, whose `command`+`args` start the generated `hooks/exec` wrapper (ADR-033, ADR-040). Handlers read `HOOK_*` and answer with an exit code; ordering, first-deny-wins and fail-closed live in the wrapper because Claude runs a group's hooks in parallel and treats a non-blocking exit as "run the tool". No `uze` on the execution path. | EMPIRICAL — the conformance vertical's `hooks` suite (deny relayed and blocking, the portable alias reaching the handler, first-deny-wins, allow executing the tool) |
 | Skill invocation policy | SUPPORTED | Canonical `invoke: {model,user}` is translated into Claude's own SKILL.md frontmatter: `disable-model-invocation: true` (model=false) and `user-invocable: false` (user=false). Generated envelopes materialize those markers; an explicit envelope is only claimed as covered when the author's own bytes already carry them (never rewritten) — ADR-030 | EMPIRICAL — real `claude -p` run, `UZE_BYPASS=1` against the actual `materialize_generated_package` output, proved both explicit `/name` invocation and model-auto-invocation-blocked (marker technique carried over from ADR-030) |
 
@@ -114,9 +114,9 @@ explicit-envelope content. All of this is unit-tested
 (`claude::plugin::claude_native_coverage_tests`).
 
 The marketplace/install/list/uninstall CLI-shelling functions themselves
-(`claude_marketplace_exists`, `run_claude_marketplace_add`,
-`claude_plugin_installed`, `attach_package`, `inspect_claude_plugin`,
-`remove_claude_plugin`) are **not** unit-tested — they shell out to the
+(`ClaudeMarketplace::marketplace_exists`, `ClaudeMarketplace::add_marketplace`,
+`ClaudeMarketplace::install_plugin`, `attach_package`, `inspect_claude_plugin`,
+`ClaudeMarketplace::remove_plugin`) are **not** unit-tested — they shell out to the
 resolved `claude` executable directly (via `provisioning_executable()`,
 never a bare `Command::new("claude")` — see Runtime shim boundary below)
 rather than through the crate's injectable `ProcessRunner` trait, so only a
@@ -151,12 +151,8 @@ canonical skill directory still referenced. The invalid policy
 
 ## Fallbacks
 
-- **Skill, setup incomplete:** `ExposureMechanism::RuntimeBridge` — the
-  original ADR-005 `--plugin-dir` conformance probe. Still live code
-  (`skill_exposure_plan`'s `else` branch), not dead: it's the correct
-  behavior before `uze setup claude` has run.
-- **MCP, setup incomplete:** no fallback exists by design — reports
-  `Unsupported` (ADR-007: MCP has no per-session probe the way Skills do).
+- **Skill or MCP, setup incomplete:** no fallback — reports `Unsupported`
+  with a rationale telling the operator to run `uze setup` (ADR-006, ADR-007).
 
 ## Runtime
 
@@ -185,8 +181,8 @@ long-term is explicitly undecided (ADR-014 Consequences).
 | Receipt | Inspect | Detach | Drift-safe |
 |---|---|---|---|
 | `IntegrationOwned{kind:"claude-plugin"}` (explicit) | `inspect_claude_plugin` — `claude plugin marketplace list --json` + `plugin list --json`, checks marketplace root + installed + enabled | `claude plugin uninstall <selector>` | Yes — MATCHED only when marketplace root, installed, and enabled all agree |
-| `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `remove_claude_plugin`, plus `remove_generated_package_by_id` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
-| `SymlinkReference` (Skill shim) | standard receipt inspection (`inspect_standard_receipt`) | standard detach + `cleanup_unused_wrapper` GC if the shim is now unreferenced | Yes |
+| `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `ClaudeMarketplace::remove_plugin`, plus `shared::marketplace::remove_generated_package` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
+| `SymlinkReference` (Skill shim) | standard receipt inspection (`ManagedArtifact::inspect_standard`) | standard detach + `cleanup_unused_wrapper` GC if the shim is now unreferenced | Yes |
 | `VendorConfigEntry` (MCP) | `inspect_claude_mcp` — read-only `~/.claude.json` parse, exact command+args match | `claude mcp remove <name>` | Yes — Blocked (not silently accepted) if the receipt requests cwd/env/enabled state this integration can't verify |
 
 One thing worth a second look, not necessarily a bug: `inspect_claude_plugin`

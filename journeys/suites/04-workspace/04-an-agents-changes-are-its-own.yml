@@ -28,11 +28,10 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the new-agent picker
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Claude Code
@@ -42,11 +41,10 @@ scenes:
         expect: agent 1
         expect_timeout: 90
         pause: 1.5
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the picker again
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Codex, which becomes the selected agent

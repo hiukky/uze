@@ -33,7 +33,7 @@ scenes:
         in: "{home}"
         say: uze opens in the home directory, not in the project
         # A pattern, like every `expect`: the `+` is escaped.
-        expect: '\+ new'
+        expect: 'new'
         expect_timeout: 20
         pause: 1.0
     then:
@@ -43,10 +43,10 @@ scenes:
 
   - scene: picking the checkout as a new space's root opens the project
     when:
-      - click: "+ new"
+      - click: new
         say: open the new-space prompt
         in: sidebar
-        expect: " at "
+        expect: '▏'  # the prompt's own cursor, which nothing else draws
       - type: "{project}/.worktrees/t0pick"
         say: name the agent's checkout itself
         clear: all

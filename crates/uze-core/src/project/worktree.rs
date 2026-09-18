@@ -458,10 +458,12 @@ impl WorktreePolicy {
     /// instruction file — the exact bytes the managed region carries.
     ///
     /// Written for a writer UZE did not place. It states the layout so a
-    /// subagent can reproduce it, and it states where the reader already is,
-    /// so an agent UZE isolated does not isolate itself again. It never asks
-    /// anyone to create a top-level worktree: UZE already did that, at
-    /// launch, for every agent it started.
+    /// subagent can reproduce it, and it states where the reader already is
+    /// — isolated in a slot, or a tenant of the operator's own checkout —
+    /// so an agent UZE isolated does not isolate itself again and an agent
+    /// UZE placed on the operator's branch does not go looking for a slot.
+    /// It never asks anyone to create a top-level worktree: UZE already did
+    /// that, at launch, for every agent it isolated.
     ///
     /// The order is the order the reader acts in, which is why naming comes
     /// before everything else: it is the only bullet asking for something
@@ -471,9 +473,14 @@ impl WorktreePolicy {
             "## Concurrent work isolation\n\
              \n\
              {naming}\
-             - Every agent UZE launches works in a checkout of its own under \
-             `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is inside \
-             `{directory}/`, you are already isolated; do not switch branches.\n\
+             - An agent UZE launches into a worktree space works in a checkout of its own \
+             under `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is \
+             inside `{directory}/`, you are already isolated; do not switch branches.\n\
+             - If your working directory is not inside `{directory}/`, you are in the \
+             operator's own checkout, on the branch they are on: commit there, as you go, and \
+             never switch, reset, stash or clean it — the operator's uncommitted work is theirs. \
+             Nothing below about delivery applies to you; the branch already has the name it \
+             will keep.\n\
              - Commit your work on your own branch, as you go. Never commit to, merge into, \
              rebase, or reset the target branch{target}: delivery is UZE's — \
              {completion}.\n\
@@ -538,8 +545,14 @@ impl IsolatedCheckout<'_> {
     /// The checkout's own directory — what a slot is keyed on when a path
     /// inside it is all the caller has.
     pub fn directory(&self) -> PathBuf {
-        self.primary.join(WORKTREES_DIRECTORY).join(self.name)
+        slot_directory(self.primary, self.name)
     }
+}
+
+/// The directory of the slot named `name` under `primary`: the fixed
+/// `.worktrees/<name>` layout, spelled once.
+pub fn slot_directory(primary: &Path, name: &str) -> PathBuf {
+    primary.join(WORKTREES_DIRECTORY).join(name)
 }
 
 /// The isolated checkout `path` sits in, or `None` for a path that is not

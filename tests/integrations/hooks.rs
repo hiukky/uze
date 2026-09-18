@@ -7,11 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use uze_core::{
+    capability::Resource,
     engine::package_resources_at,
     home::UzeHome,
     hook::HookEvent,
     integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
-    project::Resource,
     router::CompatibilityRoute,
     state,
     store::PackageId,
@@ -206,13 +206,13 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
 
     let plan = claude.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         event,
         expected: _expected,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("Claude hook plan is a managed config entry");
     };
@@ -544,7 +544,6 @@ fn reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones() {
             package_id: "hook-demo@local".to_owned(),
             resource_identity: Some(protect.identity()),
             integration: "claude-code".to_owned(),
-            strategy: "ManagedHookConfig".to_owned(),
             artifact: ManagedArtifact::HookConfigEntry {
                 config_file: settings.clone(),
                 entry_name: "hook-demo@local:protect-env".to_owned(),
@@ -588,13 +587,13 @@ fn codex_writes_its_own_hooks_json_command_form() {
 
     let plan = codex.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         event,
         expected,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("Codex hook plan is a managed config entry");
     };
@@ -697,17 +696,21 @@ fn ingest_package(home: &UzeHome, pkg_root: &std::path::Path) {
         store::UzeStore,
     };
     UzeStore::new(home.clone())
-        .ingest(&MaterializedPackage::borrowed(
-            pkg_root.to_path_buf(),
-            Provenance {
-                requested: PackageSource::Local {
-                    path: pkg_root.to_path_buf(),
+        .ingest(
+            &MaterializedPackage::borrowed(
+                pkg_root.to_path_buf(),
+                Provenance {
+                    requested: PackageSource::Local {
+                        path: pkg_root.to_path_buf(),
+                    },
+                    resolved: ResolvedSource::Local {
+                        path: pkg_root.to_path_buf(),
+                    },
                 },
-                resolved: ResolvedSource::Local {
-                    path: pkg_root.to_path_buf(),
-                },
-            },
-        ))
+            ),
+            "local",
+            None,
+        )
         .expect("test package ingests into the store");
 }
 
@@ -750,7 +753,9 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
 
     let plan = integration.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Adaptable);
-    let uze_core::exposure::ExposureMechanism::ManagedHookFile { path } = &plan.mechanism else {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::ManagedHookFile { path }) =
+        &plan.mechanism
+    else {
         panic!("OpenCode hook plan is an owned bridge file");
     };
     assert_eq!(*path, bridge);
@@ -951,13 +956,13 @@ fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
 
     let plan = antigravity.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::Managed(ManagedArtifact::HookConfigEntry {
         config_file,
         entry_name,
         expected,
         wrapper,
         ..
-    } = &plan.mechanism
+    }) = &plan.mechanism
     else {
         panic!("an Antigravity hook is delivered as a managed hook config entry");
     };
@@ -1005,7 +1010,11 @@ fn antigravity_hook_delivery_never_touches_a_foreign_named_hook() {
     .unwrap();
 
     let attached = antigravity.attach(protect).unwrap().expect("hook attaches");
-    assert_eq!(attached, config);
+    assert!(matches!(
+        attached,
+        uze_core::integration::ManagedArtifact::HookConfigEntry { ref config_file, .. }
+            if *config_file == config
+    ));
     let receipt = antigravity.attach_receipt(protect).unwrap().unwrap();
     assert_eq!(
         antigravity.inspect_receipt(&receipt).state,

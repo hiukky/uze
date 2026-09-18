@@ -22,9 +22,9 @@
 //! - **Intent**: [`scenario::Scenario`] assembles a deliberate system state
 //!   from a few declarative steps.
 //!
-//! It depends on nothing product-specific; production crates never depend on
-//! it (it is a dev-dependency of the root crate only, and unit tests inside
-//! product crates keep their own guards).
+//! It depends on nothing product-specific but the Git transport, and
+//! production code never depends on it: it is only ever a dev-dependency,
+//! of the root crate and of the crates whose unit tests drive real Git.
 
 pub mod assertions;
 pub mod env;

@@ -20,7 +20,7 @@ use ratatui::{
 };
 use uze_extensions::view::{
     Caret, Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
-    ScrollTarget, Section, Size, Span, View, ViewHit,
+    RowMark, ScrollTarget, Section, Size, Span, View, ViewHit,
 };
 
 use crate::ui::scrollbar::Scrollbar;
@@ -142,15 +142,10 @@ pub(crate) fn scroll_target(
     row: u16,
 ) -> Option<ScrollTarget> {
     let (navigator, content, _) = content_columns(frame_area, navigator_width_override);
-    let inside = |rect: Rect| {
-        rect.x <= column
-            && column < rect.x + rect.width
-            && rect.y <= row
-            && row < rect.y + rect.height
-    };
-    if inside(navigator) {
+    let pointer = ratatui::layout::Position::new(column, row);
+    if navigator.contains(pointer) {
         Some(ScrollTarget::Navigator)
-    } else if inside(content) {
+    } else if content.contains(pointer) {
         Some(ScrollTarget::Content)
     } else {
         None
@@ -329,10 +324,12 @@ fn render_navigator(
             .fg(theme::color(Token::TextSecondary))
             .add_modifier(Modifier::BOLD),
     )];
-    push_right_aligned(
+    // The panel's own right padding is the gap a trailing caption keeps
+    // off the divider, so the row is measured as if it were the pad.
+    crate::ui::push_trailing(
         &mut heading,
+        inner.width + crate::ui::TRAILING_PAD,
         navigator.badge.clone(),
-        inner.width,
         theme::color(Token::TextMuted),
     );
     frame.render_widget(
@@ -624,7 +621,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     } else {
         text.to_owned()
     };
-    let mut lines: Vec<Line<'static>> = crate::ui::wrap_words(&title, measure)
+    let mut lines: Vec<Line<'static>> = crate::ui::fold(&title, measure)
         .into_iter()
         .map(|line| {
             Line::from(TextSpan::styled(
@@ -636,7 +633,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     if let Some(hint) = hint {
         lines.push(Line::from(""));
         lines.extend(
-            crate::ui::wrap_words(hint, measure)
+            crate::ui::fold(hint, measure)
                 .into_iter()
                 .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
         );
@@ -665,6 +662,20 @@ fn icon_symbol(icon: RowIcon) -> Option<Symbol> {
         RowIcon::Git => Symbol::FileGit,
         RowIcon::Legal => Symbol::FileLegal,
     })
+}
+
+/// The glyph a section row's mark is drawn as, with the cells it takes.
+fn row_mark(mark: RowMark) -> (String, u16) {
+    let symbol = match mark {
+        RowMark::Head => Symbol::CommitHead,
+        RowMark::Commit => Symbol::Commit,
+        RowMark::Step { .. } => Symbol::MarkDone,
+    };
+    let width = theme::width(symbol);
+    match mark {
+        RowMark::Step { done: false } => (" ".repeat(width as usize), width),
+        _ => (theme::glyph(symbol), width),
+    }
 }
 
 /// The mark a navigator row carries before its name.
@@ -903,50 +914,57 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, commands: &[Command
         uze_keys::Scope::Workspace,
         uze_keys::Scope::Code,
     ];
-    let actions: Vec<uze_keys::Action> = commands.iter().copied().map(action_of).collect();
+    let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
     frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
 }
 
-/// What an extension's command means in the product's own vocabulary. The
-/// inverse of the mapping the workspace client makes when it hands a key
-/// down — kept here, beside the render that needs it, rather than in the
-/// extension, which knows nothing of either.
-fn action_of(command: Command) -> uze_keys::Action {
-    match command {
-        Command::Close => uze_keys::Action::Dismiss,
-        Command::FocusNext => uze_keys::Action::FocusNext,
-        Command::SelectNext => uze_keys::Action::SelectNext,
-        Command::SelectPrevious => uze_keys::Action::SelectPrevious,
-        Command::Collapse => uze_keys::Action::Collapse,
-        Command::Expand => uze_keys::Action::Expand,
-        Command::Activate => uze_keys::Action::Activate,
-        Command::ScrollPageUp => uze_keys::Action::ScrollPageUp,
-        Command::Edit => uze_keys::Action::EditFile,
-        Command::TogglePreview => uze_keys::Action::TogglePreview,
-        Command::Save => uze_keys::Action::SaveFile,
-        Command::Delete => uze_keys::Action::DeleteFile,
-        Command::ConfirmDelete => uze_keys::Action::ConfirmDelete,
-        Command::CaretLeft => uze_keys::Action::CaretLeft,
-        Command::CaretRight => uze_keys::Action::CaretRight,
-        Command::CaretLineStart => uze_keys::Action::CaretLineStart,
-        Command::CaretLineEnd => uze_keys::Action::CaretLineEnd,
-        Command::Newline => uze_keys::Action::InsertNewline,
-        Command::EraseBack => uze_keys::Action::EraseBack,
-        Command::EraseForward => uze_keys::Action::EraseForward,
-        // Typing has no single key to name, so a footer never lists it.
-        Command::Type(_) => uze_keys::Action::EraseBack,
-        Command::ScrollPageDown => uze_keys::Action::ScrollPageDown,
-    }
+/// What each extension command means in the product's own vocabulary, read
+/// both ways: a key the workspace resolves is handed down as the command
+/// beside its action, and a footer names a command by the key its action
+/// is bound to. Kept here, beside the render that needs it, rather than in
+/// the extension, which knows nothing of either. Where two actions reach
+/// one command, the first row is the one a footer names.
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 22] = [
+    (Command::Close, uze_keys::Action::Dismiss),
+    (Command::FocusNext, uze_keys::Action::FocusNext),
+    (Command::FocusNext, uze_keys::Action::FocusPrevious),
+    (Command::SelectNext, uze_keys::Action::SelectNext),
+    (Command::SelectPrevious, uze_keys::Action::SelectPrevious),
+    (Command::Collapse, uze_keys::Action::Collapse),
+    (Command::Expand, uze_keys::Action::Expand),
+    (Command::Activate, uze_keys::Action::Activate),
+    (Command::ScrollPageUp, uze_keys::Action::ScrollPageUp),
+    (Command::ScrollPageDown, uze_keys::Action::ScrollPageDown),
+    (Command::Edit, uze_keys::Action::EditFile),
+    (Command::TogglePreview, uze_keys::Action::TogglePreview),
+    (Command::Save, uze_keys::Action::SaveFile),
+    (Command::Delete, uze_keys::Action::DeleteFile),
+    (Command::ConfirmDelete, uze_keys::Action::ConfirmDelete),
+    (Command::CaretLeft, uze_keys::Action::CaretLeft),
+    (Command::CaretRight, uze_keys::Action::CaretRight),
+    (Command::CaretLineStart, uze_keys::Action::CaretLineStart),
+    (Command::CaretLineEnd, uze_keys::Action::CaretLineEnd),
+    (Command::Newline, uze_keys::Action::InsertNewline),
+    (Command::EraseBack, uze_keys::Action::EraseBack),
+    (Command::EraseForward, uze_keys::Action::EraseForward),
+];
+
+/// The action a command is named by. `None` for typing, which has no
+/// single key to name.
+fn action_of(command: Command) -> Option<uze_keys::Action> {
+    COMMAND_ACTIONS
+        .iter()
+        .find(|(candidate, _)| *candidate == command)
+        .map(|(_, action)| *action)
 }
 
-fn push_right_aligned(spans: &mut Vec<TextSpan<'static>>, value: String, width: u16, color: Color) {
-    let used: usize = spans.iter().map(TextSpan::width).sum();
-    let value_width = value.chars().count();
-    let gap = (width as usize).saturating_sub(used + value_width);
-    if gap > 0 {
-        spans.push(TextSpan::raw(" ".repeat(gap)));
-        spans.push(TextSpan::styled(value, Style::default().fg(color)));
-    }
+/// The command a resolved action hands down to an extension's surface,
+/// when it means one.
+pub(crate) fn command_for(action: uze_keys::Action) -> Option<Command> {
+    COMMAND_ACTIONS
+        .iter()
+        .find(|(_, candidate)| *candidate == action)
+        .map(|(command, _)| *command)
 }
 
 /// Draws one extension [`Section`] into the rows it is given, and reports
@@ -974,16 +992,16 @@ pub(crate) fn render_section(
     } else {
         Symbol::ChevronExpanded
     });
-    // Bold on a filled row: the one section header in a column of tree
-    // rows, so it reads as a heading rather than as one more item.
+    // Bold only while open, over its filled row: a heading over the content
+    // beneath it. Folded there is nothing under it to head, and bold titles
+    // stacked at the foot of the column shouted over the tree above.
+    let mut title_style = Style::default().fg(theme::color(Token::TextSecondary));
+    if !section.collapsed {
+        title_style = title_style.add_modifier(Modifier::BOLD);
+    }
     let mut spans = vec![
         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
-        TextSpan::styled(
-            section.title.clone(),
-            Style::default()
-                .fg(theme::color(Token::TextSecondary))
-                .add_modifier(Modifier::BOLD),
-        ),
+        TextSpan::styled(section.title.clone(), title_style),
     ];
     crate::ui::push_trailing(
         &mut spans,
@@ -1037,7 +1055,8 @@ pub(crate) fn render_section(
         let Some(rect) = rows.next(1) else {
             break;
         };
-        let marker_width = row.marker.text.chars().count() as u16 + 1;
+        let (mark, mark_width) = row_mark(row.mark);
+        let marker_width = mark_width + 1;
         let trailing_width = row.trailing.text.chars().count() as u16;
         // The name gives way before the trailing value, and one column is
         // reserved for the gap `push_trailing` always leaves between them.
@@ -1046,8 +1065,8 @@ pub(crate) fn render_section(
             .saturating_sub(marker_width + 1 + trailing_width + crate::ui::TRAILING_PAD);
         let mut spans = vec![
             TextSpan::styled(
-                format!("{} ", row.marker.text),
-                Style::default().fg(color(row.marker.role)),
+                format!("{mark} "),
+                Style::default().fg(color(row.mark_role)),
             ),
             TextSpan::styled(
                 crate::ui::elide_tail(&row.name.text, name_width as usize),

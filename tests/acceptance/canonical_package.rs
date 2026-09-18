@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use uze_core::{UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism, integration::IntegrationPort, router::CompatibilityRoute};
+use uze_core::{UzeHome, UzeStore, capability::CapabilityKind, exposure::{ExposureMechanism, ManagedArtifact}, integration::IntegrationPort, router::CompatibilityRoute};
 
 use uze_integrations::{
     antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
@@ -34,7 +34,7 @@ fn install(
 ) -> uze_core::Result<uze_core::StoredPackage> {
     store.ingest(&uze_core::acquisition::acquire(&uze_core::PackageSource::local(
         path,
-    ))?)
+    ))?, "local", None)
 }
 
 fn fixture() -> PathBuf {
@@ -44,11 +44,10 @@ fn fixture() -> PathBuf {
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     uze_core::state::record(
         home,
+        integration.id(),
         uze_core::state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "test".to_owned(),
-            installed: true,
         },
     )
     .unwrap();
@@ -84,11 +83,10 @@ fn one_canonical_package_reaches_every_harness_through_its_most_native_safe_repr
     let package = install(&store, fixture()).unwrap();
     assert_eq!(package.id.as_str(), "flow");
 
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
+    let resources = uze_core::engine::package_resources(&package)
         .unwrap();
-    assert_eq!(environment.resources.len(), 1, "exactly the commit Skill");
-    let resources: Vec<_> = environment.resources.iter().collect();
+    assert_eq!(resources.len(), 1, "exactly the commit Skill");
+    let resources: Vec<_> = resources.iter().collect();
     let commit_skill = resources[0];
     assert_eq!(commit_skill.capability.kind, CapabilityKind::AgentSkill);
 
@@ -148,7 +146,7 @@ fn one_canonical_package_reaches_every_harness_through_its_most_native_safe_repr
     assert_eq!(opencode_plan.route, CompatibilityRoute::Native);
     assert!(matches!(
         opencode_plan.mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
+        ExposureMechanism::Managed(ManagedArtifact::SymlinkReference { .. })
     ));
 
     let _ = std::fs::remove_dir_all(root);

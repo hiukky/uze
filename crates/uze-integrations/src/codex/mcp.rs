@@ -2,27 +2,27 @@
 //! CLI surface. No `--scope` flag exists for Codex; global is the only
 //! destination.
 
-use std::{path::Path, path::PathBuf, process::Command};
+use std::path::Path;
 
 use uze_core::{
-    Result, UzeError,
-    exposure::{ExposureMechanism, ExposurePlan},
+    Result,
+    capability::Resource,
+    exposure::ExposurePlan,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
-    project::Resource,
-    router::{CompatibilityRoute, VerificationStatus},
+    router::CompatibilityRoute,
     state,
 };
 
 use super::CodexIntegration;
-use super::unsupported;
-use crate::shared::process::{capture, failed_message, is_cli_safe_token};
+use crate::shared::mcp::{cli_add, cli_remove, managed_stdio_plan};
+use crate::shared::plan::{blocked, unsupported};
+use crate::shared::process::{capture, is_cli_safe_token};
 
 impl CodexIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
-                resource,
-                "Codex has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
+                "Codex has not completed `uze setup`; run `uze setup` so UZE can attach this MCP server (see ADR-007).",
             );
         }
         let Some(entry_name) = resource
@@ -30,81 +30,41 @@ impl CodexIntegration {
             .clone()
             .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         else {
-            return unsupported(resource, "Resource has no derivable attachment entry name.");
+            return unsupported("Resource has no derivable attachment entry name.");
         };
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
-                resource,
                 "MCP server name would be parsed as a flag by `codex mcp add`, not a name; refusing to attach.",
             );
         }
-        let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
-            return unsupported(
-                resource,
-                "mcp.json server entry is missing a usable `command` field.",
-            );
-        };
-        ExposurePlan {
-            representation: resource.capability.representation,
-            route: CompatibilityRoute::Adaptable,
-            verification: VerificationStatus::Unverified,
-            mechanism: ExposureMechanism::ManagedVendorConfig {
-                entry_name,
-                transport: "stdio".to_owned(),
-                command,
-                args,
-                cwd: None,
-                environment: Vec::new(),
-                enabled: None,
-            },
-            evidence: "UZE registers the store-owned MCP server once via `codex mcp add`, writing to ~/.codex/config.toml's [mcp_servers.*] (no --scope flag exists; global is the only destination). Available to every future session in any project."
-                .to_owned(),
-        }
+        managed_stdio_plan(
+            resource,
+            entry_name,
+            CompatibilityRoute::Adaptable,
+            None,
+            "UZE registers the store-owned MCP server once via `codex mcp add`, writing to ~/.codex/config.toml's [mcp_servers.*] (no --scope flag exists; global is the only destination). Available to every future session in any project.",
+        )
+        .unwrap_or_else(|| unsupported("mcp.json server entry is missing a usable `command` field."))
     }
 }
 
+/// Registers the server globally — Codex has no scope flag.
 pub(super) fn attach_mcp_entry(
     executable: &Path,
     command_home: &Path,
     entry_name: &str,
     command: &Path,
     args: &[String],
-) -> Result<Option<PathBuf>> {
-    if mcp_entry_exists(executable, command_home, entry_name) {
-        return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
-    }
-    let mut mcp_args: Vec<std::ffi::OsString> = vec![
-        std::ffi::OsString::from("mcp"),
-        std::ffi::OsString::from("add"),
-        std::ffi::OsString::from(entry_name),
-        std::ffi::OsString::from("--"),
-    ];
-    mcp_args.push(command.as_os_str().to_owned());
-    mcp_args.extend(args.iter().map(std::ffi::OsString::from));
-    let output = capture(executable, command_home, &mcp_args).map_err(|error| {
-        UzeError::ExposureUnavailable(format!(
-            "failed to run `codex mcp add` for entry `{entry_name}`: {error}"
-        ))
-    })?;
-    if !output.status.success() {
-        return Err(UzeError::ExposureUnavailable(failed_message(
-            &format!("codex mcp add `{entry_name}`"),
-            &output,
-        )));
-    }
-    Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
-}
-
-/// Idempotently checked before ever calling `codex mcp add` — Codex's
-/// overwrite behavior for a colliding, differently-configured name was not
-/// confirmed by research, so UZE never relies on it (see ADR-007).
-pub(super) fn mcp_entry_exists(executable: &Path, command_home: &Path, entry_name: &str) -> bool {
-    Command::new(executable)
-        .env("HOME", command_home)
-        .args(["mcp", "get", entry_name])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+) -> Result<()> {
+    cli_add(
+        executable,
+        command_home,
+        "codex",
+        &["mcp", "add"],
+        entry_name,
+        command,
+        args,
+    )
 }
 
 /// Inspects `codex mcp get --json`, the documented structured Codex surface.
@@ -122,16 +82,14 @@ pub(super) fn inspect_codex_mcp(
     environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
-    let output = match Command::new(executable)
-        .env("HOME", command_home)
-        .args(["mcp", "get", entry_name, "--json"])
-        .output()
-    {
+    let output = match capture(
+        executable,
+        command_home,
+        &["mcp", "get", entry_name, "--json"],
+    ) {
         Ok(output) => output,
         Err(error) => {
-            return super::plugin::blocked(format!(
-                "failed to run `codex mcp get --json`: {error}"
-            ));
+            return blocked(format!("failed to run `codex mcp get --json`: {error}"));
         }
     };
     if !output.status.success() {
@@ -148,14 +106,14 @@ pub(super) fn inspect_codex_mcp(
                 reason: "Codex MCP entry is absent".to_owned(),
             };
         }
-        return super::plugin::blocked(format!(
+        return blocked(format!(
             "`codex mcp get --json` could not verify entry: {}",
             stderr.trim()
         ));
     }
     let value = match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
         Ok(value) => value,
-        Err(error) => return super::plugin::blocked(format!("Codex MCP JSON is invalid: {error}")),
+        Err(error) => return blocked(format!("Codex MCP JSON is invalid: {error}")),
     };
     inspect_codex_mcp_value(
         &value,
@@ -184,7 +142,7 @@ pub(super) fn inspect_codex_mcp_value(
         .as_object()
         .or_else(|| value.get("server")?.as_object());
     let Some(object) = object else {
-        return super::plugin::blocked("Codex MCP JSON has no server object".to_owned());
+        return blocked("Codex MCP JSON has no server object");
     };
     if let Some(name) = object
         .get("name")
@@ -220,17 +178,17 @@ pub(super) fn inspect_codex_mcp_value(
         };
     }
     let Some(actual_command) = transport.get("command").and_then(serde_json::Value::as_str) else {
-        return super::plugin::blocked("Codex MCP JSON has no stdio command".to_owned());
+        return blocked("Codex MCP JSON has no stdio command");
     };
     let Some(actual_args) = transport.get("args").and_then(serde_json::Value::as_array) else {
-        return super::plugin::blocked("Codex MCP JSON has no args array".to_owned());
+        return blocked("Codex MCP JSON has no args array");
     };
     let actual_args = actual_args
         .iter()
         .map(serde_json::Value::as_str)
         .collect::<Option<Vec<_>>>();
     let Some(actual_args) = actual_args else {
-        return super::plugin::blocked("Codex MCP JSON args are not strings".to_owned());
+        return blocked("Codex MCP JSON args are not strings");
     };
     if let Some(expected_cwd) = expected_cwd
         && transport.get("cwd").and_then(serde_json::Value::as_str)
@@ -277,51 +235,9 @@ pub(super) fn inspect_codex_mcp_value(
 
 /// Removes a UZE-registered MCP entry. Wired to the remove lifecycle
 /// (`detach_receipt`) and exercised directly by `tests/integrations/
-/// contract.rs`. `command_home` is set explicitly as `HOME` for the same
-/// reason `attach_mcp_entry` does — never relies on the calling process's
-/// own environment.
+/// contract.rs`; `command_home` is always set as `HOME`, never inherited.
 pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
-    if !is_cli_safe_token(entry_name) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "MCP server name `{entry_name}` would be parsed as a flag by `codex mcp remove`, not a name; refusing to detach."
-        )));
-    }
-    let output =
-        capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
-            UzeError::ExposureUnavailable(format!(
-                "failed to run `codex mcp remove` for entry `{entry_name}`: {error}"
-            ))
-        })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    // Already absent is not an error — removal is idempotent.
-    if !mcp_entry_exists(executable, command_home, entry_name) {
-        return Ok(());
-    }
-    Err(UzeError::ExposureUnavailable(failed_message(
-        &format!("codex mcp remove `{entry_name}`"),
-        &output,
-    )))
-}
-
-/// Parses `{"command": "...", "args": [...]}` from a payload produced by
-/// `UzeEngine`'s MCP resource discovery (one server's config object,
-/// already extracted from `mcp.json`'s `mcpServers` map).
-fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
-    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    let command = value.get("command")?.as_str()?.to_owned();
-    let args = value
-        .get("args")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    Some((PathBuf::from(command), args))
+    cli_remove(executable, command_home, "codex", entry_name)
 }
 
 #[cfg(test)]

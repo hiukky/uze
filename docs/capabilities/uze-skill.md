@@ -22,7 +22,7 @@ running shell commands already could.
 
 ## How each harness invokes them
 
-Delivery is `ManagedUserScopeReference` — the same path every Skill-only package
+Delivery is a managed `SymlinkReference` — the same path every Skill-only package
 uses. The label is the stable plugin-qualified name (ADR-026); the *prefix* is
 the harness's own.
 

@@ -20,7 +20,6 @@
 //! are the only ones offered.
 
 use std::{
-    collections::BTreeMap,
     fmt, fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
@@ -29,7 +28,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    task::{Base, Task, TaskId, TaskState, TaskStore},
+    task::{AgentId, Base, Task, TaskState, TaskStore},
     worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY, label_of},
 };
 
@@ -56,6 +55,11 @@ impl CheckoutId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The slot's directory under `primary`, whether or not it exists.
+    pub fn directory(&self, primary: &Path) -> PathBuf {
+        crate::worktree::slot_directory(primary, self.as_str())
+    }
 }
 
 impl fmt::Display for CheckoutId {
@@ -69,7 +73,7 @@ pub enum SlotState {
     /// An agent is here: its task is live, or a pane still sits in the
     /// directory after the task ended — a delivered task whose agent has
     /// not left is still somebody's checkout.
-    Occupied { task: TaskId },
+    Occupied { task: AgentId },
     /// Clean, and everything on its branch is in the target or was
     /// declared done: the next agent may take it.
     Free,
@@ -352,12 +356,12 @@ fn symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reconciliation {
     /// Tasks created for checkouts nobody had recorded.
-    pub adopted: Vec<TaskId>,
+    pub adopted: Vec<AgentId>,
     /// Tasks whose checkout is gone, now marked from where their branch stands.
-    pub orphaned: Vec<TaskId>,
+    pub orphaned: Vec<AgentId>,
     /// Delivered tasks whose agent kept working: their branch carries
     /// commits the target does not, in a checkout still registered.
-    pub revived: Vec<TaskId>,
+    pub revived: Vec<AgentId>,
 }
 
 /// Brings `store` in line with the isolation directory: adopts checkouts
@@ -370,12 +374,8 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
 
     for (path, branch) in &registered {
         let id = CheckoutId::adopted(&slot_name(path));
-        if let Some(task) = store
-            .tasks
-            .iter_mut()
-            .filter(|task| task.checkout.as_ref() == Some(&id))
-            .max_by_key(|task| task.created_at_unix)
-        {
+        let owner = store.slot_owner(&id).map(|task| task.id.clone());
+        if let Some(task) = owner.and_then(|owner| store.get_mut(&owner)) {
             // An agent that keeps working after a delivery is working
             // again, and its slot is not free while it does: `Integrated`
             // is only ever reached with the branch's commits already in
@@ -415,7 +415,9 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             target.to_owned(),
         );
         task.label = label;
-        task.branch = branch.clone().unwrap_or_else(|| task.id.branch());
+        if let Some(branch) = branch {
+            task.branch = branch.clone();
+        }
         task.checkout = Some(id);
         // Nobody recorded this checkout, so nobody recorded a delivery
         // from it either: empty means it ended with nothing, not that its
@@ -449,13 +451,9 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
     // well — an evaluation renamed it after the slot's current branch, so a
     // task long gone carried the new agent's name, and discarding it would
     // have deleted the new agent's branch.
-    let owners = newest_per_slot(store);
+    let owners = store.slot_owners();
     for task in &mut store.tasks {
-        let superseded = task
-            .checkout
-            .as_ref()
-            .is_some_and(|checkout| owners.get(checkout.as_str()) != Some(&task.id));
-        if superseded {
+        if task.checkout.is_some() && !owners.contains(&task.id) {
             end_without_checkout(primary, target, task);
         }
     }
@@ -475,29 +473,6 @@ fn end_without_checkout(primary: &Path, target: &str, task: &mut Task) {
     } else if task.state != TaskState::Integrated {
         task.state = TaskState::Closed;
     }
-}
-
-/// The task standing in each slot: the newest to have been given it, the
-/// same rule `slot_state` reads occupancy by.
-fn newest_per_slot(store: &TaskStore) -> BTreeMap<String, TaskId> {
-    let mut newest: BTreeMap<String, &Task> = BTreeMap::new();
-    for task in &store.tasks {
-        let Some(checkout) = &task.checkout else {
-            continue;
-        };
-        newest
-            .entry(checkout.as_str().to_owned())
-            .and_modify(|held| {
-                if task.created_at_unix >= held.created_at_unix {
-                    *held = task;
-                }
-            })
-            .or_insert(task);
-    }
-    newest
-        .into_iter()
-        .map(|(slot, task)| (slot, task.id.clone()))
-        .collect()
 }
 
 /// What a collection removed, so a caller can say so.
@@ -616,7 +591,7 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
     let directory = task
         .checkout
         .as_ref()
-        .map(|checkout| primary.join(WORKTREES_DIRECTORY).join(checkout.as_str()))
+        .map(|checkout| checkout.directory(primary))
         .filter(|path| path.is_dir());
     let holds_work = directory.is_some_and(|path| is_dirty(&path))
         || (branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch));
@@ -642,7 +617,7 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
 pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
         if let Some(checkout) = &task.checkout {
-            let path = primary.join(WORKTREES_DIRECTORY).join(checkout.as_str());
+            let path = checkout.directory(primary);
             if path.is_dir() {
                 git(
                     primary,
@@ -952,11 +927,7 @@ fn slot_state(
     store: &TaskStore,
     occupied: &[PathBuf],
 ) -> SlotState {
-    let task = store
-        .tasks
-        .iter()
-        .filter(|task| task.checkout.as_ref() == Some(id))
-        .max_by_key(|task| task.created_at_unix);
+    let task = store.slot_owner(id);
     let pane_inside = occupied.iter().any(|pane| pane.starts_with(path));
     if let Some(task) = task
         && (is_live(&task.state) || pane_inside)
@@ -1066,7 +1037,7 @@ mod tests {
         (task, acquired)
     }
 
-    fn set_state(store: &mut TaskStore, id: &TaskId, state: TaskState) {
+    fn set_state(store: &mut TaskStore, id: &AgentId, state: TaskState) {
         store.get_mut(id).unwrap().state = state;
     }
 

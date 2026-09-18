@@ -28,9 +28,11 @@ use std::{
 
 use uze_core::{
     UzeHome, continuity,
+    conversation::Claim,
     harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext},
 };
 use uze_integrations::registry::IntegrationRegistry;
+use uze_terminal::launch;
 
 /// `None` when this process was not invoked through one of the registry's
 /// shim names — the ordinary `uze <subcommand>` path in `main()` continues
@@ -128,15 +130,17 @@ pub fn run(shim_name: &str) -> ! {
         );
     }
 
-    // Only a launch the caller composed nothing of. It is the cheapest rule
-    // that keeps every promise: the harness's own session arguments win
+    // Only a launch the caller composed nothing of, and only one this
+    // shim owns the identity of. The first is the cheapest rule that
+    // keeps every promise: the harness's own session arguments win
     // because UZE never competes with them, a prompt on the command line
     // still starts what was asked for, and a resume spelled as a subcommand
     // is only ever prepended where nothing sits in front of it to break.
     if original_args.is_empty()
         && let Some(integration) = &integration
+        && let Some(id) = owned_identity()
     {
-        let session = continuity::plan(&home, &cwd, *integration);
+        let session = continuity::plan(&home, Claim { id: &id, cwd: &cwd }, *integration);
         if let Some(note) = &session.note {
             eprintln!("uze: {note}.");
         }
@@ -156,6 +160,31 @@ pub fn run(shim_name: &str) -> ! {
         shim_name,
         telemetry,
     );
+}
+
+/// The agent identity this launch owns, if it carries one.
+///
+/// An identity has an owner: the process whose pid `UZE_SHIM_PID` names,
+/// stamped by this shim at `exec`. Before any shim runs there is no owner,
+/// and the first shim to read an identity with none takes it. A shim that
+/// finds an owner other than itself is running inside that owner's launch
+/// — a harness started by a harness, or by a person typing in its pane —
+/// and treats the identity as absent: an ordinary invocation, which never
+/// resumes the enclosing agent's conversation. The variable cannot simply
+/// be removed for descendants, because the harness's own children — `uze
+/// agent task name` among them — are the ones that need it.
+fn owned_identity() -> Option<String> {
+    let id = env::var(launch::AGENT_IDENTITY_VARIABLE).ok()?;
+    if id.is_empty() {
+        return None;
+    }
+    let owner = env::var(launch::SHIM_PID_VARIABLE).ok();
+    let own_pid = std::process::id().to_string();
+    match owner {
+        None => Some(id),
+        Some(pid) if pid == own_pid => Some(id),
+        Some(_) => None,
+    }
 }
 
 /// Exact argv passthrough: `contribution.extra_args` are prepended before
@@ -187,10 +216,11 @@ fn exec_or_die(
     let mut command = std::process::Command::new(executable);
     command.args(&contribution.extra_args);
     command.args(original_args);
-    command.env("UZE_SHIM_NAME", shim_name);
+    command.env(launch::SHIM_NAME_VARIABLE, shim_name);
     // Who the name is about — `exec` keeps this pid, so the stamp names the
-    // very process that will carry it.
-    command.env("UZE_SHIM_PID", std::process::id().to_string());
+    // very process that will carry it, and the agent identity it inherited
+    // (if any) is owned by it from here on.
+    command.env(launch::SHIM_PID_VARIABLE, std::process::id().to_string());
     for (key, value) in &contribution.extra_env {
         command.env(key, value);
     }

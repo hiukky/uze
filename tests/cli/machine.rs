@@ -650,7 +650,6 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
 
     let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
     assert!(integrations.contains("\"opencode\""));
-    assert!(integrations.contains("\"installed\": true"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);
@@ -695,7 +694,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // is just as eligible as a Skill-only one, so BOTH Claude and Codex now
     // receive package-level delivery covering the one MCP resource — no
     // resource-level `mcp add` for either. Opencode has no package envelope
-    // and stays resource-level via native `opencode mcp add` (now 🟢 Native).
+    // and stays resource-level as a native `mcp.servers` config entry.
     let (market_args, install_args) =
         uze_testkit::marketplace::marketplace_install_args(&home, &package);
     run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
@@ -703,11 +702,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     assert!(add.contains("Claude Code: native"));
     assert!(add.contains("Codex: native"));
 
-    // Opencode is resource-level native (no package envelope) via
-    // `opencode mcp add`; when the fake opencode binary is on PATH it
-    // creates a mcp-state marker, when running under llvm-cov with direct
-    // file fallback no marker is created — receipt is the source of truth.
-    let _mcp_state = fake_bin.join("mcp-state");
+    // Opencode is resource-level native (no package envelope): UZE writes
+    // the `mcp.servers` entry itself, and the receipt is the source of truth.
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();

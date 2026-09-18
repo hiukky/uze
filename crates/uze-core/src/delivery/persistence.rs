@@ -14,6 +14,21 @@ use std::{
 
 use crate::{Result, UzeError, home::UzeHome};
 
+/// Creates `link` pointing at `target`, or reports that this platform has
+/// no symbolic links for UZE to own.
+#[cfg(unix)]
+pub fn create_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link).map_err(|source| UzeError::Write {
+        path: link.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(unix))]
+pub fn create_symlink(_target: &Path, link: &Path) -> Result<()> {
+    Err(UzeError::SymlinkUnsupported(link.to_path_buf()))
+}
+
 pub fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
     let _span =
         tracing::debug_span!("persistence.write", path = %path.display(), bytes = payload.len())
@@ -186,8 +201,10 @@ fn try_lock_exclusive_briefly(file: &File) -> std::io::Result<()> {
     }
 }
 
+/// Takes an exclusive advisory lock on `file` without waiting: a held lock
+/// is `WouldBlock`, and the lock lasts as long as the file stays open.
 #[cfg(unix)]
-fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
+pub(crate) fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     // SAFETY: `flock` is called on a file descriptor this process owns and
     // keeps open for as long as the lock is held.
@@ -200,10 +217,10 @@ fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
 }
 
 /// Without an OS-level advisory lock there is nothing to serialize two
-/// processes with, which matches the runtime's supported platforms — the
-/// same position `project::task` takes.
+/// processes with; a cross-process guarantee is a Unix property here,
+/// matching the runtime's supported platforms.
 #[cfg(not(unix))]
-fn try_lock_exclusive(_file: &File) -> std::io::Result<()> {
+pub(crate) fn try_lock_exclusive(_file: &File) -> std::io::Result<()> {
     Ok(())
 }
 

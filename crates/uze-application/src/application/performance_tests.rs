@@ -21,10 +21,10 @@ use std::{
 
 use super::*;
 use uze_core::{
+    capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
     integration::HarnessDetection,
-    project::Resource,
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     trust::AlwaysTrust,
 };
 
@@ -63,11 +63,9 @@ impl IntegrationPort for SlowProbeIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::Unsupported {
                 rationale: "the budget harness delivers nothing".to_owned(),
             },
@@ -96,7 +94,7 @@ impl World {
 
         let market = root.join("market");
         let plugin_dir = market.join("plugins").join(PLUGIN);
-        copy_tree(&uze_testkit::fixtures::canonical(PLUGIN), &plugin_dir);
+        uze_testkit::fixtures::copy_tree(&uze_testkit::fixtures::canonical(PLUGIN), &plugin_dir);
         fs::write(
             market.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME),
             serde_json::json!({
@@ -201,19 +199,6 @@ impl Drop for World {
     }
 }
 
-fn copy_tree(source: &Path, destination: &Path) {
-    fs::create_dir_all(destination).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
 /// Every file under a directory with its length and modification time —
 /// what a "writes nothing" claim is checked against.
 fn tree_state(root: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
@@ -261,10 +246,17 @@ fn status_meets_the_budget() {
 fn the_agent_surface_meets_the_budget() {
     let world = World::build("budget-agent-surface");
     world.within_budget("agent task name", |app| {
-        // Refused (this is the primary checkout, which owns no task), which
-        // is the same read path a successful naming takes before its one
-        // ref rename.
-        app.workspace().name_task(&world.project, "fix/budget").ok()
+        // Refused (no record names this claim), which is the same read
+        // path a successful naming takes before its one ref rename.
+        app.workspace()
+            .name_task(
+                uze_core::conversation::Claim {
+                    id: "budget",
+                    cwd: &world.project,
+                },
+                "fix/budget",
+            )
+            .ok()
     });
 }
 

@@ -10,6 +10,7 @@
     "surface.raised-bright": "~24",
     "surface.recessed": "~06",
     "surface.hover": "~33",
+    "surface.scrim": "~12",
 
     "text.bright": "#f2f0ea",
     "text.primary": "#e6e4de",
@@ -33,6 +34,9 @@
     "state.published": "#8a94a6",
     "state.diff-added": "@state.success/1a",
     "state.diff-removed": "@state.danger/1a",
+
+    "space.worktree": "@accent",
+    "space.workspace": "#e6c07b",
 
     "ansi.0": "@surface.background",
     "ansi.1": "#e0765f",
@@ -86,6 +90,10 @@
     "status.completed": "✓",
     "status.selected": "●",
     "status.idle": "○",
+    "sync.behind": "⇣",
+    "sync.ahead": "⇡",
+    "commit.head": "◉",
+    "commit": "●",
 
     "tree.branch": "├─",
     "tree.last": "└─",

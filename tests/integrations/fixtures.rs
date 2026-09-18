@@ -17,10 +17,10 @@ use std::{
 
 use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
-    capability::{Capability, CapabilityKind, Representation},
+    capability::Resource,
+    capability::{Capability, CapabilityKind},
     home::UzeHome,
     integration::IntegrationPort,
-    project::Resource,
     state,
     store::{PackageId, StoredPackage},
 };
@@ -76,7 +76,6 @@ pub(crate) fn skill_resource(package: &StoredPackage, dir: &str, name: &str) -> 
         package.root.clone(),
         Capability {
             kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
             path,
             payload: Vec::new(),
         },
@@ -94,7 +93,6 @@ pub(crate) fn mcp_resource(package: &StoredPackage, name: &str, payload: &str) -
         package.root.clone(),
         Capability {
             kind: CapabilityKind::Mcp,
-            representation: Representation::Standard,
             path,
             payload: payload.as_bytes().to_vec(),
         },
@@ -105,11 +103,10 @@ pub(crate) fn mcp_resource(package: &StoredPackage, name: &str, payload: &str) -
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     state::record(
         home,
+        integration.id(),
         state::IntegrationRecord {
-            harness: integration.id().to_owned(),
             version: None,
             strategy: "conformance-fixture".to_owned(),
-            installed: true,
         },
     )
     .unwrap();

@@ -29,11 +29,10 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the new-agent picker
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Claude Code
@@ -69,16 +68,16 @@ scenes:
 
   - scene: closing the agent does not end the task, because somebody is still there
     when:
-      - rclick: ""
-        glyph: "●○"
+      - rclick: agent 1
         say: right-click the agent's row
         in: sidebar
-        occurrence: last
         expect: Close tab
       - click: Close tab
         in: sidebar
         say: confirm close
-        expect: "0 agents"
+        # Nothing on screen appears when a row goes, so the gate is no
+        # agent item being left on the tree.
+        expect: '\A(?![\s\S]*├─)'
         expect_timeout: 25
         pause: 2.5
     then:
@@ -96,21 +95,21 @@ scenes:
 
   - scene: the next agent gets a slot of its own, because that one is occupied
     when:
-      - click: "│"
+      - click: "+ │ ✦"
         say: open the picker again
         in: strip
-        occurrence: 2
-        offset: 2
+        offset: 4
         expect: new agent
       - click: " new agent "
         say: pick Codex
         in: pane
         row_offset: 2
         offset: 3
-        # The count, not the label: the closed agent freed its number, so
-        # this one is `agent 1` again, and the screen already says
-        # `0 agents` — `1 agent` cannot be a stale frame.
-        expect: 1 agent
+        # An item on the tree, not the label: the closed agent freed its
+        # number, so this one is `agent 1` again — a string the screen was
+        # showing a moment ago. The tree it left had no items at all, so the
+        # first one back cannot be a stale frame.
+        expect: '├─'
         expect_timeout: 90
         pause: 2.0
     then:

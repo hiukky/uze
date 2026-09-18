@@ -7,14 +7,16 @@
 //! than a thin route into `uze-core`, which is why it is the one that
 //! became a file.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use uze_core::{
-    Result, UzeError, checkout, client_layout, conversation,
+    Result, UzeError, checkout, client_layout,
+    conversation::{self, Claim},
     landing::{self, Delivered, DeliveryFailure, Readiness},
     manifest, prompt_history,
-    task::{self, Base, Task, TaskId, TaskState, TaskStore},
+    task::{self, AgentId, AgentKind, Base, Task, TaskState, TaskStore},
+    tenant::Tenant,
     workspace,
     worktree::{self, BranchVocabulary, CompletionBehavior, NameRefusal, WorktreePolicy},
 };
@@ -32,14 +34,6 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.root", skip_all, fields(cwd = %cwd.display()))]
     pub fn root(&self, cwd: &Path) -> PathBuf {
         workspace::workspace_root_or_self(cwd)
-    }
-
-    /// The isolated checkout a path sits in, or `None` when it is not
-    /// isolated. Lexical against the fixed layout: a display asks this of
-    /// every open tab on every frame.
-    #[tracing::instrument(name = "workspace.isolated_checkout", skip_all)]
-    pub fn isolated_checkout<'a>(&self, path: &'a Path) -> Option<worktree::IsolatedCheckout<'a>> {
-        worktree::isolated_checkout(path)
     }
 
     /// The harnesses this installation can recognize, as descriptors.
@@ -103,20 +97,21 @@ impl Workspace<'_> {
         )
     }
 
-    /// Writes back which conversation the agent in `cwd` is actually in.
+    /// Writes back which conversation the agent a claim names is actually
+    /// in.
     ///
     /// Answers whether anything changed. Runs off whatever thread the
     /// caller gives it — one of these asks a harness about its own
     /// records, which can mean spawning it — and is silent about every
     /// way of having nothing to say.
-    #[tracing::instrument(name = "workspace.refresh_conversation", skip_all, fields(integration = %integration, cwd = %cwd.display()))]
-    pub fn refresh_conversation(&self, integration: &str, cwd: &Path) -> bool {
+    #[tracing::instrument(name = "workspace.refresh_conversation", skip_all, fields(integration = %integration, agent = %claim.id, cwd = %claim.cwd.display()))]
+    pub fn refresh_conversation(&self, integration: &str, claim: Claim<'_>) -> bool {
         self.0
             .integrations
             .iter()
             .find(|candidate| candidate.id() == integration)
             .is_some_and(|integration| {
-                uze_core::continuity::refresh(&self.0.home, cwd, integration.as_ref())
+                uze_core::continuity::refresh(&self.0.home, claim, integration.as_ref())
             })
     }
 
@@ -161,38 +156,59 @@ impl Workspace<'_> {
 
     /// Where a newly created agent starts, decided before its harness does.
     ///
-    /// Every agent isolates: a slot is acquired for a new task in the
+    /// The kind is the space's: a slot is acquired for a new task in the
     /// repository `pane_cwd` belongs to, prepared as the project's policy
-    /// says, and the primary checkout is never assigned to an agent.
-    /// `occupied` names the checkout directories a live pane still sits
-    /// in; none of them is reused, whatever its task record says — a
-    /// delivered task's agent is still there until its tab closes. Where
-    /// isolation is impossible — no repository, no branch, no commit to
-    /// branch from, Git refusing — the agent starts in place and the
-    /// placement says why, so the tab can.
-    #[tracing::instrument(name = "workspace.place_new_agent", skip_all, fields(pane_cwd = %pane_cwd.display()))]
-    pub fn place_new_agent(&self, pane_cwd: &Path, occupied: &[PathBuf]) -> AgentPlacement {
-        let Some(primary) = worktree::primary_checkout(pane_cwd) else {
-            return AgentPlacement::unisolated(pane_cwd, "not inside a Git working tree");
-        };
-        let policy = match self.policy(&primary) {
-            Ok(policy) => policy,
-            Err(error) => return AgentPlacement::unisolated(&primary, &error.to_string()),
-        };
-        let Some(target) = policy
+    /// says, and the primary checkout is never assigned to an agent placed
+    /// that way; or the agent is recorded as a tenant of the directory
+    /// itself, on whatever branch it is on, which needs no repository at
+    /// all. `occupied` names the checkout directories a live pane still
+    /// sits in; none of them is reused, whatever its task record says — a
+    /// delivered task's agent is still there until its tab closes. A slot
+    /// that cannot be acquired — no repository, no branch, no commit to
+    /// branch from, the cap reached, Git refusing — is an error and starts
+    /// nothing: the operator asked for isolation, and an agent that lands
+    /// in their own tree instead is the one thing a notice cannot undo.
+    #[tracing::instrument(name = "workspace.place_new_agent", skip_all, fields(pane_cwd = %pane_cwd.display(), ?kind, harness))]
+    pub fn place_new_agent(
+        &self,
+        pane_cwd: &Path,
+        kind: PlacementKind,
+        harness: &str,
+        occupied: &[PathBuf],
+    ) -> Result<AgentPlacement> {
+        match kind {
+            PlacementKind::Slot => self.place_in_slot(pane_cwd, occupied),
+            PlacementKind::Tenant => {
+                let root = canonical(pane_cwd);
+                let tenant = self.record_tenant(&root, harness)?;
+                Ok(AgentPlacement {
+                    cwd: root,
+                    placement: Placement::Tenant { id: tenant.id },
+                    warnings: Vec::new(),
+                })
+            }
+        }
+    }
+
+    fn place_in_slot(&self, pane_cwd: &Path, occupied: &[PathBuf]) -> Result<AgentPlacement> {
+        let refused = |reason: String| UzeError::AgentPlacement(reason);
+        let primary = worktree::primary_checkout(pane_cwd)
+            .ok_or_else(|| refused("not inside a Git working tree".to_owned()))?;
+        let policy = self
+            .policy(&primary)
+            .map_err(|error| refused(error.to_string()))?;
+        let target = policy
             .target
             .clone()
             .or_else(|| checkout::current_branch(&primary))
-        else {
-            return AgentPlacement::unisolated(&primary, "the primary checkout is not on a branch");
-        };
+            .ok_or_else(|| refused("the primary checkout is not on a branch".to_owned()))?;
         // Before anything is branched from it: an agent placed on a target
         // nobody fetched starts behind every merge of the day, and hears
         // about it as conflicts in a request already opened.
         let sync = landing::sync_target(&primary, &target);
         let base_tip = checkout::tip_of(&primary, &target);
         if base_tip.is_empty() {
-            return AgentPlacement::unisolated(&primary, "no commit to branch from");
+            return Err(refused("no commit to branch from".to_owned()));
         }
         // Whatever the lock's answer, this is what was taken from Git
         // before it: the slot has to be given back when the record of it
@@ -227,23 +243,19 @@ impl Workspace<'_> {
 
         let (task, acquired) = match recorded {
             Ok(Ok(placed)) => placed,
-            Ok(Err(refusal)) => return AgentPlacement::unisolated(&primary, &refusal),
+            Ok(Err(refusal)) => return Err(refused(refusal)),
             // A slot nothing records is worse than no slot: nothing would
             // ever park it, `collect_slot_garbage` reads its directory as
             // unowned, and the agent is told it is isolated. Give the slot
-            // and its empty branch back, and say why this launch is not.
+            // and its empty branch back, and refuse the launch.
             Err(error) => {
                 let Some(task) = &taken else {
-                    return AgentPlacement::unisolated(
-                        &primary,
-                        &format!("task state could not be read: {error}"),
-                    );
+                    return Err(refused(format!("task state could not be read: {error}")));
                 };
                 let _ = checkout::discard(&primary, task);
-                return AgentPlacement::unisolated(
-                    &primary,
-                    &format!("the agent's task could not be recorded: {error}"),
-                );
+                return Err(refused(format!(
+                    "the agent's task could not be recorded: {error}"
+                )));
             }
         };
 
@@ -257,16 +269,16 @@ impl Workspace<'_> {
             &policy.link,
             &policy.setup,
         ));
-        AgentPlacement {
+        Ok(AgentPlacement {
             cwd: acquired.path,
-            isolation: Isolation::Slot {
+            placement: Placement::Slot {
                 task: task.id,
                 checkout: acquired.id,
                 branch: acquired.branch,
                 reused: !acquired.created,
             },
             warnings,
-        }
+        })
     }
 
     /// Puts a checkout back under a task that lost its own — removed
@@ -296,7 +308,7 @@ impl Workspace<'_> {
             {
                 return Ok(AgentPlacement {
                     cwd: existing,
-                    isolation: Isolation::Slot {
+                    placement: Placement::Slot {
                         task: task.id.clone(),
                         checkout,
                         branch: task.branch.clone(),
@@ -309,7 +321,7 @@ impl Workspace<'_> {
                 .map_err(|error| UzeError::ResumeFailed(error.to_string()))?;
             task.checkout = Some(acquired.id.clone());
             task.state = TaskState::Running;
-            let isolation = Isolation::Slot {
+            let placement = Placement::Slot {
                 task: task.id.clone(),
                 checkout: acquired.id.clone(),
                 branch: acquired.branch.clone(),
@@ -318,7 +330,7 @@ impl Workspace<'_> {
             acquired_slot = Some(acquired.clone());
             Ok(AgentPlacement {
                 cwd: acquired.path,
-                isolation,
+                placement,
                 warnings: Vec::new(),
             })
         })?;
@@ -331,52 +343,47 @@ impl Workspace<'_> {
         Ok(placement)
     }
 
-    /// Names the work the agent in `cwd` is doing.
+    /// Names the work of the agent a claim identifies.
     ///
-    /// The task is the one owning the checkout `cwd` sits in — resolved
-    /// from the directory alone, with no identifier to pass, because an
-    /// identifier is exactly what would let one agent rename another's
-    /// branch. A slot that served earlier tasks answers for the one that
-    /// owns it now, by the rule `checkout::reconcile` already uses.
+    /// The claim is verified the way every reader verifies one: the store
+    /// names its identifier and the directory is the record's own. The
+    /// stamp says which agent and the directory says where, so a process
+    /// editing its own environment cannot reach another agent's branch.
+    /// A tenant is refused before anything else is resolved — it works on
+    /// the operator's branch, which already has the name it will keep, and
+    /// may stand in a directory that is no repository at all.
     ///
     /// First-writer-wins: a task that already carries a chosen name is
     /// refused, so nothing an agent or an operator decided is ever
     /// replaced by a later mechanism.
-    #[tracing::instrument(name = "workspace.name_task", skip_all, fields(cwd = %cwd.display(), proposed = %proposed), err)]
-    pub fn name_task(&self, cwd: &Path, proposed: &str) -> Result<NamedTask> {
+    #[tracing::instrument(name = "workspace.name_task", skip_all, fields(agent = %claim.id, cwd = %claim.cwd.display(), proposed = %proposed), err)]
+    pub fn name_task(&self, claim: Claim<'_>, proposed: &str) -> Result<NamedTask> {
+        let not_an_agent =
+            || UzeError::TaskNaming("this process is not an agent UZE launched".to_owned());
+        let owner = conversation::owner_of(&self.0.home, claim).ok_or_else(not_an_agent)?;
+        if owner.kind == AgentKind::Tenant {
+            return Err(UzeError::TaskNaming(
+                "this agent works in the operator's checkout; its work is not named".to_owned(),
+            ));
+        }
         let (primary, policy) = self
-            .repository_context(cwd)
+            .repository_context(claim.cwd)
             .ok_or_else(|| UzeError::TaskNaming("not inside a Git working tree".to_owned()))?;
         let vocabulary = policy.branch.clone();
         let branch = vocabulary
             .accept(proposed)
             .map_err(|refusal| UzeError::TaskNaming(refusal_words(&refusal, &vocabulary)))?;
-        let checkout_id = worktree::isolated_checkout(cwd)
-            .map(|isolated| checkout::CheckoutId::adopted(isolated.name))
-            .ok_or_else(|| {
-                UzeError::TaskNaming(
-                    "this is not an agent's checkout — the primary belongs to the operator"
-                        .to_owned(),
-                )
-            })?;
         let target = target_of(&primary, &policy);
         task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let task = store
-                .tasks
-                .iter_mut()
-                .filter(|task| task.checkout.as_ref() == Some(&checkout_id))
-                .max_by_key(|task| task.created_at_unix)
-                .ok_or_else(|| {
-                    UzeError::TaskNaming("no task is recorded for this checkout".to_owned())
-                })?;
+            let task = store.get_mut(&owner.agent).ok_or_else(not_an_agent)?;
             if task.is_named() {
                 return Err(UzeError::TaskNaming(format!(
                     "this work is already named `{}`; a name nobody generated is never replaced",
                     task.branch
                 )));
             }
-            if checkout::current_branch(cwd).as_deref() != Some(task.branch.as_str()) {
+            if checkout::current_branch(claim.cwd).as_deref() != Some(task.branch.as_str()) {
                 return Err(UzeError::TaskNaming(
                     "this checkout is not on the task's branch — finish the rebase first"
                         .to_owned(),
@@ -521,17 +528,7 @@ impl Workspace<'_> {
     #[tracing::instrument(name = "workspace.delivery_policy", skip_all, fields(cwd = %cwd.display()))]
     pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
         let repository = self.repository(cwd)?;
-        let declared = manifest::load(&repository.primary)
-            .ok()
-            .flatten()
-            .and_then(|manifest| manifest.worktrees)
-            .is_some();
         Some(DeliveryPolicyView {
-            source: if declared {
-                PolicySource::Declared
-            } else {
-                PolicySource::BuiltInDefault
-            },
             completion: repository.policy.completion.abi_name(),
             target: repository
                 .policy
@@ -554,152 +551,20 @@ impl Workspace<'_> {
         let target = target_of(&primary, &policy);
         let mut notices = Vec::new();
         let mut ask_the_remote: Vec<Task> = Vec::new();
-        let vocabulary = policy.branch.clone();
-        let names_work = vocabulary.names_work();
         let completion = policy.completion;
         let evaluated = task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let owners = slot_owners(store);
+            let pass = EvaluationPass {
+                primary: &primary,
+                occupied,
+                owners: store.slot_owners(),
+                vocabulary: &policy.branch,
+                completion,
+            };
             for task in &mut store.tasks {
-                // A task that ended is still looked at while it owns its
-                // slot: the agent that delivered usually keeps working in the
-                // same checkout, and skipping every non-live task froze that
-                // row on `delivered` for the rest of the session however much
-                // the slot changed. `Closed` is the same story with nothing
-                // delivered — the checkout it ended in can be written in
-                // again. Only the *current* owner is reconsidered: a freed
-                // slot handed to a new agent belongs to that agent's task, not
-                // to the one that used to sit there. `Parked` is nobody's turn
-                // by definition and stays put — unless a pane sits in its
-                // checkout (`occupied`): parked means "no agent left", and an
-                // agent that is there makes it a lie, whichever way it got
-                // there — a release that raced the tab opening, a resume.
-                let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
-                    && owners.contains(task.id.as_str());
-                let parked_with_agent = task.state == TaskState::Parked
-                    && landing::slot_path(&primary, task)
-                        .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
-                let revivable = ended_owner || parked_with_agent;
-                let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
-                if task.state == TaskState::Integrating
-                    || (!checkout::is_live(&task.state) && !revivable && !parked_alone)
-                {
-                    continue;
-                }
-                // Parked is nobody's turn, but its work can still reach the
-                // target without it — a request opened before its agent left,
-                // merged on the forge. Left parked, it was listed as preserved
-                // work for good and its slot never went back to the pool.
-                if parked_alone {
-                    landing::settle_delivered(&primary, task);
-                    continue;
-                }
-                // A rebase paused on work the target already carries — what an
-                // earlier refresh left behind when it replayed a squashed
-                // branch onto its own squash — is nobody's to resolve.
-                let paused = landing::slot_path(&primary, task)
-                    .is_some_and(|slot| landing::paused_rebase(&slot).is_some());
-                if paused && landing::settle_delivered(&primary, task) {
-                    continue;
-                }
-                // The branch a task is on is a Git fact, and `task.branch` is
-                // a cache of it. Re-read before anything is asked *about* the
-                // branch: an operator renaming it by hand otherwise leaves
-                // every later question pointed at a ref that no longer exists,
-                // and `commits_ahead` answers such a question with `0` — which
-                // reads as "nothing to deliver" rather than as "wrong branch".
-                // A checkout mid-rebase is on no branch and is left alone.
-                if let Some(slot) = landing::slot_path(&primary, task)
-                    && let Some(actual) = checkout::current_branch(&slot)
-                    && actual != task.branch
-                {
-                    task.take_name(actual);
-                }
-                match landing::readiness(&primary, task) {
-                    // Nothing new since it ended leaves the ending standing:
-                    // the delivery is the last thing that happened to the
-                    // task, and saying `running` instead would erase it on the
-                    // next tick.
-                    Readiness::Running if ended_owner => {}
-                    Readiness::Running => task.state = TaskState::Running,
-                    Readiness::Uncommitted => task.state = TaskState::Uncommitted,
-                    Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
-                    // A forge that squashes what it merges leaves none of the
-                    // branch's commits in the target, so they still count as
-                    // ahead; asked by patch instead, the work is delivered.
-                    // Left `Ready`, the refresh below replayed it onto its own
-                    // squash and paused mid-rebase on every file it touched.
-                    Readiness::Ready { .. }
-                        if checkout::is_integrated(&primary, &task.target, &task.branch) =>
-                    {
-                        landing::mark_delivered(&primary, task);
-                    }
-                    Readiness::Ready { base, .. } => {
-                        // Delivered, and now holding work the target lacks: the
-                        // agent kept going, and the request it had answered
-                        // for the work already merged, not for this.
-                        if task.state == TaskState::Integrated {
-                            task.forget_request();
-                        }
-                        task.base_commit = base;
-                        if task.state != TaskState::GateFailed {
-                            task.state = TaskState::Ready;
-                        }
-                    }
-                }
-                // The work has a commit and still carries the name UZE
-                // generated for it: name it from what the agent wrote. This is
-                // the automatic half, and it deliberately runs *late* — until
-                // there is a commit there is nothing to name the work after,
-                // and the agent naming it deliberately arrives earlier and
-                // therefore wins. `Ready` is the safe moment by construction:
-                // commits ahead, a clean tree, no rebase in progress.
-                //
-                // Nothing about this reaches a harness. It is a Git fact read
-                // on a pass that already runs, which is why it works on every
-                // harness and on the next one.
-                if names_work
-                    && task.state == TaskState::Ready
-                    && !task.is_named()
-                    && let Some(derived) = landing::derived_name(&primary, task, &vocabulary)
-                    && !checkout::branch_exists(&primary, &derived)
-                    && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
-                {
-                    task.take_name(derived);
-                }
-                // The other half of what a delivery would do, learned the
-                // same way readiness is: an agent told to push and open the
-                // request itself is the one case UZE's own records can never
-                // cover, and until this ran the button went on offering to
-                // publish a branch the forge already had a request open for.
-                // Only where a request is what completion means — a project
-                // that merges or hands off never asks the remote anything.
-                //
-                // Asked after the pass, with the document unlocked: it is a
-                // `git ls-remote` per task, and inside the lock one slow
-                // remote made every delivery and every placement in the
-                // project wait behind the whole pass.
-                if completion == CompletionBehavior::Pr {
-                    ask_the_remote.push(task.clone());
-                }
-                // Following a moved target costs a clean task nothing and a
-                // dirty one its work in progress, which `refresh` refuses.
-                // Whatever the completion behaviour: a task that follows the
-                // target as it moves meets a conflict while its agent is
-                // still holding the change, rather than in a request already
-                // opened.
-                if matches!(task.state, TaskState::Running | TaskState::Ready)
-                    && let Err(DeliveryFailure::Conflict {
-                        files,
-                        target_moved,
-                    }) = landing::refresh(&primary, task)
-                    && let Some(slot) = landing::slot_path(&primary, task)
-                {
-                    notices.push(AgentNotice {
-                        task: task.id.as_str().to_owned(),
-                        checkout: slot,
-                        message: landing::conflict_message(task, &files, target_moved),
-                    });
+                if let Some(read) = pass.evaluate(task) {
+                    ask_the_remote.extend(read.ask_the_remote);
+                    notices.extend(read.notice);
                 }
             }
             Ok(task_views(&primary, store, completion))
@@ -922,7 +787,12 @@ impl Workspace<'_> {
     /// lose work are ever taken. A caller that got any of that wrong would
     /// hand one agent's slot to another.
     #[tracing::instrument(name = "workspace.reconcile_occupancy", skip_all)]
-    pub fn reconcile_occupancy(&self, look_in: &[PathBuf], held: &[PathBuf]) -> Reconciliation {
+    pub fn reconcile_occupancy(
+        &self,
+        look_in: &[PathBuf],
+        held: &[PathBuf],
+        echoed: &[String],
+    ) -> Reconciliation {
         let mut reconciliation = Reconciliation::default();
         let mut seen = BTreeSet::new();
         for cwd in look_in {
@@ -932,7 +802,7 @@ impl Workspace<'_> {
             if !seen.insert(primary) {
                 continue;
             }
-            let released = self.release_abandoned_tasks(cwd, held);
+            let released = self.release_abandoned_tasks(cwd, held, echoed);
             if !released.is_empty() {
                 reconciliation.changed.push(cwd.clone());
                 reconciliation.released.extend(released);
@@ -941,20 +811,76 @@ impl Workspace<'_> {
             // the path that just changed what "in use" means.
             self.collect_slot_garbage(cwd, held);
         }
+        // Tenants are keyed by the space's root, whether or not it is a
+        // repository, so this pass is per root and needs no Git. A slot's
+        // directory is never a root of its own.
+        let mut roots = BTreeSet::new();
+        for root in look_in {
+            if worktree::isolated_checkout(root).is_some() || !roots.insert(canonical(root)) {
+                continue;
+            }
+            if !self.end_abandoned_tenants(root, echoed).is_empty() {
+                reconciliation.changed.push(root.clone());
+            }
+        }
         reconciliation
+    }
+
+    /// Records an agent launched into `root` itself — the space's own
+    /// directory, on whatever branch it is on. No repository is needed: a
+    /// tenant is keyed by the directory it works in, which is every
+    /// directory.
+    fn record_tenant(&self, root: &Path, harness: &str) -> Result<Tenant> {
+        task::locked(&self.0.home, root, |store| {
+            let tenant = Tenant::new(harness, root);
+            store.upsert_tenant(tenant.clone());
+            Ok(tenant)
+        })
+    }
+
+    /// Ends every live tenant of `root` that no live tab was launched for,
+    /// and answers the identifiers it ended. A tenant a tab still echoes
+    /// stays live whatever else is true. Needs no repository, and writes
+    /// nothing where nothing was ever recorded.
+    #[tracing::instrument(name = "workspace.end_abandoned_tenants", skip_all, fields(root = %root.display()))]
+    pub fn end_abandoned_tenants(&self, root: &Path, echoed: &[String]) -> Vec<String> {
+        let root = canonical(root);
+        if !task::store_path(&self.0.home, &root).exists() {
+            return Vec::new();
+        }
+        task::locked(&self.0.home, &root, |store| {
+            let mut ended = Vec::new();
+            for tenant in &mut store.tenants {
+                if !tenant.is_live() || echoed.iter().any(|id| id == tenant.id.as_str()) {
+                    continue;
+                }
+                tenant.end();
+                ended.push(tenant.id.as_str().to_owned());
+            }
+            Ok(ended)
+        })
+        .unwrap_or_default()
     }
 
     /// Ends every task no pane is in front of any more, and says what
     /// became of each slot.
     ///
-    /// `occupied` names the checkout directories a live pane still sits in.
-    /// A task outside that set has no agent: its slot goes back to the pool
-    /// when it holds nothing, and is parked for the operator when it holds
-    /// work. Delivery is not the only way a task ends — most end by the
-    /// operator closing the tab — and a slot nobody ever released is a slot
-    /// no new agent can reuse.
+    /// `occupied` names the checkout directories a live pane still sits in
+    /// and `echoed` the agents live tabs were launched for. A task in
+    /// neither has no agent: its slot goes back to the pool when it holds
+    /// nothing, and is parked for the operator when it holds work. Delivery
+    /// is not the only way a task ends — most end by the operator closing
+    /// the tab — and a slot nobody ever released is a slot no new agent can
+    /// reuse. Two questions because they have two answers: the directory
+    /// is what keeps a slot from being handed on, and the launch is what
+    /// still names the task once the directory is gone from under it.
     #[tracing::instrument(name = "workspace.release_abandoned_tasks", skip_all, fields(cwd = %cwd.display()))]
-    pub fn release_abandoned_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<ReleasedTask> {
+    pub fn release_abandoned_tasks(
+        &self,
+        cwd: &Path,
+        occupied: &[PathBuf],
+        echoed: &[String],
+    ) -> Vec<ReleasedTask> {
         let Some((primary, policy)) = self.repository_context(cwd) else {
             return Vec::new();
         };
@@ -963,12 +889,13 @@ impl Workspace<'_> {
         let recorded = task::locked(&self.0.home, &primary, |store| {
             for task in &mut store.tasks {
                 // A delivery in flight owns the task until it answers.
-                if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+                if !is_agents_turn(&task.state) {
                     continue;
                 }
-                if landing::slot_path(&primary, task)
-                    .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)))
-                {
+                let in_its_slot = landing::slot_path(&primary, task)
+                    .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
+                let launched_for = echoed.iter().any(|id| id == task.id.as_str());
+                if in_its_slot || launched_for {
                     continue;
                 }
                 let slot = checkout::release(&primary, task, &target);
@@ -996,7 +923,7 @@ impl Workspace<'_> {
     /// is ever touched here, and nothing a live pane sits in (`occupied`);
     /// that is the operator's alone.
     #[tracing::instrument(name = "workspace.collect_slot_garbage", skip_all, fields(cwd = %cwd.display()))]
-    pub fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
+    fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
         let Some(repository) = self.repository(cwd) else {
             return Vec::new();
         };
@@ -1071,6 +998,187 @@ impl Repository {
 
     fn views(&self) -> Vec<TaskView> {
         task_views(&self.primary, &self.store, self.policy.completion)
+    }
+}
+
+/// Whether an agent may still be at work on a task in `state`: live, and
+/// not owned by a delivery in flight.
+fn is_agents_turn(state: &TaskState) -> bool {
+    checkout::is_live(state) && *state != TaskState::Integrating
+}
+
+/// What reading one task from its checkout came to: the task as the remote
+/// is to be asked about it, where completion opens a request, and the
+/// conflict its agent is told about when following the target produced one.
+struct Read {
+    ask_the_remote: Option<Task>,
+    notice: Option<AgentNotice>,
+}
+
+/// What every task of one evaluation pass is read against.
+struct EvaluationPass<'a> {
+    primary: &'a Path,
+    /// The checkout directories a live pane still sits in.
+    occupied: &'a [PathBuf],
+    owners: BTreeSet<AgentId>,
+    vocabulary: &'a BranchVocabulary,
+    completion: CompletionBehavior,
+}
+
+impl EvaluationPass<'_> {
+    /// Reads `task` from its checkout, or `None` when it was not read:
+    /// nobody's turn, or settled without needing to be.
+    fn evaluate(&self, task: &mut Task) -> Option<Read> {
+        let primary = self.primary;
+        let slot = landing::slot_path(primary, task);
+        // A task that ended is still looked at while it owns its slot: the
+        // agent that delivered usually keeps working in the same checkout,
+        // and skipping every non-live task froze that row on `delivered`
+        // for the rest of the session however much the slot changed.
+        // `Closed` is the same story with nothing delivered — the checkout
+        // it ended in can be written in again. Only the *current* owner is
+        // reconsidered: a freed slot handed to a new agent belongs to that
+        // agent's task, not to the one that used to sit there. `Parked` is
+        // nobody's turn by definition and stays put — unless a pane sits in
+        // its checkout (`occupied`): parked means "no agent left", and an
+        // agent that is there makes it a lie, whichever way it got there —
+        // a release that raced the tab opening, a resume.
+        let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+            && self.owners.contains(&task.id);
+        let parked_with_agent = task.state == TaskState::Parked
+            && slot
+                .as_ref()
+                .is_some_and(|slot| self.occupied.iter().any(|pane| pane.starts_with(slot)));
+        let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
+        if !(is_agents_turn(&task.state) || ended_owner || parked_with_agent || parked_alone) {
+            return None;
+        }
+        // Parked is nobody's turn, but its work can still reach the target
+        // without it — a request opened before its agent left, merged on
+        // the forge. Left parked, it was listed as preserved work for good
+        // and its slot never went back to the pool.
+        if parked_alone {
+            landing::settle_delivered(primary, task);
+            return None;
+        }
+        // A rebase paused on work the target already carries — what an
+        // earlier refresh left behind when it replayed a squashed branch
+        // onto its own squash — is nobody's to resolve.
+        let paused = slot
+            .as_ref()
+            .is_some_and(|slot| landing::paused_rebase(slot).is_some());
+        if paused && landing::settle_delivered(primary, task) {
+            return None;
+        }
+        // The branch a task is on is a Git fact, and `task.branch` is a
+        // cache of it. Re-read before anything is asked *about* the branch:
+        // an operator renaming it by hand otherwise leaves every later
+        // question pointed at a ref that no longer exists, and
+        // `commits_ahead` answers such a question with `0` — which reads as
+        // "nothing to deliver" rather than as "wrong branch". A checkout
+        // mid-rebase is on no branch and is left alone.
+        if let Some(actual) = slot.as_deref().and_then(checkout::current_branch)
+            && actual != task.branch
+        {
+            task.take_name(actual);
+        }
+        self.read_readiness(task, ended_owner);
+        self.name_from_the_work(task);
+        // The other half of what a delivery would do, learned the same way
+        // readiness is: an agent told to push and open the request itself
+        // is the one case UZE's own records can never cover, and until this
+        // ran the button went on offering to publish a branch the forge
+        // already had a request open for. Only where a request is what
+        // completion means — a project that merges or hands off never asks
+        // the remote anything.
+        //
+        // Asked after the pass, with the document unlocked: it is a `git
+        // ls-remote` per task, and inside the lock one slow remote made
+        // every delivery and every placement in the project wait behind the
+        // whole pass.
+        let ask_the_remote = (self.completion == CompletionBehavior::Pr).then(|| task.clone());
+        // Following a moved target costs a clean task nothing and a dirty
+        // one its work in progress, which `refresh` refuses. Whatever the
+        // completion behaviour: a task that follows the target as it moves
+        // meets a conflict while its agent is still holding the change,
+        // rather than in a request already opened.
+        let notice = if matches!(task.state, TaskState::Running | TaskState::Ready)
+            && let Err(DeliveryFailure::Conflict {
+                files,
+                target_moved,
+            }) = landing::refresh(primary, task)
+            && let Some(slot) = slot
+        {
+            Some(AgentNotice {
+                task: task.id.as_str().to_owned(),
+                checkout: slot,
+                message: landing::conflict_message(task, &files, target_moved),
+            })
+        } else {
+            None
+        };
+        Some(Read {
+            ask_the_remote,
+            notice,
+        })
+    }
+
+    fn read_readiness(&self, task: &mut Task, ended_owner: bool) {
+        let primary = self.primary;
+        match landing::readiness(primary, task) {
+            // Nothing new since it ended leaves the ending standing: the
+            // delivery is the last thing that happened to the task, and
+            // saying `running` instead would erase it on the next tick.
+            Readiness::Running if ended_owner => {}
+            Readiness::Running => task.state = TaskState::Running,
+            Readiness::Uncommitted => task.state = TaskState::Uncommitted,
+            Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+            // A forge that squashes what it merges leaves none of the
+            // branch's commits in the target, so they still count as ahead;
+            // asked by patch instead, the work is delivered. Left `Ready`,
+            // the refresh replayed it onto its own squash and paused
+            // mid-rebase on every file it touched.
+            Readiness::Ready { .. }
+                if checkout::is_integrated(primary, &task.target, &task.branch) =>
+            {
+                landing::mark_delivered(primary, task);
+            }
+            Readiness::Ready { base, .. } => {
+                // Delivered, and now holding work the target lacks: the
+                // agent kept going, and the request it had answered for the
+                // work already merged, not for this.
+                if task.state == TaskState::Integrated {
+                    task.forget_request();
+                }
+                task.base_commit = base;
+                if task.state != TaskState::GateFailed {
+                    task.state = TaskState::Ready;
+                }
+            }
+        }
+    }
+
+    /// The work has a commit and still carries the name UZE generated for
+    /// it: name it from what the agent wrote. This is the automatic half,
+    /// and it deliberately runs *late* — until there is a commit there is
+    /// nothing to name the work after, and the agent naming it deliberately
+    /// arrives earlier and therefore wins. `Ready` is the safe moment by
+    /// construction: commits ahead, a clean tree, no rebase in progress.
+    ///
+    /// Nothing about this reaches a harness. It is a Git fact read on a
+    /// pass that already runs, which is why it works on every harness and
+    /// on the next one.
+    fn name_from_the_work(&self, task: &mut Task) {
+        let primary = self.primary;
+        if self.vocabulary.names_work()
+            && task.state == TaskState::Ready
+            && !task.is_named()
+            && let Some(derived) = landing::derived_name(primary, task, self.vocabulary)
+            && !checkout::branch_exists(primary, &derived)
+            && checkout::rename_branch(primary, &task.branch.clone(), &derived).is_ok()
+        {
+            task.take_name(derived);
+        }
     }
 }
 
@@ -1162,34 +1270,6 @@ fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> Deli
     }
 }
 
-/// The task currently answering for each occupied slot, by id.
-///
-/// A checkout id can be named by more than one task over its life — a slot
-/// goes back to the pool and the next agent takes it — and the newest one
-/// is the owner, which is the rule `checkout::slot_state` already reads
-/// slots by. Anything older is history and must not be revived by what the
-/// directory now holds, because what it holds is somebody else's work.
-fn slot_owners(store: &TaskStore) -> BTreeSet<String> {
-    let mut newest: BTreeMap<&str, &Task> = BTreeMap::new();
-    for task in &store.tasks {
-        let Some(checkout) = &task.checkout else {
-            continue;
-        };
-        newest
-            .entry(checkout.as_str())
-            .and_modify(|held| {
-                if task.created_at_unix >= held.created_at_unix {
-                    *held = task;
-                }
-            })
-            .or_insert(task);
-    }
-    newest
-        .into_values()
-        .map(|task| task.id.as_str().to_owned())
-        .collect()
-}
-
 /// What naming a task produced.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamedTask {
@@ -1229,11 +1309,47 @@ fn refusal_words(refusal: &NameRefusal, vocabulary: &BranchVocabulary) -> String
 /// What one pass of [`Workspace::reconcile_occupancy`] changed.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reconciliation {
-    /// The directories whose repository actually gave a slot up, so a
-    /// caller knows which tasks are worth re-reading. Empty is the
-    /// ordinary answer.
+    /// The directories whose repository actually gave a slot up, or whose
+    /// tenants ended, so a caller knows which agents are worth re-reading.
+    /// Empty is the ordinary answer.
     pub changed: Vec<PathBuf>,
     pub released: Vec<ReleasedTask>,
+}
+
+/// The canonical spelling of a directory: the key every record of it is
+/// stored under, so two spellings of one root never make two stores.
+fn canonical(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+}
+
+/// How the agents of a space are placed: each in a slot of its own, or
+/// each as a tenant of the space's directory. The placement side of what a
+/// space's kind means; the wire spells the kind in the terminal's own
+/// vocabulary and the client translates once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlacementKind {
+    Slot,
+    Tenant,
+}
+
+/// What a directory can be the root of: whether slots are possible there
+/// at all. Answered off the frame — it asks Git — and cached by whoever
+/// asks, so a picker never waits on a repository.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RootProfile {
+    /// Inside a Git working tree with a commit to branch a slot from.
+    pub slots_possible: bool,
+}
+
+/// Profiles `root` from Git alone: no application, no home, because the
+/// question is asked before either exists (the client's first attach) and
+/// from inside the picker's own worker.
+pub fn root_profile(root: &Path) -> RootProfile {
+    let slots_possible = worktree::primary_checkout(root).is_some_and(|primary| {
+        checkout::current_branch(&primary)
+            .is_some_and(|branch| !checkout::tip_of(&primary, &branch).is_empty())
+    });
+    RootProfile { slots_possible }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1262,10 +1378,6 @@ pub struct TaskView {
     pub target: String,
     /// The slot's directory, when the task has one on disk.
     pub checkout: Option<PathBuf>,
-    /// The slot the task was given, whether or not its directory still
-    /// exists — what ties a pane standing in a removed checkout back to
-    /// the task it was running.
-    pub checkout_id: Option<String>,
     pub state: TaskStateView,
     /// What delivering this task does — the project's own say, carried on
     /// the task so a surface offering the delivery can name its ending
@@ -1313,10 +1425,6 @@ impl TaskView {
             branch: task.branch.clone(),
             target: task.target.clone(),
             checkout: landing::slot_path(primary, task),
-            checkout_id: task
-                .checkout
-                .as_ref()
-                .map(|checkout| checkout.as_str().to_owned()),
             state: drawn_state(primary, task, unsynced),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
@@ -1385,16 +1493,10 @@ pub enum TaskStateView {
 }
 
 impl TaskStateView {
-    /// Whether delivery may be offered for a task in this state.
-    ///
-    /// `Published` included: the request is level with the branch, but the
-    /// target moves, and a re-sync is how the branch follows it.
-    pub fn is_deliverable(&self) -> bool {
-        matches!(self, Self::Ready | Self::Published | Self::GateFailed)
-    }
-
     /// Why delivery is refused, for a state where it is — `None` for the
-    /// states [`is_deliverable`](Self::is_deliverable) accepts.
+    /// states delivery may be offered for. `Published` is one: the request
+    /// is level with the branch, but the target moves, and a re-sync is how
+    /// the branch follows it.
     ///
     /// Beside the predicate rather than beside whoever shows the answer:
     /// "not yet" and "already done" are the same refusal to a caller that
@@ -1415,11 +1517,6 @@ impl TaskStateView {
             Self::Closed => Some("branch holds nothing"),
             Self::Parked => Some("parked — resume it first"),
         }
-    }
-
-    /// Whether the task still has an agent's work in front of it.
-    pub fn is_live(&self) -> bool {
-        !matches!(self, Self::Integrated | Self::Parked | Self::Closed)
     }
 }
 
@@ -1515,66 +1612,42 @@ pub struct DeliveryPolicyView {
     pub completion: &'static str,
     pub target: Option<String>,
     pub gate: Vec<String>,
-    /// Whether this is what the project declared or what UZE falls back to.
-    /// A reader who cannot tell the two apart learns nothing from being
-    /// shown `handoff`: they cannot know whether anyone chose it.
-    pub source: PolicySource,
 }
 
-/// Where the policy in force came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PolicySource {
-    /// `agents.yaml` declares it.
-    Declared,
-    /// Nothing declares it; this is the built-in default, identical on
-    /// every machine.
-    BuiltInDefault,
-}
-
-impl PolicySource {
-    /// How the client attributes it, in the words a reader needs rather
-    /// than the words the code uses.
-    pub fn attribution(self) -> &'static str {
-        match self {
-            Self::Declared => "agents.yaml",
-            Self::BuiltInDefault => "default",
-        }
-    }
-}
-
-/// Where an agent starts, and whether that is a slot of its own.
+/// Where an agent starts, and the record its launch carries.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentPlacement {
     pub cwd: PathBuf,
-    pub isolation: Isolation,
+    pub placement: Placement,
     /// What preparing the checkout could not do — a missing link target, a
     /// failed setup — none of which stops the launch.
     pub warnings: Vec<String>,
 }
 
-impl AgentPlacement {
-    fn unisolated(cwd: &Path, reason: &str) -> Self {
-        Self {
-            cwd: cwd.to_path_buf(),
-            isolation: Isolation::Unisolated {
-                reason: reason.to_owned(),
-            },
-            warnings: Vec::new(),
-        }
-    }
-}
-
+/// What an agent was placed as. There is no third case: a placement that
+/// cannot do what was asked answers with an error and starts nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Isolation {
+pub enum Placement {
     /// The agent runs in a slot of its own, on the task's branch.
     Slot {
-        task: TaskId,
+        task: AgentId,
         checkout: checkout::CheckoutId,
         branch: String,
         reused: bool,
     },
-    /// The agent runs where it was created, and the tab must say so.
-    Unisolated { reason: String },
+    /// The agent runs in the space's own directory, on whatever branch it
+    /// is on, as a tenant of it.
+    Tenant { id: AgentId },
+}
+
+impl Placement {
+    /// The identity the launch carries, whichever kind of record it is.
+    pub fn agent(&self) -> &AgentId {
+        match self {
+            Self::Slot { task, .. } => task,
+            Self::Tenant { id } => id,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1590,10 +1663,10 @@ mod placement_tests {
         UzeApplication::new(UzeHome::at(uze_testkit::temp::scratch(label)), Vec::new())
     }
 
-    fn slot(placement: &AgentPlacement) -> &TaskId {
-        match &placement.isolation {
-            Isolation::Slot { task, .. } => task,
-            Isolation::Unisolated { reason } => panic!("expected a slot, got: {reason}"),
+    fn slot(placement: &AgentPlacement) -> &AgentId {
+        match &placement.placement {
+            Placement::Slot { task, .. } => task,
+            Placement::Tenant { .. } => panic!("expected a slot, got a tenant"),
         }
     }
 
@@ -1604,34 +1677,18 @@ mod placement_tests {
     fn a_new_agent_starts_from_the_target_as_the_remote_has_it() {
         let repository = repository("place-synced");
         let root = repository.root().to_path_buf();
-        let base = uze_testkit::temp::scratch("place-synced-remote");
-        let origin = base.join("origin.git");
-        repository.git(&[
-            "init",
-            "--quiet",
-            "--bare",
-            "-b",
-            "main",
-            origin.to_str().unwrap(),
-        ]);
-        repository.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "-u", "origin", "main"]);
-        let other = base.join("other");
-        repository.git(&[
-            "clone",
-            "--quiet",
-            origin.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ]);
-        repository.git_in(&other, &["config", "user.name", "Other"]);
-        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        repository.with_origin("main");
+        let other = repository.clone_origin();
         std::fs::write(other.join("merged-while-you-were-away.rs"), "").unwrap();
         repository.git_in(&other, &["add", "."]);
         repository.git_in(&other, &["commit", "-qm", "merged while you were away"]);
         repository.git_in(&other, &["push", "--quiet"]);
 
         let app = application("place-synced-home");
-        let placement = app.workspace().place_new_agent(&root, &[]);
+        let placement = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
 
         assert!(
             placement
@@ -1652,7 +1709,10 @@ mod placement_tests {
         let repository = repository("place-first");
         let root = repository.root().to_path_buf();
         let app = application("place-first-home");
-        let placement = app.workspace().place_new_agent(&root, &[]);
+        let placement = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let primary = root.canonicalize().unwrap();
         assert_ne!(
             placement.cwd, primary,
@@ -1664,7 +1724,10 @@ mod placement_tests {
             "the slot is populated"
         );
         let task = slot(&placement);
-        assert_eq!(repository.branch_of(&placement.cwd), task.branch());
+        assert_eq!(
+            repository.branch_of(&placement.cwd),
+            format!("agent/{task}")
+        );
     }
 
     /// The reuse the slot model exists for only ever happens if closing an
@@ -1675,13 +1738,19 @@ mod placement_tests {
         let root = repository.root().to_path_buf();
         let app = application("release-free-home");
 
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let abandoned_branch = repository.branch_of(&first.cwd);
-        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        let released = app.workspace().release_abandoned_tasks(&root, &[], &[]);
         assert_eq!(released.len(), 1);
         assert!(!released[0].parked, "an empty checkout holds nothing");
 
-        let second = app.workspace().place_new_agent(&root, &[]);
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         assert_eq!(
             second.cwd, first.cwd,
             "the freed slot is reused instead of a new directory"
@@ -1701,9 +1770,43 @@ mod placement_tests {
         let third_panes = [second.cwd.join("src")];
         assert!(
             app.workspace()
-                .release_abandoned_tasks(&root, &third_panes)
+                .release_abandoned_tasks(&root, &third_panes, &[])
                 .is_empty(),
             "an agent in front of its checkout is not abandoned"
+        );
+    }
+
+    /// The directory is not the only evidence an agent is alive: one whose
+    /// pane walked out of its slot stands nowhere its record names, and
+    /// only the identity its tab echoes still says it is there.
+    #[test]
+    fn an_agent_that_walked_out_of_its_slot_is_kept_by_the_identity_its_tab_echoes() {
+        let repository = repository("release-echoed");
+        let root = repository.root().to_path_buf();
+        let app = application("release-echoed-home");
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
+        let id = placed.placement.agent().as_str().to_owned();
+        let wandered = [root.join("src")];
+
+        assert!(
+            app.workspace()
+                .release_abandoned_tasks(&root, &wandered, std::slice::from_ref(&id))
+                .is_empty(),
+            "a tab still launched for the task keeps it"
+        );
+        let released = app
+            .workspace()
+            .release_abandoned_tasks(&root, &wandered, &[]);
+        assert_eq!(
+            released
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![id.as_str()],
+            "without the echo, a pane outside the slot is no agent of it"
         );
     }
 
@@ -1713,13 +1816,19 @@ mod placement_tests {
         let root = repository.root().to_path_buf();
         let app = application("release-park-home");
 
-        let abandoned = app.workspace().place_new_agent(&root, &[]);
+        let abandoned = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         std::fs::write(abandoned.cwd.join("draft.rs"), b"unsaved").unwrap();
-        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        let released = app.workspace().release_abandoned_tasks(&root, &[], &[]);
         assert_eq!(released.len(), 1);
         assert!(released[0].parked);
 
-        let next = app.workspace().place_new_agent(&root, &[]);
+        let next = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         assert_ne!(
             next.cwd, abandoned.cwd,
             "a parked checkout is never offered to a new agent"
@@ -1738,7 +1847,10 @@ mod placement_tests {
         let repository = repository("space-root");
         let root = repository.root().to_path_buf();
         let app = application("space-root-home");
-        let placement = app.workspace().place_new_agent(&root, &[]);
+        let placement = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         assert_eq!(
             crate::space_root(&placement.cwd),
             crate::space_root(&root),
@@ -1758,7 +1870,11 @@ mod placement_tests {
         let app = application("place-three-home");
         let primary = root.canonicalize().unwrap();
         let placements: Vec<AgentPlacement> = (0..3)
-            .map(|_| app.workspace().place_new_agent(&root, &[]))
+            .map(|_| {
+                app.workspace()
+                    .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+                    .unwrap()
+            })
             .collect();
         let mut cwds: Vec<&PathBuf> = placements.iter().map(|p| &p.cwd).collect();
         cwds.sort();
@@ -1780,8 +1896,12 @@ mod placement_tests {
         std::fs::write(root.join("README.md"), "edited by the operator\n").unwrap();
         std::fs::write(root.join("scratch.txt"), "untracked\n").unwrap();
 
-        app.workspace().place_new_agent(&root, &[]);
-        app.workspace().place_new_agent(&root, &[]);
+        app.workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
+        app.workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(root.join("README.md")).unwrap(),
@@ -1799,26 +1919,144 @@ mod placement_tests {
     /// Launching an agent unisolated beats not launching it, and the tab
     /// is told.
     #[test]
-    fn a_repository_without_a_commit_launches_in_place_with_the_reason() {
+    fn a_repository_without_a_commit_refuses_a_slot_and_starts_nothing() {
         let repository = uze_testkit::git::Repository::empty("place-unborn");
         let root = repository.root().to_path_buf();
         let app = application("place-unborn-home");
-        let placement = app.workspace().place_new_agent(&root, &[]);
-        assert_eq!(placement.cwd, root.canonicalize().unwrap());
+        let error = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("commit"), "{error}");
         assert!(
-            matches!(&placement.isolation, Isolation::Unisolated { reason } if reason.contains("commit")),
-            "{placement:?}"
+            app.workspace().tasks(&root).is_empty(),
+            "nothing was recorded"
         );
+        assert!(!root.join(".worktrees").exists(), "nothing was created");
     }
 
+    /// The operator's tree is never a fallback: a slot asked for outside a
+    /// repository is refused, and the same directory is a tenant's by
+    /// choice.
     #[test]
-    fn a_directory_outside_any_repository_launches_in_place() {
+    fn a_directory_outside_any_repository_is_a_tenant_by_choice_never_a_fallback() {
         let outside = uze_testkit::temp::scratch("place-no-repo");
         let app = application("place-no-repo-home");
-        let placement = app.workspace().place_new_agent(&outside, &[]);
-        assert_eq!(placement.cwd, outside);
-        assert!(matches!(placement.isolation, Isolation::Unisolated { .. }));
+        let error = app
+            .workspace()
+            .place_new_agent(&outside, PlacementKind::Slot, "claude-code", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Git working tree"), "{error}");
+
+        let placed = app
+            .workspace()
+            .place_new_agent(&outside, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        assert_eq!(placed.cwd, outside.canonicalize().unwrap());
+        let Placement::Tenant { id } = &placed.placement else {
+            panic!("{placed:?}");
+        };
+        let tenants = live_tenants(&app, &outside);
+        assert_eq!(tenants.len(), 1);
+        assert_eq!(&tenants[0].id, id);
+        assert_eq!(tenants[0].harness, "claude-code");
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    /// A tenant of a repository works where the operator works: no
+    /// directory, no branch, and a second tenant shares the tree.
+    #[test]
+    fn a_tenant_creates_no_checkout_and_no_branch_and_shares_the_tree() {
+        let repository = repository("place-tenant");
+        let root = repository.root().to_path_buf();
+        let app = application("place-tenant-home");
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Tenant, "codex", &[])
+            .unwrap();
+        assert_eq!(first.cwd, second.cwd);
+        assert_eq!(first.cwd, root.canonicalize().unwrap());
+        assert_ne!(first.placement.agent(), second.placement.agent());
+        assert!(!root.join(".worktrees").exists(), "no slot was created");
+        assert_eq!(
+            repository.git(&["branch", "--list", "agent/*"]).trim(),
+            "",
+            "no branch was created"
+        );
+        assert!(
+            app.workspace().tasks(&root).is_empty(),
+            "a tenant is not a task"
+        );
+        assert_eq!(live_tenants(&app, &root).len(), 2);
+    }
+
+    /// The live tenants the store records for `root`, read the way every
+    /// other reader of the store reads them.
+    fn live_tenants(app: &UzeApplication, root: &Path) -> Vec<Tenant> {
+        task::load(&app.home, &canonical(root))
+            .unwrap()
+            .tenants
+            .into_iter()
+            .filter(Tenant::is_live)
+            .collect()
+    }
+
+    /// A tenant ends when no live tab was launched for it, and never while
+    /// one was — whether or not the root is a repository.
+    #[test]
+    fn a_tenant_ends_when_nothing_echoes_it_and_survives_while_something_does() {
+        let plain = uze_testkit::temp::scratch("tenant-plain-directory");
+        let app = application("tenant-end-home");
+        let placed = app
+            .workspace()
+            .place_new_agent(&plain, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        let id = placed.placement.agent().as_str().to_owned();
+
+        assert!(
+            app.workspace()
+                .end_abandoned_tenants(&plain, std::slice::from_ref(&id))
+                .is_empty(),
+            "a tenant a tab still echoes stays live"
+        );
+        assert_eq!(live_tenants(&app, &plain).len(), 1);
+
+        let ended = app.workspace().end_abandoned_tenants(&plain, &[]);
+        assert_eq!(ended, vec![id]);
+        assert!(
+            live_tenants(&app, &plain).is_empty(),
+            "the ending is recorded"
+        );
+        assert!(
+            app.workspace()
+                .end_abandoned_tenants(&plain, &[])
+                .is_empty(),
+            "ending is recorded once"
+        );
+        std::fs::remove_dir_all(plain).unwrap();
+    }
+
+    /// The per-root sweep the client asks for reaches tenants of a plain
+    /// directory, which no repository sweep ever would.
+    #[test]
+    fn the_occupancy_sweep_ends_tenants_of_a_plain_directory() {
+        let plain = uze_testkit::temp::scratch("tenant-sweep-directory");
+        let app = application("tenant-sweep-home");
+        app.workspace()
+            .place_new_agent(&plain, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        let reconciliation =
+            app.workspace()
+                .reconcile_occupancy(std::slice::from_ref(&plain), &[], &[]);
+        assert_eq!(reconciliation.changed, vec![plain.clone()]);
+        assert!(live_tenants(&app, &plain).is_empty());
+        std::fs::remove_dir_all(plain).unwrap();
     }
 
     /// A slot freed by a delivered task is taken before a new directory
@@ -1828,17 +2066,23 @@ mod placement_tests {
         let repository = repository("place-reuse");
         let root = repository.root().to_path_buf();
         let app = application("place-reuse-home");
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
-        let second = app.workspace().place_new_agent(&root, &[]);
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         assert_eq!(second.cwd, first.cwd);
         assert!(matches!(
-            second.isolation,
-            Isolation::Slot { reused: true, .. }
+            second.placement,
+            Placement::Slot { reused: true, .. }
         ));
     }
 
@@ -1852,13 +2096,19 @@ mod placement_tests {
         let repository = repository("place-hand-over");
         let root = repository.root().to_path_buf();
         let app = application("place-hand-over-home");
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let before = slot(&first).clone();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Closed;
         task::save(&app.home, &primary, &store).unwrap();
-        let second = app.workspace().place_new_agent(&root, &[]);
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         assert_eq!(second.cwd, first.cwd, "the freed slot is reused");
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Running;
@@ -1878,7 +2128,7 @@ mod placement_tests {
             format!("agent/{}", before.as_str()),
             "it keeps the branch it had"
         );
-        assert_eq!(earlier.checkout_id, None, "the slot is no longer its");
+        assert_eq!(earlier.checkout, None, "the slot is no longer its");
         assert_eq!(earlier.state, TaskStateView::Closed);
     }
 
@@ -1892,7 +2142,10 @@ mod placement_tests {
         let repository = repository("evaluate-squashed");
         let root = repository.root().to_path_buf();
         let app = application("evaluate-squashed-home");
-        let placed = app.workspace().place_new_agent(&root, &[]);
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let id = slot(&placed).as_str().to_owned();
         let tip = squash_merged(&repository, &placed.cwd);
 
@@ -1928,7 +2181,7 @@ mod placement_tests {
     }
 
     /// Records `state` for `task` the way an earlier session left it.
-    fn recorded(app: &UzeApplication, root: &Path, task: &TaskId, state: TaskState) {
+    fn recorded(app: &UzeApplication, root: &Path, task: &AgentId, state: TaskState) {
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(task).unwrap().state = state;
@@ -1947,7 +2200,10 @@ mod placement_tests {
             let repository = repository(label);
             let root = repository.root().to_path_buf();
             let app = application(&format!("{label}-home"));
-            let placed = app.workspace().place_new_agent(&root, &[]);
+            let placed = app
+                .workspace()
+                .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+                .unwrap();
             let id = slot(&placed).clone();
             let tip = squash_merged(&repository, &placed.cwd);
             assert!(
@@ -1996,7 +2252,10 @@ mod placement_tests {
         let repository = repository("deliver-squashed");
         let root = repository.root().to_path_buf();
         let app = application("deliver-squashed-home");
-        let placed = app.workspace().place_new_agent(&root, &[]);
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let id = slot(&placed).clone();
         let tip = squash_merged(&repository, &placed.cwd);
         recorded(&app, &root, &id, TaskState::Ready);
@@ -2021,7 +2280,10 @@ mod placement_tests {
         let repository = repository("parked-mid-rebase");
         let root = repository.root().to_path_buf();
         let app = application("parked-mid-rebase-home");
-        let placed = app.workspace().place_new_agent(&root, &[]);
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let id = slot(&placed).clone();
         std::fs::write(placed.cwd.join("feature.rs"), b"ours").unwrap();
         repository.git_in(&placed.cwd, &["add", "."]);
@@ -2056,7 +2318,10 @@ mod placement_tests {
         let repository = repository("revived-request");
         let root = repository.root().to_path_buf();
         let app = application("revived-request-home");
-        let placed = app.workspace().place_new_agent(&root, &[]);
+        let placed = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let id = slot(&placed).clone();
         squash_merged(&repository, &placed.cwd);
         let primary = root.canonicalize().unwrap();
@@ -2107,21 +2372,27 @@ mod placement_tests {
         let repository = repository("place-occupied");
         let root = repository.root().to_path_buf();
         let app = application("place-occupied-home");
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
         let still_inside = vec![first.cwd.clone()];
-        let second = app.workspace().place_new_agent(&root, &still_inside);
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &still_inside)
+            .unwrap();
         assert_ne!(
             second.cwd, first.cwd,
             "never the checkout somebody is still in"
         );
         assert!(matches!(
-            second.isolation,
-            Isolation::Slot { reused: false, .. }
+            second.placement,
+            Placement::Slot { reused: false, .. }
         ));
     }
 
@@ -2132,7 +2403,10 @@ mod placement_tests {
         let repository = repository("place-resume");
         let root = repository.root().to_path_buf();
         let app = application("place-resume-home");
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let task_id = slot(&first).as_str().to_owned();
         std::fs::write(first.cwd.join("kept.rs"), b"fn kept() {}").unwrap();
         repository.git_in(&first.cwd, &["add", "."]);
@@ -2140,7 +2414,7 @@ mod placement_tests {
         std::fs::remove_dir_all(&first.cwd).unwrap();
 
         // What the TUI does once no pane is in front of the checkout.
-        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        let released = app.workspace().release_abandoned_tasks(&root, &[], &[]);
         assert!(
             released
                 .iter()
@@ -2158,8 +2432,8 @@ mod placement_tests {
         let resumed = app.workspace().resume_task(&root, &task_id, &[]).unwrap();
         assert!(resumed.cwd.join("kept.rs").is_file(), "the commit is back");
         assert!(matches!(
-            &resumed.isolation,
-            Isolation::Slot { task, branch, .. }
+            &resumed.placement,
+            Placement::Slot { task, branch, .. }
                 if task.as_str() == task_id && *branch == format!("agent/{task_id}")
         ));
         let task = app
@@ -2180,11 +2454,14 @@ mod placement_tests {
         let repository = repository("place-parked-live");
         let root = repository.root().to_path_buf();
         let app = application("place-parked-live-home");
-        let first = app.workspace().place_new_agent(&root, &[]);
+        let first = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
         let task_id = slot(&first).as_str().to_owned();
         std::fs::write(first.cwd.join("work.rs"), b"fn work() {}").unwrap();
         // Released as if no pane were there: parked, since it holds work.
-        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        let released = app.workspace().release_abandoned_tasks(&root, &[], &[]);
         assert!(
             released
                 .iter()
@@ -2237,11 +2514,14 @@ mod task_service_tests {
     }
 
     fn launched(app: &UzeApplication, root: &Path) -> (String, PathBuf) {
-        let placement = app.workspace().place_new_agent(root, &[]);
-        match placement.isolation {
-            Isolation::Slot { task, .. } => (task.as_str().to_owned(), placement.cwd),
-            Isolation::Unisolated { reason } => panic!("{reason}"),
-        }
+        let placement = app
+            .workspace()
+            .place_new_agent(root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
+        (
+            placement.placement.agent().as_str().to_owned(),
+            placement.cwd,
+        )
     }
 
     fn agent_commits(
@@ -2549,10 +2829,7 @@ mod task_service_tests {
 ",
         );
         let root = repository.root().to_path_buf();
-        let remote = uze_testkit::temp::scratch("svc-agent-publish-remote").join("origin.git");
-        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
-        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+        repository.with_origin(&repository.branch());
 
         let app = application("svc-agent-publish-home");
         let (id, slot) = launched(&app, &root);
@@ -2626,10 +2903,7 @@ mod task_service_tests {
         let repository = repository("svc-merge-remote");
         declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
-        let remote = uze_testkit::temp::scratch("svc-merge-remote-origin").join("origin.git");
-        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
-        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
-        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+        repository.with_origin(&repository.branch());
 
         let app = application("svc-merge-remote-home");
         let (id, slot) = launched(&app, &root);
@@ -2689,8 +2963,11 @@ mod task_service_tests {
         let root = repository.root().to_path_buf();
         let app = application("svc-lock-launch-home");
 
-        let placement = app.workspace().place_new_agent(&root, &[]);
-        let Isolation::Slot { branch, .. } = &placement.isolation else {
+        let placement = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap();
+        let Placement::Slot { branch, .. } = &placement.placement else {
             panic!("{placement:?}");
         };
         assert!(placement.warnings.is_empty(), "{:?}", placement.warnings);
@@ -2711,11 +2988,12 @@ mod task_service_tests {
         );
         let _ = branch;
 
-        let second = app.workspace().place_new_agent(&root, &[]);
-        assert!(
-            matches!(&second.isolation, Isolation::Unisolated { reason } if reason.contains("1 declared")),
-            "{second:?}"
-        );
+        let second = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(second.contains("1 declared"), "{second}");
     }
 
     /// The record of a delivery survives an evaluation that overlapped it.
@@ -2982,12 +3260,11 @@ mod task_service_tests {
         );
         assert!(
             app.workspace()
-                .release_abandoned_tasks(&root, &[])
+                .release_abandoned_tasks(&root, &[], &[])
                 .is_empty(),
             "and no pane in its checkout does not make it abandoned"
         );
         assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrating);
-        assert!(!TaskStateView::Integrating.is_deliverable());
         assert_eq!(
             TaskStateView::Integrating.undeliverable_reason(),
             Some("already delivering"),
@@ -3011,14 +3288,15 @@ mod task_service_tests {
         let (first, _) = launched(&app, &root);
 
         let directory = refuse_writes(&app, &root);
-        let placement = app.workspace().place_new_agent(&root, &[]);
+        let placement =
+            app.workspace()
+                .place_new_agent(&root, PlacementKind::Slot, "claude-code", &[]);
         allow_writes(&directory);
 
-        let Isolation::Unisolated { reason } = &placement.isolation else {
-            panic!("a placement nothing recorded was reported as isolated: {placement:?}");
-        };
+        let reason = placement
+            .expect_err("a placement nothing recorded starts nothing")
+            .to_string();
         assert!(reason.contains("could not be recorded"), "{reason}");
-        assert_eq!(placement.cwd, root, "the agent starts where it was created");
         assert_eq!(
             app.workspace().tasks(&root).len(),
             1,
@@ -3069,16 +3347,42 @@ mod naming_tests {
         (application(label), repository)
     }
 
-    fn placed(app: &UzeApplication, root: &Path) -> PathBuf {
-        match app.workspace().place_new_agent(root, &[]).isolation {
-            Isolation::Slot { .. } => {}
-            Isolation::Unisolated { reason } => panic!("{reason}"),
+    /// An agent placed in a slot: what its launch claims, and its checkout.
+    pub(super) struct Placed {
+        pub(super) id: String,
+        pub(super) checkout: PathBuf,
+    }
+
+    impl Placed {
+        pub(super) fn claim(&self) -> Claim<'_> {
+            Claim {
+                id: &self.id,
+                cwd: &self.checkout,
+            }
         }
-        app.workspace()
+
+        fn claim_in<'a>(&'a self, cwd: &'a Path) -> Claim<'a> {
+            Claim { id: &self.id, cwd }
+        }
+    }
+
+    pub(super) fn placed(app: &UzeApplication, root: &Path) -> Placed {
+        let id = app
+            .workspace()
+            .place_new_agent(root, PlacementKind::Slot, "claude-code", &[])
+            .unwrap()
+            .placement
+            .agent()
+            .as_str()
+            .to_owned();
+        let checkout = app
+            .workspace()
             .tasks(root)
-            .last()
-            .and_then(|task| task.checkout.clone())
-            .expect("the placed agent has a checkout")
+            .into_iter()
+            .find(|task| task.id == id)
+            .and_then(|task| task.checkout)
+            .expect("the placed agent has a checkout");
+        Placed { id, checkout }
     }
 
     fn branch_of(checkout: &Path) -> String {
@@ -3089,12 +3393,13 @@ mod naming_tests {
     fn naming_renames_the_branch_and_records_the_label() {
         let (app, repository) = naming_project("naming-basic");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let placed = placed(&app, &root);
+        let checkout = placed.checkout.clone();
         assert!(branch_of(&checkout).starts_with("agent/"));
 
         let named = app
             .workspace()
-            .name_task(&checkout, "fix/branch-naming")
+            .name_task(placed.claim(), "fix/branch-naming")
             .unwrap();
 
         assert_eq!(named.branch, "fix/branch-naming");
@@ -3119,36 +3424,79 @@ mod naming_tests {
         );
     }
 
-    /// Resolved from the directory, so any depth inside the checkout is the
-    /// same answer.
+    /// The claim is verified against the directory, and any depth inside
+    /// the checkout is the same answer.
     #[test]
     fn a_nested_directory_names_the_checkouts_own_task() {
         let (app, repository) = naming_project("naming-nested");
-        let checkout = placed(&app, repository.root());
-        let nested = checkout.join("deep/inside");
+        let placed = placed(&app, repository.root());
+        let nested = placed.checkout.join("deep/inside");
         std::fs::create_dir_all(&nested).unwrap();
 
         app.workspace()
-            .name_task(&nested, "feat/from-below")
+            .name_task(placed.claim_in(&nested), "feat/from-below")
             .unwrap();
 
-        assert_eq!(branch_of(&checkout), "feat/from-below");
+        assert_eq!(branch_of(&placed.checkout), "feat/from-below");
     }
 
-    /// The primary belongs to the operator: there is no task there to name,
-    /// and no argument that would let one be named from here.
+    /// A process that is not an agent UZE launched has nothing to name:
+    /// no identity at all, an identity nobody recorded, or a recorded
+    /// identity claimed from a directory that is not its own — the
+    /// operator's checkout, or another agent's slot.
     #[test]
-    fn the_primary_checkout_has_nothing_to_name() {
+    fn a_process_that_is_not_the_agent_has_nothing_to_name() {
         let (app, repository) = naming_project("naming-primary");
         let root = repository.root().to_path_buf();
-        let before = branch_of(&root);
+        let placed = placed(&app, &root);
+        let before = branch_of(&placed.checkout);
+
+        let refusals = [
+            Claim {
+                id: "nobody",
+                cwd: &placed.checkout,
+            },
+            placed.claim_in(&root),
+        ];
+        for claim in refusals {
+            let error = app
+                .workspace()
+                .name_task(claim, "fix/not-here")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("not an agent UZE launched"), "{error}");
+        }
+        assert_eq!(branch_of(&placed.checkout), before, "nothing was renamed");
+        assert_eq!(branch_of(&root), "main", "and never the operator's branch");
+    }
+
+    /// A tenant's work is not named, and that is the refusal it hears —
+    /// even where its directory is no repository, which is the question a
+    /// tenant never needed answered.
+    #[test]
+    fn a_tenant_is_refused_as_work_that_is_not_named() {
+        let plain = uze_testkit::temp::scratch("naming-tenant-directory");
+        let app = application("naming-tenant-home");
+        let placed = app
+            .workspace()
+            .place_new_agent(&plain, PlacementKind::Tenant, "claude-code", &[])
+            .unwrap();
+        let id = placed.placement.agent().as_str().to_owned();
+
         let error = app
             .workspace()
-            .name_task(&root, "fix/not-here")
+            .name_task(
+                Claim {
+                    id: &id,
+                    cwd: &placed.cwd,
+                },
+                "fix/not-mine",
+            )
             .unwrap_err()
             .to_string();
-        assert!(error.contains("operator"), "{error}");
-        assert_eq!(branch_of(&root), before, "nothing was renamed");
+
+        assert!(error.contains("its work is not named"), "{error}");
+        std::fs::remove_dir_all(plain).unwrap();
     }
 
     /// First-writer-wins: the second call is refused and the first name
@@ -3156,30 +3504,31 @@ mod naming_tests {
     #[test]
     fn a_second_name_is_refused_and_the_first_one_stands() {
         let (app, repository) = naming_project("naming-twice");
-        let checkout = placed(&app, repository.root());
+        let placed = placed(&app, repository.root());
         app.workspace()
-            .name_task(&checkout, "fix/first-name")
+            .name_task(placed.claim(), "fix/first-name")
             .unwrap();
 
         let error = app
             .workspace()
-            .name_task(&checkout, "fix/second-name")
+            .name_task(placed.claim(), "fix/second-name")
             .unwrap_err()
             .to_string();
 
         assert!(error.contains("already named"), "{error}");
-        assert_eq!(branch_of(&checkout), "fix/first-name");
+        assert_eq!(branch_of(&placed.checkout), "fix/first-name");
     }
 
     #[test]
     fn a_name_outside_the_vocabulary_is_refused_naming_what_is_accepted() {
         let (app, repository) = naming_project("naming-vocabulary");
-        let checkout = placed(&app, repository.root());
+        let placed = placed(&app, repository.root());
+        let checkout = placed.checkout.clone();
         let before = branch_of(&checkout);
 
         let error = app
             .workspace()
-            .name_task(&checkout, "ui/dark-mode")
+            .name_task(placed.claim(), "ui/dark-mode")
             .unwrap_err()
             .to_string();
 
@@ -3195,12 +3544,13 @@ mod naming_tests {
     fn a_name_already_taken_is_refused_rather_than_disambiguated() {
         let (app, repository) = naming_project("naming-collision");
         repository.git(&["branch", "fix/taken"]);
-        let checkout = placed(&app, repository.root());
+        let placed = placed(&app, repository.root());
+        let checkout = placed.checkout.clone();
         let before = branch_of(&checkout);
 
         let error = app
             .workspace()
-            .name_task(&checkout, "fix/taken")
+            .name_task(placed.claim(), "fix/taken")
             .unwrap_err()
             .to_string();
 
@@ -3214,16 +3564,16 @@ mod naming_tests {
     fn a_project_that_names_nothing_refuses_and_says_why() {
         let repository = repository("naming-undeclared");
         let app = application("naming-undeclared");
-        let checkout = placed(&app, repository.root());
+        let placed = placed(&app, repository.root());
 
         let error = app
             .workspace()
-            .name_task(&checkout, "fix/branch-naming")
+            .name_task(placed.claim(), "fix/branch-naming")
             .unwrap_err()
             .to_string();
 
         assert!(error.contains("agents.yaml"), "{error}");
-        assert!(branch_of(&checkout).starts_with("agent/"));
+        assert!(branch_of(&placed.checkout).starts_with("agent/"));
     }
 
     /// The defect this fixes: with the branch renamed by hand, every later
@@ -3234,7 +3584,7 @@ mod naming_tests {
     fn a_branch_renamed_by_hand_is_adopted_and_still_reaches_ready() {
         let (app, repository) = naming_project("naming-manual");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         std::fs::write(checkout.join("work.rs"), "fn work() {}").unwrap();
         repository.git_in(&checkout, &["add", "."]);
         repository.git_in(&checkout, &["commit", "-qm", "feat: work"]);
@@ -3283,16 +3633,8 @@ mod derived_naming_tests {
         )
     }
 
-    fn placed(app: &UzeApplication, root: &Path) -> PathBuf {
-        match app.workspace().place_new_agent(root, &[]).isolation {
-            Isolation::Slot { .. } => {}
-            Isolation::Unisolated { reason } => panic!("{reason}"),
-        }
-        app.workspace()
-            .tasks(root)
-            .last()
-            .and_then(|task| task.checkout.clone())
-            .expect("the placed agent has a checkout")
+    fn placed(app: &UzeApplication, root: &Path) -> super::naming_tests::Placed {
+        super::naming_tests::placed(app, root)
     }
 
     fn commits(repository: &uze_testkit::git::Repository, checkout: &Path, subject: &str) {
@@ -3305,7 +3647,7 @@ mod derived_naming_tests {
     fn the_first_commit_names_work_nobody_named() {
         let (app, repository) = project("derive-basic", "  branch: conventional\n");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
         let evaluation = app
@@ -3333,10 +3675,11 @@ mod derived_naming_tests {
     fn a_name_the_agent_chose_is_never_replaced_by_the_derivation() {
         let (app, repository) = project("derive-vs-chosen", "  branch: conventional\n");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let placed = placed(&app, &root);
         app.workspace()
-            .name_task(&checkout, "fix/chosen-first")
+            .name_task(placed.claim(), "fix/chosen-first")
             .unwrap();
+        let checkout = placed.checkout.clone();
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
         let evaluation = app
@@ -3356,7 +3699,7 @@ mod derived_naming_tests {
     fn a_commit_outside_the_vocabulary_leaves_the_generated_name() {
         let (app, repository) = project("derive-refused", "  branch: [ui, fix]\n");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
         let evaluation = app
@@ -3380,7 +3723,7 @@ mod derived_naming_tests {
     fn a_project_that_names_nothing_is_left_alone() {
         let (app, repository) = project("derive-undeclared", "  completion: handoff\n");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
         let evaluation = app
@@ -3403,7 +3746,7 @@ mod derived_naming_tests {
     fn a_dirty_checkout_is_not_named() {
         let (app, repository) = project("derive-dirty", "  branch: conventional\n");
         let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         commits(&repository, &checkout, "feat(api): answer ping with pong");
         std::fs::write(checkout.join("later.rs"), "in progress").unwrap();
 
@@ -3423,7 +3766,7 @@ mod derived_naming_tests {
         let (app, repository) = project("derive-collision", "  branch: conventional\n");
         let root = repository.root().to_path_buf();
         repository.git(&["branch", "feat/answer-ping-with-pong"]);
-        let checkout = placed(&app, &root);
+        let checkout = placed(&app, &root).checkout;
         commits(&repository, &checkout, "feat(api): answer ping with pong");
 
         let evaluation = app

@@ -222,9 +222,9 @@ pub fn project_id_for(canonical_project_root: &Path) -> String {
 /// and no vendor's own output is obliged to state it.
 pub const PROJECTION_MARKER: &str = "project.json";
 
-/// The two tenants of `runtime/`. Anything else directly beneath it is
+/// The one tenant of `runtime/`. Anything else directly beneath it is
 /// unowned and swept — see `prune_projections`.
-const RUNTIME_TENANTS: &[&str] = &["projects", "sessions"];
+const RUNTIME_TENANT: &str = "projects";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ProjectionMarker {
@@ -270,7 +270,7 @@ pub fn projection_root(project_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Removes every runtime projection whose project root is gone, plus
-/// anything under `runtime/` that is neither of its two tenants, and
+/// anything under `runtime/` beside its one tenant, and
 /// returns what it swept. Never fails: a tree it cannot read or delete is
 /// left for the next pass rather than turned into an error a caller would
 /// have to decide what to do about.
@@ -289,7 +289,7 @@ pub fn prune_projections(home: &UzeHome) -> Vec<String> {
     let mut pruned = Vec::new();
     for entry in read_dir(&home.runtime_dir()) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if RUNTIME_TENANTS.contains(&name.as_str()) {
+        if name == RUNTIME_TENANT {
             continue;
         }
         if remove(&entry.path()) {
@@ -552,13 +552,11 @@ mod tests {
     }
 
     /// The sweep owns `runtime/` itself, not just its projects: anything
-    /// beside the two tenants is UZE's own derived output at a path nothing
+    /// beside the tenant is UZE's own derived output at a path nothing
     /// writes to any more, and rebuildable wherever it does belong.
     #[test]
-    fn the_sweep_keeps_both_tenants_and_nothing_else() {
+    fn the_sweep_keeps_the_tenant_and_nothing_else() {
         let (project, home) = projected("projection-tenants", "fake-harness");
-        let session = home.runtime_session_dir("fake-harness", "session-1");
-        fs::create_dir_all(&session).unwrap();
         let abandoned = home.runtime_dir().join("fake-harness").join("projects");
         fs::create_dir_all(&abandoned).unwrap();
         fs::write(home.runtime_dir().join("stray.json"), b"{}").unwrap();
@@ -568,10 +566,6 @@ mod tests {
         assert_eq!(pruned, ["fake-harness", "stray.json"]);
 
         assert!(!abandoned.exists());
-        assert!(
-            session.is_dir(),
-            "a session receipt is the other tenant, not garbage"
-        );
         assert!(
             home.runtime_project_dir(&project_id_for(&project)).is_dir(),
             "a live project must survive its neighbours being swept"

@@ -1,1322 +1,255 @@
 {
-  "$id": "https://uze.dev/schema/theme/v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
+  "$id": "https://uze.dev/schema/theme/v1.json",
+  "title": "UZE theme",
   "description": "A UZE theme. Every field is optional: whatever a theme does not declare keeps the built-in default's value, so a usable theme can be a handful of lines.",
+  "type": "object",
+  "additionalProperties": false,
   "properties": {
-    "colors": {
-      "additionalProperties": false,
-      "description": "Token name to colour. A colour is `#rrggbb`; `#rrggbbaa`, composited over this theme's own `surface.background`; `~aa`, separated from that background by `aa` in whichever direction is visible against it (white on a dark theme, black on a light one); `@another.token`, taking another token's value; or `@another.token/aa`, that token's value at that alpha over the background.",
-      "properties": {
-        "accent": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.0": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.1": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.10": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.11": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.12": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.13": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.14": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.15": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.2": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.3": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.4": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.5": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.6": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.7": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.8": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "ansi.9": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "border.default": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "border.faint": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.danger": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.diff-added": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.diff-removed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.in-flight": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.info": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.landed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.published": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.success": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "state.warning": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.background": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.hover": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.raised": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.raised-bright": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.raised-subtle": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.recessed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "surface.selected": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.bright": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.dim": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.faint": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.inactive": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.muted": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.primary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.secondary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        },
-        "text.tertiary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "description": {
-      "type": "string"
+    "version": {
+      "description": "Schema version this file was written against.",
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
     },
     "extends": {
       "description": "The theme this one is a variation of, by id. Absent means the built-in default. Anything this file does not declare comes from the nearest ancestor that does.",
       "type": "string"
     },
     "name": {
-      "description": "Display name. Defaults to the file's stem.",
+      "type": "string",
+      "description": "Display name. Defaults to the file's stem."
+    },
+    "description": {
       "type": "string"
     },
-    "symbols": {
+    "colors": {
+      "description": "Token name to colour. A colour is `#rrggbb`; `#rrggbbaa`, composited over this theme's own `surface.background`; `~aa`, separated from that background by `aa` in whichever direction is visible against it (white on a dark theme, black on a light one); `@another.token`, taking another token's value; or `@another.token/aa`, that token's value at that alpha over the background.",
+      "type": "object",
       "additionalProperties": false,
-      "description": "Symbol name to glyph: a string, a list of frames for an animation, or an object with an explicit display width for a glyph the terminal measures differently than Unicode does.",
       "properties": {
-        "arrow.down": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.background": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "arrow.external": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.selected": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "arrow.swap": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.raised": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "arrow.to": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.raised-subtle": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "arrow.up": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.raised-bright": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "bar.medium": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.recessed": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "bar.thick": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.hover": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "bar.thin": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "surface.scrim": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "chevron.collapsed": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.bright": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "chevron.expanded": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.primary": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "chevron.right": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.secondary": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "code": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.tertiary": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "cursor.text": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.muted": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.archive": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.dim": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.code": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.faint": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.config": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "text.inactive": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.data": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "border.default": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.default": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "border.faint": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.directory": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "accent": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.directory-open": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.success": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.git": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.warning": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.image": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.danger": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.legal": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.info": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.lock": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.in-flight": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "file.markup": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.landed": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "manage": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.published": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.adapted": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.diff-added": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.attention": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "state.diff-removed": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.close": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "space.worktree": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.cross": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "space.workspace": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.done": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "ansi.0": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
-        "mark.dot": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
+        "ansi.1": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
         },
+        "ansi.2": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.3": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.4": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.5": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.6": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.7": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.8": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.9": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.10": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.11": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.12": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.13": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.14": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        },
+        "ansi.15": {
+          "type": "string",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$"
+        }
+      }
+    },
+    "symbols": {
+      "description": "Symbol name to glyph: a string, a list of frames for an animation, or an object with an explicit display width for a glyph the terminal measures differently than Unicode does.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
         "mark.native": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -1326,31 +259,31 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -1360,133 +293,65 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "mark.sparkle": {
+        "mark.adapted": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "mark.toggle-off": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
                 "frames": {
+                  "type": "array",
                   "items": {
                     "type": "string"
                   },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
+                  "minItems": 1
                 },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "mark.toggle-on": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -1496,337 +361,711 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "menu": {
+        "mark.attention": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "prompt": {
+        "mark.close": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "scroll.thumb": {
+        "mark.dot": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "status.completed": {
+        "mark.cross": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "status.idle": {
+        "mark.done": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "status.selected": {
+        "mark.sparkle": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "status.working": {
+        "mark.toggle-off": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "step.next": {
+        "mark.toggle-on": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "step.previous": {
+        "file.directory": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
+              }
+            }
+          ]
+        },
+        "file.directory-open": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
               },
-              "type": "object"
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.default": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.markup": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.config": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.lock": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.data": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.image": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.archive": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.git": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "file.legal": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
             }
           ]
         },
@@ -1836,31 +1075,31 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -1870,167 +1109,235 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "text.ellipsis": {
+        "status.working": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "text.em-dash": {
+        "status.completed": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "text.plus-minus": {
+        "status.selected": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
-        "text.separator": {
+        "status.idle": {
           "oneOf": [
             {
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
+              }
+            }
+          ]
+        },
+        "commit.head": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
               },
-              "type": "object"
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "commit": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
             }
           ]
         },
@@ -2040,99 +1347,31 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "tree.column-divider": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
                 "frames": {
+                  "type": "array",
                   "items": {
                     "type": "string"
                   },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
+                  "minItems": 1
                 },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "tree.divider": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -2142,31 +1381,31 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
-              },
-              "type": "object"
+              }
             }
           ]
         },
@@ -2176,42 +1415,961 @@
               "type": "string"
             },
             {
+              "type": "array",
               "items": {
                 "type": "string"
               },
-              "minItems": 1,
-              "type": "array"
+              "minItems": 1
             },
             {
+              "type": "object",
               "additionalProperties": false,
               "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "glyph": {
                   "type": "string"
                 },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
                 "width": {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 }
+              }
+            }
+          ]
+        },
+        "tree.divider": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
               },
-              "type": "object"
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "tree.column-divider": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "bar.thick": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "bar.medium": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "bar.thin": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "cursor.text": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "scroll.thumb": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "arrow.up": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "arrow.down": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "arrow.external": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "arrow.swap": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "arrow.to": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "sync.behind": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "sync.ahead": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "chevron.right": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "step.previous": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "step.next": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "chevron.collapsed": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "chevron.expanded": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "prompt": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "menu": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "manage": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "text.ellipsis": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "text.em-dash": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "text.separator": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "text.plus-minus": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "glyph": {
+                  "type": "string"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
             }
           ]
         }
-      },
-      "type": "object"
+      }
     },
     "syntax": {
+      "type": "object",
       "additionalProperties": false,
       "properties": {
         "theme": {
           "description": "Palette for syntax-highlighted content, such as a diff.",
+          "type": "string",
           "enum": [
             "InspiredGitHub",
             "Solarized (dark)",
@@ -2220,19 +2378,9 @@
             "base16-mocha.dark",
             "base16-ocean.dark",
             "base16-ocean.light"
-          ],
-          "type": "string"
+          ]
         }
-      },
-      "type": "object"
-    },
-    "version": {
-      "default": 1,
-      "description": "Schema version this file was written against.",
-      "minimum": 1,
-      "type": "integer"
+      }
     }
-  },
-  "title": "UZE theme",
-  "type": "object"
+  }
 }

@@ -16,13 +16,13 @@
 //! collapsed/filtered-out plugins are a pure rendering/navigation concern
 //! layered on top of the flat, already-grouped `marketplace_rows` Vec. The
 //! detail drawer overlays the list from the right with a draggable left
-//! edge — see `TuiModel::marketplace_drawer_open`.
+//! edge — see `ListScreen::drawer_open`.
 
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use uze_application::CapabilityKind;
@@ -30,9 +30,9 @@ use uze_application::application::{DoctorReport, MarketplacePluginSummary, Plugi
 
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
-use super::super::model::{ResizablePanel, TuiModel};
-use super::super::{content_area, render_screen_header, side_panel_area};
-use super::{DrawerStatus, drawer_footer_height, fold, render_drawer_footer};
+use super::super::model::{ResizablePanel, Route, TuiModel};
+use super::super::{content_area, fold, render_screen_header};
+use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
@@ -69,7 +69,7 @@ fn build_rows(model: &TuiModel) -> Vec<Row> {
         .enumerate()
         .map(|(position, &raw)| (raw, position))
         .collect();
-    let filtering_active = !model.marketplace_filter.trim().is_empty();
+    let filtering_active = !model.remembered.plugin_screen.filter.trim().is_empty();
 
     // Consecutive-run grouping: `marketplace_rows` already emits
     // official-first, then each registered marketplace's plugins, then the
@@ -136,34 +136,30 @@ pub(crate) fn render_plugins(
 ) {
     let outer = content_area(area);
     let drawer_open =
-        model.marketplace_drawer_open && model.selected_marketplace_plugin().is_some();
-    let drawer_width = drawer_open.then(|| {
-        model
-            .marketplace_drawer_width
-            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
-            .clamp(24, outer.width.saturating_sub(24).max(24))
-    });
+        model.remembered.plugin_screen.drawer_open && model.selected_marketplace_plugin().is_some();
+    let drawer_width =
+        drawer_open.then(|| super::drawer_width(ResizablePanel::MarketplaceDrawer, model, outer));
     let list_area_width = outer
         .width
         .saturating_sub(drawer_width.unwrap_or(0))
         .saturating_sub(if drawer_open { 1 } else { 0 });
     let header_area = Rect::new(outer.x, outer.y, list_area_width, outer.height);
-    let sources = model.marketplaces.len();
+    let sources = model.remembered.marketplaces.len();
     let trailer = (sources > 0).then(|| {
         Span::styled(
             format!("{sources} source{}", if sources == 1 { "" } else { "s" }),
             theme::fg(Token::TextMuted),
         )
     });
-    let content = render_screen_header(
-        frame,
-        header_area,
-        "Plugins",
-        "skills · agents · MCP",
-        trailer,
-    );
+    let content = render_screen_header(frame, header_area, Route::Plugins, trailer);
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
-    render_filter_box(frame, filter_area, model);
+    super::filter_box(
+        frame,
+        filter_area,
+        &model.remembered.plugin_screen.filter,
+        "Filter plugins…",
+        model.filtering,
+    );
     hits.push((filter_area, Hit::FocusFilter));
     let list_area = Rect::new(
         content.x,
@@ -205,7 +201,10 @@ pub(crate) fn render_plugins(
         if rows.is_empty() {
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    format!("No plugins match \"{}\".", model.marketplace_filter.trim()),
+                    format!(
+                        "No plugins match \"{}\".",
+                        model.remembered.plugin_screen.filter.trim()
+                    ),
                     theme::fg(Token::TextMuted),
                 )),
                 list_area,
@@ -246,7 +245,7 @@ pub(crate) fn render_plugins(
                             Paragraph::new(plugin_line(
                                 plugin,
                                 *is_last,
-                                *position == model.marketplace_selected,
+                                *position == model.remembered.plugin_screen.selected,
                                 model.was_just_updated(&model.marketplace_plugin_id(plugin)),
                                 name_width,
                                 label_width,
@@ -262,14 +261,7 @@ pub(crate) fn render_plugins(
     }
 
     if drawer_open && let Some(plugin) = model.selected_marketplace_plugin() {
-        render_plugin_drawer(
-            frame,
-            outer,
-            drawer_width.unwrap_or_default(),
-            model,
-            &plugin,
-            hits,
-        );
+        render_plugin_drawer(frame, outer, model, &plugin, hits);
     }
 }
 
@@ -283,34 +275,6 @@ fn group_display_name(marketplace: &str) -> &str {
         "local" => "Local",
         other => other,
     }
-}
-
-fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(if model.filtering {
-            theme::color(Token::Accent)
-        } else {
-            theme::color(Token::BorderDefault)
-        }));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let text = if model.marketplace_filter.is_empty() {
-        Line::from(Span::styled("Filter plugins…", theme::fg(Token::TextMuted)))
-    } else {
-        let mut spans = vec![Span::styled(
-            model.marketplace_filter.clone(),
-            theme::fg(Token::TextPrimary),
-        )];
-        if model.filtering {
-            spans.push(Span::styled(
-                theme::glyph(Symbol::BarThin),
-                theme::fg(Token::Accent),
-            ));
-        }
-        Line::from(spans)
-    };
-    frame.render_widget(Paragraph::new(text), inner);
 }
 
 fn header_line(
@@ -450,51 +414,20 @@ fn plugin_line<'a>(
 
 fn render_plugin_drawer(
     frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    width: u16,
+    content: Rect,
     model: &TuiModel,
     plugin: &MarketplacePluginSummary,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let drawer = side_panel_area(area, width);
-    frame.render_widget(Clear, drawer);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(
-                if model.dragging_panel == Some(ResizablePanel::MarketplaceDrawer) {
-                    theme::color(Token::Accent)
-                } else {
-                    theme::color(Token::SurfaceRecessed)
-                },
-            ))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        drawer,
+    let inner = super::drawer(
+        frame,
+        content,
+        ResizablePanel::MarketplaceDrawer,
+        model,
+        hits,
     );
-    hits.insert(
-        0,
-        (
-            Rect::new(drawer.x, drawer.y, 1, drawer.height),
-            Hit::ResizePanel(ResizablePanel::MarketplaceDrawer),
-        ),
-    );
-
-    let sections_x = drawer.x + 2;
-    let sections_width = drawer.width.saturating_sub(3);
     let offers = plugin.offers();
-    let status_height = drawer_footer_height(&offers);
-    let body = Rect::new(
-        sections_x,
-        drawer.y + 1,
-        sections_width,
-        drawer.height.saturating_sub(2 + status_height),
-    );
-    let status_area = Rect::new(
-        sections_x,
-        body.y + body.height,
-        sections_width,
-        status_height,
-    );
+    let (body, status_area) = super::drawer_body_and_footer(inner, &offers);
 
     let room = body.width as usize;
     let mut lines = vec![Line::from(Span::styled(
@@ -533,6 +466,7 @@ fn render_plugin_drawer(
     let source_row_y = body.y + lines.len() as u16;
     let name = group_display_name(&plugin.marketplace);
     let homepage = model
+        .remembered
         .marketplaces
         .iter()
         .find(|entry| entry.name == plugin.marketplace)
@@ -659,7 +593,7 @@ fn render_plugin_drawer(
             DrawerStatus {
                 color: theme::color(Token::Accent),
                 headline: "Installed",
-                subtitle: match plugin_health(model.doctor.as_ref(), &qualified_id) {
+                subtitle: match plugin_health(model.remembered.doctor.as_ref(), &qualified_id) {
                     "ready" => "Ready to use in your projects",
                     "missing" => "Installation is missing artifacts",
                     "needs attention" => "Managed state needs attention",
@@ -687,13 +621,12 @@ fn render_plugin_drawer(
 
 /// The order a reader meets a plugin's resources in: what they invoke
 /// first, what runs on its own after.
-const RESOURCE_ORDER: [CapabilityKind; 6] = [
+const RESOURCE_ORDER: [CapabilityKind; 5] = [
     CapabilityKind::AgentSkill,
     CapabilityKind::Agent,
     CapabilityKind::Hook,
     CapabilityKind::Mcp,
     CapabilityKind::Instruction,
-    CapabilityKind::Policy,
 ];
 
 /// One row per kind the plugin declares — `Skills  init, worktree` —

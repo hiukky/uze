@@ -1,24 +1,25 @@
 ## ADDED Requirements
 
 ### Requirement: Every agent is isolated and the primary checkout belongs to the operator
-The system SHALL start every agent it launches inside a Git working tree in
-an isolated checkout of its own, created before the agent's process starts,
-without asking the operator and without requiring any harness to cooperate.
-The primary checkout SHALL never be assigned to an agent. Where isolation is
-impossible the system SHALL start the agent in the directory it would
-otherwise have used and SHALL state on the agent's tab that it is not
-isolated.
+The system SHALL start every agent it launches into a worktree space (see
+the `space-kinds` capability) in an isolated checkout of its own, created
+before the agent's process starts, without asking the operator and without
+requiring any harness to cooperate. The primary checkout SHALL never be
+assigned to an agent of a worktree space. Where a slot cannot be acquired
+the system SHALL NOT start the agent and SHALL state the reason. An agent
+of a workspace space is the operator's deliberate choice to work in the
+root, and is outside this requirement.
 
 #### Scenario: The first agent is isolated
-- **WHEN** an operator creates an agent in a repository with no other agent running
+- **WHEN** an operator creates an agent in a worktree space over a repository with no other agent running
 - **THEN** it starts in an isolated checkout on its own branch, not in the primary checkout
 
 #### Scenario: Concurrent agents never share a working tree
-- **WHEN** three agents are live in one repository
+- **WHEN** three agents are live in one worktree space
 - **THEN** each works in a distinct checkout and none of them is the primary
 
 #### Scenario: The operator's uncommitted work is untouched by agents
-- **WHEN** the operator has uncommitted changes in the primary checkout and agents run to completion
+- **WHEN** the operator has uncommitted changes in the primary checkout and agents of a worktree space run to completion
 - **THEN** the primary checkout's working tree and index are exactly what the operator left
 
 #### Scenario: A terminal that is not an agent runs where the operator is
@@ -30,10 +31,10 @@ isolated.
 - **THEN** the tab is listed with the harness's name and its real directory, and carries no task, checkout, state or delivery action
 - **AND** nothing is evaluated for it
 
-#### Scenario: Isolation being impossible does not block the launch
-- **WHEN** the space's root is not a Git working tree, or has no commit to branch from, or Git is absent
-- **THEN** the agent still starts in that root
-- **AND** the agent's tab states that it is not isolated
+#### Scenario: A slot that cannot be acquired refuses the launch
+- **WHEN** an agent is created in a worktree space and no slot can be acquired for it
+- **THEN** no agent starts in the space's root
+- **AND** the operator is told why
 
 ### Requirement: Isolated checkouts are reusable slots
 The system SHALL keep isolated checkouts under the primary checkout's fixed
@@ -114,21 +115,23 @@ action naming the task.
 
 ### Requirement: A task's identity is immutable and its name is derived
 The system SHALL give every agent launch a generated task identifier that
-never changes, and SHALL key the checkout, the branch and the task's
-persisted state on it. The visible label SHALL be derived from the initial
-prompt when there is one, and from the identifier otherwise. The branch
-SHALL be named from the identifier under the `agent/` prefix while the work
-stays local; a readable name derived from the label SHALL be produced only
-when the branch is first published. Task state SHALL be persisted outside
+never changes, and SHALL key the checkout and the task's persisted state on
+it. The branch SHALL start from that identifier under the `agent/` prefix,
+and both the branch and the visible label SHALL then be names rather than
+derivations: replaced once while they are still generated, never overwritten
+afterwards (see the `agent-work-naming` capability). A readable name derived
+at publish time SHALL remain as the fallback for a task nobody named, not as
+the mechanism by which work is named. Task state SHALL be persisted outside
 every checkout and written atomically.
 
-#### Scenario: The label comes from the prompt
-- **WHEN** an agent is created with an initial prompt
-- **THEN** its tab carries a label derived from that prompt's first line, and its branch carries the identifier
+#### Scenario: The branch starts from the identifier
+- **WHEN** an agent is created
+- **THEN** its branch is the identifier under the `agent/` prefix, and its
+  label is the generated one until the work is named
 
 #### Scenario: A published branch carries a readable name
-- **WHEN** a task is delivered by opening a pull request
-- **THEN** the pushed branch is named from the task's label
+- **WHEN** a task nobody named is delivered by opening a pull request
+- **THEN** the pushed branch is named from the task's first commit
 - **AND** the task's identifier, checkout and state are unchanged
 
 #### Scenario: State survives the checkout
@@ -278,11 +281,13 @@ Stale worktree registry entries SHALL be pruned only after reconciliation.
 ### Requirement: The declaration is projected without triggering foreign isolation
 The system SHALL render a project's declaration into a marker-owned managed
 region of the shared instruction file, stating the isolation layout, that a
-reader inside an isolated checkout is already isolated, that finished work
-is committed on the reader's own branch and never on the target, that
-delivery is performed by the system, and how to isolate a subagent against
-the primary checkout. The rendering SHALL be deterministic, and SHALL NOT
-instruct any reader to create a top-level worktree.
+reader inside an isolated checkout is already isolated and commits on its
+own branch and never on the target, that a reader anywhere else in the
+project is on the operator's branch and commits there without switching,
+resetting or stashing it, that delivery is performed by the system for
+isolated work, and how to isolate a subagent against the primary checkout.
+The rendering SHALL be deterministic, and SHALL NOT instruct any reader to
+create a top-level worktree.
 
 #### Scenario: Reconciling a declaration projects it
 - **WHEN** the operator reconciles project context for a project that declares an isolation policy
@@ -300,7 +305,11 @@ instruct any reader to create a top-level worktree.
 
 #### Scenario: The projected text keeps the target for the system
 - **WHEN** a project declares any completion behavior
-- **THEN** the projected text states that behavior, that the reader commits on its own branch, and that the target is written by the system
+- **THEN** the projected text states that behavior, that an isolated reader commits on its own branch, and that the target is written by the system
+
+#### Scenario: The projected text addresses the reader on the operator's branch
+- **WHEN** the projected text is read by an agent standing in the project's root rather than in an isolated checkout
+- **THEN** it is told it is on the operator's branch, to commit there, and never to switch, reset or stash it
 
 ### Requirement: A declaration stays editable
 The system SHALL key the projected region's identity on the rendered

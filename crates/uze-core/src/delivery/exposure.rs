@@ -1,21 +1,20 @@
 //! Package and capability delivery plans.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
-use crate::{project::Resource, store::PackageId};
+use crate::{capability::Resource, store::PackageId};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    capability::Representation,
     error::{Result, UzeError},
-    home::UzeHome,
     hook::HookEvent,
-    router::{CompatibilityRoute, VerificationStatus},
+    integration::{AttachmentInspection, AttachmentState},
+    router::CompatibilityRoute,
 };
 
 /// Secret-free declaration of a process environment value UZE may pass
@@ -28,45 +27,32 @@ pub struct McpEnvironmentReference {
     pub name: String,
 }
 
-/// How an integration makes a resource available. This is deliberately
-/// separate from `representation`: a STANDARD resource does not imply that a
-/// harness can discover it from a UZE store path.
+/// How an integration makes a resource available: the artifact UZE will own
+/// once attached — described exactly as its receipt records it — or why
+/// there is none.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExposureMechanism {
-    DirectNative {
-        resource_path: PathBuf,
-    },
-    RuntimeBridge {
-        bridge: String,
-        arguments: Vec<String>,
-    },
-    FilesystemProjection {
-        source: PathBuf,
-        target_relative: PathBuf,
-    },
-    /// A persistent, UZE-owned reference placed once in a harness's
-    /// user-scope discovery directory (e.g. `~/.claude/skills`,
-    /// `~/.agents/skills`), pointing at content inside the UZE store. Unlike
-    /// `FilesystemProjection`, it is not tied to any one project workspace
-    /// or session and is expected to outlive a single harness invocation.
-    /// See ADR-006.
-    ManagedUserScopeReference {
-        discovery_root: PathBuf,
-        entry_name: String,
-        source: PathBuf,
-    },
-    /// A generated entry in a harness's own global/user-scope vendor
-    /// configuration (e.g. `~/.claude.json`'s `mcpServers`,
-    /// `~/.codex/config.toml`'s `[mcp_servers.*]`), produced by shelling
-    /// out to that harness's own management CLI rather than by a
-    /// filesystem symlink. This is the "Runtime Attachment" category named
-    /// in ADR-006: unlike `ManagedUserScopeReference`, there is no shared
-    /// discovery directory to point at, so this variant carries no generic
-    /// attach/detach method — the registration command differs per
-    /// harness, and each integration's own `attach()` reads this data to
-    /// build its own invocation. See ADR-007.
-    ManagedVendorConfig {
+    Managed(ManagedArtifact),
+    Unsupported { rationale: String },
+}
+
+/// One harness-owned side effect UZE is responsible for. As a plan it says
+/// what attaching will create; inside a receipt it is the ownership proof
+/// every later inspection and detach is judged against.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ManagedArtifact {
+    /// A persistent reference placed once in a harness's user-scope
+    /// discovery directory (e.g. `~/.claude/skills/<name>`), pointing at
+    /// content inside the UZE store. Tied to no project or session
+    /// (ADR-006).
+    SymlinkReference { path: PathBuf, target: PathBuf },
+    /// A generated entry in a harness's own user-scope vendor configuration
+    /// (e.g. `~/.claude.json`'s `mcpServers`), registered through that
+    /// harness's management CLI. The registration command differs per
+    /// harness, so the owning integration attaches it (ADR-007).
+    VendorConfigEntry {
         entry_name: String,
         transport: String,
         command: PathBuf,
@@ -75,164 +61,246 @@ pub enum ExposureMechanism {
         environment: Vec<McpEnvironmentReference>,
         enabled: Option<bool>,
     },
-    /// UZE owns a delimited region inside a shared text file it does not
-    /// otherwise own — never the whole file. `target_file` and
-    /// `region_identity` name the artifact; `expected_content` is what
-    /// belongs between its markers. See `crate::text_region`, which this
-    /// variant's `attach`/`detach` methods delegate to; that module carries
-    /// no knowledge of what `target_file` is or why `region_identity` was
-    /// chosen — both are supplied entirely by the caller.
+    /// A delimited region inside a shared text file UZE does not otherwise
+    /// own. Every safety rule lives in `crate::text_region`, which knows
+    /// nothing about what `target_file` is or why `region_identity` was
+    /// chosen.
     ManagedTextRegion {
         target_file: PathBuf,
         region_identity: String,
         expected_content: String,
     },
-    /// One namespaced entry inside a shared harness hook configuration
-    /// (ADR-033). `entry_name` is the stable UZE identity for the entry
-    /// (`<package>:<hook-id>`); `event` names the manifest group's semantic
-    /// event where the target shape is event-keyed; `expected` is the exact
-    /// serialized entry UZE owns, used for content-identity inspection and
-    /// drift-safe removal. Every merge/inspect/detach rule lives in the
-    /// owning integration, which knows the target file's shape; the Core
-    /// only routes the mechanism.
-    ManagedHookConfig {
+    /// A delivery whose ownership proof only the owning integration can
+    /// interpret. The Core routes it by `receipt.integration`, never reads
+    /// `detail`, and refuses to inspect or detach it generically.
+    IntegrationOwned {
+        kind: String,
+        selector: String,
+        #[serde(flatten, default)]
+        detail: BTreeMap<String, serde_json::Value>,
+    },
+    /// A UZE-namespaced entry inside the harness's shared hook
+    /// configuration (ADR-033). `entry_name` is the stable UZE identity,
+    /// `event` the manifest group's semantic event where the target shape
+    /// is event-keyed, and `expected` the exact serialized entry content.
+    /// Inspection and detach are integration-owned: the Core knows the
+    /// identity, never the file's shape.
+    HookConfigEntry {
         config_file: PathBuf,
         entry_name: String,
         event: HookEvent,
         expected: String,
-        /// The generated wrapper the entry runs. Owned alongside the entry:
-        /// materialized on attach, verified by content identity, removed
-        /// once no entry needs it.
+        /// The generated wrapper this entry runs: materialized on attach,
+        /// verified by content identity, removed once no entry needs it.
         wrapper: PathBuf,
     },
-    /// A whole, UZE-owned derived file loaded by the harness directly from
-    /// its own discovery directory — e.g. the OpenCode hook bridge
-    /// (`<config root>/plugins/hooks-<package>.ts`, auto-discovered by
-    /// the harness, so there is no configuration entry to merge). The
-    /// integration owns attach/inspect/detach; the Core only routes it.
-    ManagedHookFile {
-        path: PathBuf,
-    },
-    Unsupported {
-        rationale: String,
-    },
+    /// A whole derived file the harness loads from its own discovery
+    /// directory (the OpenCode hook bridge): no configuration entry exists
+    /// to merge, so `path` is the entire artifact. The owning integration
+    /// attaches, inspects and detaches it.
+    ManagedHookFile { path: PathBuf },
 }
 
-impl ExposureMechanism {
-    /// Idempotently creates or refreshes a persistent, UZE-owned reference at
-    /// the harness's user-scope discovery location so a plain harness
-    /// invocation can resolve it without further action. Only valid for
-    /// `ManagedUserScopeReference`; returns the created/verified entry path.
-    /// Never touches an entry it does not already own.
-    pub fn attach(&self) -> Result<PathBuf> {
-        let Self::ManagedUserScopeReference {
-            discovery_root,
-            entry_name,
-            source,
-        } = self
-        else {
-            return Err(UzeError::ExposureUnavailable(
-                "this exposure mechanism does not support persistent attachment".to_owned(),
-            ));
-        };
-        fs::create_dir_all(discovery_root).map_err(|source_error| UzeError::Write {
-            path: discovery_root.clone(),
-            source: source_error,
-        })?;
-        let target = discovery_root.join(entry_name);
-        // An entry name may carry vendor-namespacing path components (e.g.
-        // a harness whose namespaced physical representation is nested
-        // directories). Creating the entry's parent directory is generic
-        // filesystem preparation, not vendor syntax — the integration owns
-        // the shape, this method only makes the write possible.
-        if let Some(parent) = target.parent()
-            && parent != discovery_root
-        {
-            fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
-                path: parent.to_path_buf(),
-                source: source_error,
-            })?;
+impl ManagedArtifact {
+    /// Creates or verifies an artifact whose full desired state the artifact
+    /// itself carries — a symlink reference or a text region. Never touches
+    /// an entry UZE does not already own. Every other artifact is attached
+    /// by its owning integration.
+    pub fn attach_standard(&self) -> Result<()> {
+        match self {
+            Self::SymlinkReference { path, target } => attach_symlink(path, target),
+            Self::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            } => crate::text_region::attach(target_file, region_identity, expected_content),
+            _ => Err(UzeError::ExposureUnavailable(
+                "this artifact is attached by its owning integration".to_owned(),
+            )),
         }
-        match fs::symlink_metadata(&target) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                let current = fs::read_link(&target).map_err(|source_error| UzeError::Read {
-                    path: target.clone(),
-                    source: source_error,
-                })?;
-                if &current != source {
-                    // A managed-looking name is not ownership proof: users
-                    // may repoint an earlier UZE reference. Preserve it.
-                    return Err(UzeError::ManagedEntryDrift(target));
+    }
+
+    /// Inspection for artifacts whose ownership proof does not depend on a
+    /// harness schema. Vendor integrations call this explicitly rather than
+    /// redispatching through `IntegrationPort` from an override.
+    pub fn inspect_standard(&self) -> AttachmentInspection {
+        match self {
+            Self::SymlinkReference { path, target } => inspect_symlink(path, target),
+            Self::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            } => crate::text_region::inspect(target_file, region_identity, expected_content),
+            _ => AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: "integration must inspect this vendor artifact".to_owned(),
+            },
+        }
+    }
+
+    /// Removes only a currently matched standard artifact. Any non-matched
+    /// inspection is returned unchanged, so drift never turns into a
+    /// destructive operation.
+    pub fn detach_standard(&self) -> Result<AttachmentInspection> {
+        match self {
+            // `text_region::detach` inspects the region in the same read it
+            // removes it from, so drift never becomes a removal (ADR-009).
+            Self::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            } => crate::text_region::detach(target_file, region_identity, expected_content),
+            Self::SymlinkReference { path, target } => {
+                let inspection = inspect_symlink(path, target);
+                if inspection.state != AttachmentState::Matched {
+                    return Ok(inspection);
                 }
+                fs::remove_file(path).map_err(|source| UzeError::Write {
+                    path: path.clone(),
+                    source,
+                })?;
+                Ok(AttachmentInspection {
+                    state: AttachmentState::Missing,
+                    reason: "managed artifact detached".to_owned(),
+                })
             }
-            Ok(_) => return Err(UzeError::ManagedEntryConflict(target)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                create_symlink(source, &target)?;
+            _ => Ok(self.inspect_standard()),
+        }
+    }
+
+    /// The physical exposure name this artifact claims. `None` for a shape
+    /// with no single physical name of its own: a text region spans a
+    /// portion of a shared file, and an integration-owned artifact's naming
+    /// is opaque to the Core by design.
+    pub fn exposure_name(&self) -> Option<String> {
+        match self {
+            Self::SymlinkReference { path, .. } | Self::ManagedHookFile { path } => {
+                path.file_name()?.to_str().map(str::to_owned)
             }
-            Err(error) => {
-                return Err(UzeError::Read {
-                    path: target,
-                    source: error,
-                });
+            Self::VendorConfigEntry { entry_name, .. }
+            | Self::HookConfigEntry { entry_name, .. } => Some(entry_name.clone()),
+            Self::ManagedTextRegion { .. } | Self::IntegrationOwned { .. } => None,
+        }
+    }
+
+    /// A human-readable locator. Display-only: the artifact itself remains
+    /// the source of truth.
+    pub fn location(&self) -> PathBuf {
+        match self {
+            Self::SymlinkReference { path, .. } | Self::ManagedHookFile { path } => path.clone(),
+            Self::VendorConfigEntry { entry_name, .. } => {
+                PathBuf::from(format!("mcp:{entry_name}"))
+            }
+            Self::HookConfigEntry {
+                config_file,
+                entry_name,
+                ..
+            } => PathBuf::from(format!("{}#{entry_name}", config_file.display())),
+            Self::ManagedTextRegion {
+                target_file,
+                region_identity,
+                ..
+            } => PathBuf::from(format!("{}#{region_identity}", target_file.display())),
+            Self::IntegrationOwned { kind, selector, .. } => {
+                PathBuf::from(format!("{kind}:{selector}"))
             }
         }
-        Ok(target)
     }
 
-    /// Idempotently creates or verifies the region a `ManagedTextRegion`
-    /// mechanism describes. Only valid for that variant; delegates entirely
-    /// to `crate::text_region`, which owns every safety rule.
-    pub fn attach_text_region(&self) -> Result<PathBuf> {
-        let Self::ManagedTextRegion {
-            target_file,
-            region_identity,
-            expected_content,
-        } = self
-        else {
-            return Err(UzeError::ExposureUnavailable(
-                "this exposure mechanism is not a managed text region".to_owned(),
-            ));
+    /// A cheap, vendor-neutral fingerprint of the filesystem surface the
+    /// artifact lives on — the freshness half of the inspection cache
+    /// (ADR 018).
+    ///
+    /// Only a symlink reference has a directly stat-able presence, and it
+    /// always produces one: a missing link is a real, checkable state, not
+    /// the absence of a fingerprint. Everything else lives inside vendor
+    /// files whose locations this layer deliberately does not know, so its
+    /// verdicts are bounded by TTL and mutation invalidation alone.
+    pub fn fingerprint(&self) -> Option<String> {
+        let Self::SymlinkReference { path, target } = self else {
+            return None;
         };
-        crate::text_region::attach(target_file, region_identity, expected_content)?;
-        Ok(target_file.clone())
+        let state = fs::symlink_metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(u128::MAX); // absent/untimed: a state, never "no info"
+        let link = fs::read_link(path)
+            .map(|resolved| resolved.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Some(format!("{state}:{link}:{}", target.display()))
     }
 
-    /// Removes only the UZE-owned reference this mechanism describes, and
-    /// only if it still points at `source`. Never removes an entry it did
-    /// not create, and never removes the shared discovery directory itself.
-    pub fn detach(&self) -> Result<()> {
-        let Self::ManagedUserScopeReference {
-            discovery_root,
-            entry_name,
+    /// Whether the artifact is still physically in place, answered only for
+    /// a symlink reference (the link exists and points where it should).
+    /// Everything else is the owning integration's verdict, so the answer is
+    /// `false` and callers fall back to receipt existence.
+    pub fn is_in_place(&self) -> bool {
+        let Self::SymlinkReference { path, target } = self else {
+            return false;
+        };
+        fs::read_link(path).is_ok_and(|resolved| resolved == *target)
+    }
+}
+
+fn attach_symlink(path: &Path, target: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+            path: parent.to_path_buf(),
             source,
-        } = self
-        else {
-            return Ok(());
-        };
-        let target = discovery_root.join(entry_name);
-        let Ok(metadata) = fs::symlink_metadata(&target) else {
-            return Ok(());
-        };
-        if !metadata.file_type().is_symlink() {
-            return Ok(());
-        }
-        if fs::read_link(&target).ok().as_deref() != Some(source.as_path()) {
-            return Ok(());
-        }
-        fs::remove_file(&target).map_err(|source_error| UzeError::Write {
-            path: target,
-            source: source_error,
-        })
+        })?;
     }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(path).map_err(|source| UzeError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if current != target {
+                // A managed-looking name is not ownership proof: users may
+                // repoint an earlier UZE reference. Preserve it.
+                return Err(UzeError::ManagedEntryDrift(path.to_path_buf()));
+            }
+            Ok(())
+        }
+        Ok(_) => Err(UzeError::ManagedEntryConflict(path.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::persistence::create_symlink(target, path)
+        }
+        Err(source) => Err(UzeError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn inspect_symlink(path: &Path, target: &Path) -> AttachmentInspection {
+    let (state, reason) = match fs::read_link(path) {
+        Ok(actual) if actual == target => (
+            AttachmentState::Matched,
+            "managed symlink target matches receipt".to_owned(),
+        ),
+        Ok(_) => (
+            AttachmentState::Drifted,
+            "symlink target differs from receipt".to_owned(),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            AttachmentState::Missing,
+            "managed symlink is missing".to_owned(),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => (
+            AttachmentState::Conflict,
+            "managed path is occupied by a non-symlink".to_owned(),
+        ),
+        Err(error) => (AttachmentState::Blocked, error.to_string()),
+    };
+    AttachmentInspection { state, reason }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExposurePlan {
-    pub representation: Representation,
     pub route: CompatibilityRoute,
-    /// Result of a previous real conformance attempt, if any. Plans begin
-    /// `UNVERIFIED`; strategy selection does not fabricate execution evidence.
-    pub verification: VerificationStatus,
     pub mechanism: ExposureMechanism,
     pub evidence: String,
 }
@@ -252,7 +320,6 @@ pub struct ExposurePlan {
 pub struct PackageExposurePlan {
     pub package_id: PackageId,
     pub route: CompatibilityRoute,
-    pub verification: VerificationStatus,
     pub provided_resource_identities: BTreeSet<String>,
     pub evidence: String,
 }
@@ -264,255 +331,14 @@ impl PackageExposurePlan {
     }
 }
 
-#[derive(Debug)]
-pub struct PreparedExposure {
-    pub working_directory: PathBuf,
-    pub arguments: Vec<String>,
-    pub runtime_directory: Option<PathBuf>,
-    managed: Option<ManagedExposureArtifact>,
-}
-
-#[derive(Debug)]
-struct ManagedExposureArtifact {
-    target: PathBuf,
-    runtime_directory: PathBuf,
-    created_directories: Vec<PathBuf>,
-}
-
-impl PreparedExposure {
-    /// Removes only the artifact UZE created, plus empty parent directories it
-    /// created for that artifact. It never removes project-owned content.
-    pub fn cleanup(&mut self) -> Result<()> {
-        let Some(managed) = self.managed.take() else {
-            return Ok(());
-        };
-        remove_managed_artifact(&managed)
-    }
-}
-
-impl Drop for PreparedExposure {
-    fn drop(&mut self) {
-        if let Some(managed) = self.managed.take() {
-            let _ = remove_managed_artifact(&managed);
-        }
-    }
-}
-
-impl ExposurePlan {
-    pub fn prepare(
-        &self,
-        home: &UzeHome,
-        integration: &str,
-        session: &str,
-        workspace: &Path,
-    ) -> Result<PreparedExposure> {
-        match &self.mechanism {
-            ExposureMechanism::DirectNative { .. } => Ok(PreparedExposure {
-                working_directory: workspace.to_path_buf(),
-                arguments: Vec::new(),
-                runtime_directory: None,
-                managed: None,
-            }),
-            ExposureMechanism::RuntimeBridge { arguments, .. } => Ok(PreparedExposure {
-                working_directory: workspace.to_path_buf(),
-                arguments: arguments.clone(),
-                runtime_directory: None,
-                managed: None,
-            }),
-            ExposureMechanism::FilesystemProjection {
-                source,
-                target_relative,
-            } => prepare_filesystem_projection(
-                home,
-                integration,
-                session,
-                workspace,
-                source,
-                target_relative,
-            ),
-            ExposureMechanism::ManagedUserScopeReference { .. } => {
-                // A persistent, user-scope reference is not a session-scoped
-                // managed artifact: it is created/refreshed once via
-                // `ExposureMechanism::attach`, not per invocation, and must
-                // not be torn down when a `PreparedExposure` is dropped.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedVendorConfig { .. } => {
-                // Same rationale as `ManagedUserScopeReference` above: the
-                // real attachment path for generated vendor config is each
-                // integration's own `attach()`, called once at `uze add`
-                // time, not `prepare()`.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedTextRegion { .. } => {
-                // Same rationale again: a managed text region is a
-                // persistent, package-lifecycle artifact created once via
-                // `attach_text_region`/`IntegrationPort::attach`, not a
-                // per-session projection this type prepares or tears down.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedHookConfig { .. } => {
-                // A managed hook entry is a persistent, package-lifecycle
-                // artifact merged once into the harness's shared hook
-                // configuration via `IntegrationPort::attach` — never a
-                // per-session projection (ADR-033).
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedHookFile { .. } => {
-                // A whole derived hook file is a persistent,
-                // package-lifecycle artifact written once via
-                // `IntegrationPort::attach` — never a per-session
-                // projection (ADR-033).
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::Unsupported { rationale } => {
-                Err(UzeError::ExposureUnavailable(rationale.clone()))
-            }
-        }
-    }
-}
-
-fn prepare_filesystem_projection(
-    home: &UzeHome,
-    integration: &str,
-    session: &str,
-    workspace: &Path,
-    source: &Path,
-    target_relative: &Path,
-) -> Result<PreparedExposure> {
-    let runtime = home.runtime_session_dir(integration, session);
-    let target = workspace.join(target_relative);
-    if target.exists() || target.is_symlink() {
-        return Err(UzeError::RuntimePathExists(target));
-    }
-    let parent = target.parent().expect("projection target has a parent");
-    let created_directories = create_missing_directories(parent)?;
-    fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
-        path: parent.to_path_buf(),
-        source: source_error,
-    })?;
-    create_symlink(source, &target)?;
-    fs::create_dir_all(&runtime).map_err(|source_error| UzeError::Write {
-        path: runtime.clone(),
-        source: source_error,
-    })?;
-    let metadata = serde_json::json!({
-        "managed_by": "uze",
-        "integration": integration,
-        "session": session,
-        "workspace": workspace,
-        "target": target,
-        "source": source,
-    });
-    fs::write(
-        runtime.join("managed-exposure.json"),
-        serde_json::to_vec_pretty(&metadata).expect("metadata serialization is infallible"),
-    )
-    .map_err(|source_error| UzeError::Write {
-        path: runtime.join("managed-exposure.json"),
-        source: source_error,
-    })?;
-    Ok(PreparedExposure {
-        working_directory: workspace.to_path_buf(),
-        arguments: Vec::new(),
-        runtime_directory: Some(runtime),
-        managed: Some(ManagedExposureArtifact {
-            target,
-            runtime_directory: home.runtime_session_dir(integration, session),
-            created_directories,
-        }),
-    })
-}
-
-fn create_missing_directories(parent: &Path) -> Result<Vec<PathBuf>> {
-    let mut missing = Vec::new();
-    let mut cursor = parent;
-    while !cursor.exists() {
-        missing.push(cursor.to_path_buf());
-        cursor = cursor
-            .parent()
-            .ok_or_else(|| UzeError::RuntimePathExists(parent.to_path_buf()))?;
-    }
-    missing.reverse();
-    Ok(missing)
-}
-
-fn remove_managed_artifact(managed: &ManagedExposureArtifact) -> Result<()> {
-    if managed.target.is_symlink() || managed.target.is_file() {
-        fs::remove_file(&managed.target).map_err(|source| UzeError::Write {
-            path: managed.target.clone(),
-            source,
-        })?;
-    }
-    for directory in managed.created_directories.iter().rev() {
-        match fs::remove_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-            Err(source) => {
-                return Err(UzeError::Write {
-                    path: directory.clone(),
-                    source,
-                });
-            }
-        }
-    }
-    if managed.runtime_directory.exists() {
-        fs::remove_dir_all(&managed.runtime_directory).map_err(|source| UzeError::Write {
-            path: managed.runtime_directory.clone(),
-            source,
-        })?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn create_symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn create_symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    fn managed_reference(discovery_root: &Path, source: &Path) -> ExposureMechanism {
-        ExposureMechanism::ManagedUserScopeReference {
-            discovery_root: discovery_root.to_path_buf(),
-            entry_name: "uze-example".to_owned(),
-            source: source.to_path_buf(),
+    fn managed_reference(discovery_root: &Path, target: &Path) -> ManagedArtifact {
+        ManagedArtifact::SymlinkReference {
+            path: discovery_root.join("uze-example"),
+            target: target.to_path_buf(),
         }
     }
 
@@ -523,15 +349,15 @@ mod tests {
         let source = root.join("store-entry");
         fs::create_dir_all(&source).unwrap();
 
-        let mechanism = managed_reference(&discovery_root, &source);
-        let target = mechanism.attach().unwrap();
-        assert_eq!(target, discovery_root.join("uze-example"));
-        assert!(target.is_symlink());
-        assert_eq!(fs::read_link(&target).unwrap(), source);
+        let artifact = managed_reference(&discovery_root, &source);
+        artifact.attach_standard().unwrap();
+        let link = discovery_root.join("uze-example");
+        assert!(link.is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), source);
 
         // Second attach is a no-op, not an error and not a re-link.
-        let target_again = mechanism.attach().unwrap();
-        assert_eq!(target_again, target);
+        artifact.attach_standard().unwrap();
+        assert_eq!(fs::read_link(&link).unwrap(), source);
 
         fs::remove_dir_all(&root).unwrap();
     }
@@ -545,56 +371,10 @@ mod tests {
         let source = root.join("store-entry");
         fs::create_dir_all(&source).unwrap();
 
-        let mechanism = managed_reference(&discovery_root, &source);
-        let error = mechanism.attach().unwrap_err();
+        let error = managed_reference(&discovery_root, &source)
+            .attach_standard()
+            .unwrap_err();
         assert!(matches!(error, UzeError::ManagedEntryConflict(_)));
-
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn detach_removes_only_the_reference_it_owns() {
-        let root = uze_testkit::temp::scratch("detach");
-        let discovery_root = root.join("skills");
-        let source = root.join("store-entry");
-        fs::create_dir_all(&source).unwrap();
-
-        let mechanism = managed_reference(&discovery_root, &source);
-        let target = mechanism.attach().unwrap();
-        assert!(target.exists());
-
-        mechanism.detach().unwrap();
-        assert!(!target.exists());
-        assert!(
-            discovery_root.exists(),
-            "discovery root itself is preserved"
-        );
-
-        // Detaching again is a no-op, not an error.
-        mechanism.detach().unwrap();
-
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn detach_does_not_remove_an_entry_repointed_elsewhere() {
-        let root = uze_testkit::temp::scratch("repointed");
-        let discovery_root = root.join("skills");
-        let source = root.join("store-entry");
-        let other = root.join("unrelated-entry");
-        fs::create_dir_all(&source).unwrap();
-        fs::create_dir_all(&other).unwrap();
-
-        let mechanism = managed_reference(&discovery_root, &source);
-        let target = mechanism.attach().unwrap();
-        fs::remove_file(&target).unwrap();
-        create_symlink(&other, &target).unwrap();
-
-        mechanism.detach().unwrap();
-        assert!(
-            target.exists(),
-            "entry no longer pointing at source is left alone"
-        );
 
         fs::remove_dir_all(&root).unwrap();
     }

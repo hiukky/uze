@@ -74,12 +74,11 @@ fn a_service_call_is_one_span_tree() {
         "the snapshot hangs under the caller's span: {spans:?}"
     );
     for child in [
-        "plugins.list",
         "health.report",
         "marketplace.list",
         "marketplace.plugins",
         "profiles.list",
-        "workspace.summary",
+        "context.inspect",
     ] {
         assert_eq!(
             named(child),

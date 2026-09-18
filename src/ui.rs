@@ -10,8 +10,8 @@
 //!
 //! Module map — start at [`run`], the entry point:
 //! - `ui.rs` (this file): the entry point, plus chrome both surfaces
-//!   share — the color palette, [`TerminalSession`] (the one
-//!   alternate-screen lifecycle), and the sidebar-geometry math
+//!   share — [`TerminalSession`] (the one alternate-screen lifecycle),
+//!   row and text helpers, and the sidebar-geometry math
 //!   (`clamp_sidebar_width`/`sidebar_width_for`) both menus resize by.
 //! - [`orchestrator`]: the terminal workspace client (ADR-038) — tabs,
 //!   panes, the persistent runtime client, and the one event loop. Owns
@@ -134,9 +134,13 @@ pub fn run(home: UzeHome) -> Result<()> {
     let mut landing = orchestrator::Landing::AtLaunchDirectory;
     let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let launch = uze_terminal::SpaceSeat {
+            kind: space_kind_for(&uze_application::space_root(&root)),
+            root,
+        };
         match orchestrator::attach_workspace(
             &mut terminal,
-            &root,
+            &launch,
             &mut layout,
             &mut workspace_memory,
             &home,
@@ -274,9 +278,6 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
     }
 }
 
-/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
-/// label without competing with it for weight — the route counts in the
-/// management sidebar, the pull/push counts under an agent's branch.
 /// The first row of an informational popup: its name, and the key that
 /// dismisses it pinned to the right.
 pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::text::Line<'static> {
@@ -299,6 +300,9 @@ pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::tex
     ])
 }
 
+/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
+/// label without competing with it for weight — the route counts in the
+/// management sidebar, the pull/push counts under an agent's branch.
 pub(crate) fn small_digits(n: usize) -> String {
     n.to_string()
         .chars()
@@ -379,6 +383,21 @@ pub(crate) fn small_caps(s: &str) -> String {
         .collect()
 }
 
+/// The kind a space over `root` is created as when nobody chose.
+pub fn space_kind_for(root: &std::path::Path) -> uze_terminal::SpaceKind {
+    default_space_kind(uze_application::root_profile(root))
+}
+
+/// The kind a root with `profile` lands on: a worktree space where slots
+/// are possible, a workspace space anywhere else.
+pub(crate) fn default_space_kind(profile: uze_application::RootProfile) -> uze_terminal::SpaceKind {
+    if profile.slots_possible {
+        uze_terminal::SpaceKind::Worktree
+    } else {
+        uze_terminal::SpaceKind::Workspace
+    }
+}
+
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
 pub(crate) fn display_project_path(root: &std::path::Path) -> String {
@@ -438,31 +457,53 @@ const CONTENT_INSET_LEFT: u16 = 2;
 const CONTENT_INSET_RIGHT: u16 = 2;
 const CONTENT_INSET_TOP: u16 = 1;
 
-/// `text` broken between words into lines of at most `measure` columns; a
-/// single word longer than that stands on a line of its own.
-pub(crate) fn wrap_words(text: &str, measure: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut line = String::new();
+/// `text` broken between words into rows of at most `width` columns, with
+/// a word wider than a row broken across rows — the one wrapper every
+/// surface folds prose with. Empty text is one empty row.
+///
+/// Folding *before* a paragraph is authored is what keeps a row index a
+/// screen row: the plugin drawer anchors its two clickable rows (the
+/// marketplace name, the address under it) by counting authored lines, and
+/// a description that ratatui's own `Wrap` folded afterwards pushed the
+/// drawn rows down and left the targets sitting above them.
+pub(crate) fn fold(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
+    }
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
     for word in text.split_whitespace() {
-        let cells = |text: &str| Span::raw(text).width();
-        let wanted = cells(&line) + usize::from(!line.is_empty()) + cells(word);
-        if !line.is_empty() && wanted > measure {
-            lines.push(std::mem::take(&mut line));
+        // A word wider than the row is broken across rows rather than
+        // left to overflow — the paragraph's own wrapper does the same,
+        // and a bare URL in a description is exactly that word.
+        let mut word = word;
+        while word.chars().count() > width {
+            if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            let split = word
+                .char_indices()
+                .nth(width)
+                .map_or(word.len(), |(index, _)| index);
+            let (head, tail) = word.split_at(split);
+            rows.push(head.to_owned());
+            word = tail;
         }
-        if !line.is_empty() {
-            line.push(' ');
+        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
+        if projected > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
         }
-        line.push_str(word);
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
     }
-    if !line.is_empty() {
-        lines.push(line);
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
     }
-    lines
+    rows
 }
 
-/// Every content screen's outer inset — the design's `padding: 36px 44px`
-/// on each route's root div, translated to terminal cells. No border, no
-/// background: content just sits indented on the shared backdrop.
 /// A hint line for `actions`, each printed with the key that reaches it
 /// in `scopes`.
 ///
@@ -495,6 +536,9 @@ pub(crate) fn hint_for(scopes: &[uze_keys::Scope], actions: &[uze_keys::Action])
     Line::from(spans)
 }
 
+/// Every content screen's outer inset — the design's `padding: 36px 44px`
+/// on each route's root div, translated to terminal cells. No border, no
+/// background: content just sits indented on the shared backdrop.
 pub(crate) fn content_area(area: Rect) -> Rect {
     Rect::new(
         area.x + CONTENT_INSET_LEFT,
@@ -523,8 +567,8 @@ pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
     )
 }
 
-/// Every screen's header: a bold bright title, a muted subtitle on the
-/// next line, and an optional right-aligned trailer on the title's own
+/// Every screen's header: the route's name in bold, its subtitle muted on
+/// the next line, and an optional right-aligned trailer on the title's own
 /// row (item count, doctor summary, source count — whatever that route
 /// reports). Exactly the two-line header shape every route in the design
 /// uses. Returns the area still available below the header plus its own
@@ -532,10 +576,10 @@ pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
 pub(crate) fn render_screen_header(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    title: &str,
-    subtitle: &str,
+    route: model::Route,
     trailer: Option<Span<'static>>,
 ) -> Rect {
+    let title = route.label();
     let title_style = Style::default()
         .fg(theme::color(Token::TextBright))
         .add_modifier(Modifier::BOLD);
@@ -557,7 +601,7 @@ pub(crate) fn render_screen_header(
     if area.height > 1 {
         let subtitle_row = Rect::new(area.x, area.y + 1, area.width, 1);
         frame.render_widget(
-            Paragraph::new(Span::styled(subtitle, theme::fg(Token::TextMuted))),
+            Paragraph::new(Span::styled(route.subtitle(), theme::fg(Token::TextMuted))),
             subtitle_row,
         );
     }
@@ -698,7 +742,7 @@ pub(crate) struct FirstSteps<'a> {
 impl FirstSteps<'_> {
     /// The heading, in the section vocabulary the timeline already speaks.
     pub(crate) fn section(&self) -> uze_extensions::view::Section {
-        use uze_extensions::view::{Role, SectionRow, Span as ViewSpan};
+        use uze_extensions::view::{Role, RowMark, SectionRow, Span as ViewSpan};
 
         let keymap = uze_keys::active();
         uze_extensions::view::Section {
@@ -714,14 +758,10 @@ impl FirstSteps<'_> {
                 .steps
                 .iter()
                 .map(|action| SectionRow {
-                    marker: ViewSpan::new(
-                        if self.is_taken(*action) {
-                            theme::glyph(Symbol::MarkDone)
-                        } else {
-                            " ".repeat(theme::width(Symbol::MarkDone) as usize)
-                        },
-                        Role::Success,
-                    ),
+                    mark: RowMark::Step {
+                        done: self.is_taken(*action),
+                    },
+                    mark_role: Role::Success,
                     name: ViewSpan::new(
                         action.label(),
                         if self.is_taken(*action) {

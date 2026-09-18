@@ -92,6 +92,10 @@ fn the_projection_never_triggers_a_harnesss_own_isolation() {
         agents_md.contains("already isolated"),
         "an agent UZE placed must be told it is already isolated"
     );
+    assert!(
+        agents_md.contains("operator's own checkout"),
+        "an agent placed on the operator's branch must be told where it is: {agents_md}"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

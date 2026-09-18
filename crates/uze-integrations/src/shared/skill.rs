@@ -24,9 +24,162 @@
 //! in a directory Codex and OpenCode consume *together*, so its bytes are
 //! the superset of both vendors' encodings — never a canonical rewrite.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-use uze_core::{Result, UzeError, skill::SkillInvocationPolicy};
+use uze_core::{
+    Result, UzeError,
+    capability::Resource,
+    exposure::{ExposureMechanism, ExposurePlan},
+    home::UzeHome,
+    integration::{IntegrationPort, active_plugin_name, qualified_exposure_name_candidates},
+    router::CompatibilityRoute,
+    skill::SkillInvocationPolicy,
+};
+
+/// A Skill that nobody may invoke is never projected (ADR-030 §1).
+pub(crate) fn invalid_policy_plan() -> ExposurePlan {
+    ExposurePlan {
+        route: CompatibilityRoute::Unsupported,
+        mechanism: ExposureMechanism::Unsupported {
+            rationale: "This Skill declares invoke.model: false and invoke.user: false — nobody can invoke it, so UZE never projects it. Fix the `invoke:` block in SKILL.md.".to_owned(),
+        },
+        evidence: "Invalid canonical invocation policy: a Skill that nobody may invoke is not a projectable capability (ADR-030 §1).".to_owned(),
+    }
+}
+
+/// A Skill reaches `harness` through a managed user-scope attachment, which
+/// exists only once `uze setup` has completed.
+pub(crate) fn setup_pending_plan(harness: &str) -> ExposurePlan {
+    ExposurePlan {
+        route: CompatibilityRoute::Unsupported,
+        mechanism: ExposureMechanism::Unsupported {
+            rationale: format!(
+                "{harness} has not completed `uze setup`; run `uze setup` so UZE can attach this Skill."
+            ),
+        },
+        evidence: format!(
+            "Skills reach {harness} through a managed user-scope attachment, which exists only once `uze setup` has completed."
+        ),
+    }
+}
+
+/// The physical entry name for `resource`: the one shared-root resolution
+/// settled on, else the integration's own first candidate.
+pub(crate) fn entry_name(integration: &dyn IntegrationPort, resource: &Resource) -> Option<String> {
+    resource.resolved_exposure_name.clone().or_else(|| {
+        integration
+            .exposure_name_candidates(resource)
+            .into_iter()
+            .next()
+    })
+}
+
+/// The stable namespaced invocation label (`flow:review`, ADR-026) a
+/// generated wrapper declares as its `name`.
+pub(crate) fn skill_label(uze_home: &UzeHome, resource: &Resource) -> Option<String> {
+    qualified_exposure_name_candidates(resource, &active_plugin_name(uze_home, resource))
+        .into_iter()
+        .next()
+}
+
+/// Where `vendor` generates one Skill's wrapper, under UZE's own state and
+/// never under the Store: `<attachments>/<vendor>/skills/<package>/<skill>`.
+pub(crate) fn generated_skill_dir(
+    uze_home: &UzeHome,
+    vendor: &str,
+    resource: &Resource,
+) -> PathBuf {
+    let package_id = resource
+        .package_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let name = resource
+        .logical_capability_name()
+        .unwrap_or_else(|| resource.name());
+    skill_wrapper_root(uze_home, vendor)
+        .join(package_id)
+        .join(name)
+}
+
+/// The root every one of `vendor`'s generated Skill wrappers sits under.
+pub(crate) fn skill_wrapper_root(uze_home: &UzeHome, vendor: &str) -> PathBuf {
+    crate::shared::path::attachment_root(uze_home, vendor).join("skills")
+}
+
+/// A generated SKILL.md: `name`, the canonical description re-quoted (never
+/// raw-interpolated), the vendor's own `markers` as frontmatter lines, then
+/// the canonical body verbatim.
+pub fn render_skill_wrapper(name: &str, canonical_bytes: &[u8], markers: &[&str]) -> String {
+    let (description, body) = parse_skill_body(canonical_bytes);
+    let mut document = format!("---\nname: {name}\n");
+    if let Some(description) = description {
+        let escaped = escape_yaml_double_quoted(&description);
+        document.push_str(&format!("description: \"{escaped}\"\n"));
+    }
+    for marker in markers {
+        document.push_str(marker);
+        document.push('\n');
+    }
+    document.push_str("---\n");
+    document.push_str(&body);
+    document
+}
+
+/// The two harnesses that read the shared `~/.agents/skills` root.
+pub(crate) enum SharedRootReader {
+    Codex,
+    OpenCode,
+}
+
+/// When shared-root resolution reused another integration's wrapper for
+/// `resource`, that wrapper must still carry `reader`'s own encoding of the
+/// canonical policy — otherwise it would silently degrade (ADR-030 §25).
+pub(crate) fn verify_reused_wrapper(
+    resource: &Resource,
+    wrapper: &Path,
+    skills_dir: &Path,
+    reader: SharedRootReader,
+    integration_id: &str,
+) -> Result<()> {
+    let policy = resource.skill_invocation();
+    let missing = if policy.is_invalid() {
+        None
+    } else {
+        match reader {
+            SharedRootReader::Codex => (!policy.model && !has_explicit_only_sidecar(wrapper)).then_some(
+                "Codex needs agents/openai.yaml with policy.allow_implicit_invocation: false for a user-only Skill",
+            ),
+            SharedRootReader::OpenCode => {
+                let bytes = fs::read(wrapper.join("SKILL.md")).unwrap_or_default();
+                if !policy.model && !has_opencode_autoinvoke_false(&bytes) {
+                    Some("OpenCode needs metadata.opencode/autoinvoke: false for a user-only Skill")
+                } else if !policy.user && !has_slash_false(&bytes) {
+                    Some("OpenCode needs slash: false for a model-only Skill")
+                } else {
+                    None
+                }
+            }
+        }
+    };
+    let Some(requirement) = missing else {
+        return Ok(());
+    };
+    let entry = resource
+        .resolved_exposure_name
+        .as_ref()
+        .map_or_else(|| wrapper.to_path_buf(), |name| skills_dir.join(name));
+    Err(crate::shared::projection::conflict(
+        resource,
+        &entry,
+        wrapper,
+        requirement,
+        integration_id,
+    ))
+}
 
 /// Splits a canonical SKILL.md into `(description, body)`:
 ///
@@ -41,24 +194,33 @@ pub fn parse_skill_body(bytes: &[u8]) -> (Option<String>, String) {
     let Some(text) = is_utf8(bytes) else {
         return (None, String::new());
     };
-    let stripped = text.strip_prefix("\u{feff}").unwrap_or(text);
-    let Some(rest) = stripped.strip_prefix("---\n") else {
+    let Some((head, body)) = split_frontmatter(text.strip_prefix('\u{feff}').unwrap_or(text))
+    else {
         return (None, text.to_owned());
     };
-    let Some(end) = rest.find("\n---\n") else {
-        return (None, text.to_owned());
-    };
-    let head = &rest[..end];
-    let body = &rest[end + "\n---\n".len()..];
-    let mut description = None;
-    for line in head.lines() {
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim() == "description"
-        {
-            description = Some(value.trim().to_owned());
-        }
-    }
-    (description, body.to_owned())
+    let description = head
+        .lines()
+        .rev()
+        .find_map(|line| key_value(line, "description"));
+    (description.map(str::to_owned), body.to_owned())
+}
+
+/// Splits a document into its `---` frontmatter block and the body after
+/// it; `None` when the document does not open with a closed block.
+pub fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("---\n")?;
+    let end = rest.find("\n---\n")?;
+    Some((&rest[..end], &rest[end + "\n---\n".len()..]))
+}
+
+/// The first value `key` holds in a frontmatter block, trimmed.
+pub fn head_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    head.lines().find_map(|line| key_value(line, key))
+}
+
+fn key_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let (candidate, value) = line.split_once(':')?;
+    (candidate.trim() == key).then(|| value.trim())
 }
 
 /// Escapes `value` as the contents of a YAML double-quoted scalar, so it can
@@ -100,11 +262,11 @@ pub fn has_disable_model_invocation(bytes: &[u8]) -> bool {
 /// model may still load it automatically. Same strictness as
 /// [`has_disable_model_invocation`].
 pub fn has_user_invocable_false(bytes: &[u8]) -> bool {
-    frontmatter_key_value(bytes, "user-invocable").is_some_and(|value| value == "false")
+    frontmatter_value(bytes, "user-invocable").is_some_and(|value| value == "false")
 }
 
 fn frontmatter_is_true(bytes: &[u8], key: &str) -> bool {
-    frontmatter_key_value(bytes, key).is_some_and(|value| value == "true")
+    frontmatter_value(bytes, key).is_some_and(|value| value == "true")
 }
 
 /// Reads one top-level frontmatter value (e.g. `name`) from canonical
@@ -112,19 +274,9 @@ fn frontmatter_is_true(bytes: &[u8], key: &str) -> bool {
 /// identity instead of inventing one. `None` for absent/malformed
 /// frontmatter or non-UTF8 payload — never a guess.
 pub fn frontmatter_value(bytes: &[u8], key: &str) -> Option<String> {
-    frontmatter_key_value(bytes, key)
-}
-
-fn frontmatter_key_value(bytes: &[u8], key: &str) -> Option<String> {
     let text = is_utf8(bytes)?;
-    let stripped = text.strip_prefix("\u{feff}").unwrap_or(text);
-    let rest = stripped.strip_prefix("---\n")?;
-    let end = rest.find("\n---\n")?;
-    let head = &rest[..end];
-    head.lines().find_map(|line| {
-        let (candidate, value) = line.split_once(':')?;
-        (candidate.trim() == key).then(|| value.trim().to_owned())
-    })
+    let (head, _) = split_frontmatter(text.strip_prefix('\u{feff}').unwrap_or(text))?;
+    head_value(head, key).map(str::to_owned)
 }
 
 /// Whether the payload declares OpenCode's user-only control —
@@ -148,6 +300,16 @@ pub fn has_slash_false(bytes: &[u8]) -> bool {
         return false;
     };
     text.lines().any(|line| line.trim() == "slash: false")
+}
+
+/// Whether `skill_dir` carries Codex's explicit-only policy sidecar:
+/// `agents/openai.yaml` declaring `allow_implicit_invocation: false`.
+pub fn has_explicit_only_sidecar(skill_dir: &Path) -> bool {
+    fs::read_to_string(skill_dir.join("agents/openai.yaml")).is_ok_and(|policy| {
+        policy
+            .lines()
+            .any(|line| line.trim() == "allow_implicit_invocation: false")
+    })
 }
 
 fn is_utf8(bytes: &[u8]) -> Option<&str> {
@@ -188,6 +350,50 @@ pub fn write_superset_skill_wrapper(
     label: &str,
     policy: &SkillInvocationPolicy,
 ) -> Result<()> {
+    recreate_dir(dir)?;
+    let mut markers = Vec::new();
+    if !policy.user {
+        markers.push("slash: false");
+    }
+    if !policy.model {
+        markers.extend(["metadata:", "  opencode/autoinvoke: false"]);
+    }
+    write_file(
+        &dir.join("SKILL.md"),
+        render_skill_wrapper(label, canonical_bytes, &markers).as_bytes(),
+    )?;
+    if !policy.model {
+        write_explicit_only_sidecar(dir)?;
+    }
+    // A canonical `agents/` directory stays out: the sidecar above is the
+    // encoding this wrapper owns, and an author's own `agents/openai.yaml`
+    // is never re-derived into it.
+    link_extras(canonical_dir, dir, &["agents"])
+}
+
+/// Codex's official invocation-policy metadata: `agents/openai.yaml` beside
+/// `SKILL.md`, with `policy.allow_implicit_invocation: false`. Per Codex's
+/// Build skills documentation this makes the skill *not* implicitly
+/// invocable by the model while explicit `$skill` invocation still works
+/// (verified against codex-cli 0.149.0 via `codex debug prompt-input`).
+pub(crate) const EXPLICIT_ONLY_POLICY_YAML: &str = "policy:\n  allow_implicit_invocation: false\n";
+
+/// Writes Codex's explicit-only policy sidecar into `skill_dir`.
+pub(crate) fn write_explicit_only_sidecar(skill_dir: &Path) -> Result<()> {
+    let agents = skill_dir.join("agents");
+    fs::create_dir_all(&agents).map_err(|source| UzeError::Write {
+        path: agents.clone(),
+        source,
+    })?;
+    write_file(
+        &agents.join("openai.yaml"),
+        EXPLICIT_ONLY_POLICY_YAML.as_bytes(),
+    )
+}
+
+/// Replaces `dir` with an empty directory: a generated artifact is rebuilt
+/// wholesale, never patched, because nothing in it is authoritative.
+pub(crate) fn recreate_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
         fs::remove_dir_all(dir).map_err(|source| UzeError::Write {
             path: dir.to_path_buf(),
@@ -197,55 +403,52 @@ pub fn write_superset_skill_wrapper(
     fs::create_dir_all(dir).map_err(|source| UzeError::Write {
         path: dir.to_path_buf(),
         source,
-    })?;
-    let (description, body) = parse_skill_body(canonical_bytes);
-    let mut document = String::from("---\n");
-    document.push_str(&format!("name: {label}\n"));
-    if let Some(description) = description {
-        let escaped = escape_yaml_double_quoted(&description);
-        document.push_str(&format!("description: \"{escaped}\"\n"));
-    }
-    if !policy.user {
-        document.push_str("slash: false\n");
-    }
-    if !policy.model {
-        document.push_str("metadata:\n  opencode/autoinvoke: false\n");
-    }
-    document.push_str("---\n");
-    document.push_str(&body);
-    fs::write(dir.join("SKILL.md"), document).map_err(|source| UzeError::Write {
-        path: dir.join("SKILL.md"),
+    })
+}
+
+pub(crate) fn write_file(path: &Path, content: &[u8]) -> Result<()> {
+    fs::write(path, content).map_err(|source| UzeError::Write {
+        path: path.to_path_buf(),
         source,
-    })?;
-    if !policy.model {
-        let policy_file = dir.join("agents/openai.yaml");
-        if policy_file.exists() {
-            fs::remove_file(&policy_file).map_err(|source| UzeError::Write {
-                path: policy_file.clone(),
-                source,
+    })
+}
+
+/// Points `link` at `source`, repairing a link that points elsewhere and
+/// refusing to replace anything that is not a link.
+pub(crate) fn link_or_repair(link: &Path, source: &Path) -> Result<()> {
+    match fs::symlink_metadata(link) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(link).map_err(|error| UzeError::Read {
+                path: link.to_path_buf(),
+                source: error,
             })?;
+            if current == source {
+                return Ok(());
+            }
+            fs::remove_file(link).map_err(|error| UzeError::Write {
+                path: link.to_path_buf(),
+                source: error,
+            })?;
+            uze_core::persistence::create_symlink(source, link)
         }
-        fs::create_dir_all(policy_file.parent().expect("policy file has a parent")).map_err(
-            |source| UzeError::Write {
-                path: policy_file
-                    .parent()
-                    .expect("policy file has a parent")
-                    .to_path_buf(),
-                source,
-            },
-        )?;
-        fs::write(
-            &policy_file,
-            "policy:\n  allow_implicit_invocation: false\n",
-        )
-        .map_err(|source| UzeError::Write {
-            path: policy_file,
-            source,
-        })?;
+        Ok(_) => Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            uze_core::persistence::create_symlink(source, link)
+        }
+        Err(error) => Err(UzeError::Read {
+            path: link.to_path_buf(),
+            source: error,
+        }),
     }
-    // Everything else in the canonical skill directory stays referenced.
-    // An absent canonical directory (a Resource built without a real Store
-    // path, in unit-test contexts) simply has no extras to reference.
+}
+
+/// Links every entry of a canonical skill directory except `SKILL.md` (and
+/// the names in `skip`) into a generated skill directory, so a wrapper that
+/// replaces `SKILL.md` never drops the scripts and references it names by
+/// relative path. An entry already present is left as it is. An absent
+/// canonical directory (a Resource built without a real Store path, in
+/// unit-test contexts) has no extras to link.
+pub fn link_extras(canonical_dir: &Path, target_dir: &Path, skip: &[&str]) -> Result<()> {
     let entries = match fs::read_dir(canonical_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -261,36 +464,16 @@ pub fn write_superset_skill_wrapper(
             path: canonical_dir.to_path_buf(),
             source,
         })?;
-        let entry_name = entry.file_name();
-        if entry_name == "SKILL.md" {
+        let name = entry.file_name();
+        if name == "SKILL.md" || skip.iter().any(|skipped| name == *skipped) {
             continue;
         }
-        if entry_name == "agents" {
-            // The canonical skill may ship its own `agents/` support files;
-            // they stay canonical (and a canonical `agents/openai.yaml` is
-            // the author's, never re-derived here).
-            continue;
-        }
-        let source = entry.path();
-        let target = dir.join(&entry_name);
+        let target = target_dir.join(&name);
         if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
+            uze_core::persistence::create_symlink(&entry.path(), &target)?;
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]

@@ -28,7 +28,6 @@ pub struct Scenario {
     project_files: Vec<(String, String)>,
 }
 
-#[derive(Clone)]
 struct MarketplaceSpec {
     name: String,
     marketplace_json: String,
@@ -66,9 +65,8 @@ impl Scenario {
     /// `source` into `<market>/plugins/<name>` (a real marketplace serves
     /// its plugin bytes from a local path).
     pub fn marketplace_plugin(mut self, name: &str, source: impl AsRef<Path>) -> Self {
-        let mut specs = std::mem::take(&mut self.marketplace_plugins);
-        specs.push((name.to_owned(), source.as_ref().to_path_buf()));
-        self.marketplace_plugins = specs;
+        self.marketplace_plugins
+            .push((name.to_owned(), source.as_ref().to_path_buf()));
         self
     }
 
@@ -91,20 +89,15 @@ impl Scenario {
 
     /// Writes everything into `env`: the marketplace under the env root,
     /// project files and `agents.lock` under `env.project`.
-    pub fn materialize(mut self, env: &TestEnvironment) -> MaterializedScenario {
-        let marketplace_name = self.marketplace.as_ref().map(|spec| spec.name.clone());
-        let marketplace = self.marketplace.take().map(|spec| {
-            let dir = env.root().join(format!("market-{}", spec.name));
-            std::fs::create_dir_all(&dir).expect("scenario: marketplace dir must be creatable");
-            std::fs::write(dir.join("marketplace.json"), spec.marketplace_json)
-                .expect("scenario: marketplace.json must be writable");
-            for (name, source) in &self.marketplace_plugins {
-                let dest = dir.join("plugins").join(name);
-                copy_tree(source, &dest);
-            }
-            // A marketplace is a Git repository, so a scenario's is too.
-            crate::git::commit_everything_in(&dir);
-            dir
+    pub fn materialize(self, env: &TestEnvironment) -> MaterializedScenario {
+        let staged = self.marketplace.as_ref().map(|spec| {
+            let directory = env.root().join(format!("market-{}", spec.name));
+            let revision = crate::marketplace::stage(
+                &directory,
+                &spec.marketplace_json,
+                &self.marketplace_plugins,
+            );
+            (spec.name.as_str(), directory, revision)
         });
 
         for (rel, contents) in &self.project_files {
@@ -118,14 +111,12 @@ impl Scenario {
 
         let lock = env.project.join("agents.lock");
         if !self.lock_plugins.is_empty() {
-            let market = marketplace
+            let (name, market, revision) = staged
                 .as_ref()
                 .unwrap_or_else(|| panic!("scenario: lock_plugin_from_market needs a marketplace"));
-            let name = marketplace_name.as_deref().unwrap_or("local");
             // A local marketplace is a clone, and a clone's path is a valid
             // Git URL: the lock names the repository and the commit, the
             // same as it would for a remote one.
-            let revision = crate::git::commit_everything_in(market);
             let mut yaml = String::from("version: 1\nmarketplaces:\n");
             yaml.push_str(&format!(
                 "  {name}:\n    git: {}\n    revision: {revision}\n",
@@ -142,25 +133,9 @@ impl Scenario {
         }
 
         MaterializedScenario {
-            marketplace,
+            marketplace: staged.map(|(_, directory, _)| directory),
             project: env.project.clone(),
             lock,
-        }
-    }
-}
-
-/// Recursively copies `source` into `dest` (dest is created).
-fn copy_tree(source: &Path, dest: &Path) {
-    std::fs::create_dir_all(dest).expect("scenario: plugin dest must be creatable");
-    for entry in std::fs::read_dir(source).expect("scenario: plugin source must be readable") {
-        let entry = entry.expect("scenario: plugin entry must be readable");
-        let from = entry.path();
-        let to = dest.join(entry.file_name());
-        if from.is_dir() {
-            copy_tree(&from, &to);
-        } else {
-            std::fs::copy(&from, &to)
-                .unwrap_or_else(|error| panic!("scenario: copy {from:?} -> {to:?}: {error}"));
         }
     }
 }

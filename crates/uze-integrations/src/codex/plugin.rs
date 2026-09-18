@@ -1,81 +1,175 @@
-//! Codex's native plugin marketplace: the derived, UZE-owned
-//! `.agents/plugins/marketplace.json` catalogue every installed package
-//! with its own external `.codex-plugin/plugin.json` is republished
-//! through, and the `codex plugin`/`codex mcp` inspection JSON parsing.
+//! Codex's native plugin marketplaces: the dialect UZE's derived
+//! `.agents/plugins/marketplace.json` catalogues are written in, the
+//! exact-coverage computation for a package's own `.codex-plugin/plugin.json`,
+//! and the `codex plugin` verbs and their inspection JSON.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use uze_core::{
-    Result, UzeError,
+    Result,
+    capability::Resource,
     integration::{AttachmentInspection, AttachmentState},
+    skill::SkillInvocationPolicy,
     store::StoredPackage,
 };
 
+use crate::shared::marketplace::{MarketplaceDialect, Origin, detail_path, marketplace_entries};
 use crate::shared::path::normalize_declared_relative_path;
-use crate::shared::process::run_quiet;
+use crate::shared::plan::blocked;
+use crate::shared::process::{json, run_quiet};
 
-/// Name of the local catalogue this integration publishes into.
-pub(super) const MARKETPLACE_NAME: &str = "uze-local";
+pub(super) struct CodexMarketplace;
 
-pub(super) fn marketplace_exists(executable: &Path, command_home: &Path, root: &Path) -> bool {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "marketplace", "list", "--json"])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return false;
-    };
-    value["marketplaces"].as_array().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry
-                .get("root")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|candidate| Path::new(candidate) == root)
+impl MarketplaceDialect for CodexMarketplace {
+    const VENDOR: &'static str = "codex";
+    const SETUP_NAME: &'static str = "codex";
+    const CATALOGUE_NOUN: &'static str = "Codex catalogue";
+    const ENVELOPE_DIR: &'static str = ".codex-plugin";
+    const CATALOGUE_PATH: &'static str = ".agents/plugins/marketplace.json";
+    const EXPLICIT_KIND: &'static str = "marketplace-plugin";
+    const GENERATED_KIND: &'static str = "marketplace-plugin-generated";
+    const EXPLICIT_EVIDENCE: &'static str = "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.";
+    const GENERATED_EVIDENCE: &'static str = "No .codex-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Codex marketplace.";
+
+    fn catalogue_document(
+        name: &str,
+        display_name: &str,
+        plugins: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "interface": { "displayName": display_name },
+            "plugins": plugins,
         })
-    })
-}
-
-pub(super) fn run_codex(
-    executable: &Path,
-    command_home: &Path,
-    prefix: [&str; 3],
-    path: Option<&Path>,
-) -> Result<()> {
-    let label = format!("codex {}", prefix.join(" "));
-    let mut args: Vec<std::ffi::OsString> = prefix.iter().map(std::ffi::OsString::from).collect();
-    if let Some(path) = path {
-        args.push(path.as_os_str().to_owned());
     }
-    run_quiet(executable, command_home, &label, &args)
+
+    /// Codex requires `policy`/`category` on every entry, and reads
+    /// `source.path` relative to the marketplace root.
+    fn catalogue_entry(
+        package: &StoredPackage,
+        source: String,
+        _origin: Origin,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "name": package.active_name.as_str(),
+            "source": { "source": "local", "path": source },
+            "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+            "category": "Developer tools"
+        })
+    }
+
+    fn explicit_coverage(package: &StoredPackage, resources: &[&Resource]) -> BTreeSet<String> {
+        codex_exact_coverage(package, resources)
+    }
+
+    /// The `agents/openai.yaml` sidecar covers `model=false` and the default
+    /// needs nothing; `user=false` cannot be enforced anywhere on Codex.
+    fn envelope_preserves(policy: SkillInvocationPolicy) -> bool {
+        !policy.is_invalid() && !(policy.model && !policy.user)
+    }
+
+    fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Result<()> {
+        super::generate::materialize_envelope(package, dir)
+    }
+
+    /// Codex reports an installed plugin at the directory it was catalogued
+    /// from — the generated one, not the Store package — so recording the
+    /// Store root would read as permanent drift against Codex's own report.
+    fn generated_receipt_root(_package: &StoredPackage, envelope_dir: &Path) -> PathBuf {
+        envelope_dir.to_path_buf()
+    }
+
+    fn marketplace_exists(executable: &Path, home: &Path, root: &Path) -> bool {
+        let Ok(listing) = json(
+            executable,
+            home,
+            &["plugin", "marketplace", "list", "--json"],
+            "codex",
+        ) else {
+            return false;
+        };
+        marketplace_entries(&listing).is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .get("root")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|candidate| Path::new(candidate) == root)
+            })
+        })
+    }
+
+    fn add_marketplace(executable: &Path, home: &Path, root: &Path) -> Result<()> {
+        run_quiet(
+            executable,
+            home,
+            "codex plugin marketplace add",
+            &[
+                std::ffi::OsStr::new("plugin"),
+                std::ffi::OsStr::new("marketplace"),
+                std::ffi::OsStr::new("add"),
+                root.as_os_str(),
+            ],
+        )
+    }
+
+    fn install_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
+        run_quiet(
+            executable,
+            home,
+            &format!("codex plugin add `{selector}`"),
+            &["plugin", "add", selector],
+        )
+    }
+
+    fn inspect_plugin(
+        executable: &Path,
+        home: &Path,
+        selector: &str,
+        marketplace_root: &Path,
+        detail: &BTreeMap<String, serde_json::Value>,
+    ) -> AttachmentInspection {
+        let Some(package_root) = detail_path(detail, "package_root") else {
+            return blocked("plugin receipt has no package root");
+        };
+        inspect_codex_plugin(executable, home, selector, marketplace_root, &package_root)
+    }
+
+    fn remove_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
+        run_quiet(
+            executable,
+            home,
+            &format!("codex plugin remove {selector}"),
+            &["plugin", "remove", selector],
+        )
+    }
 }
 
-pub(super) fn inspect_codex_plugin(
+fn inspect_codex_plugin(
     executable: &Path,
     command_home: &Path,
     selector: &str,
     marketplace_root: &Path,
     package_root: &Path,
 ) -> AttachmentInspection {
-    let marketplace = match codex_json(
+    let marketplace = match json(
         executable,
         command_home,
-        ["plugin", "marketplace", "list", "--json"],
+        &["plugin", "marketplace", "list", "--json"],
+        "codex",
     ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
     let marketplace_name = selector.rsplit_once('@').map(|(_, name)| name);
     let Some(marketplace_name) = marketplace_name else {
-        return blocked("plugin receipt selector has no marketplace identity".to_owned());
+        return blocked("plugin receipt selector has no marketplace identity");
     };
-    let Some(entries) = marketplace
-        .get("marketplaces")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return blocked("Codex marketplace JSON has no marketplaces array".to_owned());
+    let Some(entries) = marketplace_entries(&marketplace) else {
+        return blocked("Codex marketplace JSON has no marketplaces array");
     };
     let matching_name = entries.iter().find(|entry| {
         entry
@@ -99,7 +193,12 @@ pub(super) fn inspect_codex_plugin(
             reason: "Codex marketplace root differs from receipt".to_owned(),
         };
     }
-    let plugins = match codex_json(executable, command_home, ["plugin", "list", "--json"]) {
+    let plugins = match json(
+        executable,
+        command_home,
+        &["plugin", "list", "--json"],
+        "codex",
+    ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -112,7 +211,7 @@ fn inspect_codex_plugin_value(
     package_root: &Path,
 ) -> AttachmentInspection {
     let Some(installed) = value.get("installed").and_then(serde_json::Value::as_array) else {
-        return blocked("Codex plugin JSON has no installed array".to_owned());
+        return blocked("Codex plugin JSON has no installed array");
     };
     let Some(plugin) = installed.iter().find(|entry| {
         ["pluginId", "id", "plugin_id", "selector"]
@@ -126,27 +225,27 @@ fn inspect_codex_plugin_value(
         };
     };
     let Some(enabled) = plugin.get("enabled").and_then(serde_json::Value::as_bool) else {
-        return blocked("Codex plugin JSON has no enabled state".to_owned());
+        return blocked("Codex plugin JSON has no enabled state");
     };
     let Some(installed_state) = plugin.get("installed").and_then(serde_json::Value::as_bool) else {
-        return blocked("Codex plugin JSON has no installed state".to_owned());
+        return blocked("Codex plugin JSON has no installed state");
     };
     let Some((_, marketplace_name)) = selector.rsplit_once('@') else {
-        return blocked("plugin receipt selector has no marketplace identity".to_owned());
+        return blocked("plugin receipt selector has no marketplace identity");
     };
     let Some(actual_marketplace) = plugin
         .get("marketplaceName")
         .or_else(|| plugin.get("marketplace_name"))
         .and_then(serde_json::Value::as_str)
     else {
-        return blocked("Codex plugin JSON has no marketplace identity".to_owned());
+        return blocked("Codex plugin JSON has no marketplace identity");
     };
     let source = plugin
         .get("path")
         .or_else(|| plugin.pointer("/source/path"))
         .and_then(serde_json::Value::as_str);
     let Some(source) = source else {
-        return blocked("Codex plugin JSON has no package source path".to_owned());
+        return blocked("Codex plugin JSON has no package source path");
     };
     if !enabled
         || !installed_state
@@ -162,86 +261,6 @@ fn inspect_codex_plugin_value(
         state: AttachmentState::Matched,
         reason: "Codex native plugin matches receipt".to_owned(),
     }
-}
-
-fn codex_json<const N: usize>(
-    executable: &Path,
-    command_home: &Path,
-    args: [&str; N],
-) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run `codex`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("`codex` inspection exited with {}", output.status));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Codex JSON is invalid: {error}"))
-}
-
-pub(super) fn remove_plugin(executable: &Path, command_home: &Path, selector: &str) -> Result<()> {
-    run_quiet(
-        executable,
-        command_home,
-        &format!("codex plugin remove {selector}"),
-        &["plugin", "remove", selector],
-    )
-}
-
-pub(super) fn blocked(reason: String) -> AttachmentInspection {
-    AttachmentInspection {
-        state: AttachmentState::Blocked,
-        reason,
-    }
-}
-
-/// Packages carrying the Codex-native envelope. Deciding which packages
-/// belong in the catalogue is Codex policy, so it lives here rather than in
-/// the Store.
-pub(super) fn publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
-    packages
-        .iter()
-        .filter(|package| package.root.join(".codex-plugin/plugin.json").is_file())
-        .collect()
-}
-
-/// The catalogue document, derived purely from the installed package set.
-/// Nothing here exists only in the catalogue: delete the file and this
-/// rebuilds it byte for byte from the Store.
-pub(super) fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
-    let plugins: Vec<serde_json::Value> = publishable(packages)
-        .into_iter()
-        .map(|package| {
-            serde_json::json!({
-                "name": package.active_name.as_str(),
-                // Relative to the catalogue root by necessity — see
-                // `CodexIntegration::catalogue_root`.
-                "source": { "source": "local", "path": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()) },
-                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
-                "category": "Developer tools"
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": MARKETPLACE_NAME,
-        "interface": { "displayName": "UZE Local" },
-        "plugins": plugins,
-    })
-}
-
-pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
-    let parent = path.parent().expect("catalogue path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    uze_core::persistence::write_atomic(
-        path,
-        &serde_json::to_vec_pretty(&catalogue_document(packages))
-            .expect("catalogue is serializable"),
-    )
 }
 
 /// Computes which of `resources` (already discovered by UZE's engine) are
@@ -261,7 +280,7 @@ pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result
 /// exactly like Claude's malformed-manifest handling.
 pub(super) fn codex_exact_coverage(
     package: &StoredPackage,
-    resources: &[&uze_core::project::Resource],
+    resources: &[&uze_core::capability::Resource],
 ) -> std::collections::BTreeSet<String> {
     let manifest_path = package.root.join(".codex-plugin/plugin.json");
     let bytes = match fs::read(&manifest_path) {
@@ -310,7 +329,9 @@ pub(super) fn codex_exact_coverage(
                 // live inside the declared skills root, not merely share a
                 // string prefix — `Path::starts_with` compares components,
                 // so "skills-extra" is never mistaken for inside "skills".
-                if parent.starts_with(declared_dir) {
+                if parent.starts_with(declared_dir)
+                    && explicit_envelope_preserves_policy(resource, &package.root.join(parent))
+                {
                     provided.insert(resource.identity());
                 }
             }
@@ -327,16 +348,22 @@ pub(super) fn codex_exact_coverage(
     provided
 }
 
-/// Reads one integration-defined detail out of an opaque receipt payload.
-/// Only this integration interprets these keys.
-pub(super) fn detail_path(
-    detail: &std::collections::BTreeMap<String, serde_json::Value>,
-    key: &str,
-) -> Option<PathBuf> {
-    detail
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(PathBuf::from)
+/// Whether the author's own bytes already carry Codex's encoding of the
+/// Skill's canonical `invoke:` policy (ADR-030 §6): UZE never rewrites an
+/// explicit envelope, so a path match alone is not coverage. A user-only
+/// Skill needs its own `agents/openai.yaml` explicit-only sidecar; a
+/// model-only Skill degrades on Codex and an invalid one is never projected,
+/// so neither is ever claimed — both fall through to capability-level
+/// delivery, which reports them honestly.
+fn explicit_envelope_preserves_policy(
+    resource: &uze_core::capability::Resource,
+    skill_dir: &Path,
+) -> bool {
+    let policy = resource.skill_invocation();
+    if policy.is_invalid() || !policy.user {
+        return false;
+    }
+    policy.model || crate::shared::skill::has_explicit_only_sidecar(skill_dir)
 }
 
 #[cfg(test)]
@@ -378,10 +405,10 @@ mod codex_native_coverage_tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::capability::Resource;
+    use uze_core::capability::{Capability, CapabilityKind};
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
-    use uze_core::project::Resource;
 
     use super::super::CodexIntegration;
     use super::codex_exact_coverage;
@@ -449,7 +476,6 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::AgentSkill,
-                representation: Representation::Standard,
                 path,
                 payload: Vec::new(),
             },
@@ -466,12 +492,71 @@ mod codex_native_coverage_tests {
             pkg.root.clone(),
             Capability {
                 kind: CapabilityKind::Mcp,
-                representation: Representation::Standard,
                 path,
                 payload,
             },
             name.to_owned(),
         )
+    }
+
+    fn policy_skill_resource(
+        pkg: &uze_core::store::StoredPackage,
+        skill: &str,
+        body: &str,
+    ) -> Resource {
+        let path = pkg.root.join("skills").join(skill).join("SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, body).unwrap();
+        Resource::from_package(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::AgentSkill,
+                path,
+                payload: body.as_bytes().to_vec(),
+            },
+        )
+    }
+
+    const USER_ONLY: &str =
+        "---\nname: review\ninvoke:\n  model: false\n  user: true\n---\nBody.\n";
+
+    /// ADR-030 §6: an explicit envelope never rewritten by UZE covers a
+    /// user-only Skill only when the author shipped Codex's own
+    /// explicit-only sidecar beside it.
+    #[test]
+    fn explicit_user_only_skill_is_covered_only_with_the_authors_policy_sidecar() {
+        let (_root, pkg) = make_package("policy-sidecar", Some(r#""./skills/""#), None, None);
+        let without = policy_skill_resource(&pkg, "review", USER_ONLY);
+        assert!(
+            codex_exact_coverage(&pkg, &[&without]).is_empty(),
+            "a path-matched user-only Skill without the sidecar would silently become model-invocable"
+        );
+        let sidecar = pkg.root.join("skills/review/agents/openai.yaml");
+        fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        fs::write(&sidecar, "policy:\n  allow_implicit_invocation: false\n").unwrap();
+        assert_eq!(
+            codex_exact_coverage(&pkg, &[&without]),
+            BTreeSet::from([without.identity()])
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn explicit_model_only_and_invalid_skills_are_never_covered() {
+        let (_root, pkg) = make_package("policy-degraded", Some(r#""./skills/""#), None, None);
+        let model_only = policy_skill_resource(
+            &pkg,
+            "legacy",
+            "---\ninvoke:\n  model: true\n  user: false\n---\nBody.\n",
+        );
+        let invalid = policy_skill_resource(
+            &pkg,
+            "dead",
+            "---\ninvoke:\n  model: false\n  user: false\n---\nBody.\n",
+        );
+        assert!(codex_exact_coverage(&pkg, &[&model_only, &invalid]).is_empty());
+        let _ = fs::remove_dir_all(_root);
     }
 
     const MCP_FILE_ONE_SERVER: &str = r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#;
@@ -673,6 +758,12 @@ mod codex_native_coverage_tests {
         assert!(plan.provided_resource_identities.is_empty());
         // The uncovered skill must still be attachable through the normal
         // capability-level fallback — never silently dropped.
+        uze_core::state::record(
+            &UzeHome::at(_root.join("uze")),
+            integration.id(),
+            uze_core::state::IntegrationRecord::default(),
+        )
+        .unwrap();
         let fallback = integration.exposure_plan(&r_a);
         assert!(!matches!(
             fallback.mechanism,
@@ -700,11 +791,10 @@ mod codex_native_coverage_tests {
         let integration = CodexIntegration::new(_root.join("agents"), uze_home.clone());
         uze_core::state::record(
             &uze_home,
+            integration.id(),
             uze_core::state::IntegrationRecord {
-                harness: integration.id().to_owned(),
                 version: None,
                 strategy: "test".to_owned(),
-                installed: true,
             },
         )
         .unwrap();

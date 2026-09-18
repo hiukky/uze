@@ -10,8 +10,10 @@
 //! [`plan`] runs inside the launched process, on the shim — the only place
 //! that is reached by *every* relaunch, including the one the terminal
 //! runtime performs when it restores a workspace with no client in the room.
-//! It therefore does no more than a lexical path match, one small read and,
-//! on a first launch, one small write.
+//! It therefore does no more than verifying the launch's claim against the
+//! record it names — a few `stat`s and one small read — and, on a first
+//! launch, one small write. It reads no environment: the shim decides what
+//! the launch claims and hands it in.
 //!
 //! [`refresh`] is the other half, and runs where a background answer already
 //! runs: it asks the harness which conversation the agent is actually in and
@@ -21,7 +23,7 @@
 use std::{ffi::OsString, path::Path};
 
 use crate::{
-    conversation::{self, ConversationOrigin, SessionId},
+    conversation::{self, Claim, ConversationOrigin, SessionId},
     home::UzeHome,
     integration::{IntegrationPort, ObservationContext, SessionContinuity},
 };
@@ -46,22 +48,23 @@ impl LaunchPlan {
     }
 }
 
-/// Resume this task's conversation, or start one and record it.
+/// Resume this agent's conversation, or start one and record it.
 ///
-/// `None` of the interesting cases is an error: a directory belonging to no
-/// managed task, a harness that declares no continuity, a record that no
-/// longer resolves — each answers with the launch that would have happened
-/// anyway. Continuity is never a precondition for an agent starting.
-pub fn plan(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) -> LaunchPlan {
+/// `None` of the interesting cases is an error: a claim no record backs, a
+/// harness that declares no continuity, a record that no longer resolves —
+/// each answers with the launch that would have happened anyway.
+/// Continuity is never a precondition for an agent starting.
+pub fn plan(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort) -> LaunchPlan {
     let continuity = integration.session_continuity();
     if continuity == SessionContinuity::Unsupported {
         return LaunchPlan::nothing();
     }
-    // Not a managed task's checkout: an ordinary invocation stays ordinary.
-    let Some(owner) = conversation::owner_of(home, cwd) else {
+    // Not an agent UZE launched, or not where its record put it: an
+    // ordinary invocation stays ordinary.
+    let Some(owner) = conversation::owner_of(home, claim) else {
         return LaunchPlan::nothing();
     };
-    let mut record = conversation::load(home, &owner.primary, &owner.task);
+    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
 
     // A launch whose read-back never happened — the client was not running,
@@ -75,30 +78,30 @@ pub fn plan(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) -> La
     if let Some(entry) = record.get(id)
         && entry.conversation.is_none()
         && let Some(observed) = integration.observe_session(&ObservationContext {
-            cwd,
+            cwd: claim.cwd,
             since_unix: entry.launched_at_unix,
             preceded_by: entry.preceded_by.as_ref(),
         })
     {
         let launched_at = entry.launched_at_unix;
         if record.observed(id, launched_at, observed) {
-            let _ = conversation::save(home, &owner.primary, &record);
+            let _ = conversation::save(home, &owner.project_root, &record);
         }
     }
 
     if let Some(recorded) = record.get(id).and_then(|entry| entry.conversation.clone()) {
-        if integration.session_exists(&recorded, cwd) {
+        if integration.session_exists(&recorded, claim.cwd) {
             return LaunchPlan::args(integration.resume_session_args(&recorded));
         }
         record.forget_harness(id);
-        let mut plan = start(home, cwd, integration, &mut record, &owner);
+        let mut plan = start(home, claim.cwd, integration, &mut record, &owner);
         plan.note = Some(format!(
             "the recorded conversation ({recorded}) is no longer there; starting a new one"
         ));
         return plan;
     }
 
-    start(home, cwd, integration, &mut record, &owner)
+    start(home, claim.cwd, integration, &mut record, &owner)
 }
 
 fn start(
@@ -138,7 +141,7 @@ fn start(
     };
     // A record that cannot be written is a conversation that will not be
     // carried over next time — never a launch that does not happen.
-    let _ = conversation::save(home, &owner.primary, record);
+    let _ = conversation::save(home, &owner.project_root, record);
     plan
 }
 
@@ -149,14 +152,14 @@ fn start(
 /// nothing new to report, a task that has moved on, an unreadable record —
 /// all of them mean "nothing to do", and none of them is worth interrupting
 /// anybody over.
-pub fn refresh(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) -> bool {
+pub fn refresh(home: &UzeHome, claim: Claim<'_>, integration: &dyn IntegrationPort) -> bool {
     if integration.session_continuity() == SessionContinuity::Unsupported {
         return false;
     }
-    let Some(owner) = conversation::owner_of(home, cwd) else {
+    let Some(owner) = conversation::owner_of(home, claim) else {
         return false;
     };
-    let mut record = conversation::load(home, &owner.primary, &owner.task);
+    let mut record = conversation::load(home, &owner.project_root, &owner.agent);
     let id = integration.id();
     let Some(entry) = record.get(id) else {
         return false;
@@ -164,7 +167,7 @@ pub fn refresh(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) ->
     let launched_at = entry.launched_at_unix;
     let known = entry.conversation.clone();
     let observed = integration.observe_session(&ObservationContext {
-        cwd,
+        cwd: claim.cwd,
         since_unix: launched_at,
         preceded_by: entry.preceded_by.as_ref(),
     });
@@ -177,39 +180,7 @@ pub fn refresh(home: &UzeHome, cwd: &Path, integration: &dyn IntegrationPort) ->
     if !record.observed(id, launched_at, observed) {
         return false;
     }
-    conversation::save(home, &owner.primary, &record).is_ok()
-}
-
-/// Records a conversation an authoritative source named for `cwd` — a
-/// harness stating its own identifier, which needs no observation and no
-/// guessing at all.
-///
-/// Nothing calls this today: the one authoritative source UZE had was the
-/// hook dispatch it ran itself, and hooks now run a generated wrapper with
-/// no UZE on the path (ADR-040, amended). Kept because the channel is the
-/// harness's to offer, not UZE's to invent — [`refresh`] above is the
-/// observing route, and it is the one in use.
-pub fn record_observed(
-    home: &UzeHome,
-    cwd: &Path,
-    integration_id: &str,
-    session: SessionId,
-) -> bool {
-    let Some(owner) = conversation::owner_of(home, cwd) else {
-        return false;
-    };
-    let mut record = conversation::load(home, &owner.primary, &owner.task);
-    let Some(entry) = record.get(integration_id) else {
-        return false;
-    };
-    if entry.conversation.as_ref() == Some(&session) {
-        return false;
-    }
-    let launched_at = entry.launched_at_unix;
-    if !record.observed(integration_id, launched_at, session) {
-        return false;
-    }
-    conversation::save(home, &owner.primary, &record).is_ok()
+    conversation::save(home, &owner.project_root, &record).is_ok()
 }
 
 #[cfg(test)]
@@ -280,8 +251,9 @@ mod tests {
         }
     }
 
-    /// A repository with one task in one slot, and the slot's path.
-    fn managed(label: &str) -> (UzeHome, PathBuf, PathBuf) {
+    /// A repository with one task in one slot: the home, the primary, the
+    /// slot's path and the task's identifier — what a launch there claims.
+    fn managed(label: &str) -> (UzeHome, PathBuf, PathBuf, String) {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = uze_testkit::temp::scratch(&format!("{label}-{unique}"));
@@ -292,10 +264,15 @@ mod tests {
 
         let mut task = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
         task.checkout = Some(CheckoutId::adopted("slot-1"));
+        let id = task.id.as_str().to_owned();
         let mut store = TaskStore::default();
         store.upsert(task);
         task::save(&home, &primary, &store).unwrap();
-        (home, primary, slot)
+        (home, primary, slot, id)
+    }
+
+    fn claim<'a>(id: &'a str, cwd: &'a Path) -> Claim<'a> {
+        Claim { id, cwd }
     }
 
     fn recorded(home: &UzeHome, primary: &Path) -> Option<SessionId> {
@@ -309,8 +286,12 @@ mod tests {
 
     #[test]
     fn a_first_launch_of_an_assigning_harness_names_and_records_the_conversation() {
-        let (home, primary, slot) = managed("continuity-assign");
-        let plan = plan(&home, &slot, &Harness::new(SessionContinuity::Assigned));
+        let (home, primary, slot, id) = managed("continuity-assign");
+        let plan = plan(
+            &home,
+            claim(&id, &slot),
+            &Harness::new(SessionContinuity::Assigned),
+        );
 
         let session = recorded(&home, &primary).expect("the conversation was recorded");
         assert_eq!(
@@ -322,12 +303,12 @@ mod tests {
 
     #[test]
     fn a_second_launch_resumes_what_the_first_recorded() {
-        let (home, primary, slot) = managed("continuity-resume");
+        let (home, primary, slot, id) = managed("continuity-resume");
         let harness = Harness::new(SessionContinuity::Assigned);
-        plan(&home, &slot, &harness);
+        plan(&home, claim(&id, &slot), &harness);
         let session = recorded(&home, &primary).unwrap();
 
-        let plan = plan(&home, &slot, &harness);
+        let plan = plan(&home, claim(&id, &slot), &harness);
         assert_eq!(
             plan.args,
             vec![OsString::from("--resume"), OsString::from(session.as_str())]
@@ -336,11 +317,14 @@ mod tests {
 
     #[test]
     fn a_first_launch_of_an_observing_harness_carries_no_argument_but_is_recorded() {
-        let (home, primary, slot) = managed("continuity-observe");
+        let (home, primary, slot, id) = managed("continuity-observe");
         let mut harness = Harness::new(SessionContinuity::Observed);
         harness.recorded_for = Some(SessionId::new("previous-tenant"));
 
-        assert_eq!(plan(&home, &slot, &harness), LaunchPlan::nothing());
+        assert_eq!(
+            plan(&home, claim(&id, &slot), &harness),
+            LaunchPlan::nothing()
+        );
 
         let store = task::load(&home, &primary).unwrap();
         let entry = conversation::load(&home, &primary, &store.tasks[0].id)
@@ -357,13 +341,13 @@ mod tests {
     /// which is exactly the relaunch that matters.
     #[test]
     fn a_launch_resolves_a_read_back_nobody_else_did() {
-        let (home, primary, slot) = managed("continuity-pending");
+        let (home, primary, slot, id) = managed("continuity-pending");
         let harness = Harness::new(SessionContinuity::Observed);
-        plan(&home, &slot, &harness);
+        plan(&home, claim(&id, &slot), &harness);
         assert_eq!(recorded(&home, &primary), None, "still pending");
 
         *harness.observed.borrow_mut() = Some(SessionId::new("named-by-the-harness"));
-        let plan = plan(&home, &slot, &harness);
+        let plan = plan(&home, claim(&id, &slot), &harness);
 
         assert_eq!(
             plan.args,
@@ -380,12 +364,12 @@ mod tests {
 
     #[test]
     fn a_directory_no_task_owns_is_left_exactly_as_it_was() {
-        let (home, _primary, _slot) = managed("continuity-unmanaged");
+        let (home, _primary, _slot, id) = managed("continuity-unmanaged");
         let elsewhere = uze_testkit::temp::scratch("continuity-elsewhere");
         assert_eq!(
             plan(
                 &home,
-                &elsewhere,
+                claim(&id, &elsewhere),
                 &Harness::new(SessionContinuity::Assigned)
             ),
             LaunchPlan::nothing()
@@ -393,10 +377,59 @@ mod tests {
     }
 
     #[test]
-    fn a_harness_that_declares_no_continuity_contributes_nothing_and_records_nothing() {
-        let (home, primary, slot) = managed("continuity-unsupported");
+    fn an_identifier_no_record_names_is_left_exactly_as_it_was() {
+        let (home, _primary, slot, _id) = managed("continuity-unknown-id");
         assert_eq!(
-            plan(&home, &slot, &Harness::new(SessionContinuity::Unsupported)),
+            plan(
+                &home,
+                claim("nobody-recorded-this", &slot),
+                &Harness::new(SessionContinuity::Assigned)
+            ),
+            LaunchPlan::nothing()
+        );
+    }
+
+    /// Two records over one directory are told apart by the identifier
+    /// alone: each launch resumes its own conversation and never the other's.
+    #[test]
+    fn two_agents_in_one_directory_keep_their_own_conversations() {
+        let (home, primary, slot, first) = managed("continuity-shared-directory");
+        let mut second = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
+        second.checkout = Some(CheckoutId::adopted("slot-1"));
+        let second_id = second.id.as_str().to_owned();
+        let mut store = task::load(&home, &primary).unwrap();
+        store.upsert(second);
+        task::save(&home, &primary, &store).unwrap();
+        let harness = Harness::new(SessionContinuity::Assigned);
+
+        let started_first = plan(&home, claim(&first, &slot), &harness).args;
+        let started_second = plan(&home, claim(&second_id, &slot), &harness).args;
+        assert_ne!(
+            started_first, started_second,
+            "each launch names its own conversation"
+        );
+
+        let resumed_first = plan(&home, claim(&first, &slot), &harness).args;
+        assert_eq!(
+            resumed_first[1], started_first[1],
+            "the first resumes its own"
+        );
+        let resumed_second = plan(&home, claim(&second_id, &slot), &harness).args;
+        assert_eq!(
+            resumed_second[1], started_second[1],
+            "the second resumes its own"
+        );
+    }
+
+    #[test]
+    fn a_harness_that_declares_no_continuity_contributes_nothing_and_records_nothing() {
+        let (home, primary, slot, id) = managed("continuity-unsupported");
+        assert_eq!(
+            plan(
+                &home,
+                claim(&id, &slot),
+                &Harness::new(SessionContinuity::Unsupported)
+            ),
             LaunchPlan::nothing()
         );
         assert_eq!(recorded(&home, &primary), None);
@@ -404,13 +437,13 @@ mod tests {
 
     #[test]
     fn a_conversation_the_harness_no_longer_holds_starts_a_new_one_and_says_so() {
-        let (home, primary, slot) = managed("continuity-vanished");
+        let (home, primary, slot, id) = managed("continuity-vanished");
         let mut harness = Harness::new(SessionContinuity::Assigned);
-        plan(&home, &slot, &harness);
+        plan(&home, claim(&id, &slot), &harness);
         let gone = recorded(&home, &primary).unwrap();
 
         harness.exists = false;
-        let plan = plan(&home, &slot, &harness);
+        let plan = plan(&home, claim(&id, &slot), &harness);
 
         let replacement = recorded(&home, &primary).unwrap();
         assert_ne!(replacement, gone);
@@ -426,78 +459,54 @@ mod tests {
 
     #[test]
     fn unreadable_state_still_launches_the_agent() {
-        let (home, primary, slot) = managed("continuity-unreadable");
+        let (home, primary, slot, id) = managed("continuity-unreadable");
         let store = task::load(&home, &primary).unwrap();
         let path = conversation::store_path(&home, &primary, &store.tasks[0].id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all").unwrap();
 
-        let plan = plan(&home, &slot, &Harness::new(SessionContinuity::Assigned));
+        let plan = plan(
+            &home,
+            claim(&id, &slot),
+            &Harness::new(SessionContinuity::Assigned),
+        );
         assert!(!plan.args.is_empty(), "the agent still starts");
     }
 
     #[test]
     fn a_read_back_records_where_the_agent_actually_is() {
-        let (home, primary, slot) = managed("continuity-refresh");
+        let (home, primary, slot, id) = managed("continuity-refresh");
         let harness = Harness::new(SessionContinuity::Observed);
-        plan(&home, &slot, &harness);
+        plan(&home, claim(&id, &slot), &harness);
 
         *harness.observed.borrow_mut() = Some(SessionId::new("started-by-the-harness"));
-        assert!(refresh(&home, &slot, &harness));
+        assert!(refresh(&home, claim(&id, &slot), &harness));
         assert_eq!(
             recorded(&home, &primary),
             Some(SessionId::new("started-by-the-harness"))
         );
 
         // Nothing new to say is not a write.
-        assert!(!refresh(&home, &slot, &harness));
+        assert!(!refresh(&home, claim(&id, &slot), &harness));
     }
 
     /// The clear/fork case: the agent left the conversation it started in,
     /// and what resumes has to be where the work actually went.
     #[test]
     fn a_conversation_the_agent_moved_to_replaces_the_one_it_started_in() {
-        let (home, primary, slot) = managed("continuity-moved");
+        let (home, primary, slot, id) = managed("continuity-moved");
         let harness = Harness::new(SessionContinuity::Assigned);
-        plan(&home, &slot, &harness);
+        plan(&home, claim(&id, &slot), &harness);
         let started_in = recorded(&home, &primary).unwrap();
 
         *harness.observed.borrow_mut() = Some(SessionId::new("moved-to"));
-        assert!(refresh(&home, &slot, &harness));
+        assert!(refresh(&home, claim(&id, &slot), &harness));
 
-        let plan = plan(&home, &slot, &harness);
+        let plan = plan(&home, claim(&id, &slot), &harness);
         assert_eq!(
             plan.args,
             vec![OsString::from("--resume"), OsString::from("moved-to")]
         );
         assert_ne!(recorded(&home, &primary), Some(started_in));
-    }
-
-    #[test]
-    fn an_identifier_an_authoritative_source_named_is_recorded_without_observing() {
-        let (home, primary, slot) = managed("continuity-authoritative");
-        plan(&home, &slot, &Harness::new(SessionContinuity::Observed));
-
-        assert!(record_observed(
-            &home,
-            &slot,
-            "harness",
-            SessionId::new("from-a-hook")
-        ));
-        assert_eq!(
-            recorded(&home, &primary),
-            Some(SessionId::new("from-a-hook"))
-        );
-    }
-
-    #[test]
-    fn an_identifier_for_a_launch_that_never_happened_is_not_recorded() {
-        let (home, _primary, slot) = managed("continuity-no-launch");
-        assert!(!record_observed(
-            &home,
-            &slot,
-            "harness",
-            SessionId::new("out-of-nowhere")
-        ));
     }
 }

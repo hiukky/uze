@@ -38,6 +38,12 @@
     "status.selected": "@",
     "status.idle": ".",
 
+    "commit.head": "@",
+    "commit": "o",
+
+    "sync.behind": "v",
+    "sync.ahead": "^",
+
     "tree.branch": "|-",
     "tree.last": "`-",
     "tree.vertical": "|",

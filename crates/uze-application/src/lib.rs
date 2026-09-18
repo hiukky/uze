@@ -3,12 +3,11 @@
 pub mod application;
 pub mod bootstrap;
 
-pub use application::StaleProjection;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, NamedTask, Reconciliation, ReleasedTask, TaskStateView,
-    TaskView, UpstreamSync,
+    DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind, Reconciliation, ReleasedTask,
+    RootProfile, TaskStateView, TaskView, UpstreamSync, root_profile,
 };
 
 /// Types the read models above are made of. Presentation consumes these
@@ -17,12 +16,13 @@ pub use application::services::{
 /// making the caller find it elsewhere is what put `uze_core::` in the
 /// TUI's imports.
 pub use uze_core::{
-    ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
+    Result, UzeError, UzeHome,
     capability::CapabilityKind,
     client_layout::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
     },
     context::PlannedAction,
+    conversation::Claim,
     integration::{AttachmentState, PublicationStatus},
     naming::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
@@ -32,16 +32,14 @@ pub use uze_core::{
         Autonomy, AxisPlan, KeyPlan, ModelPreference, PlannedValue, PreferenceApplyOutcome,
         PreferenceAxis, PreferencePlan, Preferences, SandboxScope,
     },
-    project_lock::parse_plugin_marketplace_spec,
     prompt_history::{PromptAge, PromptClock, PromptEntry, PromptOrigin},
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,
+    store::parse_plugin_marketplace_spec,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
-    worktree::{
-        BranchPreset, BranchVocabulary, CompletionBehavior, IsolatedCheckout, isolated_checkout,
-    },
+    worktree::{CompletionBehavior, isolated_checkout},
 };
 
 /// The repository a directory's tasks hang off, resolved lexically.
@@ -76,8 +74,5 @@ pub fn is_isolated_checkout(cwd: &std::path::Path) -> bool {
 /// repository, rooted inside `.worktrees`. An agent's checkout belongs to
 /// the space its repository already has.
 pub fn space_root(cwd: &std::path::Path) -> std::path::PathBuf {
-    let base = isolated_checkout(cwd)
-        .map(|checkout| checkout.primary.to_path_buf())
-        .unwrap_or_else(|| cwd.to_path_buf());
-    workspace_root_or_self(&base)
+    workspace_root_or_self(&slot_key(cwd))
 }

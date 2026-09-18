@@ -168,7 +168,7 @@ where it always was, and never gains a policy sidecar it did not declare.
 
 > `tests/integrations/policy.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
 > `tests/integrations/policy.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
-> `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
+> `crates/uze-core/src/capability.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
 
 ### A shared-root entry always carries the superset of both encodings
 
@@ -231,12 +231,12 @@ Provenance reaches the Store as an opaque value it stores and compares through
 
 `packages.json` is a ledger of independent registrations, so an entry this
 UZE cannot read — a key that is not a valid qualified id, or a value whose
-fields an older UZE spelled differently — is quarantined, never fatal. The
+fields it does not know — is quarantined, never fatal. The
 readable entries stay listable, resolvable and removable; the quarantined one
 answers to nothing and the next save drops it. `doctor` reports it as a named
 state carrying its remedy, not as the serde error that produced it.
 
-> `crates/uze-core/src/package/store.rs::tests::an_entry_written_by_an_older_uze_is_quarantined_and_named`
+> `crates/uze-core/src/package/store.rs::tests::an_entry_with_unreadable_fields_is_quarantined_and_named`
 > `crates/uze-core/src/package/store.rs::tests::load_registry_quarantines_a_tampered_entry_without_losing_valid_ones`
 > `crates/uze-application/src/application/doctor.rs::tests::doctor_names_an_unreadable_registration_and_its_remedy`
 
@@ -837,19 +837,37 @@ delivery that did not happen.
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
 
-### Every agent is isolated, and the primary checkout belongs to the operator
+### Every agent of a worktree space is isolated, and the primary checkout belongs to the operator
 
-An agent UZE launches in a Git repository with a commit starts in a slot of
-its own, created before its harness does. The primary checkout is never
+An agent UZE launches into a worktree space of a Git repository with a
+commit starts in a slot of its own, created before its harness does. The
+primary checkout is never
 assigned to an agent, so the operator's uncommitted work is exactly what they
-left after any number of agents have run. Where isolation is impossible the
-agent starts in place and its tab says so.
+left after any number of agents have run. Where a slot cannot be acquired
+the agent is not started and the reason is said: the primary is never a
+fallback.
 
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_first_agent_is_isolated`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
-> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_launches_in_place_with_the_reason`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
 > `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_carries_no_marker`
+
+### A tenant never acquires a slot and never creates a branch (`add-space-kinds`)
+
+An agent launched into a workspace space is a tenant of the space's own
+directory, on whatever branch it is on: no directory under `.worktrees`, no
+`agent/` branch, no task. Two tenants share one tree and are told apart by
+identity alone. A slot asked for where none can be acquired — no repository,
+no commit, the cap reached — is refused and starts nothing: the operator's
+tree is never a fallback. A tenant ends when no live tab was launched for
+it, whether or not its root is a repository.
+
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_tenant_creates_no_checkout_and_no_branch_and_shares_the_tree`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_directory_outside_any_repository_is_a_tenant_by_choice_never_a_fallback`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_tenant_ends_when_nothing_echoes_it_and_survives_while_something_does`
+> `crates/uze-terminal/src/state.rs::a_root_carries_one_space_per_kind`
 
 ### A checkout is a slot; a task is what comes and goes
 
@@ -1181,27 +1199,33 @@ the only way back in short of a manual `kill`.
 > `crates/uze-terminal/src/runtime.rs::stop_is_heard_as_a_first_frame_by_a_server_nobody_attached_to`
 > `src/ui/orchestrator/tests.rs::workspace_tests::a_terminal_runtime_that_went_away_is_said_rather_than_waited_on`
 
-### A pid file is a claim; the process table is the fact
+### Liveness is the workspace claim; the kernel names the peer
 
-Nothing is signalled, and no endpoint is trusted, on a pid file's word
-alone: the file outlives the process it names, and pids are recycled. Two
-independent witnesses have to name the same process before it is signalled
-— the pid the kernel stamps on the socket's own connection (`SO_PEERCRED`),
-which nothing can forge, and the pid file — and the kernel has to say that
-process runs `uze`. Where nothing can corroborate that, nothing is
-signalled at all; clearing the endpoint files is the whole recovery there.
-A file that does not name exactly one process names none: `libc::pid_t` is
-signed, and `kill(-1, …)` is every process the user owns. A process without
-an executable image — a crashed server nobody reaped — is not alive however
-addressable it remains. The directory the endpoint lives in is proved to be
+Whether a server is alive is answered by the workspace claim alone, never by
+a file in the runtime directory: the kernel releases the claim when its
+holder dies however it dies, so a crashed server — a zombie nobody reaped
+included — holds nothing. A client asks for the claim shared and a server
+takes it exclusively, so a server starting while a client asks is never
+refused as though it had met another server. Only the server holding the
+claim unlinks the endpoint, binding over whatever it finds there; a client
+never does, so a listener nobody can vouch for — every listener, where the
+process table cannot be read — is connected to rather than taken down. A
+process is signalled only when the kernel names it as the socket's peer
+(`SO_PEERCRED`, which nothing can forge) and the process table says, right
+before the signal, that it runs `uze` of another build — or any `uze`, when
+the claim is free and it is serving a workspace deleted under it. A pid that
+does not name exactly one process is never signalled: `kill(-1, …)` is every
+process the user owns. The directory the endpoint lives in is proved to be
 this user's own, unreachable by anyone else, and not a symlink, before a
 socket carrying every pane's contents is put in it.
 
-> `crates/uze-terminal/src/runtime.rs::replace_incompatible_server_leaves_a_process_that_is_not_a_server_running`
-> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_disagrees_with_the_peer_gets_nobody_signalled`
-> `crates/uze-terminal/src/runtime.rs::a_pid_file_that_does_not_name_one_process_names_none`
-> `crates/uze-terminal/src/runtime.rs::nothing_is_signalled_where_nothing_can_corroborate_it`
-> `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_does_not_count_as_alive`
+> `crates/uze-terminal/src/runtime.rs::an_attach_replaces_only_a_server_it_can_name`
+> `crates/uze-terminal/src/runtime.rs::an_asker_is_never_mistaken_for_a_server`
+> `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_holds_no_claim`
+> `crates/uze-terminal/src/runtime.rs::a_stale_socket_is_reclaimed_by_the_server_that_binds`
+> `crates/uze-terminal/src/runtime.rs::a_server_of_another_build_is_retired_and_lets_go_of_the_workspace`
+> `crates/uze-terminal/src/runtime.rs::a_process_that_is_not_uze_is_never_signalled`
+> `crates/uze-terminal/src/runtime.rs::a_pid_that_does_not_name_one_process_is_never_signalled`
 > `crates/uze-terminal/src/runtime.rs::a_runtime_directory_that_is_not_ours_to_own_is_stepped_over`
 
 ### One workspace, one server
@@ -1243,7 +1267,40 @@ task never inherits it, and a task given its checkout back finds what it
 left.
 
 > `crates/uze-core/src/project/conversation.rs::a_recycled_slots_new_task_finds_nothing_the_previous_one_left`
-> `crates/uze-core/src/project/conversation.rs::the_newest_task_naming_a_checkout_owns_it`
+> `crates/uze-core/src/project/conversation.rs::a_verified_claim_resolves_to_its_own_record_wherever_inside_its_directory`
+
+### An agent is what its launch carried, verified twice (`identify-agents-at-launch`)
+
+Which agent a process is comes from the identity its launch stamped into
+the pane's environment — persisted with the tab, respawned with it, echoed
+back to the client — and never from the directory it stands in. Every
+reader verifies the stamp twice before acting on it: the project's records
+name it, and the directory is the one the record gives that agent. An
+identifier nobody recorded, or one claimed from outside its own directory,
+is no identity at all; two records over one directory are told apart by
+the identifier alone. The name of the variable has one owner, the terminal
+runtime's launch vocabulary, and core never spells it.
+
+> `crates/uze-terminal/src/runtime.rs::a_launch_environment_reaches_the_first_process`
+> `crates/uze-terminal/src/runtime.rs::a_launch_environment_survives_a_restart`
+> `crates/uze-terminal/src/runtime.rs::a_shell_respawn_carries_no_launch_environment`
+> `crates/uze-terminal/src/runtime.rs::a_pane_does_not_inherit_the_servers_agent_identity`
+> `crates/uze-core/src/project/conversation.rs::a_claim_no_record_backs_has_no_owner`
+> `crates/uze-core/src/delivery/continuity.rs::two_agents_in_one_directory_keep_their_own_conversations`
+> `tests/acceptance/session_continuity.rs::an_identity_claimed_from_the_wrong_directory_is_launched_untouched`
+> `tests/architecture/layering.rs::architecture_rules_hold` (the identity variable has one owner)
+
+### An identity has an owner, and a launch inside a launch is ordinary
+
+The shim that first reads an identity with no owner takes it, stamping its
+own pid; a shim that finds the identity owned by another pid is running
+inside that owner's launch — a harness started by a harness — and treats
+it as absent. Two processes never share one resume. The agent's own
+commands are the owner's children and accept the inherited identity
+without applying the rule: a command is not a launch.
+
+> `tests/acceptance/session_continuity.rs::a_launch_nested_inside_an_agents_launch_is_ordinary`
+> `tests/acceptance/agent_surface.rs::an_agent_names_its_work_through_the_real_binary`
 
 ### A relaunch resumes; the decision is made where every relaunch passes
 
@@ -1258,12 +1315,14 @@ next one continues it.
 ### Continuity never rewrites an invocation and never blocks a launch
 
 An invocation carrying anything of the operator's own is launched exactly as
-typed, a directory no task owns is untouched, and every failure — a
-conversation the harness no longer holds, unreadable state, a harness that
-declares no mechanism — starts the agent anyway.
+typed, a launch carrying no identity is untouched wherever it is made — a
+managed task's checkout included, because a person typing there is not the
+launch UZE composed — and every failure — a conversation the harness no
+longer holds, unreadable state, a harness that declares no mechanism —
+starts the agent anyway.
 
 > `tests/acceptance/session_continuity.rs::an_invocation_the_operator_composed_is_launched_exactly_as_typed`
-> `tests/acceptance/session_continuity.rs::a_directory_no_task_owns_launches_the_harness_untouched`
+> `tests/acceptance/session_continuity.rs::a_launch_carrying_no_identity_is_launched_untouched_even_inside_a_slot`
 > `crates/uze-core/src/delivery/continuity.rs::a_conversation_the_harness_no_longer_holds_starts_a_new_one_and_says_so`
 > `crates/uze-core/src/delivery/continuity.rs::unreadable_state_still_launches_the_agent`
 
@@ -1318,16 +1377,14 @@ same terms, and rebuilt by the next launch that needs it.
 > `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_directory_that_names_no_root_is_swept`
 > `tests/integrations/runtime_projection.rs::a_swept_projection_is_rebuilt_by_the_next_launch`
 
-### The runtime tree's two tenants are never confused for one another
+### The runtime tree has one tenant, and the sweep owns the rest
 
 `runtime/projects/` holds derived projections that outlive every invocation
-and die with their project root; `runtime/sessions/` holds the receipts that
-let a filesystem projection be undone, and dies with the invocation that made
-it. They are named siblings rather than sibling ids under one integration, so
-the sweep can never take one for the other, and nothing project-owned is
-reached through a projection it collects.
+and die with their project root. Anything else directly under `runtime/` is
+UZE's own output at a path nothing writes any more, so the sweep removes it,
+and nothing project-owned is reached through a projection it collects.
 
-> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_both_tenants_and_nothing_else`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenant_and_nothing_else`
 > `tests/integrations/runtime_projection.rs::sweeping_a_dead_projection_never_touches_the_project_it_pointed_at`
 > `tests/packages/store.rs::uze_home_derives_every_owned_path_from_one_root`
 

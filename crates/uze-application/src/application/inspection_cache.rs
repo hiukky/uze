@@ -1,7 +1,7 @@
 //! Cache for per-receipt attachment inspection on READ paths — the
 //! mechanism behind ADR 018.
 //!
-//! The expensive half of `doctor()` is per-receipt
+//! The expensive half of `Health::report` is per-receipt
 //! `IntegrationPort::inspect_receipt`: several integrations verify their
 //! attachments by running vendor CLIs (`codex plugin list`, `claude
 //! plugin list`, …), each a subprocess of a slow install-managed binary.
@@ -31,8 +31,6 @@
 //! calling the live `reconcile_package` — a stale `Matched` must never
 //! authorize destroying a vendor artifact that drifted.
 
-#![allow(clippy::empty_line_after_doc_comments)]
-
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -60,7 +58,7 @@ struct CachedInspection {
     state: AttachmentState,
     reason: String,
     cached_at_unix_nanos: u128,
-    /// `managed_artifact_fingerprint` at the time the verdict was
+    /// `ManagedArtifact::fingerprint` at the time the verdict was
     /// obtained. `None` for artifacts whose state is not cheaply
     /// stat-able (vendor-native catalogues) — those rely on TTL +
     /// mutation invalidation; `Some` ones are re-checked on every read.
@@ -269,7 +267,7 @@ mod tests {
     #[test]
     fn a_removed_symlink_is_detected_without_a_probe() {
         use std::os::unix::fs::symlink;
-        use uze_core::integration::{ManagedArtifact, managed_artifact_fingerprint};
+        use uze_core::integration::ManagedArtifact;
 
         let base = home_at("symlink");
         let home_dir = base.root().to_path_buf();
@@ -282,7 +280,7 @@ mod tests {
             path: link.clone(),
             target,
         };
-        let fingerprint = managed_artifact_fingerprint(&artifact).expect("symlink carries one");
+        let fingerprint = artifact.fingerprint().expect("symlink carries one");
         let cache = InspectionCache::new(&base);
         cache.put(
             "pkg:test:symlink",
@@ -294,7 +292,7 @@ mod tests {
         // Hand-removal: recomputed fingerprint flips to "absent" → miss —
         // the lifecycle that a Matched verdict must never mask.
         std::fs::remove_file(&link).unwrap();
-        let now = managed_artifact_fingerprint(&artifact).expect("absent is still a state");
+        let now = artifact.fingerprint().expect("absent is still a state");
         assert_ne!(now, fingerprint);
         assert!(cache.get("pkg:test:symlink", Some(&now)).is_none());
     }

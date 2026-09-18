@@ -10,12 +10,12 @@ use std::{cell::RefCell, collections::BTreeSet, fs, path::PathBuf};
 
 use uze_application::UzeApplication;
 use uze_core::{
-    PackageExposurePlan, Resource, UzeEngine, UzeHome, UzeStore,
+    PackageExposurePlan, Resource, UzeHome, UzeStore,
     exposure::ExposurePlan,
     integration::{
         AttachmentReceipt, HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
     },
-    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
+    router::{CompatibilityRoute, HarnessCapabilities},
     store::StoredPackage,
 };
 
@@ -27,9 +27,11 @@ fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
 ) -> uze_core::Result<uze_core::StoredPackage> {
-    store.ingest(&uze_core::acquisition::acquire(
-        &uze_core::PackageSource::local(path),
-    )?)
+    store.ingest(
+        &uze_core::acquisition::acquire(&uze_core::PackageSource::local(path))?,
+        "local",
+        None,
+    )
 }
 
 fn native_package_fixture() -> PathBuf {
@@ -99,11 +101,9 @@ impl IntegrationPort for PublishingIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "fake integration exposes nothing individually".to_owned(),
             },
@@ -159,11 +159,9 @@ impl IntegrationPort for QuietIntegration {
         HarnessCapabilities::default()
     }
 
-    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+    fn exposure_plan(&self, _resource: &Resource) -> ExposurePlan {
         ExposurePlan {
-            representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
-            verification: VerificationStatus::Unverified,
             mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "quiet".to_owned(),
             },
@@ -375,15 +373,12 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
     let home = temporary_home("suppression");
     let store = UzeStore::new(home.clone());
     let package = install(&store, native_package_fixture()).unwrap();
-    let environment = UzeEngine::new(store)
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let resources: Vec<&Resource> = environment.resources.iter().collect();
+    let resources = uze_core::engine::package_resources(&package).unwrap();
+    let resources: Vec<&Resource> = resources.iter().collect();
 
     let plan = PackageExposurePlan {
         package_id: package.id.clone(),
         route: CompatibilityRoute::Native,
-        verification: VerificationStatus::Unverified,
         provided_resource_identities: resources
             .iter()
             .map(|resource| resource.identity())
@@ -477,7 +472,6 @@ fn an_integration_owned_receipt_round_trips_through_the_ledger() {
         package_id: "plugin-a".to_owned(),
         resource_identity: None,
         integration: "fake-native".to_owned(),
-        strategy: "whatever-the-integration-calls-it".to_owned(),
         artifact: ManagedArtifact::IntegrationOwned {
             kind: "fake-catalogue-entry".to_owned(),
             selector: "plugin-a@fake".to_owned(),
