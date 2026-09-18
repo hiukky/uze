@@ -775,12 +775,22 @@ impl Attach<'_> {
                     picker.descend();
                 }
             }
+            // Creates the space where the prompt is, and where it cannot
+            // — a worktree space wants a repository, and the row is a
+            // directory on the way to one — walks in instead. Enter
+            // used to do nothing at all there, which is a dead key on
+            // the row a person presses it on most.
             Action::Activate => {
-                if let Some((root, kind)) =
-                    self.model.root_picker.as_ref().and_then(RootPicker::chosen)
-                {
-                    self.model.root_picker = None;
-                    self.open_space_at(root, kind, columns, rows);
+                match self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
+                    Some((root, kind)) => {
+                        self.model.root_picker = None;
+                        self.open_space_at(root, kind, columns, rows);
+                    }
+                    None => {
+                        if let Some(picker) = self.model.root_picker.as_mut() {
+                            picker.descend();
+                        }
+                    }
                 }
             }
             Action::Dismiss => self.model.root_picker = None,
@@ -2540,6 +2550,13 @@ impl Attach<'_> {
                 self.model
                     .set_notice(format!("tasks unreadable — {reason}"));
                 continue;
+            }
+            // Said before the tasks are taken, because it is what those
+            // tasks are: records adopted from the checkouts on disk, with
+            // the labels and publication UZE had recorded left behind in
+            // a document it could not read.
+            if let Some(recovered) = evaluation.recovered {
+                self.model.set_notice(recovered);
             }
             self.model
                 .remembered

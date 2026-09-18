@@ -571,6 +571,32 @@ caller getting the order wrong hands one agent's slot to another.
 > `tests/acceptance/engine.rs::one_reconciliation_pass_answers_a_repository_once_however_it_is_named`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_delivered_tasks_slot_stays_its_agents_while_a_pane_sits_in_it`
 
+### A task document this build cannot read never stops the project
+
+The document declares a schema version, and that version is read *before*
+the document — out of the one shape every version of it shares. Every
+field of a `Task` is required, so a strict parse of an older document
+fails with `missing field ...` before the version guard can look at it:
+the guard was dead for exactly the case it exists for, and what the
+operator saw was a parse error about a file they never wrote.
+
+A document this build cannot read — an older schema, a hand edit,
+corruption — is then set aside rather than refused. It used to fail every
+mutation of the project, which is every way an agent is created,
+delivered or reconciled: the product was unusable in that repository with
+no way back from inside it. The bytes are kept beside the document they
+came from, the record starts again from empty, and the same pass adopts
+every checkout Git still registers, so what is lost is UZE's own labels
+and publication records and never the work.
+
+The judgement is only ever made under the mutation lock, because that is
+what separates "unreadable" from "read while somebody was publishing it".
+
+> `crates/uze-core/src/project/task.rs::tests::an_older_schema_is_named_by_its_version_rather_than_by_a_missing_field`
+> `crates/uze-core/src/project/task.rs::tests::a_document_this_build_cannot_read_is_set_aside_rather_than_refused`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_unreadable_document_never_stops_an_agent_being_created`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::a_document_that_cannot_be_read_is_recovered_from_and_said`
+
 ### One task document, one writer at a time
 
 Evaluation, delivery, placement and occupancy reconciliation are four
@@ -851,7 +877,7 @@ fallback.
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
-> `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_carries_no_marker`
+> `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_is_left_unmarked_and_says_where_nowhere`
 
 ### A tenant never acquires a slot and never creates a branch (`add-space-kinds`)
 
@@ -1228,10 +1254,17 @@ refused as though it had met another server. Only the server holding the
 claim unlinks the endpoint, binding over whatever it finds there; a client
 never does, so a listener nobody can vouch for — every listener, where the
 process table cannot be read — is connected to rather than taken down. A
-process is signalled only when the kernel names it as the socket's peer
-(`SO_PEERCRED`, which nothing can forge) and the process table says, right
-before the signal, that it runs `uze` of another build — or any `uze`, when
-the claim is free and it is serving a workspace deleted under it. A pid that
+process is signalled on one of two proofs, never on a claim alone. The
+kernel names it as the socket's peer (`SO_PEERCRED`, which nothing can
+forge) and the process table says, right before the signal, that it runs
+`uze` of another build — or any `uze`, when the claim is free and it is
+serving a workspace deleted under it. Or the claim itself records it: a
+server writes its own pid into the claim it holds, which is what makes a
+server at an endpoint this build cannot compute something `stop` can stop
+and `attach` can replace rather than a workspace shut until the machine
+restarts. That record is a lead, not the proof — it is corroborated
+against the process table before the signal, exactly as the peer is, and
+a claim that records nobody is reported rather than guessed at. A pid that
 does not name exactly one process is never signalled: `kill(-1, …)` is every
 process the user owns. The directory the endpoint lives in is proved to be
 this user's own, unreachable by anyone else, and not a symlink, before a
@@ -1240,6 +1273,8 @@ socket carrying every pane's contents is put in it.
 > `crates/uze-terminal/src/runtime.rs::an_attach_replaces_only_a_server_it_can_name`
 > `crates/uze-terminal/src/runtime.rs::an_asker_is_never_mistaken_for_a_server`
 > `crates/uze-terminal/src/runtime.rs::a_crashed_server_nobody_reaped_holds_no_claim`
+> `crates/uze-terminal/src/runtime.rs::a_server_answering_at_no_endpoint_this_build_names_is_still_stopped`
+> `crates/uze-terminal/src/runtime.rs::a_claim_this_build_cannot_name_is_reported_rather_than_called_stopped`
 > `crates/uze-terminal/src/runtime.rs::a_stale_socket_is_reclaimed_by_the_server_that_binds`
 > `crates/uze-terminal/src/runtime.rs::a_server_of_another_build_is_retired_and_lets_go_of_the_workspace`
 > `crates/uze-terminal/src/runtime.rs::a_process_that_is_not_uze_is_never_signalled`

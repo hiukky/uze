@@ -425,26 +425,125 @@ pub fn store_path(home: &UzeHome, project_root: &Path) -> PathBuf {
 
 /// The project's tasks; empty when nothing was ever recorded.
 pub fn load(home: &UzeHome, project_root: &Path) -> Result<TaskStore> {
-    let path = store_path(home, project_root);
+    Ok(read_document(&store_path(home, project_root))?.unwrap_or_default())
+}
+
+/// The one shape every version of the document shares, read before the
+/// document itself.
+///
+/// Every field of a [`Task`] is required, so a document written under an
+/// older schema fails to deserialize — `missing field ...` — long before
+/// the version guard below could look at it: the guard was dead for
+/// exactly the case it exists for, and what the operator saw instead was
+/// a parse error about a file they never wrote.
+#[derive(Deserialize)]
+struct DeclaredSchema {
+    schema_version: u32,
+}
+
+/// The document at `path`, or `None` when nothing was ever recorded
+/// there. An error says this build cannot read what is there: the schema
+/// it declares is not this one, or the bytes are not the document at all.
+fn read_document(path: &Path) -> Result<Option<TaskStore>> {
     if !path.exists() {
-        return Ok(TaskStore::default());
+        return Ok(None);
     }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
+    let bytes = fs::read(path).map_err(|source| UzeError::Read {
+        path: path.to_path_buf(),
         source,
     })?;
-    let store: TaskStore = serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-        path: path.clone(),
-        source,
-    })?;
-    if store.schema_version != SCHEMA_VERSION {
+    let declared: DeclaredSchema =
+        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if declared.schema_version != SCHEMA_VERSION {
         return Err(UzeError::UnsupportedStateSchema {
-            path,
-            found: store.schema_version,
+            path: path.to_path_buf(),
+            found: declared.schema_version,
             expected: SCHEMA_VERSION,
         });
     }
-    Ok(store)
+    let store: TaskStore = serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(store))
+}
+
+/// What reading the document had to do before it could answer.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Recovery {
+    /// The document this build could not read, moved out of the way with
+    /// the reason it could not be read.
+    pub set_aside: Option<SetAside>,
+}
+
+/// A document UZE could not read, kept rather than overwritten.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetAside {
+    /// Where the bytes are now. Nothing reads them again; they are kept
+    /// because a document UZE cannot understand is still not one it may
+    /// throw away. The name deliberately stops being a `.json` in this
+    /// directory: what is set aside must not read as a second task
+    /// document to anything that lists the directory.
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Whether a document this build cannot read is one it may set aside.
+///
+/// Bytes that are not the document at all, and a document from a schema
+/// this build is *ahead* of: what is lost there is bookkeeping this build
+/// would rewrite anyway.
+///
+/// Never a document from a schema ahead of this one. Setting that aside
+/// takes a newer UZE's record away from it, and two builds on one machine
+/// — the ordinary state of this repository, `target/debug/uze` beside
+/// `~/.cargo/bin/uze` — would then take turns destroying each other's
+/// records, one adoption at a time. The older build reports and leaves it
+/// where it is.
+fn may_be_set_aside(reason: &UzeError) -> bool {
+    match reason {
+        UzeError::Json { .. } => true,
+        UzeError::UnsupportedStateSchema {
+            found, expected, ..
+        } => found < expected,
+        _ => false,
+    }
+}
+
+/// Moves the document aside so the project can be recorded again, and
+/// says what was moved.
+///
+/// Only ever reached under the mutation lock: with the lock held no other
+/// pass is publishing the file, so bytes that do not read are genuinely
+/// unreadable rather than a write caught halfway. What the project loses
+/// is UZE's own labels and publication records — `checkout::reconcile`
+/// adopts every checkout Git still registers on the same pass, and the
+/// work itself was never in this file to begin with.
+fn set_aside(path: &Path, reason: &UzeError) -> Result<Recovery> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("tasks.json");
+    let moved = path.with_file_name(format!("{name}.unreadable-{}", now_unix()));
+    fs::rename(path, &moved).map_err(|source| UzeError::Write {
+        path: moved.clone(),
+        source,
+    })?;
+    tracing::warn!(
+        document = %path.display(),
+        set_aside = %moved.display(),
+        reason = %reason,
+        "the project's task document could not be read and was set aside"
+    );
+    Ok(Recovery {
+        set_aside: Some(SetAside {
+            path: moved,
+            reason: reason.to_string(),
+        }),
+    })
 }
 
 /// Replaces the document atomically: readers see the previous version or
@@ -493,11 +592,38 @@ pub fn locked<T>(
     project_root: &Path,
     mutate: impl FnOnce(&mut TaskStore) -> Result<T>,
 ) -> Result<T> {
-    let _held = MutationGuard::acquire(&store_path(home, project_root))?;
-    let mut store = load(home, project_root)?;
+    locked_reporting(home, project_root, mutate).map(|(outcome, _)| outcome)
+}
+
+/// [`locked`], saying what reading the document had to set aside first.
+///
+/// A document this build cannot read is not a reason to refuse the work:
+/// it is how every agent in the project stops being placeable at once,
+/// over a file the operator never wrote — an older UZE's schema, a hand
+/// edit, corruption. The document is set aside, the project is recorded
+/// again from an empty one, and the caller is handed the fact so it can
+/// be said once rather than inferred from a sidebar that emptied.
+///
+/// Reading and setting aside both happen under the lock, which is what
+/// makes the judgement safe: a reader without it can catch a write
+/// halfway and would move a document that was never broken.
+pub fn locked_reporting<T>(
+    home: &UzeHome,
+    project_root: &Path,
+    mutate: impl FnOnce(&mut TaskStore) -> Result<T>,
+) -> Result<(T, Recovery)> {
+    let path = store_path(home, project_root);
+    let _held = MutationGuard::acquire(&path)?;
+    let (mut store, recovery) = match read_document(&path) {
+        Ok(document) => (document.unwrap_or_default(), Recovery::default()),
+        Err(reason) if may_be_set_aside(&reason) => {
+            (TaskStore::default(), set_aside(&path, &reason)?)
+        }
+        Err(error) => return Err(error),
+    };
     let outcome = mutate(&mut store)?;
     save(home, project_root, &store)?;
-    Ok(outcome)
+    Ok((outcome, recovery))
 }
 
 thread_local! {
@@ -697,6 +823,115 @@ mod tests {
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),
             "{error}"
+        );
+    }
+
+    /// A document from an older schema is named by its version, never by
+    /// serde. Every field of a `Task` is required, so the strict parse
+    /// used to fail first and the version guard never ran: what the
+    /// operator was shown for a state file written by a previous UZE was
+    /// `failed to parse JSON in ...: missing field`, about a file they
+    /// never wrote and could not act on.
+    #[test]
+    fn an_older_schema_is_named_by_its_version_rather_than_by_a_missing_field() {
+        let home = home("tasks-older-schema");
+        let root = uze_testkit::temp::scratch("tasks-older-schema-project");
+        let path = store_path(&home, &root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Schema 1's document: a task with the fields of the day, and no
+        // `tenants` at all.
+        fs::write(
+            &path,
+            br#"{"schema_version": 1, "tasks": [{"id": "abc123", "label": "a", "pushed": false}]}"#,
+        )
+        .unwrap();
+        let error = load(&home, &root).unwrap_err();
+        assert!(
+            matches!(error, UzeError::UnsupportedStateSchema { found: 1, .. }),
+            "{error}"
+        );
+    }
+
+    /// The condition this recovery exists for: a document UZE cannot read
+    /// used to refuse every mutation of the project, so no agent could be
+    /// placed at all — over a file nobody authored. It is moved aside,
+    /// the bytes are kept, and the work carries on.
+    #[test]
+    fn a_document_this_build_cannot_read_is_set_aside_rather_than_refused() {
+        let home = home("tasks-set-aside");
+        let root = uze_testkit::temp::scratch("tasks-set-aside-project");
+        let path = store_path(&home, &root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{ this is not the document").unwrap();
+
+        let (recorded, recovery) = locked_reporting(&home, &root, |store| {
+            store.upsert(task("after the recovery"));
+            Ok(store.tasks.len())
+        })
+        .expect("an unreadable document is recovered from, not refused");
+        assert_eq!(
+            recorded, 1,
+            "the project is recorded again from an empty document"
+        );
+
+        let set_aside = recovery.set_aside.expect("the recovery is reported");
+        assert_eq!(
+            fs::read(&set_aside.path).unwrap(),
+            b"{ this is not the document",
+            "the bytes UZE could not read are kept, not overwritten"
+        );
+        assert!(
+            !set_aside.reason.is_empty(),
+            "and the reason travels with them"
+        );
+        assert_eq!(
+            load(&home, &root).unwrap().tasks.len(),
+            1,
+            "what the mutation wrote is what the next pass reads"
+        );
+    }
+
+    /// A document from a schema *ahead* of this build is left exactly
+    /// where it is. Two builds on one machine is the ordinary state of
+    /// this repository — a release beside a debug build — and a rule that
+    /// set aside whatever it could not read would have them take turns
+    /// destroying each other's records, one adoption at a time, each
+    /// saying "recovered" as it went.
+    #[test]
+    fn a_document_from_a_newer_uze_is_refused_rather_than_set_aside() {
+        let home = home("tasks-newer-schema");
+        let root = uze_testkit::temp::scratch("tasks-newer-schema-project");
+        let path = store_path(&home, &root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let written = format!(
+            r#"{{"schema_version": {}, "tasks": [], "tenants": [], "futures": []}}"#,
+            SCHEMA_VERSION + 1
+        );
+        fs::write(&path, &written).unwrap();
+
+        let refused = locked(&home, &root, |store| {
+            store.upsert(task("from the older build"));
+            Ok(())
+        })
+        .expect_err("a newer document is not this build's to rewrite");
+        assert!(
+            matches!(refused, UzeError::UnsupportedStateSchema { .. }),
+            "{refused}"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            written,
+            "and the newer build's record is untouched"
+        );
+        assert!(
+            !path
+                .parent()
+                .unwrap()
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains("unreadable")),
+            "nothing was set aside"
         );
     }
 

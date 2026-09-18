@@ -1069,8 +1069,8 @@ mod workspace_tests {
             "ready carries its own mark: {name_row}"
         );
         assert!(
-            rows.iter().any(|row| row.contains("agent/t1")),
-            "and the task it is on reads underneath it: {rows:?}"
+            rows.iter().any(|row| row.contains("agent")),
+            "and what runs it reads underneath it: {rows:?}"
         );
 
         let (rows, hits) = tab_strip(&model);
@@ -1708,10 +1708,11 @@ mod workspace_tests {
         assert!(super::super::adopt_task_names(&mut model).is_empty());
     }
 
-    /// A named task reads as its name on both lines: the label the agent
-    /// chose above, the branch it renamed below. This is where a claim
-    /// about what the *screen says* belongs — a journey may only gate on
-    /// screen text, never assert it.
+    /// A named task reads as its name, once. The label *is* the branch's
+    /// subject (`worktree::label_of`), so the caption that used to carry
+    /// the branch was the same words with the type in front. This is where
+    /// a claim about what the *screen says* belongs — a journey may only
+    /// gate on screen text, never assert it.
     #[test]
     fn a_named_task_reads_as_its_name_in_the_sidebar() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
@@ -1719,36 +1720,52 @@ mod workspace_tests {
             tasks[0].branch = "fix/branch-naming".to_owned();
             tasks[0].label = "branch naming".to_owned();
         }
+        // The tab carries the name the task took, which is what
+        // `adopt_task_names` puts there in the product.
+        label_every_tab(&mut model, "branch naming");
 
         let rows = sidebar(&model, &identities_fixture()).rows;
 
         assert!(
-            rows.iter().any(|row| row.contains("fix/branch-naming")),
-            "the branch a reviewer will see is the caption: {rows:?}"
+            rows.iter().any(|row| row.contains("branch naming")),
+            "the name the agent chose is the row: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("fix/branch-naming")),
+            "and the branch it was derived from is not repeated under it: {rows:?}"
         );
         assert!(
             !rows.iter().any(|row| row.contains("agent/")),
-            "and the generated identifier is nowhere on the screen: {rows:?}"
+            "nor is the generated identifier anywhere on the screen: {rows:?}"
         );
     }
 
-    /// A branch too long for the column is elided, not cut. It used to run
-    /// under the row's own right-aligned caption and off the sidebar,
+    /// A caption too long for the column is elided, not cut. It used to
+    /// run under the row's own right-aligned caption and off the sidebar,
     /// taking that caption's meaning with it and ending mid-word with
     /// nothing to say it had been shortened.
     #[test]
-    fn a_long_branch_is_elided_rather_than_run_off_the_sidebar() {
+    fn a_long_caption_is_elided_rather_than_run_off_the_sidebar() {
+        const LONG: &str = "a-harness-named-longer-than-any-sidebar-column-could-hold";
         let mut model = agent_with_task(TaskStateView::Ready, 3);
-        let long = "agent/a-branch-name-longer-than-any-sidebar-column-could-hold";
-        for tasks in model.remembered.tasks.values_mut() {
-            tasks[0].branch = long.to_owned();
+        for space in &mut model.session.as_mut().unwrap().workspace.spaces {
+            for tab in &mut space.tabs {
+                tab.pane.process = LONG.to_owned();
+            }
         }
+        let identities = vec![AgentIdentity {
+            binary: LONG,
+            integration: "long",
+            display_name: "Long",
+            launch: std::path::PathBuf::from(LONG),
+            continuity_gap: None,
+        }];
 
-        let rows = sidebar(&model, &identities_fixture()).rows;
+        let rows = sidebar(&model, &identities).rows;
         let caption = rows
             .iter()
-            .find(|row| row.contains("agent/a-branch"))
-            .expect("the branch reads under the agent's name");
+            .find(|row| row.contains("a-harness-named"))
+            .expect("what runs there reads under the agent's name");
 
         // Past the caption sits the sidebar's own divider, which is the
         // proof nothing ran over the column's edge.
@@ -1761,7 +1778,7 @@ mod workspace_tests {
             "the name is elided, and says so: {caption}"
         );
         assert!(
-            !caption.contains(long),
+            !caption.contains(LONG),
             "so the whole name cannot be on the row: {caption}"
         );
     }
@@ -1769,8 +1786,8 @@ mod workspace_tests {
     /// A slot outlives the tasks that run in it, and a task that ended
     /// keeps naming the slot it ran in — so a reused directory is named by
     /// two tasks at once. The row belongs to whoever is in it now; reading
-    /// the first match handed the new agent the previous one's branch and
-    /// its delivered arrow.
+    /// the first match handed the new agent the previous one's delivered
+    /// arrow, which is the mark this reads for.
     #[test]
     fn a_reused_slot_reads_the_task_in_it_now_not_the_one_before() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
@@ -1798,14 +1815,6 @@ mod workspace_tests {
             .insert(PathBuf::from("/repo"), vec![before, now]);
 
         let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            rows.iter().any(|row| row.contains("agent/now")),
-            "the branch under the row is the one being written on: {rows:?}"
-        );
-        assert!(
-            !rows.iter().any(|row| row.contains("agent/before")),
-            "and never the branch of the task that ended here: {rows:?}"
-        );
         let (delivered, _) = task_mark(&TaskStateView::Integrated).expect("integrated is marked");
         let name_row = rows
             .iter()
@@ -1870,50 +1879,90 @@ mod workspace_tests {
         rows
     }
 
-    /// A tenant is the same two-row item a worktree agent is: its name, and
-    /// beneath it the branch the root is on.
+    /// A tenant is the same two-row item a worktree agent is: its name,
+    /// and beneath it the harness running it. Every tenant of the space
+    /// stands in one directory on one branch, so the branch never told
+    /// two rows apart and the harness always does.
     #[test]
-    fn a_workspace_space_draws_each_agent_over_its_branch() {
+    fn a_workspace_space_draws_each_agent_over_the_harness_it_runs() {
         let model = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let agents = agent_rows(&hits);
         assert_eq!(agents.len(), 4, "two rows per agent: {rows:?}");
-        for (label, row) in [("agent 1", agents[0]), ("agent 2", agents[2])] {
+        for (label, harness, row) in [
+            ("agent 1", "claude", agents[0]),
+            ("agent 2", "codex", agents[2]),
+        ] {
             assert!(rows[row as usize].contains(label), "{rows:?}");
             assert!(
-                rows[row as usize + 1].contains("main"),
-                "the branch beneath {label}: {rows:?}"
+                rows[row as usize + 1].contains(harness),
+                "what runs {label}, beneath it: {rows:?}"
             );
         }
+        assert!(
+            !rows.iter().any(|row| row.contains("main")),
+            "and the branch they share is said by the space, not by each of them: {rows:?}"
+        );
         assert_eq!(
             agents[2],
-            agents[1] + 2,
-            "a spacer row between siblings: {rows:?}"
+            agents[1] + 1,
+            "the next agent follows directly: two rows per item, no gap: {rows:?}"
         );
         let branch = theme::glyph(theme::Symbol::TreeBranch);
         assert!(
             !rows.iter().any(|row| row.contains(&branch)),
             "flat: nothing branches off the gutter: {rows:?}"
         );
-        let header = rows
-            .iter()
-            .find(|row| row.contains("repo"))
-            .expect("the space header");
-        assert!(
-            !header.contains("main"),
-            "the branch is on each agent, not repeated on the header: {header:?}"
-        );
     }
 
-    /// Outside a Git repository there is no branch to name, so the caption
-    /// says where the agent runs instead.
+    /// Two rows per agent and no gap between them, so what says which
+    /// item the keyboard is on has to be the item itself: its two rows
+    /// carry a trace of the space's own hue over the panel every other
+    /// row sits on. Light enough to be read through — it is a selection,
+    /// not a highlight — and the kind's, so the tint says what the space
+    /// is as well as where you are.
     #[test]
-    fn a_tenant_outside_a_repository_is_captioned_by_its_directory() {
+    fn the_agent_receiving_keystrokes_wears_its_kinds_hue_over_the_space() {
+        let model = workspace_space_session();
+        let Sidebar {
+            buffer, hits, rows, ..
+        } = sidebar(&model, &tenant_identities());
+        let agents = agent_rows(&hits);
+        let plain = theme::color(Token::SurfaceRaisedSubtle);
+        let tinted = crate::ui::theme::tinted(Token::SpaceWorkspace, Token::SurfaceRaisedSubtle);
+        assert_ne!(tinted, plain, "the tint is a surface of its own");
+
+        // `agent 2` is the space's context agent (see `workspace_space_session`).
+        for row in [agents[2], agents[3]] {
+            assert_eq!(
+                buffer[(2, row)].bg,
+                tinted,
+                "both rows of the item in front: {rows:?}"
+            );
+        }
+        for row in [agents[0], agents[1]] {
+            assert_eq!(
+                buffer[(2, row)].bg,
+                plain,
+                "and every other agent keeps the space's own panel: {rows:?}"
+            );
+        }
+    }
+
+    /// Outside a Git repository there is no branch to name, and the row
+    /// reads exactly as it does inside one: the caption answers "what
+    /// runs here", which is a question every directory has an answer to.
+    #[test]
+    fn a_tenant_outside_a_repository_reads_as_any_other_agent() {
         let mut model = workspace_space_session();
         model.remembered.branches.clear();
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let agents = agent_rows(&hits);
-        assert!(rows[agents[1] as usize].contains("/repo"), "{rows:?}");
+        assert!(rows[agents[1] as usize].contains("claude"), "{rows:?}");
+        assert!(
+            !rows[agents[1] as usize].contains("/repo"),
+            "no directory stands in for it: {rows:?}"
+        );
     }
 
     #[test]
@@ -1991,22 +2040,6 @@ mod workspace_tests {
         );
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         assert_eq!(agent_rows(&hits).len(), 2, "one two-row item: {rows:?}");
-    }
-
-    #[test]
-    fn the_root_toggle_names_each_tenants_harness_beneath_it() {
-        let mut model = workspace_space_session();
-        let space = model.session.as_ref().unwrap().workspace.selected_space;
-        model.remembered.roots_shown.insert(space);
-        let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
-        assert!(
-            rows.iter().any(|row| row.contains("/repo")),
-            "the header shows the root: {rows:?}"
-        );
-        let agents = agent_rows(&hits);
-        assert!(rows[agents[0] as usize].contains("agent 1"), "{rows:?}");
-        assert!(rows[agents[1] as usize].contains("claude"), "{rows:?}");
-        assert!(rows[agents[3] as usize].contains("codex"), "{rows:?}");
     }
 
     /// A tenant has no task, so its row has nothing to deliver and no state
@@ -2170,8 +2203,8 @@ mod workspace_tests {
 
         // Looking for a repository from a directory that is not one is the
         // whole point of the other kind: the flip is taken, the listing
-        // narrows to what a slot can be cut from, and with none of them
-        // there is nothing to create yet.
+        // narrows to what a slot can be cut from and the folders leading
+        // to one, and with neither there is nothing to create yet.
         model
             .root_picker
             .as_mut()
@@ -2184,7 +2217,7 @@ mod workspace_tests {
         assert_eq!(
             model.root_picker.as_ref().map(RootPicker::match_count),
             Some(0),
-            "no repository under it"
+            "no repository under it, and nothing under that either"
         );
         assert_eq!(
             model.root_picker.as_ref().and_then(RootPicker::chosen),
@@ -2406,31 +2439,32 @@ mod workspace_tests {
         );
     }
 
-    /// The same `⇄` that swaps a space's name for its root swaps each of
-    /// its agents' branch for the harness running it — what the work is,
-    /// or where and on what it runs — and swaps both back.
+    /// An agent's caption says what runs there, and never the branch: a
+    /// task's label is derived from its branch, so the caption used to
+    /// repeat the name above it — `agent/t1` under `t1` for work nobody
+    /// named, `fix/thing` under `thing` for work somebody did. The
+    /// space's `⇄` is the header's alone and does not touch it.
     #[test]
-    fn the_root_toggle_shows_each_agents_harness_in_place_of_its_branch() {
+    fn an_agents_caption_names_the_harness_running_it_never_its_branch() {
         let mut model = agent_with_task(TaskStateView::Running, 0);
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let caption = rows
-            .iter()
-            .position(|row| row.contains("agent/t1"))
-            .unwrap_or_else(|| panic!("the branch is the caption: {rows:#?}"));
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let caption = agent_rows(&hits)[1] as usize;
+        assert!(
+            rows[caption].contains("agent") && !rows[caption].contains("agent/t1"),
+            "the harness id, not the branch: {rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("agent/t1")),
+            "and the branch is nowhere in the column: {rows:#?}"
+        );
 
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.remembered.roots_shown.insert(space);
         let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
-            rows[caption].contains("agent")
-                && !rows[caption].contains("Agent")
-                && !rows[caption].contains("agent/t1"),
-            "the harness id in the branch's place: {rows:#?}"
+            rows[caption].contains("agent") && !rows[caption].contains("agent/t1"),
+            "which the header's own toggle leaves alone: {rows:#?}"
         );
-
-        model.remembered.roots_shown.remove(&space);
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(rows[caption].contains("agent/t1"), "{rows:#?}");
     }
 
     /// A space header says one thing at a time — its name, or where its
@@ -4751,18 +4785,17 @@ mod workspace_tests {
         buffer[(column as u16, row as u16)].fg
     }
 
+    /// Every agent has a slot, so a slot is nothing to announce: neither
+    /// the `.worktrees/<id>` tail — two more segments in a column this
+    /// narrow — nor a mark of its own on the name row.
     #[test]
-    fn an_agent_in_a_slot_is_captioned_by_its_primary_and_left_unmarked() {
-        // The whole point: `.worktrees/<id>` is two more segments in a
-        // column this narrow, and every agent has a slot, so the caption
-        // just stops spelling out the tail and the name row stays clean.
+    fn an_agent_in_a_slot_is_left_unmarked_and_says_where_nowhere() {
         let model = agent_session_in("/repo/.worktrees/ai");
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let caption = rows
-            .iter()
-            .find(|row| row.contains("/repo"))
-            .expect("the caption row names where it is");
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let caption = &rows[agent_rows(&hits)[1] as usize];
+        assert!(caption.contains("agent"), "what runs there: {caption}");
         assert!(!caption.contains(".worktrees"), "{caption}");
+        assert!(!caption.contains("/repo"), "{caption}");
         assert!(
             !caption.contains('\u{22d4}'),
             "one mark, not two: {caption}"
@@ -4771,8 +4804,8 @@ mod workspace_tests {
 
     /// The column in front of an agent's name answers one question — how
     /// that agent is doing — so which agent the keystrokes reach is left
-    /// to the caption's hue, on whatever branch that agent is on: a slot's
-    /// or the operator's own tree's, both read the same way.
+    /// to the caption's hue, wherever that agent stands: a slot of its
+    /// own or the operator's tree, both read the same way.
     #[test]
     fn the_agent_receiving_keystrokes_is_the_one_captioned_in_the_warning_hue() {
         let mut model = two_agent_session("/repo/.worktrees/ai", "/repo/src");
@@ -4786,82 +4819,43 @@ mod workspace_tests {
             "the status glyph still leads: {name_row}"
         );
         assert_eq!(
-            caption_color_of(&model, "Agent", "/repo"),
+            caption_color_of(&model, "Agent", "agent"),
             theme::color(Token::StateWarning),
             "a slot is no exception — the selected agent wears the hue"
         );
         assert_eq!(
-            caption_color_of(&model, "Second", "/repo/src"),
+            caption_color_of(&model, "Second", "agent"),
             theme::color(Token::TextDim),
             "and every other agent stays dim, slot or not"
         );
 
         select_second_agent(&mut model);
         assert_eq!(
-            caption_color_of(&model, "Agent", "/repo"),
+            caption_color_of(&model, "Agent", "agent"),
             theme::color(Token::TextDim)
         );
         assert_eq!(
-            caption_color_of(&model, "Second", "/repo/src"),
-            theme::color(Token::StateWarning)
-        );
-
-        model
-            .remembered
-            .branches
-            .insert(PathBuf::from("/repo/src"), "main".into());
-        assert_eq!(
-            caption_color_of(&model, "Second", "main"),
+            caption_color_of(&model, "Second", "agent"),
             theme::color(Token::StateWarning)
         );
     }
 
-    /// An agent outside any slot has no task to take a branch from, so
-    /// its caption is the branch its own directory was evaluated on —
-    /// and, until that evaluation answers, the directory itself.
+    /// An agent outside any slot reads as one inside it — what runs
+    /// there, and nothing about where. The branch its directory was
+    /// evaluated on belongs to the space, which says it once.
     #[test]
-    fn an_agent_outside_any_slot_is_captioned_by_its_branch() {
+    fn an_agent_outside_any_slot_reads_as_one_inside_it() {
         let mut model = agent_session_in("/repo/src");
-        let before = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            before.iter().any(|row| row.contains("/repo/src")),
-            "the directory stands in until the branch is read: {before:?}"
-        );
-
         model
             .remembered
             .branches
             .insert(PathBuf::from("/repo/src"), "feature/x".into());
-        let rows = sidebar(&model, &identities_fixture()).rows;
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let caption = &rows[agent_rows(&hits)[1] as usize];
+        assert!(caption.contains("agent"), "what runs there: {caption}");
         assert!(
-            rows.iter().any(|row| row.contains("feature/x")),
-            "the branch captions the agent: {rows:?}"
-        );
-        assert!(
-            !rows.iter().any(|row| row.contains("/repo/src")),
-            "the branch replaces the directory: {rows:?}"
-        );
-    }
-
-    /// Inside a slot the branch is the task's to name: the primary's own
-    /// branch, however recently read, is not what that agent delivers from.
-    #[test]
-    fn a_slot_never_borrows_the_primary_branch() {
-        let mut model = agent_session_in("/repo/.worktrees/ai");
-        model
-            .remembered
-            .branches
-            .insert(PathBuf::from("/repo"), "main".into());
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows
-            .iter()
-            .position(|row| row.contains("Agent"))
-            .expect("the agent's row");
-        assert!(
-            !rows[agent..=agent + 1]
-                .iter()
-                .any(|row| row.contains("main")),
-            "no task, no branch: {rows:?}"
+            !caption.contains("feature/x") && !caption.contains("/repo/src"),
+            "neither the branch nor the directory: {caption}"
         );
     }
 
@@ -4888,15 +4882,15 @@ mod workspace_tests {
             .expect("the agent's row");
         let caption = &rows[agent + 1];
         assert!(
-            caption.contains("main"),
-            "the branch captions the agent: {caption:?}"
+            caption.contains("agent"),
+            "the harness captions the agent: {caption:?}"
         );
         assert!(
             caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
             "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
         );
         assert_eq!(
-            caption_color_of(&model, "Agent", "main"),
+            caption_color_of(&model, "Agent", "agent"),
             theme::color(Token::StateWarning)
         );
         assert_eq!(
@@ -5033,19 +5027,6 @@ mod workspace_tests {
         let session = model.session.as_mut().unwrap();
         session.add_tab(SpaceId(1), "shell 2".into(), None, 80, 24, "/repo".into());
         assert!(adopt_agent_labels(&mut model, &identities_fixture()).is_empty());
-    }
-
-    /// Every agent has a slot, so a slot is nothing to announce; the
-    /// caption reads as the primary the slot hangs off.
-    #[test]
-    fn an_agent_in_a_slot_carries_no_marker() {
-        let model = agent_session_in("/repo/.worktrees/ai");
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            rows.iter()
-                .any(|row| row.contains("/repo") && !row.contains(".worktrees")),
-            "the caption reads as the primary: {rows:?}"
-        );
     }
 
     /// The `new` prompt is a chooser, not a text field: the sidebar
@@ -5406,28 +5387,51 @@ mod workspace_tests {
         );
     }
 
-    /// A root several levels deep is longer than the sidebar is wide, and
-    /// the segment being typed is the half that must survive.
+    /// A root several levels deep is longer than the sidebar is wide, so
+    /// its head gives way — and the moment something is typed the line is
+    /// only that. The root stood pinned to the right of the line all the
+    /// way through, saying where the prompt was in a second place; the
+    /// two could disagree, and the one that went stale was the pinned
+    /// half.
     #[test]
-    fn a_long_root_gives_way_to_what_is_being_typed() {
+    fn a_long_root_gives_way_and_then_gives_the_line_over_to_what_is_typed() {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-elide");
         std::fs::create_dir_all(root.join("a-very-long-directory-name/inner")).unwrap();
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
-        picker.descend();
+        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
+        let prompt_row = |model: &WorkspaceModel| {
+            sidebar(model, &identities_fixture())
+                .rows
+                .into_iter()
+                .find(|row| row.contains(&cursor))
+                .expect("the prompt row is drawn")
+        };
+
+        let mut picker = RootPicker::opened_in(
+            &root
+                .join("a-very-long-directory-name")
+                .display()
+                .to_string(),
+            None,
+        );
+        model.root_picker = Some(picker);
+        let prompt = prompt_row(&model);
+        assert!(
+            prompt.contains('\u{2026}'),
+            "where the typing starts from, head first to give way: {prompt}"
+        );
+
+        picker = model.root_picker.take().expect("the prompt is open");
         for character in "inn".chars() {
             picker.typed(character);
         }
         model.root_picker = Some(picker);
-
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
-        let prompt = rows
-            .iter()
-            .find(|row| row.contains(&cursor))
-            .expect("the prompt row is drawn");
+        let prompt = prompt_row(&model);
         assert!(prompt.contains("inn\u{258f}"), "{prompt}");
-        assert!(prompt.contains('\u{2026}'), "the head gave way: {prompt}");
+        assert!(
+            !prompt.contains('\u{2026}'),
+            "and the root is not repeated beside what was typed: {prompt}"
+        );
     }
 
     #[test]
@@ -6570,8 +6574,9 @@ mod workspace_tests {
     }
 
     /// The column reads space > agent: the header's fold against the
-    /// gutter and its name just after; each agent's status glyph and name one column further in, its
-    /// caption under that name — the same in either kind of space.
+    /// gutter and its name just after; each agent's status glyph a blank
+    /// column past the connector, its name after that, its caption under
+    /// that name — the same in either kind of space.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -6585,22 +6590,22 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
         let agent = column_of(&rows[header + 1], "shell");
-        assert_eq!(agent, name + 1, "{rows:?}");
-        assert_eq!(column_of(&rows[header + 2], "/one"), agent, "{rows:?}");
+        assert_eq!(agent, name + 2, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "agent"), agent, "{rows:?}");
 
         let flat = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &tenant_identities());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
         assert_eq!(
             column_of(&rows[header + 1], "agent 1"),
-            name + 1,
+            name + 2,
             "{rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 2], "main"), name + 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "claude"), name + 2, "{rows:?}");
     }
 
     /// A space is where its own shell is: a `cd` there moves what the space

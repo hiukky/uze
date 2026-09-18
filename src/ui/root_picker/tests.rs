@@ -171,12 +171,37 @@ fn a_hidden_directory_appears_only_once_it_is_asked_for_by_name() {
     assert_eq!(names(&picker), [".worktrees"]);
 }
 
-/// A separator walks into the row the prompt is on, the way `Tab` does —
-/// and with no row chosen there is nowhere to walk into.
+/// A separator is a character on the line, not a gesture. It used to
+/// walk into whichever row happened to be selected and clear what had
+/// been typed — an implicit `Tab` that answered with a directory nobody
+/// had asked for, and lost the name being typed on the way.
 #[test]
-fn a_separator_typed_with_nothing_chosen_changes_nothing() {
-    let (root, mut picker) = picker_over("root-picker-separator", &["alpha"]);
+fn a_separator_is_typed_into_the_line_rather_than_acted_on() {
+    let (root, mut picker) = picker_over("root-picker-separator", &["alpha/inner"]);
 
+    for character in "alpha".chars() {
+        picker.typed(character);
+    }
+    picker.typed('/');
+
+    assert_eq!(picker.input(), "alpha/", "the line keeps what was typed");
+    assert_eq!(
+        picker.base(),
+        root.join("alpha"),
+        "and names the directory it ends in"
+    );
+    assert_eq!(names(&picker), ["inner"]);
+}
+
+/// The two spellings that leave the directory the prompt opened on: the
+/// same ones a shell answers to.
+#[test]
+fn a_line_that_starts_at_the_root_or_at_home_is_read_from_there() {
+    let (root, mut picker) = picker_over("root-picker-absolute", &["alpha"]);
+
+    for character in root.path().display().to_string().chars() {
+        picker.typed(character);
+    }
     picker.typed('/');
 
     assert_eq!(picker.base(), root.path());
@@ -218,7 +243,27 @@ fn descending_lists_the_selected_directorys_own_children() {
 
     assert_eq!(names(&picker), ["crates", "docs"]);
     assert_eq!(picker.base(), root.join("repo"));
-    assert!(picker.input().is_empty(), "and nothing left typed");
+    assert_eq!(
+        picker.input(),
+        "repo/",
+        "completion is written into the line, not into state beside it"
+    );
+}
+
+/// Completing twice walks two directories down, and the line reads the
+/// path it walked — the segment being matched is what each completion
+/// replaces, never the whole line.
+#[test]
+fn completing_again_replaces_the_segment_and_keeps_the_path() {
+    let (_root, mut picker) = picker_over("root-picker-descend-twice", &["repo/crates/core"]);
+
+    picker.move_selection(0);
+    picker.descend();
+    picker.move_selection(0);
+    picker.descend();
+
+    assert_eq!(picker.input(), "repo/crates/");
+    assert_eq!(names(&picker), ["core"]);
 }
 
 #[test]
@@ -312,31 +357,53 @@ fn the_listed_directory_is_what_the_prompt_lands_on() {
     );
 }
 
-/// A worktree space can only be cut from a repository, so that is all the
-/// listing offers for one — picking anything else silently created the
-/// space somewhere else. The other kind stands anywhere, and offers
-/// everything.
+/// A worktree space is cut from a repository, so the listing offers
+/// repositories — and the folders that lead to one, which is where they
+/// actually are. Keeping only the rows that *were* repositories made a
+/// `projects` folder holding nothing but checkouts draw as empty,
+/// because `projects` is not one itself. The other kind stands anywhere,
+/// and offers everything.
 #[test]
-fn the_worktree_kind_offers_repositories_and_the_other_offers_every_directory() {
+fn a_worktree_offers_repositories_and_the_folders_that_lead_to_them() {
     let root = TempDir::new("root-picker-filter");
-    std::fs::create_dir_all(root.join("project/.git")).unwrap();
-    std::fs::create_dir_all(root.join("notes")).unwrap();
+    std::fs::create_dir_all(root.join("projects/engine/.git")).unwrap();
+    std::fs::create_dir_all(root.join("notes/drafts")).unwrap();
     let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
     // A plain directory names the tenancy, which offers both rows.
-    assert_eq!(names(&picker), ["notes", "project"]);
+    assert_eq!(names(&picker), ["notes", "projects"]);
 
     picker.choose_kind(SpaceKind::Worktree);
 
     assert_eq!(
         names(&picker),
-        ["project"],
-        "only what a slot can be cut from"
+        ["projects"],
+        "what a slot can be cut from, and the way to it — never a folder \
+         with no repository under it at all"
+    );
+    assert_eq!(
+        picker.chosen(),
+        None,
+        "the way to one is not a root itself, which is what makes Enter walk in"
+    );
+
+    picker.select(0);
+    picker.descend();
+
+    assert_eq!(names(&picker), ["engine"]);
+    picker.select(0);
+    assert_eq!(
+        picker.chosen(),
+        Some((root.join("projects/engine"), SpaceKind::Worktree)),
+        "the repository under it is what a slot is cut from"
     );
 
     picker.choose_kind(SpaceKind::Workspace);
-
-    assert_eq!(names(&picker), ["notes", "project"], "and back");
+    assert_eq!(
+        names(&picker),
+        ["engine"],
+        "and the other kind offers it too"
+    );
 }
 
 /// A worktree space is cut from a repository, so a directory inside one is
@@ -360,7 +427,7 @@ fn a_subdirectory_is_the_repository_for_a_worktree_and_itself_for_a_workspace() 
     );
     assert!(
         names(&picker).is_empty(),
-        "and a subdirectory is no place to cut one from: {:?}",
+        "and a subdirectory is no place to cut one from, nor the way to one: {:?}",
         names(&picker)
     );
 

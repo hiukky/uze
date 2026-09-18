@@ -406,33 +406,20 @@ pub(super) fn render_context_menu(
     }
 }
 
-/// How a caption row reads a pane's directory: a slot shows as the primary
-/// it hangs off rather than as its own `.worktrees/<id>` path — that tail
-/// is two more segments in a column only 28-40 wide (see
-/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
-/// is; the slot is where the agent is, which every agent has and none
-/// needs announced.
-fn caption_path(cwd: &Path) -> String {
-    match uze_application::isolated_checkout(cwd) {
-        Some(checkout) => crate::ui::display_project_path(checkout.primary),
-        None => crate::ui::display_project_path(cwd),
-    }
-}
-
-/// Whether `cwd` is outside any slot — the fallback every agent tab
-/// otherwise never needs: no repository, no commit to branch from, Git
-/// absent or refusing. An agent there has no task to take a branch from,
-/// so its caption reads the branch its own directory sits on, and the
-/// pull/push it owes its upstream.
+/// Whether `cwd` is outside any slot: no repository, no commit to branch
+/// from, Git absent or refusing, or a space of the workspace kind, whose
+/// agents stand in the operator's own directory. An agent there owes its
+/// upstream a pull or a push that an agent in a slot never does, which is
+/// the one thing its caption says beyond the harness.
 fn is_unisolated(cwd: &Path) -> bool {
     !uze_application::is_isolated_checkout(cwd)
 }
 
 /// The hue an agent's caption line is drawn in: dim, like every other
-/// detail, except under the agent actually receiving keystrokes. Its
-/// branch — whichever branch that is — is the one every command in the
-/// footer would act on, so the caption says so in the warning hue rather
-/// than leaving the operator to trace the bold label back down a row.
+/// detail, except under the agent actually receiving keystrokes — whose
+/// whole item, both rows of it, is what every command in the footer would
+/// act on. Saying so on the caption too spares the operator tracing the
+/// bold label back down a row.
 fn caption_color(is_current: bool) -> Color {
     if is_current {
         theme::color(Token::StateWarning)
@@ -746,7 +733,7 @@ pub(super) fn render_sidebar(
         if !agents.is_empty() {
             let captions: Vec<TreeCaption> = agents
                 .iter()
-                .map(|agent| TreeCaption::resolve(model, space, agent))
+                .map(|agent| TreeCaption::resolve(model, agent))
                 .collect();
             draw_tree(
                 frame,
@@ -874,7 +861,6 @@ fn agent_rows(agents: u16) -> u16 {
 /// which of its states are on.
 struct SidebarAgent<'a> {
     tab: &'a Tab,
-    is_last: bool,
     /// The agent the space is about (see `space_context_agent`).
     selected: bool,
     /// Selected *and* in the active space: the one agent receiving
@@ -894,15 +880,15 @@ struct TreeCaption {
     /// A checkout removed from under the agent whose task the preserved
     /// list still holds — the row offers to resume it.
     resumable: bool,
-    /// The task's branch, the harness while the root toggle is on, or the
-    /// words for a checkout that is gone.
+    /// The harness running the agent, or the words for a checkout that
+    /// is gone.
     detail: String,
     detail_color: Color,
     sync: Vec<(String, Color)>,
 }
 
 impl TreeCaption {
-    fn resolve(model: &WorkspaceModel, space: &Space, agent: &SidebarAgent<'_>) -> Self {
+    fn resolve(model: &WorkspaceModel, agent: &SidebarAgent<'_>) -> Self {
         let tab = agent.tab;
         let cwd = &tab.pane.cwd;
         let task = model.tab_task(tab.id);
@@ -913,25 +899,29 @@ impl TreeCaption {
         // holds.
         let lost = model.remembered.lost_checkouts.contains(&tab.pane.id);
         let resumable = lost && model.lost_task(tab.id).is_some();
-        // The task's own working branch in place of the cwd path — what
-        // this agent will deliver from. An agent outside any slot has no
-        // task, so its branch is the one its evaluation read at the
-        // directory itself. Either falls back to the cwd (via
-        // `caption_path`) for the moment right after tab creation, before
-        // the async evaluation resolves and a branch exists to show. The
-        // space's `⇄` shows the other side of it: where its work lives on
-        // the header, and what each agent runs on here — named by its id
-        // (`claude`, `codex`), the same word the picker launches and the
-        // process reports.
-        let showing_runtime = model.remembered.roots_shown.contains(&space.id);
+        // What runs here, named by its id (`claude`, `codex`) — the same
+        // word the picker launches and the process reports.
+        //
+        // Not the branch, which this row used to carry: a task's label is
+        // *derived* from its branch (`worktree::label_of`), so the caption
+        // repeated the name above it minus the type — and a task nobody
+        // named reads `agent/<id>` under a label that is the identifier
+        // itself. In a workspace space it was worse: every tenant shares
+        // the operator's branch, so every caption said the same thing.
+        // The branch belongs to the space, and the space's header and the
+        // timeline are where it is said once.
+        //
+        // The harness is the one fact that tells two agents of a space
+        // apart, and it cost a click to see. A row is only drawn for a
+        // recognized harness (`agent_tabs_of`), so the pane's own process
+        // is a fallback for a race, not a second answer.
         let detail = if lost {
             "checkout removed".to_owned()
-        } else if let Some(harness) = agent.harness.filter(|_| showing_runtime) {
-            harness.to_owned()
         } else {
-            task.map(|task| task.branch.clone())
-                .or_else(|| unisolated_branch(model, cwd))
-                .unwrap_or_else(|| caption_path(cwd))
+            agent
+                .harness
+                .unwrap_or(tab.pane.process.as_str())
+                .to_owned()
         };
         let detail_color = if lost {
             theme::color(Token::StateWarning)
@@ -979,7 +969,6 @@ impl<'a> SidebarAgent<'a> {
         });
         Self {
             tab,
-            is_last,
             selected,
             is_current,
             status: model.agent_tab_status(tab.pane.id, is_current),
@@ -1069,10 +1058,11 @@ fn render_space_caption(
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
 
-/// Each agent a two-row item — status and name over the branch or the
-/// directory — with a spacer row between siblings, for either kind, all of
-/// it beside the space's gutter (see [`space_gutter`]). Selection in the tree is the block
-/// fill of the active space plus the status glyph; the drop indicator
+/// Each agent a two-row item — status and name over the harness running
+/// it — one item straight after the next, for either kind, all of it
+/// beside the space's gutter (see [`space_gutter`]). Selection in the
+/// tree is the item's own fill, a trace of the space's hue over the
+/// panel the space sits on, plus the status glyph; the drop indicator
 /// during a drag is an accent bar down the item's leading column, on
 /// both of its rows so it reads as the whole item.
 ///
@@ -1100,15 +1090,29 @@ fn draw_tree(
         // line, in the accent, never a heavier one.
         let lit = agent.is_current || agent.drop_target;
         let flat = kind == SpaceKind::Workspace;
+        // The row the keyboard is on carries a trace of its space's own
+        // hue over the panel every other row sits on — the item is two
+        // rows and the status glyph is one cell, so the block is what
+        // reads as "here" at a glance. Nothing outside the active space
+        // is tinted: `is_current` is selected *and* receiving keystrokes.
+        let surface = if agent.is_current {
+            Some(theme::tinted(kind_hue(kind), Token::SurfaceRaisedSubtle))
+        } else {
+            is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
+        };
+        // One blank column between the connector and the status glyph, in
+        // either kind, so the two land in the same place: the tree's line
+        // runs into the row rather than into the mark that answers for the
+        // agent.
         let lead = || {
             if flat {
-                [space_gutter(lit, kind), Span::raw(" ")]
+                [space_gutter(lit, kind), Span::raw("  ")]
             } else {
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
                     Span::styled(branch[..trunk].to_owned(), gutter_style(lit, kind)),
-                    Span::styled(branch[trunk..].to_owned(), gutter_style(lit, kind)),
+                    Span::styled(format!("{} ", &branch[trunk..]), gutter_style(lit, kind)),
                 ]
             }
         };
@@ -1144,21 +1148,17 @@ fn draw_tree(
             if let Some((mark, hue)) = &caption.task_mark {
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    label_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
+            if let Some(surface) = surface {
+                fill_row_bg(&mut spans, label_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
         }
 
         if let Some(detail_rect) = rows.slot(1).visible() {
-            // Under the agent's name, past the status column, in either
-            // kind.
-            let mut spans = vec![space_gutter(lit, kind), Span::raw("   ")];
+            // Under the agent's name, past the connector's blank column
+            // and the status column, in either kind.
+            let mut spans = vec![space_gutter(lit, kind), Span::raw("    ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1218,38 +1218,14 @@ fn draw_tree(
                 spans.extend(sync);
                 spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             }
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    detail_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
+            if let Some(surface) = surface {
+                fill_row_bg(&mut spans, detail_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
             // The label and its dim branch/cwd caption read as one tree
             // item — clicking the caption line must select the tab too, not
             // just the label text above it.
             hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
-        }
-        // A light gap between sibling tabs. A bare blank row was tried and
-        // discarded — it broke the tree's own "│" connector into two
-        // disconnected stubs. Continuing that connector through the gap
-        // row keeps the tree intact while still giving each 2-row item a
-        // little room to breathe. Skipped for the last tab: it has no
-        // sibling below to connect to, and the space loop's own blank row
-        // already separates it from whatever comes next.
-        if !agent.is_last
-            && let Some(gap_rect) = rows.slot(1).visible()
-        {
-            let mut spans = vec![space_gutter(false, kind)];
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    gap_rect.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), gap_rect);
         }
     }
 }
@@ -1693,9 +1669,9 @@ fn header_is_current(
         && (folded || space_context_agent(space, identities).is_none())
 }
 
-/// Appends the `⇄` to a space header — which flips the space between what
-/// its work is (its label, each agent's branch) and where and on what it
-/// runs (its root, each agent's harness) — pinned to the row's right edge: the
+/// Appends the `⇄` to a space header — which flips the header between
+/// what the space is called and where its work lives — pinned to the
+/// row's right edge: the
 /// same column the agent rows below pin their task mark to (see
 /// [`push_trailing_mark`]), so the sidebar's right-hand column stays one
 /// column — and makes that one cell the click target that flips it.
@@ -1943,16 +1919,6 @@ pub(super) fn render_status_catalog(
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// The branch an agent outside any slot is on, as its evaluation last
-/// read it. `None` inside a slot: the branch there belongs to the task,
-/// and the key an unslotted directory is evaluated under is its own path.
-fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
-    if !is_unisolated(cwd) {
-        return None;
-    }
-    model.remembered.branches.get(&evaluation_key(cwd)).cloned()
 }
 
 /// What a pull and a push would move for an agent outside any slot, when
@@ -2206,19 +2172,22 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    // The end of the path is what says where you are, so it is the head
-    // that gives way in a column this narrow.
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
-    let room = rect.width.saturating_sub(used + TRAILING_PAD + 1);
-    crate::ui::push_trailing(
-        &mut spans,
-        rect.width,
-        elide_head(
-            &crate::ui::display_project_path(picker.base()),
-            room as usize,
-        ),
-        theme::color(Token::TextDim),
-    );
+    // Where the typing starts from, and only until there is typing: the
+    // line says everything else itself (see `RootPicker`). A path pinned
+    // to the right of the line all the way through said where the prompt
+    // was in a second place, which is the half that went stale the
+    // moment the two could disagree.
+    if needle.is_empty() {
+        let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
+        let room = rect.width.saturating_sub(used + TRAILING_PAD + 1);
+        spans.push(Span::styled(
+            elide_head(
+                &crate::ui::display_project_path(picker.base()),
+                room as usize,
+            ),
+            theme::fg(Token::TextDim),
+        ));
+    }
     fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     // In the hue of the kind it would create, like the gutter of a space

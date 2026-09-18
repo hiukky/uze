@@ -552,7 +552,7 @@ impl Workspace<'_> {
         let mut notices = Vec::new();
         let mut ask_the_remote: Vec<Task> = Vec::new();
         let completion = policy.completion;
-        let evaluated = task::locked(&self.0.home, &primary, |store| {
+        let evaluated = task::locked_reporting(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
             let pass = EvaluationPass {
                 primary: &primary,
@@ -569,8 +569,8 @@ impl Workspace<'_> {
             }
             Ok(task_views(&primary, store, completion))
         });
-        let tasks = match evaluated {
-            Ok(tasks) => tasks,
+        let (tasks, recovery) = match evaluated {
+            Ok(answered) => answered,
             Err(error) => {
                 return Evaluation {
                     unreadable: Some(error.to_string()),
@@ -582,6 +582,12 @@ impl Workspace<'_> {
             tasks,
             notices,
             unreadable: None,
+            recovered: recovery.set_aside.map(|set_aside| {
+                format!(
+                    "task state unreadable — set aside at {}",
+                    set_aside.path.display()
+                )
+            }),
         };
         self.adopt_observed_requests(&primary, completion, &ask_the_remote, &mut evaluation);
         evaluation
@@ -1562,6 +1568,15 @@ pub struct Evaluation {
     /// condition surfaced as a single truncated line the one time somebody
     /// happened to add an agent.
     pub unreadable: Option<String>,
+    /// The document could not be read at all and was set aside, so the
+    /// tasks above were adopted afresh from the checkouts Git registers
+    /// rather than read from what UZE had recorded.
+    ///
+    /// Said once, and never in place of the work: an old schema, a hand
+    /// edit or a corrupt file used to stop every agent in the project
+    /// from being placed, which is a worse answer than starting the
+    /// record again from what is on disk.
+    pub recovered: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2923,9 +2938,11 @@ mod task_service_tests {
     /// both with an empty list. Every agent then lost its branch, its mark
     /// and its delivery button at once, with nothing said — the condition
     /// surfaced only as a truncated line the next time somebody happened
-    /// to add an agent.
+    /// to add an agent. A document nothing can read is now recovered from
+    /// rather than reported forever: it is set aside, the checkouts Git
+    /// still registers are adopted, and that is what is said.
     #[test]
-    fn an_unreadable_task_store_is_an_answer_not_an_empty_one() {
+    fn a_document_that_cannot_be_read_is_recovered_from_and_said() {
         let repository = repository("svc-unreadable");
         let root = repository.root().to_path_buf();
         let app = application("svc-unreadable-home");
@@ -2942,12 +2959,55 @@ mod task_service_tests {
         .unwrap();
         let evaluation = app.workspace().evaluate_tasks(&root, &[]);
         assert!(
-            evaluation.unreadable.is_some(),
-            "the reason is carried, not swallowed"
+            evaluation.recovered.is_some(),
+            "a document that cannot be read is said, not swallowed"
         );
+        assert_eq!(
+            evaluation.tasks.len(),
+            1,
+            "the agent still in its checkout is adopted rather than lost"
+        );
+        assert_ne!(
+            evaluation.tasks[0].id, id,
+            "as a record of its own: what the unreadable document said about it is gone"
+        );
+        assert_eq!(
+            evaluation.tasks[0].state,
+            TaskStateView::Parked,
+            "and the commits in that checkout are what it is adopted as holding"
+        );
+    }
+
+    /// What the operator actually hit: a state document this UZE could
+    /// not read — an older schema, a hand edit, corruption — refused
+    /// every mutation of the project, so no agent could be created at
+    /// all. Nothing about the request was wrong, and there was no way
+    /// back from inside the product.
+    #[test]
+    fn an_unreadable_document_never_stops_an_agent_being_created() {
+        let repository = repository("svc-recovered-launch");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-recovered-launch-home");
+        // Schema 1's shape: what every UZE before this one wrote.
+        std::fs::create_dir_all(app.home.state_dir().join("tasks")).unwrap();
+        std::fs::write(
+            task::store_path(&app.home, &root.canonicalize().unwrap()),
+            br#"{"schema_version": 1, "tasks": []}"#,
+        )
+        .unwrap();
+
+        let placement = app
+            .workspace()
+            .place_new_agent(&root, PlacementKind::Slot, "claude", &[])
+            .expect("a document UZE cannot read is not a reason to refuse a launch");
+        assert!(placement.cwd.is_dir(), "the agent has its checkout");
         assert!(
-            evaluation.tasks.is_empty(),
-            "and nothing is invented to stand in for what could not be read"
+            app.workspace()
+                .evaluate_tasks(&root, &[])
+                .tasks
+                .iter()
+                .any(|task| task.id == placement.placement.agent().as_str()),
+            "and the launch is recorded in a document that reads again"
         );
     }
 
