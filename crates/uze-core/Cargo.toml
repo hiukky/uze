@@ -15,7 +15,7 @@ tracing = "0.1"
 uze-git = { path = "../uze-git" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-noyalib = { version = "0.0.41", features = ["compat-serde-yaml"] }
+noyalib = { version = "0.0.43", features = ["compat-serde-yaml"] }
 thiserror = "2"
 # Authentication, not identification: `integrity` in agents.lock must be
 # infeasible to forge, which rules out this crate's own FNV digest. RustCrypto,
