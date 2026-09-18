@@ -45,6 +45,13 @@ pub(super) struct RootPicker {
     /// match first.
     matched: Vec<usize>,
     selected: usize,
+    /// The project the operator is standing in, when it is one of the
+    /// rows. The prompt opens on it and returns to it whenever the
+    /// listing is read again with nothing typed — a kind chosen, a
+    /// profile landing — so "another space over this project" stays one
+    /// `Enter` away while the listing shows everywhere else they could
+    /// go.
+    marked: Option<PathBuf>,
     /// The directory the prompt is on right now — the row chosen in the
     /// listing, or the directory being listed — resolved when the input or
     /// the selection changes rather than on every frame: it probes the
@@ -62,17 +69,29 @@ pub(super) struct RootPicker {
 }
 
 impl RootPicker {
-    /// Opens the prompt inside `prefill` — the selected space's root, the
-    /// directory a sibling space is most likely to be found next to.
-    pub(super) fn opened_in(prefill: &str) -> Self {
+    /// Opens the prompt listing `prefill`, with the project the operator
+    /// is standing in marked when it is one of the rows.
+    ///
+    /// The two are a different question. What is *listed* is where
+    /// projects are — the same premise the prompt resolves typing
+    /// against — and what the prompt is *on* is where the operator
+    /// already is, so neither the walk to another project nor a second
+    /// space over this one costs a gesture the other one saves.
+    pub(super) fn opened_in(prefill: &str, standing_in: Option<&Path>) -> Self {
+        // Trailing separators go, but never all of them: `/` trimmed to
+        // nothing is a relative path, and a relative path is resolved
+        // against home — which would answer "home" for a project sitting
+        // directly under the root.
+        let trimmed = prefill.trim_end_matches('/');
         let mut picker = Self {
-            base: expand_home(prefill.trim_end_matches('/')),
+            base: expand_home(if trimmed.is_empty() { prefill } else { trimmed }),
             input: String::new(),
             touched: false,
             listed: PathBuf::new(),
             listing: Vec::new(),
             matched: Vec::new(),
             selected: 0,
+            marked: standing_in.map(Path::to_path_buf),
             picked: None,
             landed: None,
             chosen: None,
@@ -94,7 +113,15 @@ impl RootPicker {
             // (see the filter in `refresh`).
             (None, _) => match self.profile {
                 Some(profile) => crate::ui::default_space_kind(profile),
-                None if holds_a_repository(&self.base) => SpaceKind::Worktree,
+                // The directory the prompt *opened* on: the project it
+                // is standing in when there is one, and otherwise the
+                // one being listed. Deliberately not the row it has
+                // moved to since — that is what the profile answers,
+                // and reading `picked` here would read it mid-refresh,
+                // before this pass has resolved it.
+                None if holds_a_repository(self.marked.as_deref().unwrap_or(&self.base)) => {
+                    SpaceKind::Worktree
+                }
                 None => SpaceKind::Workspace,
             },
         }
@@ -354,6 +381,21 @@ impl RootPicker {
         // Typing is choosing: the best match leads the list, and it is the
         // one `Enter` takes.
         self.touched = !self.input.is_empty();
+        // Nothing typed, so the prompt is back on the project the
+        // operator is standing in. The listing is re-read whenever the
+        // kind changes — including when the profile lands and decides it
+        // — and a re-read that moved them off it would change what
+        // `Enter` creates while nobody asked.
+        if self.input.is_empty()
+            && let Some(marked) = self.marked.clone()
+            && let Some(index) = self
+                .matched
+                .iter()
+                .position(|candidate| self.listing[*candidate].path == marked)
+        {
+            self.selected = index;
+            self.touched = true;
+        }
         self.reland();
     }
 }

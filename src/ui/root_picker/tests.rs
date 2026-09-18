@@ -13,7 +13,7 @@ fn picker_over(label: &str, directories: &[&str]) -> (TempDir, RootPicker) {
     for directory in directories {
         std::fs::create_dir_all(root.join(directory)).unwrap();
     }
-    let picker = RootPicker::opened_in(&root.path().display().to_string());
+    let picker = RootPicker::opened_in(&root.path().display().to_string(), None);
     (root, picker)
 }
 
@@ -32,6 +32,68 @@ fn opening_lists_the_directories_inside_the_prefilled_root() {
     assert!(picker.input().is_empty(), "nothing to delete before typing");
     assert_eq!(picker.base(), root.path());
     assert_eq!(picker.selection(), None, "and no row claimed yet");
+}
+
+/// The listing and the row the prompt is on answer two questions. The
+/// listing is where projects are; the row is where the operator already
+/// is. Marking it is what keeps a second space over the project already
+/// open one `Enter` away, while the listing still shows everywhere else
+/// they could go — before this, the prompt listed the project's own
+/// subdirectories, and reaching another project meant walking back out.
+#[test]
+fn the_project_the_operator_is_standing_in_is_the_row_the_prompt_opens_on() {
+    let root = TempDir::new("root-picker-standing-in");
+    for directory in ["alpha", "here", "zeta"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    let here = root.join("here");
+    let picker = RootPicker::opened_in(&root.path().display().to_string(), Some(&here));
+
+    assert_eq!(
+        names(&picker),
+        ["alpha", "here", "zeta"],
+        "everywhere they could go is listed"
+    );
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(here.clone()),
+        "and the prompt is on where they are"
+    );
+    assert!(picker.input().is_empty(), "with nothing to delete first");
+
+    // A listing read again — which is what choosing a kind does — must
+    // not move them off it.
+    let mut picker = picker;
+    picker.choose_kind(SpaceKind::Workspace);
+    assert_eq!(picker.chosen().map(|(root, _)| root), Some(here));
+
+    // Typing is choosing, and it chooses among the rows rather than
+    // returning to the mark.
+    picker.typed('z');
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.join("zeta")),
+        "what was typed leads, not what was marked"
+    );
+}
+
+/// A project that is not one of the rows leaves the prompt as it would
+/// have been: the mark is an offer, never a claim about the listing.
+#[test]
+fn a_project_outside_the_listing_marks_nothing() {
+    let root = TempDir::new("root-picker-elsewhere");
+    std::fs::create_dir_all(root.join("alpha")).unwrap();
+    let picker = RootPicker::opened_in(
+        &root.path().display().to_string(),
+        Some(std::path::Path::new("/somewhere/else")),
+    );
+
+    assert_eq!(picker.selection(), None, "no row claimed");
+    assert_eq!(
+        picker.chosen().map(|(root, _)| root),
+        Some(root.path().to_path_buf()),
+        "so `Enter` still takes the directory being listed"
+    );
 }
 
 /// `Enter` on a prompt nothing has been done to takes the directory it
@@ -64,7 +126,7 @@ fn a_file_is_not_a_root() {
     std::fs::create_dir_all(root.join("checkout")).unwrap();
     std::fs::write(root.join("notes.md"), "").unwrap();
 
-    let picker = RootPicker::opened_in(&root.path().display().to_string());
+    let picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
     assert_eq!(names(&picker), ["checkout"]);
 }
@@ -203,7 +265,7 @@ fn the_selection_cannot_run_off_either_end_of_the_matches() {
 #[test]
 fn an_empty_directory_still_offers_itself_as_the_root() {
     let root = TempDir::new("root-picker-empty");
-    let picker = RootPicker::opened_in(&root.path().display().to_string());
+    let picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
     assert_eq!(picker.match_count(), 0);
     assert_eq!(
@@ -241,7 +303,7 @@ fn the_window_scrolls_only_far_enough_to_keep_the_selection_visible() {
 fn the_listed_directory_is_what_the_prompt_lands_on() {
     let root = TempDir::new("root-picker-self");
     std::fs::create_dir_all(root.join("checkout/inner")).unwrap();
-    let picker = RootPicker::opened_in(&root.join("checkout").display().to_string());
+    let picker = RootPicker::opened_in(&root.join("checkout").display().to_string(), None);
     assert_eq!(names(&picker), ["inner"]);
 
     assert_eq!(
@@ -259,7 +321,7 @@ fn the_worktree_kind_offers_repositories_and_the_other_offers_every_directory() 
     let root = TempDir::new("root-picker-filter");
     std::fs::create_dir_all(root.join("project/.git")).unwrap();
     std::fs::create_dir_all(root.join("notes")).unwrap();
-    let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+    let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
     // A plain directory names the tenancy, which offers both rows.
     assert_eq!(names(&picker), ["notes", "project"]);
@@ -287,7 +349,7 @@ fn a_subdirectory_is_the_repository_for_a_worktree_and_itself_for_a_workspace() 
     let repository = root.join("project");
     std::fs::create_dir_all(repository.join(".git")).unwrap();
     std::fs::create_dir_all(repository.join("docs")).unwrap();
-    let mut picker = RootPicker::opened_in(&repository.display().to_string());
+    let mut picker = RootPicker::opened_in(&repository.display().to_string(), None);
 
     // Opened in a repository, the prompt is on the repository itself, and a
     // worktree space is what it would create there.
@@ -326,7 +388,8 @@ fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
     let root = TempDir::new("root-picker-slot");
     let repository = root.join("project");
     std::fs::create_dir_all(repository.join(".worktrees/4j03rn")).unwrap();
-    let mut picker = RootPicker::opened_in(&repository.join(".worktrees").display().to_string());
+    let mut picker =
+        RootPicker::opened_in(&repository.join(".worktrees").display().to_string(), None);
     assert_eq!(names(&picker), ["4j03rn"]);
 
     picker.move_selection(0);
@@ -337,7 +400,10 @@ fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
 
     // …and the same answer for a slot typed out rather than landed on:
     // an empty listing falls back to the typed directory itself.
-    let typed = RootPicker::opened_in(&repository.join(".worktrees/4j03rn").display().to_string());
+    let typed = RootPicker::opened_in(
+        &repository.join(".worktrees/4j03rn").display().to_string(),
+        None,
+    );
     assert_eq!(typed.match_count(), 0);
     assert_eq!(typed.chosen().map(|(root, _)| root), Some(repository));
 }

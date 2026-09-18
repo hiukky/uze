@@ -142,16 +142,29 @@ impl Attach<'_> {
     // --- The management modal --------------------------------------------
 
     /// Opens space creation, from the pointer or the keyboard alike: the
-    /// picker starts at home.
+    /// picker lists where projects like this one live, standing on the
+    /// one the operator is in.
     ///
-    /// Home because that is where checkouts live, which is the same
-    /// premise the prompt already resolves typing against
-    /// (`root_picker::expand_home`). It used to start inside the selected
-    /// space, which listed *that project's* subdirectories — `crates`,
-    /// `docs`, `src` — when what is being looked for is another project
-    /// entirely, so the first gesture was always walking back out of it.
+    /// The directory *beside* the selected space's root, because a new
+    /// space is another project and projects sit beside each other —
+    /// which for a checkout under `~` is `~` itself, the same premise the
+    /// prompt already resolves typing against. It used to list the space's
+    /// own subdirectories (`crates`, `docs`, `src`), so reaching another
+    /// project meant walking back out of this one first. Home is the
+    /// fallback for a workspace with nothing selected, and marking the
+    /// space's own root keeps the other half: a second space over the
+    /// project already open is still one `Enter` away.
     fn open_root_picker(&mut self) {
-        self.model.root_picker = Some(RootPicker::opened_in("~"));
+        let standing_in = self
+            .model
+            .session
+            .as_ref()
+            .map(|session| session.selected_space().root.clone());
+        let beside = standing_in
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map_or_else(|| "~".to_owned(), |parent| parent.display().to_string());
+        self.model.root_picker = Some(RootPicker::opened_in(&beside, standing_in.as_deref()));
         self.ask_root_profile();
         self.model.dirty = true;
     }

@@ -2108,7 +2108,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-picker-kinds");
         std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
             rows.iter().any(|row| row.contains("workspace")),
@@ -4012,7 +4015,8 @@ mod workspace_tests {
     }
 
     /// Creating a space is reachable from the keyboard, and the chord opens
-    /// exactly what the pointer's `new` opens: the picker, rooted at home.
+    /// exactly what the pointer's `new` opens: the picker, listing where
+    /// the selected space's neighbours are and standing on the space.
     #[test]
     fn the_new_space_chord_opens_the_picker_the_pointer_opens() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-new-space-chord"));
@@ -4029,10 +4033,14 @@ mod workspace_tests {
             .root_picker
             .as_ref()
             .expect("the picker opened");
+        // Where a project beside this one would be. Whether the space's
+        // own root is then marked is a question about real directories,
+        // and `root_picker`'s own tests answer it over a temp tree — this
+        // session's `/repo` is a name, not a directory.
         assert_eq!(
             picker.base(),
-            Path::new(&std::env::var("HOME").expect("a home directory")),
-            "rooted at home, where the projects a new space is born from live"
+            Path::new("/"),
+            "listing where a project beside this one would be"
         );
         assert!(
             picker.input().is_empty(),
@@ -4306,7 +4314,7 @@ mod workspace_tests {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
         assert_eq!(hue_of_new(&mut model), theme::color(Token::Accent));
 
-        model.root_picker = Some(RootPicker::opened_in("~"));
+        model.root_picker = Some(RootPicker::opened_in("~", None));
 
         assert_eq!(
             hue_of_new(&mut model),
@@ -5050,7 +5058,10 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
 
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         assert!(
@@ -5130,7 +5141,7 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
         for character in "cr".chars() {
             picker.typed(character);
         }
@@ -5188,7 +5199,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-picker-kind-click");
         std::fs::create_dir_all(root.join("plain")).unwrap();
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
         driven.frame();
         let control = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceKind(_)));
@@ -5227,7 +5241,10 @@ mod workspace_tests {
             std::fs::create_dir_all(root.join(format!("directory-{index:02}"))).unwrap();
         }
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
         driven.frame();
         let last_row = |driven: &Driven<'_>| {
@@ -5285,7 +5302,10 @@ mod workspace_tests {
             .position(|row| row.contains("repo"))
             .expect("the first space's header is drawn");
 
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let Sidebar { rows, buffer, .. } = sidebar(&model, &identities_fixture());
         let kind_row = rows
             .iter()
@@ -5333,7 +5353,7 @@ mod workspace_tests {
     #[test]
     fn the_prompt_opens_empty_over_the_directory_it_is_rooted_at() {
         let mut model = agent_session_in("/repo");
-        model.root_picker = Some(RootPicker::opened_in("~"));
+        model.root_picker = Some(RootPicker::opened_in("~", None));
 
         let rows = sidebar(&model, &identities_fixture()).rows;
         let cursor = theme::glyph(crate::ui::theme::Symbol::CursorText);
@@ -5364,7 +5384,10 @@ mod workspace_tests {
         std::fs::create_dir_all(root.join("engine")).unwrap();
         let mut model = agent_session_in("/repo");
 
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains("engine")),
@@ -5390,7 +5413,7 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("sidebar-root-elide");
         std::fs::create_dir_all(root.join("a-very-long-directory-name/inner")).unwrap();
         let mut model = agent_session_in("/repo");
-        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
         picker.descend();
         for character in "inn".chars() {
             picker.typed(character);
@@ -7243,7 +7266,10 @@ mod workspace_tests {
         let mut model = session_rooted_at(root.path());
         // The directory being listed is what an untouched prompt lands on
         // (see `RootPicker`) — here, the space's own root.
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
 
         driven.frame();
@@ -7268,7 +7294,10 @@ mod workspace_tests {
         let root = uze_testkit::temp::TempDir::new("orchestrator-space-new-root");
         std::fs::create_dir_all(root.join("inner")).unwrap();
         let mut model = session_rooted_at(root.path());
-        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        model.root_picker = Some(RootPicker::opened_in(
+            &root.path().display().to_string(),
+            None,
+        ));
         let mut driven = driven(model, &home);
 
         driven.frame();
