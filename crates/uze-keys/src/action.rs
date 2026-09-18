@@ -228,17 +228,17 @@ actions! {
 
     // --- The architect surface -------------------------------------------
     PanLeft => "pan-left", false,
-        "Left", "Move the board to show what is further left";
+        "Move left", "Move the board to show what is further left";
     PanRight => "pan-right", false,
-        "Right", "Move the board to show what is further right";
+        "Move right", "Move the board to show what is further right";
     PanUp => "pan-up", false,
-        "Up", "Move the board to show what is further up";
+        "Move up", "Move the board to show what is further up";
     PanDown => "pan-down", false,
-        "Down", "Move the board to show what is further down";
+        "Move down", "Move the board to show what is further down";
     NextDiagram => "next-diagram", false,
-        "Next diagram", "Show the next diagram on the board";
+        "Next artifact", "Show the next artifact on the board";
     PreviousDiagram => "previous-diagram", false,
-        "Previous diagram", "Show the previous diagram on the board";
+        "Previous artifact", "Show the previous artifact on the board";
     NextRendering => "next-rendering", false,
         "Rendering", "Draw the diagram the next way it can be drawn";
 

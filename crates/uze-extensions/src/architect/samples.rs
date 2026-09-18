@@ -7,34 +7,28 @@
 //! — is the next question, and an easier one.
 
 pub struct Sample {
-    pub group: &'static str,
     pub name: &'static str,
     pub source: &'static str,
 }
 
 pub const SAMPLES: [Sample; 5] = [
     Sample {
-        group: "Flowchart",
         name: "Crate layering",
         source: LAYERING,
     },
     Sample {
-        group: "Flowchart",
         name: "Install pipeline",
         source: INSTALL_PIPELINE,
     },
     Sample {
-        group: "C4",
         name: "System context",
         source: C4_CONTEXT,
     },
     Sample {
-        group: "C4",
         name: "Containers",
         source: C4_CONTAINERS,
     },
     Sample {
-        group: "Sequence",
         name: "uze install",
         source: INSTALL_SEQUENCE,
     },

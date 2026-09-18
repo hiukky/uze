@@ -352,28 +352,25 @@ fn render_board(
     let (tabs, heading_row, board, footer) = board_rows(area);
     let mut rendered = Rendered::default();
     render_modes(frame, tabs, &view.modes, hits);
+    let heading = match &view.content {
+        Content::Lines { heading, .. } => heading.as_str(),
+        Content::Message { .. } => "",
+    };
     if let Some(navigator) = view.navigator.as_ref() {
         let room = tabs.width.saturating_sub(modes_width(&view.modes) + 2);
-        render_tabs(frame, Rect::new(tabs.x, tabs.y, room, 1), navigator, hits);
+        render_areas(frame, Rect::new(tabs.x, tabs.y, room, 1), navigator, hits);
+        render_artifacts(frame, heading_row, navigator, heading, hits);
     }
     match &view.content {
         Content::Message { text, hint, role } => {
             render_message(frame, board, text, hint.as_deref(), color(*role));
         }
         Content::Lines {
-            heading,
             scroll,
             lines,
             total,
             ..
         } => {
-            frame.render_widget(
-                Paragraph::new(TextSpan::styled(
-                    heading.to_owned(),
-                    theme::fg(Token::TextMuted),
-                )),
-                heading_row,
-            );
             let gutter = gutter_width(lines);
             for (row, (offset, line)) in lines
                 .iter()
@@ -415,53 +412,124 @@ fn render_board(
     rendered
 }
 
-/// The list, laid along a row: a group is a quiet label, an item a
-/// segment drawn the way the mode segments are, so the two controls on
-/// this row read as the same kind of thing.
-fn render_tabs(
+/// The list's groups, which on a board are its *areas*: the first of two
+/// levels, drawn the way the mode segments beside them are, because both
+/// are a choice between a few fixed things.
+///
+/// Two rows rather than one, because one row of areas and artifacts mixed
+/// is a row where nothing says which word is a heading and which is a
+/// choice — the reader has to work out the grammar before reading it.
+fn render_areas(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     navigator: &Navigator,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
+    let active = active_group(navigator);
     let mut x = area.x;
-    for row in &navigator.rows {
-        let (text, style, hit) = match row {
-            NavigatorRow::Group { name, .. } => (
-                format!(
-                    "{}{} ",
-                    if x == area.x { "" } else { "  " },
-                    name.to_uppercase()
-                ),
-                theme::fg(Token::TextFaint),
-                None,
-            ),
-            NavigatorRow::Item {
-                id, name, selected, ..
-            } => {
-                let (fill, ink) = match selected {
-                    true => (Token::SurfaceSelected, Token::TextBright),
-                    false => (Token::SurfaceBackground, Token::TextMuted),
-                };
-                let mut style = Style::default()
-                    .fg(theme::color(ink))
-                    .bg(theme::color(fill));
-                if *selected {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                (format!(" {name} "), style, Some(ViewHit::SelectItem(*id)))
-            }
+    for (index, row) in navigator.rows.iter().enumerate() {
+        let NavigatorRow::Group { id, name, .. } = row else {
+            continue;
         };
-        let width = TextSpan::raw(&text).width() as u16;
+        let count = navigator.rows[index + 1..]
+            .iter()
+            .take_while(|row| matches!(row, NavigatorRow::Item { .. }))
+            .count();
+        let is_active = active == Some(*id);
+        let (fill, ink, quiet) = match is_active {
+            true => (
+                Token::SurfaceSelected,
+                Token::TextBright,
+                Token::TextSecondary,
+            ),
+            false => (
+                Token::SurfaceBackground,
+                Token::TextSecondary,
+                Token::TextDim,
+            ),
+        };
+        let fill = theme::color(fill);
+        let mut label = Style::default().fg(theme::color(ink)).bg(fill);
+        if is_active {
+            label = label.add_modifier(Modifier::BOLD);
+        }
+        let spans = vec![
+            TextSpan::styled(format!(" {name} "), label),
+            TextSpan::styled(
+                format!("{count} "),
+                Style::default().fg(theme::color(quiet)).bg(fill),
+            ),
+        ];
+        let width = spans.iter().map(TextSpan::width).sum::<usize>() as u16;
         if x.saturating_add(width) > area.right() {
             break;
         }
         let rect = Rect::new(x, area.y, width, 1);
-        frame.render_widget(Paragraph::new(TextSpan::styled(text, style)), rect);
-        if let Some(hit) = hit {
-            hits.push((rect, hit));
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        hits.push((rect, ViewHit::ToggleGroup(*id)));
+        x = x.saturating_add(width + 1);
+    }
+}
+
+/// The group the selection is in — the area whose artifacts are on show.
+fn active_group(navigator: &Navigator) -> Option<usize> {
+    let mut group = None;
+    for row in &navigator.rows {
+        match row {
+            NavigatorRow::Group { id, .. } => group = Some(*id),
+            NavigatorRow::Item { selected: true, .. } => return group,
+            NavigatorRow::Item { .. } => {}
         }
-        x = x.saturating_add(width);
+    }
+    None
+}
+
+/// The second level: the artifacts of the area on show, as plain words —
+/// the chosen one bright and underlined, the rest legible rather than
+/// faint, since every one of them is something to click. What the content
+/// says about itself sits at the far end of the same row.
+fn render_artifacts(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    navigator: &Navigator,
+    heading: &str,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let active = active_group(navigator);
+    let heading_width = TextSpan::raw(heading).width() as u16;
+    let room = area.width.saturating_sub(heading_width + 3);
+    let mut x = area.x.saturating_add(1);
+    let mut group = None;
+    for row in &navigator.rows {
+        match row {
+            NavigatorRow::Group { id, .. } => group = Some(*id),
+            NavigatorRow::Item {
+                id, name, selected, ..
+            } if group == active => {
+                let width = TextSpan::raw(name.as_str()).width() as u16;
+                if x.saturating_add(width) > area.x.saturating_add(room) {
+                    break;
+                }
+                let style = match selected {
+                    true => theme::fg_bold(Token::Accent).add_modifier(Modifier::UNDERLINED),
+                    false => theme::fg(Token::TextSecondary),
+                };
+                let rect = Rect::new(x, area.y, width, 1);
+                frame.render_widget(Paragraph::new(TextSpan::styled(name.clone(), style)), rect);
+                hits.push((rect, ViewHit::SelectItem(*id)));
+                x = x.saturating_add(width + 3);
+            }
+            NavigatorRow::Item { .. } => {}
+        }
+    }
+    if heading_width < area.width {
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(
+                heading.to_owned(),
+                theme::fg(Token::TextMuted),
+            )),
+            Rect::new(area.right() - heading_width, area.y, heading_width, 1),
+        );
     }
 }
 
@@ -1387,13 +1455,18 @@ mod tests {
             println!("{}", rows.join("\n"));
         }
         assert!(
-            rows[1].contains("FLOWCHART") && rows[1].contains("Install pipeline"),
-            "the diagrams are a row of tabs: {}",
+            rows[1].contains("C4 2") && rows[1].contains("Flowchart 2"),
+            "the areas are the first row, each with what it holds: {}",
             rows[1]
+        );
+        assert!(
+            rows[2].contains("Containers") && !rows[2].contains("Crate layering"),
+            "the second row is the area on show, and only that: {}",
+            rows[2]
         );
         let footer = rows[usize::from(height) - 3].as_str();
         assert!(
-            footer.contains("tab next diagram") && footer.contains("v rendering"),
+            footer.contains("tab next artifact") && footer.contains("v rendering"),
             "the footer names the board's own keys: {footer}"
         );
 
@@ -1428,7 +1501,7 @@ mod tests {
         let Content::Lines { heading, .. } = architect::view(&state, space).content else {
             panic!("a diagram is lines");
         };
-        assert!(heading.contains("selected Workspace TUI"), "{heading}");
+        assert!(heading.starts_with("Workspace TUI"), "{heading}");
     }
 
     /// The whole point of the contract: an extension names a row, the host

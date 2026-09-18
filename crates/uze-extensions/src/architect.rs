@@ -16,6 +16,7 @@
 //! position; the host only draws the cells it is handed.
 
 mod canvas;
+mod catalog;
 mod layout;
 mod mermaid;
 mod minimap;
@@ -34,10 +35,10 @@ use crate::{
 };
 
 use canvas::{Canvas, Frame, Glyphs};
+use catalog::Catalog;
 use minimap::Minimap;
 use model::Diagram;
 use paint::Scene;
-use samples::SAMPLES;
 
 pub const CATALOG: BuiltinExtension = BuiltinExtension {
     id: "architect",
@@ -74,10 +75,14 @@ enum Drawing {
 }
 
 pub struct ArchitectView {
-    sample: usize,
+    catalog: Catalog,
+    selected: usize,
     showing: Showing,
-    /// The board cell at the screen's top-left corner.
-    corner: (i32, i32),
+    /// The board cell at the screen's top-left corner, once the board has
+    /// been moved. `None` is *home* — the drawing in the middle of the
+    /// screen — which cannot be a number here, because it depends on a
+    /// screen size this side only learns when it is asked to draw.
+    corner: Option<(i32, i32)>,
     picked: Option<usize>,
     drawing: Drawing,
     canvas: Option<Canvas>,
@@ -92,25 +97,30 @@ pub enum ArchitectOutcome {
 impl ArchitectView {
     pub fn opening() -> Self {
         let mut view = Self {
-            sample: 0,
+            catalog: Catalog::built_in(),
+            selected: 0,
             showing: Showing::Unicode,
-            corner: (0, 0),
+            corner: None,
             picked: None,
             drawing: Drawing::Unreadable(String::new()),
             canvas: None,
         };
-        view.open_sample(0);
+        view.open(0);
         view
     }
 
-    fn open_sample(&mut self, sample: usize) {
-        self.sample = sample % SAMPLES.len();
-        self.corner = (0, 0);
+    fn open(&mut self, artifact: usize) {
+        let count = self.catalog.artifacts().len().max(1);
+        self.selected = artifact % count;
+        self.corner = None;
         self.picked = None;
-        self.drawing = match mermaid::parse(SAMPLES[self.sample].source) {
-            Ok(Diagram::Graph(graph)) => Drawing::Graph(Box::new(Scene::of(graph))),
-            Ok(Diagram::Sequence(sequence)) => Drawing::Sequence(sequence),
-            Err(reason) => Drawing::Unreadable(reason),
+        self.drawing = match self.catalog.get(self.selected) {
+            Some(artifact) => match mermaid::parse(&artifact.source) {
+                Ok(Diagram::Graph(graph)) => Drawing::Graph(Box::new(Scene::of(graph))),
+                Ok(Diagram::Sequence(sequence)) => Drawing::Sequence(sequence),
+                Err(reason) => Drawing::Unreadable(reason),
+            },
+            None => Drawing::Unreadable("there is nothing to draw".to_owned()),
         };
         self.repaint();
     }
@@ -129,43 +139,69 @@ impl ArchitectView {
 
     fn show(&mut self, showing: Showing) {
         self.showing = showing;
+        self.corner = None;
         self.repaint();
+    }
+
+    fn source(&self) -> &str {
+        self.catalog
+            .get(self.selected)
+            .map_or("", |artifact| artifact.source.as_str())
     }
 
     fn board_size(&self) -> (i32, i32) {
         match (self.showing, &self.canvas) {
-            (Showing::Source, _) => {
-                let lines = SAMPLES[self.sample].source.lines();
-                let widest = lines.clone().map(canvas::text_width).max().unwrap_or(0);
-                (widest, lines.count() as i32)
-            }
+            (Showing::Source, _) => (0, self.source().lines().count() as i32),
             (_, Some(canvas)) => (canvas.width, canvas.height),
             _ => (0, 0),
         }
     }
 
-    /// Moves the screen's corner, never past the point where the board's
-    /// far edge would leave the screen's.
-    fn move_by(&mut self, columns: i32, rows: i32, space: Size) {
+    /// How far the corner may go, each way. A board is not a document:
+    /// its edge may be brought to the middle of the screen, from either
+    /// side, because what is being read is as often at the edge of the
+    /// drawing as in it — and a drawing pinned to the screen's border
+    /// cannot be looked at the way its middle can. The source *is* a
+    /// document, and scrolls like one.
+    fn reach(&self, space: Size) -> ((i32, i32), (i32, i32)) {
         let board = self.board_size();
-        let furthest = (
-            (board.0 - i32::from(space.width)).max(0),
-            (board.1 - i32::from(space.height)).max(0),
-        );
-        self.corner = (
-            (self.corner.0 + columns).clamp(0, furthest.0),
-            (self.corner.1 + rows).clamp(0, furthest.1),
-        );
+        let screen = (i32::from(space.width), i32::from(space.height));
+        match self.showing {
+            Showing::Source => ((0, 0), (0, (board.1 - screen.1).max(0))),
+            _ => (
+                (-screen.0 / 2, board.0 - screen.0 / 2),
+                (-screen.1 / 2, board.1 - screen.1 / 2),
+            ),
+        }
     }
 
-    /// How far in a board smaller than the screen is set, so it sits in
-    /// the middle of it rather than against its top-left corner.
-    fn inset(&self, space: Size) -> (i32, i32) {
+    /// Where the corner is when nothing has moved it: the drawing in the
+    /// middle of the screen, or its top-left in view when it is larger.
+    fn home(&self, space: Size) -> (i32, i32) {
         let board = self.board_size();
+        let screen = (i32::from(space.width), i32::from(space.height));
+        match self.showing {
+            Showing::Source => (0, 0),
+            _ => (
+                ((board.0 - screen.0) / 2).min(0),
+                ((board.1 - screen.1) / 2).min(0),
+            ),
+        }
+    }
+
+    fn corner(&self, space: Size) -> (i32, i32) {
+        let (across, down) = self.reach(space);
+        let corner = self.corner.unwrap_or_else(|| self.home(space));
         (
-            ((i32::from(space.width) - board.0) / 2).max(0),
-            ((i32::from(space.height) - board.1) / 2).max(0),
+            corner.0.clamp(across.0, across.1.max(across.0)),
+            corner.1.clamp(down.0, down.1.max(down.0)),
         )
+    }
+
+    fn move_by(&mut self, columns: i32, rows: i32, space: Size) {
+        let corner = self.corner(space);
+        self.corner = Some((corner.0 + columns, corner.1 + rows));
+        self.corner = Some(self.corner(space));
     }
 
     fn minimap(&self, space: Size) -> Option<Minimap> {
@@ -176,30 +212,28 @@ impl ArchitectView {
         }
     }
 
-    /// A click, given as the content line and the screen column it
-    /// landed on. The map answers first: it is drawn over the board.
-    fn click(&mut self, line: usize, cell: usize, space: Size) {
-        let (x, y) = (cell as i32, line as i32 - self.corner.1);
+    /// A click, given as the screen cell it landed on. The map answers
+    /// first: it is drawn over the board.
+    fn click(&mut self, x: i32, y: i32, space: Size) {
         if let Some(target) = self.minimap(space).and_then(|map| map.board_cell_at(x, y)) {
             let half = (i32::from(space.width) / 2, i32::from(space.height) / 2);
-            self.corner = (0, 0);
-            self.move_by(target.0 - half.0, target.1 - half.1, space);
+            self.corner = Some((target.0 - half.0, target.1 - half.1));
+            self.corner = Some(self.corner(space));
             return;
         }
         let Drawing::Graph(scene) = &self.drawing else {
             return;
         };
-        let inset = self.inset(space);
-        let board = (x - inset.0 + self.corner.0, line as i32 - inset.1);
-        let node = scene.placement.node_at(board.0, board.1);
+        let corner = self.corner(space);
+        let node = scene.placement.node_at(x + corner.0, y + corner.1);
         // Clicking what is already picked lets go of it, so the diagram
         // can be read whole again without reaching for a key.
         self.picked = if node == self.picked { None } else { node };
         self.repaint();
     }
 
-    fn heading(&self, space: Size) -> String {
-        let mut heading = match &self.drawing {
+    fn heading(&self) -> String {
+        match &self.drawing {
             Drawing::Graph(scene) => {
                 let graph = &scene.graph;
                 let mut heading =
@@ -214,10 +248,7 @@ impl ArchitectView {
                         .iter()
                         .filter(|edge| edge.from == picked)
                         .count();
-                    heading.push_str(&format!(
-                        " · selected {} · {into} in · {out} out",
-                        graph.nodes[picked].title
-                    ));
+                    heading = format!("{} · {into} in · {out} out", graph.nodes[picked].title);
                 }
                 heading
             }
@@ -227,11 +258,7 @@ impl ArchitectView {
                 sequence.steps.len()
             ),
             Drawing::Unreadable(_) => String::new(),
-        };
-        if self.minimap(space).is_some() {
-            heading.push_str(" · drag the board or use the arrows to move it");
         }
-        heading
     }
 
     /// The part of the board the screen is over, as the screen's own
@@ -239,15 +266,15 @@ impl ArchitectView {
     fn screen(&self, space: Size) -> Option<Canvas> {
         let board = self.canvas.as_ref()?;
         let (columns, rows) = (i32::from(space.width), i32::from(space.height));
+        let corner = self.corner(space);
         let mut screen = Canvas::new(columns, rows, board.glyphs);
-        let inset = self.inset(space);
         let grid_dot = match board.glyphs {
             Glyphs::Unicode => '·',
             Glyphs::Ascii => '.',
         };
         for y in 0..rows {
             for x in 0..columns {
-                let at = (x - inset.0 + self.corner.0, y - inset.1 + self.corner.1);
+                let at = (x + corner.0, y + corner.1);
                 match board.cell(at.0, at.1) {
                     Some(cell) if cell.solid => screen.set(x, y, cell),
                     _ if at.0.rem_euclid(GRID.0) == 0 && at.1.rem_euclid(GRID.1) == 0 => {
@@ -263,8 +290,8 @@ impl ArchitectView {
                 _ => &[],
             };
             let looking_at = Frame {
-                x: self.corner.0,
-                y: self.corner.1,
+                x: corner.0,
+                y: corner.1,
                 w: columns,
                 h: rows,
             };
@@ -276,13 +303,13 @@ impl ArchitectView {
 
 pub fn view(state: &ArchitectView, space: Size) -> View {
     let mut rows = Vec::new();
-    let mut group = "";
-    for (index, sample) in SAMPLES.iter().enumerate() {
-        if sample.group != group {
-            group = sample.group;
+    let mut area = None;
+    for (index, artifact) in state.catalog.artifacts().iter().enumerate() {
+        if area != Some(artifact.kind) {
+            area = Some(artifact.kind);
             rows.push(NavigatorRow::Group {
                 id: index,
-                name: group.to_owned(),
+                name: artifact.kind.name().to_owned(),
                 depth: 0,
                 collapsed: false,
                 icon: RowIcon::None,
@@ -290,32 +317,24 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         }
         rows.push(NavigatorRow::Item {
             id: index,
-            name: sample.name.to_owned(),
+            name: artifact.name.clone(),
             depth: 1,
             marker: Span::default(),
-            selected: index == state.sample,
+            selected: index == state.selected,
             icon: RowIcon::None,
         });
     }
     View {
-        title: vec![
-            Span::new("Architect", Role::Bright).bold(),
-            Span::new("  proof of concept", Role::Dim),
-        ],
+        title: vec![Span::new("Architect", Role::Bright).bold()],
         navigator: Some(Navigator {
-            heading: "DIAGRAMS".to_owned(),
-            badge: SAMPLES.len().to_string(),
+            heading: "ARTIFACTS".to_owned(),
+            badge: state.catalog.artifacts().len().to_string(),
             focused: false,
             rows,
             anchor: None,
         }),
         content: content(state, space),
-        footer: vec![
-            Command::Close,
-            Command::NextView,
-            Command::NextMode,
-            Command::ScrollPageDown,
-        ],
+        footer: vec![Command::Close, Command::NextView, Command::NextMode],
         modes: MODES
             .iter()
             .map(|&(showing, label)| Mode {
@@ -330,42 +349,35 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
 fn content(state: &ArchitectView, space: Size) -> Content {
     if let Drawing::Unreadable(reason) = &state.drawing {
         return Content::Message {
-            text: "This diagram could not be read".to_owned(),
+            text: "This artifact could not be drawn".to_owned(),
             hint: Some(reason.clone()),
             role: Role::Warning,
         };
     }
-    let scrolled = state.corner.1.max(0) as usize;
-    let lines = match state.showing {
-        Showing::Source => source_lines(SAMPLES[state.sample].source),
-        _ => {
-            // The host skips the lines scrolled past, so they are handed
-            // over empty: only the screen is worth the cells.
-            let mut lines = vec![blank_line(); scrolled];
-            lines.extend(
-                state
-                    .screen(space)
-                    .map(|screen| screen.lines())
-                    .unwrap_or_default(),
-            );
-            lines
+    match state.showing {
+        Showing::Source => {
+            let lines = source_lines(state.source());
+            Content::Lines {
+                heading: state.heading(),
+                scroll: state.corner(space).1.max(0) as u16,
+                total: lines.len(),
+                lines,
+                caret: None,
+            }
         }
-    };
-    Content::Lines {
-        heading: state.heading(space),
-        scroll: scrolled as u16,
-        total: state.board_size().1.max(0) as usize,
-        lines,
-        caret: None,
-    }
-}
-
-fn blank_line() -> ContentLine {
-    ContentLine {
-        gutter: String::new(),
-        number: String::new(),
-        tone: LineTone::Neutral,
-        spans: Vec::new(),
+        // A board hands over its screen and nothing else: there is no
+        // "scrolled past" on a surface that moves both ways, so there is
+        // no scroll for the host to apply and no bar for it to draw.
+        _ => {
+            let lines = state.screen(space).map(|s| s.lines()).unwrap_or_default();
+            Content::Lines {
+                heading: state.heading(),
+                scroll: 0,
+                total: lines.len(),
+                lines,
+                caret: None,
+            }
+        }
     }
 }
 
@@ -388,10 +400,11 @@ pub fn handle_command(
     space: Size,
 ) -> ArchitectOutcome {
     let page = i32::from(space.height.saturating_sub(2).max(1));
+    let count = state.catalog.artifacts().len().max(1);
     match command {
         Command::Close => return ArchitectOutcome::Close,
-        Command::NextView => state.open_sample(state.sample + 1),
-        Command::PreviousView => state.open_sample(state.sample + SAMPLES.len() - 1),
+        Command::NextView => state.open(state.selected + 1),
+        Command::PreviousView => state.open(state.selected + count - 1),
         Command::Pan(PanDirection::Left) => state.move_by(-PAN_COLUMNS, 0, space),
         Command::Pan(PanDirection::Right) => state.move_by(PAN_COLUMNS, 0, space),
         Command::Pan(PanDirection::Up) => state.move_by(0, -PAN_ROWS, space),
@@ -404,7 +417,6 @@ pub fn handle_command(
                 .position(|&(showing, _)| showing == state.showing)
                 .unwrap_or(0);
             state.show(MODES[(current + 1) % MODES.len()].0);
-            state.move_by(0, 0, space);
         }
         _ => {}
     }
@@ -418,15 +430,17 @@ pub fn handle_mouse(
 ) -> ArchitectOutcome {
     match hit {
         Some(ViewHit::Close) => return ArchitectOutcome::Close,
-        Some(ViewHit::SelectItem(sample)) => state.open_sample(sample),
+        Some(ViewHit::SelectItem(artifact)) => state.open(artifact),
+        // An area is entered by its first artifact: the group's id is
+        // that artifact's index, so there is nothing to look up.
+        Some(ViewHit::ToggleGroup(first)) => state.open(first),
         Some(ViewHit::SelectMode(mode)) => {
             if let Some(&(showing, _)) = MODES.get(mode) {
                 state.show(showing);
-                state.move_by(0, 0, space);
             }
         }
         Some(ViewHit::PlaceCaret { line, cell }) if state.showing != Showing::Source => {
-            state.click(line, cell, space);
+            state.click(cell as i32, line as i32, space);
         }
         _ => {}
     }
@@ -454,8 +468,9 @@ pub fn handle_scroll(state: &mut ArchitectView, direction: ScrollDirection, spac
 }
 
 pub fn scroll_to(state: &mut ArchitectView, first: usize, space: Size) {
-    state.corner.1 = 0;
-    state.move_by(0, first as i32, space);
+    let corner = state.corner(space);
+    state.corner = Some((corner.0, first as i32));
+    state.corner = Some(state.corner(space));
 }
 
 #[cfg(test)]
