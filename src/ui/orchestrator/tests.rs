@@ -6517,8 +6517,9 @@ mod workspace_tests {
     }
 
     /// The column reads space > agent: the header's fold against the
-    /// gutter and its name just after; each agent's status glyph and name one column further in, its
-    /// caption under that name — the same in either kind of space.
+    /// gutter and its name just after; each agent's status glyph a blank
+    /// column past the connector, its name after that, its caption under
+    /// that name — the same in either kind of space.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -6532,22 +6533,22 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
         let agent = column_of(&rows[header + 1], "shell");
-        assert_eq!(agent, name + 1, "{rows:?}");
+        assert_eq!(agent, name + 2, "{rows:?}");
         assert_eq!(column_of(&rows[header + 2], "agent"), agent, "{rows:?}");
 
         let flat = workspace_space_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &tenant_identities());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        assert_eq!(column_of(&rows[header + 1], &idle), name - 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
         assert_eq!(
             column_of(&rows[header + 1], "agent 1"),
-            name + 1,
+            name + 2,
             "{rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 2], "claude"), name + 1, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "claude"), name + 2, "{rows:?}");
     }
 
     /// A space is where its own shell is: a `cd` there moves what the space

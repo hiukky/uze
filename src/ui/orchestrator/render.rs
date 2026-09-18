@@ -1091,15 +1091,19 @@ fn draw_tree(
         // line, in the accent, never a heavier one.
         let lit = agent.is_current || agent.drop_target;
         let flat = kind == SpaceKind::Workspace;
+        // One blank column between the connector and the status glyph, in
+        // either kind, so the two land in the same place: the tree's line
+        // runs into the row rather than into the mark that answers for the
+        // agent.
         let lead = || {
             if flat {
-                [space_gutter(lit, kind), Span::raw(" ")]
+                [space_gutter(lit, kind), Span::raw("  ")]
             } else {
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
                     Span::styled(branch[..trunk].to_owned(), gutter_style(lit, kind)),
-                    Span::styled(branch[trunk..].to_owned(), gutter_style(lit, kind)),
+                    Span::styled(format!("{} ", &branch[trunk..]), gutter_style(lit, kind)),
                 ]
             }
         };
@@ -1147,9 +1151,9 @@ fn draw_tree(
         }
 
         if let Some(detail_rect) = rows.slot(1).visible() {
-            // Under the agent's name, past the status column, in either
-            // kind.
-            let mut spans = vec![space_gutter(lit, kind), Span::raw("   ")];
+            // Under the agent's name, past the connector's blank column
+            // and the status column, in either kind.
+            let mut spans = vec![space_gutter(lit, kind), Span::raw("    ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
