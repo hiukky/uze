@@ -142,15 +142,16 @@ impl Attach<'_> {
     // --- The management modal --------------------------------------------
 
     /// Opens space creation, from the pointer or the keyboard alike: the
-    /// picker starts where the selected space is rooted.
+    /// picker starts at home.
+    ///
+    /// Home because that is where checkouts live, which is the same
+    /// premise the prompt already resolves typing against
+    /// (`root_picker::expand_home`). It used to start inside the selected
+    /// space, which listed *that project's* subdirectories — `crates`,
+    /// `docs`, `src` — when what is being looked for is another project
+    /// entirely, so the first gesture was always walking back out of it.
     fn open_root_picker(&mut self) {
-        let prefill = self
-            .model
-            .session
-            .as_ref()
-            .map(|session| crate::ui::display_project_path(&session.selected_space().root))
-            .unwrap_or_else(|| "~".to_owned());
-        self.model.root_picker = Some(RootPicker::opened_in(&prefill));
+        self.model.root_picker = Some(RootPicker::opened_in("~"));
         self.ask_root_profile();
         self.model.dirty = true;
     }
@@ -169,8 +170,23 @@ impl Attach<'_> {
             closed: self.model.first_steps_closed,
             taken: self.model.steps_taken.clone(),
         };
+        // The project the modal is about is the one the operator is
+        // standing in — the space's root, not the directory this process
+        // was started from. Those are routinely different (a shell opens
+        // at home; the work is in a repository), and the Overview read
+        // its prompt history, its context status and its project's
+        // plugins against the wrong one of them.
+        let root = self
+            .model
+            .session
+            .as_ref()
+            .map(|session| session.selected_space().root.clone())
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
         self.model.manage = Some(self.manage_memory.open(
             self.home,
+            &root,
             &self.model.management_layout,
             &first_steps,
             self.keyboard,
@@ -1071,7 +1087,7 @@ impl Attach<'_> {
                 };
                 let showing = self.model.code.as_ref().map(code::CodeView::showing);
                 match code_door(showing, wanted) {
-                    CodeDoor::Close => self.model.code = None,
+                    CodeDoor::Close => self.model.close_code(),
                     CodeDoor::Switch => {
                         if let Some(view) = self.model.code.as_mut() {
                             view.show(wanted);
@@ -1102,7 +1118,7 @@ impl Attach<'_> {
                 code::CodeOutcome::Close
             )
         {
-            self.model.code = None;
+            self.model.close_code();
         }
         self.model.dirty = true;
     }
@@ -1432,7 +1448,7 @@ impl Attach<'_> {
                 } else if let Some(view) = self.model.code.as_mut()
                     && matches!(code::handle_mouse(view, view_hit), code::CodeOutcome::Close)
                 {
-                    self.model.code = None;
+                    self.model.close_code();
                 }
                 self.model.dirty = true;
             }

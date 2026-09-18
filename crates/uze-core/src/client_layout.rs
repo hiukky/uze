@@ -98,39 +98,22 @@ impl Default for WorkspaceLayout {
 
 /// What the management client — plugins, extensions, integrations,
 /// profiles — keeps of its own arrangement.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ManagementLayout {
     /// The screen that was open, by the client's own id for it; `None`,
     /// or an id the client no longer recognizes, opens its default screen.
     pub route: Option<String>,
-    pub marketplace_drawer_open: bool,
-    pub extension_drawer_open: bool,
-    pub harnesses_drawer_open: bool,
+    /// Where each detail drawer's edge was dragged to; `None` leaves the
+    /// width to the client's responsive default. Only the width: a
+    /// screen's detail is the point of the screen, so the drawer is a
+    /// column of it rather than something to be opened and closed.
     pub marketplace_drawer_width: Option<u16>,
     pub extension_drawer_width: Option<u16>,
     pub harness_drawer_width: Option<u16>,
     pub profile_columns_width: Option<u16>,
     /// The marketplaces folded shut in the catalog, by name.
     pub collapsed_marketplaces: BTreeSet<String>,
-}
-
-impl Default for ManagementLayout {
-    /// Every drawer open: a screen's detail is the point of the screen,
-    /// and a first visit should show it rather than ask for it.
-    fn default() -> Self {
-        Self {
-            route: None,
-            marketplace_drawer_open: true,
-            extension_drawer_open: true,
-            harnesses_drawer_open: true,
-            marketplace_drawer_width: None,
-            extension_drawer_width: None,
-            harness_drawer_width: None,
-            profile_columns_width: None,
-            collapsed_marketplaces: BTreeSet::new(),
-        }
-    }
 }
 
 pub fn load(home: &UzeHome) -> ClientLayout {
@@ -190,7 +173,7 @@ mod tests {
             },
             management: ManagementLayout {
                 route: Some("plugins".to_owned()),
-                marketplace_drawer_open: false,
+                marketplace_drawer_width: Some(52),
                 harness_drawer_width: Some(40),
                 collapsed_marketplaces: BTreeSet::from(["uze-official".to_owned()]),
                 ..ManagementLayout::default()
@@ -221,9 +204,9 @@ mod tests {
         assert_eq!(layout.sidebar.width, Some(30));
         assert_eq!(layout.management.route.as_deref(), Some("profiles"));
         assert_eq!(layout.workspace, WorkspaceLayout::default());
-        assert!(
-            layout.management.marketplace_drawer_open,
-            "a field the file does not name is the default, not false"
+        assert_eq!(
+            layout.management.marketplace_drawer_width, None,
+            "a field the file does not name is the default, not a value"
         );
     }
 

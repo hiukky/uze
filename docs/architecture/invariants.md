@@ -1117,12 +1117,30 @@ never become no policy in silence.
 
 The terminal server is one per `UZE_HOME`, and every client attaches to it
 whatever directory it was started in. A space is born from a root: starting
-`uze` ensures a space rooted at the launch directory's workspace root exists
-and selects it for that client, creating it only when no space has that
-root. Behaviour derives from the root; there is no global space.
+`uze` in a directory somebody chose selects the space rooted at its
+workspace root, opening one when no space has that root. Behaviour derives
+from the root; there is no global space.
 
 > `tests/acceptance/engine.rs::two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`
 > `crates/uze-terminal/src/runtime.rs::a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands`
+
+### Where a client lands and what that may create are two questions
+
+An attach says one of three things: take the session as it stands, land on
+the space at this seat *if there is one*, or open a space at this seat. Only
+the third creates. This is what makes closing a space stick — a seat that
+always created meant the directory a client started in was a standing
+request, so a space closed on purpose came back when the runtime went away
+mid-run, and again on the next launch from that directory. A close that does
+not stay closed is indistinguishable from a close that did not work.
+
+The home directory is the seat nobody chose: a shell starts there, so
+starting `uze` there lands on the home space when one is open and adds
+nothing when none is. A home space someone creates deliberately is still
+theirs, and still what the next launch from home lands on.
+
+> `crates/uze-terminal/src/runtime.rs::only_asking_to_open_a_space_may_create_one`
+> `src/ui/orchestrator/tests.rs::starting_at_home_lands_in_the_workspace_rather_than_adding_to_it`
 
 ### Focus is per client
 
@@ -1616,6 +1634,32 @@ this is the other half of the same defence.
 
 > `conformance/contract/skill.py::_assert_catalog`
 
+## Unfinished surfaces
+
+### What a person downloads carries no half-built screen
+
+A surface the product has not committed to is named in
+`uze_core::features`: off in a release build, on in a development one, and
+overridable either way by `UZE_FEATURES`. Resolved at runtime rather than
+through a Cargo feature, because the vocabularies it gates (a route, a
+scope, an action) are exhaustive enums that tests walk, and a build that
+stopped compiling the hidden code would stop testing it — a flag whose
+purpose is to defer a decision must not delete the evidence that decision
+needs.
+
+> `uze-core::machine::features::tests::what_a_person_downloads_carries_no_unfinished_surface`
+> `uze-core::machine::features::tests::the_environment_answers_either_way`
+
+### A screen behind a feature is absent or whole
+
+The sidebar, the walk from one screen to the next, the id a layout file
+remembers and the Shortcuts screen that documents a surface all read the
+same list. A build where three of them agree and the fourth still offers a
+way in is the failure mode a runtime flag has in place of a compile error,
+so it is the one this guards.
+
+> `src/ui/tests.rs::a_screen_behind_a_feature_is_absent_or_whole`
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed
@@ -1753,6 +1797,16 @@ order, which is what retired `r` meaning both *remove* and *refresh*.
 
 > `uze-keys::keymap::tests::one_chord_names_one_action_within_a_keyboard`
 > `src/ui/tests.rs::a_letter_names_one_action_and_refreshing_has_its_own`
+
+### Leaving uze is never one bare keystroke away
+
+Management owns the whole keyboard, which is why its actions may hold bare
+letters — and it is a modal over a session full of running agents, so the
+one action that cannot be taken back is the one that may not be a single
+letter. `q` there closes the modal, the way the theme picker's does;
+quitting is `ctrl+q`, global and named as such.
+
+> `uze-keys::load::tests::leaving_uze_is_never_one_bare_keystroke_away`
 
 ### A keymap that cannot be used never takes the keyboard away
 

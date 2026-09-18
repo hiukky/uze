@@ -7,8 +7,9 @@
 //! composition root that knows the extension set, so nothing here is
 //! hand-maintained. Today every entry is bundled with the binary (there is
 //! no loading/enablement surface yet); a responsive catalog of compact cards,
-//! and the detail drawer opens on selection the same way Plugins/Harnesses
-//! do — its content is static catalog metadata, so there is nothing to fetch.
+//! and the detail drawer describes the selection the same way
+//! Plugins/Harnesses do — its content is static catalog metadata, so there
+//! is nothing to fetch.
 
 use ratatui::{
     layout::Rect,
@@ -30,14 +31,15 @@ pub(crate) fn render_extensions(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let outer = content_area(area);
-    let drawer_open =
-        model.remembered.extension_screen.drawer_open && model.selected_extension().is_some();
+    // Shown whenever there is an extension to describe: the drawer is the
+    // screen's detail column, not something opened and closed.
+    let drawer_shown = model.selected_extension().is_some();
     let drawer_width =
-        drawer_open.then(|| super::drawer_width(ResizablePanel::ExtensionDrawer, model, outer));
+        drawer_shown.then(|| super::drawer_width(ResizablePanel::ExtensionDrawer, model, outer));
     let header_width = outer
         .width
         .saturating_sub(drawer_width.unwrap_or(0))
-        .saturating_sub(if drawer_open { 1 } else { 0 });
+        .saturating_sub(if drawer_shown { 1 } else { 0 });
     let header_area = Rect::new(outer.x, outer.y, header_width, outer.height);
     let content = render_screen_header(
         frame,
@@ -120,7 +122,7 @@ pub(crate) fn render_extensions(
         }
     }
 
-    if drawer_open && let Some(extension) = model.selected_extension() {
+    if let Some(extension) = model.selected_extension() {
         render_extension_drawer(frame, outer, model, extension, hits);
     }
 }

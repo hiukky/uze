@@ -16,7 +16,7 @@
 //! collapsed/filtered-out plugins are a pure rendering/navigation concern
 //! layered on top of the flat, already-grouped `marketplace_rows` Vec. The
 //! detail drawer overlays the list from the right with a draggable left
-//! edge — see `ListScreen::drawer_open`.
+//! edge — see `ListScreen::drawer_width`.
 
 use ratatui::{
     layout::Rect,
@@ -135,14 +135,15 @@ pub(crate) fn render_plugins(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let outer = content_area(area);
-    let drawer_open =
-        model.remembered.plugin_screen.drawer_open && model.selected_marketplace_plugin().is_some();
+    // Shown whenever there is a plugin to describe: the drawer is the
+    // screen's detail column, not something opened and closed.
+    let drawer_shown = model.selected_marketplace_plugin().is_some();
     let drawer_width =
-        drawer_open.then(|| super::drawer_width(ResizablePanel::MarketplaceDrawer, model, outer));
+        drawer_shown.then(|| super::drawer_width(ResizablePanel::MarketplaceDrawer, model, outer));
     let list_area_width = outer
         .width
         .saturating_sub(drawer_width.unwrap_or(0))
-        .saturating_sub(if drawer_open { 1 } else { 0 });
+        .saturating_sub(if drawer_shown { 1 } else { 0 });
     let header_area = Rect::new(outer.x, outer.y, list_area_width, outer.height);
     let sources = model.remembered.marketplaces.len();
     let trailer = (sources > 0).then(|| {
@@ -260,7 +261,7 @@ pub(crate) fn render_plugins(
         }
     }
 
-    if drawer_open && let Some(plugin) = model.selected_marketplace_plugin() {
+    if let Some(plugin) = model.selected_marketplace_plugin() {
         render_plugin_drawer(frame, outer, model, &plugin, hits);
     }
 }

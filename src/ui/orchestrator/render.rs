@@ -1059,7 +1059,7 @@ fn render_space_caption(
     let hue = theme::color(Token::TextDim);
     crate::ui::push_trailing(&mut spans, rect.width, caption, hue);
     if selected {
-        fill_space_row(
+        fill_row_bg(
             &mut spans,
             rect.width,
             theme::color(Token::SurfaceRaisedSubtle),
@@ -1104,8 +1104,6 @@ fn draw_tree(
             if flat {
                 [space_gutter(lit, kind), Span::raw(" ")]
             } else {
-                // Split at the trunk's own cell, so that cell alone stays
-                // off the row's fill (see `fill_space_row`).
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
@@ -1147,7 +1145,7 @@ fn draw_tree(
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
             if is_active_space {
-                fill_space_row(
+                fill_row_bg(
                     &mut spans,
                     label_rect.width,
                     theme::color(Token::SurfaceRaisedSubtle),
@@ -1221,7 +1219,7 @@ fn draw_tree(
                 spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             }
             if is_active_space {
-                fill_space_row(
+                fill_row_bg(
                     &mut spans,
                     detail_rect.width,
                     theme::color(Token::SurfaceRaisedSubtle),
@@ -1245,7 +1243,7 @@ fn draw_tree(
         {
             let mut spans = vec![space_gutter(false, kind)];
             if is_active_space {
-                fill_space_row(
+                fill_row_bg(
                     &mut spans,
                     gap_rect.width,
                     theme::color(Token::SurfaceRaisedSubtle),
@@ -1626,7 +1624,7 @@ pub(super) fn render_space_header(
         }
     }
     if selected {
-        fill_space_row(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+        fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
@@ -1637,17 +1635,6 @@ pub(super) fn render_space_header(
 /// worked in included; `lit`, in the accent, only along what is selected
 /// in it — a whole block in the accent said the same thing as the fill
 /// behind it, louder.
-/// [`fill_row_bg`] for a row of a space: everything but the gutter's own
-/// cell. The gutter is a box-drawing line, centred in its cell, so a fill
-/// under it left half a cell of fill outside the line — which read as a
-/// margin inside the block, not as its edge.
-fn fill_space_row(spans: &mut Vec<Span<'_>>, width: u16, bg: Color) {
-    fill_row_bg(spans, width, bg);
-    if let Some(gutter) = spans.first_mut() {
-        gutter.style.bg = None;
-    }
-}
-
 /// The vertical line down a space's leading column, from its header to its
 /// last row: the space as one block. Muted in every space, the one being
 /// worked in included; `lit`, in the hue of the space's own kind, only

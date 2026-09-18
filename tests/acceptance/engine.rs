@@ -335,7 +335,9 @@ fn connect(project: &Path) -> (UnixStream, UnixStream) {
             version: PROTOCOL_VERSION,
             columns: 80,
             rows: 24,
-            seat: Some(uze_terminal::SpaceSeat {
+            // A project directory, which is a directory somebody chose:
+            // the client asks for a space there.
+            seating: uze_terminal::Seating::Open(uze_terminal::SpaceSeat {
                 root: project.to_path_buf(),
                 kind: uze_terminal::SpaceKind::Worktree,
             }),

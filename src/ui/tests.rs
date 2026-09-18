@@ -12,7 +12,7 @@ use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
     Confirmation, Focus, ListScreen, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES,
-    RefreshData, Remembered, Route, Status, TrustedRetry, TuiModel,
+    RefreshData, Remembered, Route, Status, TrustedRetry, TuiModel, routes, scope_is_offered,
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
@@ -365,13 +365,6 @@ fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
         "moving the selection wants the new row's detail even mid-flight"
     );
 
-    model.remembered.plugin_screen.drawer_open = false;
-    assert_eq!(
-        model.drawer_inspect_intent(),
-        Intent::None,
-        "a closed drawer needs nothing"
-    );
-    model.remembered.plugin_screen.drawer_open = true;
     model.route = Route::Overview;
     assert_eq!(
         model.drawer_inspect_intent(),
@@ -471,7 +464,7 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.remembered.resolved_at = Some(std::time::Instant::now());
     model.remembered.plugin_screen.selected = 1;
-    model.remembered.plugin_screen.drawer_open = false;
+    model.remembered.plugin_screen.drawer_width = Some(46);
     model.remembered.prompt_history = Vec::new();
     // What one visit ends holding — including work it was in the middle
     // of, which the next visit must not inherit.
@@ -498,9 +491,10 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
     );
     assert_eq!(model.route, Route::Plugins);
     assert_eq!(model.remembered.plugin_screen.selected, 1);
-    assert!(
-        !model.remembered.plugin_screen.drawer_open,
-        "a drawer stays as it was left"
+    assert_eq!(
+        model.remembered.plugin_screen.drawer_width,
+        Some(46),
+        "a drawer stays the width it was dragged to"
     );
     assert!(matches!(model.status, Status::Idle));
     assert!(matches!(model.overlay, Overlay::None));
@@ -537,10 +531,10 @@ fn a_first_visit_starts_from_the_default_model() {
     assert!(model.remembered.plugins.is_empty());
     assert_eq!(model.route, Route::Overview);
     assert!(
-        model.remembered.plugin_screen.drawer_open
-            && model.remembered.extension_screen.drawer_open
-            && model.remembered.harness_screen.drawer_open,
-        "the drawers a screen opens with are stated once, by Default"
+        model.remembered.plugin_screen.drawer_width.is_none()
+            && model.remembered.extension_screen.drawer_width.is_none()
+            && model.remembered.harness_screen.drawer_width.is_none(),
+        "the widths a screen opens with are stated once, by Default"
     );
 }
 
@@ -550,7 +544,7 @@ fn a_first_visit_starts_from_the_default_model() {
 fn the_next_run_opens_on_the_screen_the_last_one_left() {
     let mut model = TuiModel::default();
     model.set_route(Route::Profiles);
-    model.remembered.harness_screen.drawer_open = false;
+    model.remembered.harness_screen.drawer_width = Some(38);
     model.profile_columns_width = Some(28);
     model
         .collapsed_marketplaces
@@ -561,9 +555,10 @@ fn the_next_run_opens_on_the_screen_the_last_one_left() {
 
     let model = TuiModel::recall(None, &layout);
     assert_eq!(model.route, Route::Profiles);
-    assert!(
-        !model.remembered.harness_screen.drawer_open,
-        "a drawer stays as it was left"
+    assert_eq!(
+        model.remembered.harness_screen.drawer_width,
+        Some(38),
+        "a drawer stays the width it was dragged to"
     );
     assert_eq!(model.profile_columns_width, Some(28));
     assert!(model.collapsed_marketplaces.contains("uze-official"));
@@ -689,7 +684,6 @@ fn mouse_click_on_extension_row_selects_and_opens_drawer_without_fetch() {
         Rect::new(0, 0, 100, 40),
     );
     assert_eq!(model.remembered.extension_screen.selected, 1);
-    assert!(model.remembered.extension_screen.drawer_open);
     assert_eq!(intent, Intent::None);
 }
 
@@ -1805,7 +1799,6 @@ fn a_letter_names_one_action_and_refreshing_has_its_own() {
 fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.remembered.plugin_screen.drawer_open = true;
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1862,7 +1855,6 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
 fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.remembered.plugin_screen.drawer_open = true;
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1919,7 +1911,6 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
 fn the_source_link_lights_up_only_under_the_pointer() {
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.remembered.plugin_screen.drawer_open = true;
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
@@ -1986,7 +1977,6 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     // real health from it instead of the masked "unknown" placeholder.
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
-    model.remembered.plugin_screen.drawer_open = true;
     model.remembered.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home"),
         store: uze_application::application::StoreHealth::Ready,
@@ -3471,6 +3461,47 @@ fn small_caps_levels_mixed_case_and_keeps_what_it_cannot_fold() {
     assert_eq!(crate::ui::small_caps("Query X2"), "qᴜᴇʀʏ x2");
 }
 
+/// A screen behind a feature is absent or whole. The sidebar, the walk
+/// from one screen to the next, the id a layout file remembers and the
+/// shortcuts screen all read the same list — a build where three of them
+/// agree and the fourth still offers a way in is the failure mode a flag
+/// like this has instead of a compile error.
+#[test]
+fn a_screen_behind_a_feature_is_absent_or_whole() {
+    let offered = routes();
+    for route in ROUTES {
+        let shown = offered.contains(&route);
+        assert_eq!(
+            shown,
+            route.feature().is_none_or(uze_application::feature_enabled),
+            "{route:?} is drawn on a different rule from the one it declares"
+        );
+        assert_eq!(
+            Route::from_id(route.id()).is_some(),
+            shown,
+            "{route:?} is remembered on a different rule from the one it is drawn on"
+        );
+    }
+    for route in &offered {
+        assert!(
+            offered.contains(&route.neighbour(1)) && offered.contains(&route.neighbour(-1)),
+            "walking the sidebar from {route:?} lands on a screen nobody can see"
+        );
+    }
+
+    let model = model_with_data();
+    let undocumented: Vec<_> = model
+        .key_rows()
+        .into_iter()
+        .filter(|row| !scope_is_offered(row.scope))
+        .map(|row| format!("{}.{}", row.scope.name(), row.action))
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "the shortcuts screen documents a surface this build hides: {undocumented:?}"
+    );
+}
+
 // The sidebar is where someone decides which screen to open, so a route
 // that is not settled has to say so there — selected or not, and in the
 // narrow layout too, which drops the subtitle and is exactly where a badge
@@ -3480,7 +3511,11 @@ fn small_caps_levels_mixed_case_and_keeps_what_it_cannot_fold() {
 #[test]
 fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
     use ratatui::{Terminal, backend::TestBackend};
-    let badge = crate::ui::small_caps("Beta");
+    let badge = crate::ui::small_caps(
+        Route::Profiles
+            .badge()
+            .expect("a screen behind a feature says so"),
+    );
     for (width, height) in [(150u16, 26u16), (80, 20)] {
         for route in [Route::Profiles, Route::Plugins] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -3572,10 +3607,7 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
         route: Route::Plugins,
         focus: Focus::Content,
         remembered: Remembered {
-            plugin_screen: ListScreen {
-                drawer_open: true,
-                ..ListScreen::default()
-            },
+            plugin_screen: ListScreen::default(),
             marketplace_plugins: vec![summary],
             ..TuiModel::default().remembered
         },
@@ -3683,10 +3715,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
             ],
         }),
         remembered: Remembered {
-            plugin_screen: ListScreen {
-                drawer_open: true,
-                ..ListScreen::default()
-            },
+            plugin_screen: ListScreen::default(),
             marketplace_plugins: vec![summary],
             ..TuiModel::default().remembered
         },
@@ -4320,8 +4349,6 @@ fn every_drawer_draws_what_its_row_can_do_as_buttons() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.remembered.plugin_screen.drawer_open = true;
-        model.remembered.harness_screen.drawer_open = true;
         let available: Vec<_> = model
             .selected_offers()
             .into_iter()
@@ -4367,9 +4394,6 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.remembered.plugin_screen.drawer_open = true;
-        model.remembered.harness_screen.drawer_open = true;
-        model.remembered.extension_screen.drawer_open = true;
         model.appearance_themes = vec![uze_application::application::ThemeSummary {
             id: "default".to_owned(),
             active: true,

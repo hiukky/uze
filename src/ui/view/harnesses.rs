@@ -1,7 +1,7 @@
 //! TUI view — Harnesses route.
 //!
 //! A responsive integration catalog on the left; a detail drawer slides in
-//! from the right once a harness is selected (`ListScreen::drawer_open`),
+//! from the right once a harness is selected,
 //! with a draggable left edge to balance the detail against the cards.
 
 use ratatui::{
@@ -121,9 +121,10 @@ pub(crate) fn render_harnesses(
     // under the drawer and gets clipped mid-word by its Clear. Its initial
     // width is an even split; dragging the divider lets either panel take
     // priority for the task at hand.
-    let drawer_open =
-        model.remembered.harness_screen.drawer_open && model.selected_harness().is_some();
-    let drawer_width = if drawer_open {
+    // Shown whenever there is a harness to describe: the drawer is the
+    // screen's detail column, not something opened and closed.
+    let drawer_shown = model.selected_harness().is_some();
+    let drawer_width = if drawer_shown {
         super::drawer_width(ResizablePanel::HarnessDrawer, model, area)
     } else {
         0
@@ -133,7 +134,7 @@ pub(crate) fn render_harnesses(
         area.y,
         area.width
             .saturating_sub(drawer_width)
-            .saturating_sub(if drawer_open { 1 } else { 0 }),
+            .saturating_sub(if drawer_shown { 1 } else { 0 }),
         area.height,
     );
     let content = render_screen_header(
@@ -234,7 +235,7 @@ pub(crate) fn render_harnesses(
         }
     }
 
-    if drawer_open && let Some(harness) = model.selected_harness() {
+    if let Some(harness) = model.selected_harness() {
         render_harness_drawer(frame, area, model, harness, hits);
     }
 }
