@@ -227,6 +227,44 @@ fn every_route_renders_without_panicking() {
     }
 }
 
+/// The legend is the card's own vocabulary written out, so it names what
+/// a card can wear and nothing else. It used to list three marks, one of
+/// them for a state no card draws any more; the unmarked state is
+/// described instead of listed, because a glyph beside it would name a
+/// mark that is never on screen.
+#[test]
+fn the_harness_legend_names_the_one_mark_a_card_wears() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut model = model_with_data();
+    model.set_route(Route::Harnesses);
+    model.overlay = Overlay::HarnessHelp;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let legend = buffer_rows(&terminal).join("\n");
+
+    assert!(
+        legend.contains(&format!(
+            "{} Configured",
+            theme::glyph(theme::Symbol::MarkOk)
+        )),
+        "the one mark, with the word for it: {legend}"
+    );
+    assert!(
+        legend.contains("Not configured"),
+        "and the state that wears none, said in words: {legend}"
+    );
+    for gone in ["Not installed", "PATH shadowed"] {
+        assert!(
+            !legend.contains(gone),
+            "{gone:?} is not a state a card has: {legend}"
+        );
+    }
+}
+
 #[test]
 fn every_overlay_renders_without_panicking() {
     use ratatui::{Terminal, backend::TestBackend};
@@ -2677,6 +2715,83 @@ fn refreshed_updates_workspace_state() {
         model.overview_install_path(),
         None,
         "refresh must reflect a completed install"
+    );
+}
+
+/// The catalog asks one question of each harness and marks only a "yes".
+/// A harness UZE configured wears its mark; one it has not wears nothing
+/// — being unmarked is already the whole state, and a second way of
+/// saying it turns a machine's ordinary condition (most CLIs installed by
+/// their owner, or not installed at all) into a column of warnings.
+///
+/// What the mark is worn *with* follows the room on the card: the word
+/// where it fits beside the name, the mark alone where it does not. The
+/// one thing a card never shows is the word cut in half against the name
+/// it is glued to.
+#[test]
+fn a_harness_card_marks_only_what_uze_configured() {
+    let mut model = model_with_data();
+    model.set_route(Route::Harnesses);
+    model.focus = Focus::Content;
+    // By each card's own hit rect, so this reads title rows rather than
+    // the first mention of a name anywhere on the screen.
+    let titles = |width: u16| {
+        let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        let titles: Vec<String> = hits
+            .iter()
+            .filter_map(|(rect, hit)| matches!(hit, Hit::HarnessRow(_)).then_some(*rect))
+            .map(|rect| {
+                rows[(rect.y + 1) as usize]
+                    .chars()
+                    .skip(rect.x as usize)
+                    .take(rect.width as usize)
+                    .collect()
+            })
+            .collect();
+        assert!(!titles.is_empty(), "no harness card was drawn: {rows:?}");
+        (titles, rows)
+    };
+    let card = |titles: &[String], name: &str| {
+        titles
+            .iter()
+            .find(|title| title.contains(name))
+            .unwrap_or_else(|| panic!("{name} has no card: {titles:?}"))
+            .clone()
+    };
+
+    let (wide, rows) = titles(200);
+    let configured = card(&wide, "Claude Code");
+    assert!(
+        configured.contains(&format!(
+            "{} Configured",
+            theme::glyph(theme::Symbol::MarkOk)
+        )),
+        "the one UZE set up says so: {configured:?}"
+    );
+    let theirs = card(&wide, "Codex");
+    assert!(
+        theirs.trim() == "Codex",
+        "and the one it did not wears no state at all: {theirs:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("PATH")),
+        "least of all a sentence about this machine's PATH: {rows:?}"
+    );
+
+    let (narrow, _) = titles(140);
+    let squeezed = card(&narrow, "Claude Code");
+    assert!(
+        squeezed.contains(&theme::glyph(theme::Symbol::MarkOk)),
+        "a narrowed card keeps the mark: {squeezed:?}"
+    );
+    assert!(
+        !squeezed.contains("Config"),
+        "and drops the word rather than clipping it: {squeezed:?}"
     );
 }
 

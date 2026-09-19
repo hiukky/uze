@@ -72,7 +72,7 @@ sandbox:
   copy:
     - from: ~/.config/opencode/opencode.json
       to: '{home}/.config/opencode/opencode.json'
-  # Shims first, or every Integrations card reports "PATH shadowed" on camera.
+  # Setup first, or every Integrations card reads "Not configured" on camera.
   provision:
     - test -x {home}/.local/bin/codex || curl -fsSL https://chatgpt.com/codex/install.sh | sh
     - '{project}/target/release/uze setup'
