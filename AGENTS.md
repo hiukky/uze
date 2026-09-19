@@ -199,10 +199,13 @@ need to).
   `theme::content`.
 - `src/ui/widget/` — the chrome vocabulary: `Surface` (a bordered box),
   `Rule` (an edge hairline), `Button`/`button_row`, `Chip` (a filled
-  label standing where a control stands), `RowState`/`row` (what a list
-  line's ground says), `text` (fitting text to the room there is), `mark`
-  (the caret and the disclosure chevron), `Scrollbar`, `scrim`, and the
-  `fill`/`root` grounds. Where `theme` settles what a drawn thing may
+  label standing where a control stands), `row` (a list line's ground,
+  its trailing caption, its title), `text` (fitting text to the room
+  there is, and the small-caps forms), `mark` (the caret and the
+  disclosure chevron), `hint` (the keys that act here), `screen_header`,
+  `action_index`, `Scrollbar`, `scrim`, the `fill`/`root` grounds, and the
+  `POPUP_H_PAD`/`POPUP_V_PAD`/`TRAILING_PAD` spacing. Nothing in it names
+  anything but `theme` and its own siblings. Where `theme` settles what a drawn thing may
   *look* like, this settles what it is *made of*. **Nothing outside
   `src/ui/widget/` may build chrome from ratatui's primitives** —
   `chrome_is_built_from_the_widget_vocabulary` in

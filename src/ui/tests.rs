@@ -2350,7 +2350,7 @@ fn a_hint_line_reads_its_keys_off_the_keymap() {
     use uze_keys::{Action, Scope};
 
     let scopes = [Scope::Global, Scope::Management, Scope::Plugins];
-    let line: Line<'static> = crate::ui::hint_for(
+    let line: Line<'static> = crate::ui::widget::hint::line(
         &scopes,
         &[
             Action::RemovePlugin,
@@ -2377,7 +2377,7 @@ fn a_hint_line_reads_its_keys_off_the_keymap() {
     // An action with no key here is skipped rather than printed keyless:
     // a hint is a list of shortcuts, and what has none is offered where a
     // pointer can reach it.
-    let unbound: Line<'static> = crate::ui::hint_for(&scopes, &[Action::NewSpace]);
+    let unbound: Line<'static> = crate::ui::widget::hint::line(&scopes, &[Action::NewSpace]);
     assert!(unbound.spans.is_empty());
 }
 
@@ -2514,7 +2514,7 @@ fn a_trailing_caption_is_elided_to_the_room_the_row_has_left() {
     use ratatui::text::Span;
 
     let mut spans = vec![Span::raw("▾ Git")];
-    super::push_trailing(
+    crate::ui::widget::row::push_trailing(
         &mut spans,
         20,
         "agent/a-very-long-branch-name".to_owned(),
@@ -2531,7 +2531,7 @@ fn a_trailing_caption_is_elided_to_the_room_the_row_has_left() {
     );
 
     let mut spans = vec![Span::raw("▾ Git")];
-    super::push_trailing(
+    crate::ui::widget::row::push_trailing(
         &mut spans,
         20,
         "main".to_owned(),
@@ -3638,7 +3638,7 @@ fn eliding_reserves_the_active_themes_own_marker_width() {
 fn small_caps_preserves_a_labels_length_and_its_cells() {
     use ratatui::text::Span;
     for label in ["Beta", "claude", "codex", "antigravity", "PATH shadowed"] {
-        let drawn = crate::ui::small_caps(label);
+        let drawn = crate::ui::widget::text::small_caps(label);
         assert_eq!(
             drawn.chars().count(),
             label.chars().count(),
@@ -3663,9 +3663,12 @@ fn small_caps_preserves_a_labels_length_and_its_cells() {
 // vanishing or standing up as the one full-height letter in the run.
 #[test]
 fn small_caps_levels_mixed_case_and_keeps_what_it_cannot_fold() {
-    assert_eq!(crate::ui::small_caps("Beta"), "ʙᴇᴛᴀ");
-    assert_eq!(crate::ui::small_caps("PATH shadowed"), "ᴘᴀᴛʜ ꜱʜᴀᴅᴏᴡᴇᴅ");
-    assert_eq!(crate::ui::small_caps("Query X2"), "qᴜᴇʀʏ x2");
+    assert_eq!(crate::ui::widget::text::small_caps("Beta"), "ʙᴇᴛᴀ");
+    assert_eq!(
+        crate::ui::widget::text::small_caps("PATH shadowed"),
+        "ᴘᴀᴛʜ ꜱʜᴀᴅᴏᴡᴇᴅ"
+    );
+    assert_eq!(crate::ui::widget::text::small_caps("Query X2"), "qᴜᴇʀʏ x2");
 }
 
 /// A screen behind a feature is absent or whole. The sidebar, the walk
@@ -3734,7 +3737,7 @@ fn a_screen_behind_a_feature_is_absent_or_whole() {
 #[test]
 fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
     use ratatui::{Terminal, backend::TestBackend};
-    let badge = crate::ui::small_caps(
+    let badge = crate::ui::widget::text::small_caps(
         Route::Profiles
             .badge()
             .expect("a screen behind a feature says so"),
@@ -3768,7 +3771,7 @@ fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
                 badged[0]
             );
             assert!(
-                badged[0].contains(&crate::ui::small_digits(2)),
+                badged[0].contains(&crate::ui::widget::text::small_digits(2)),
                 "the badge pushed the route count off its row: {:?}",
                 badged[0]
             );

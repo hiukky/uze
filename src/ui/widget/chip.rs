@@ -18,7 +18,8 @@ use ratatui::{
 };
 use uze_theme::Token;
 
-use crate::ui::{theme, widget::row};
+use super::row;
+use crate::ui::theme;
 
 /// The column of air each side of a chip's label. Part of the control: it
 /// is filled, hovered and clicked exactly as the glyphs are, which is why

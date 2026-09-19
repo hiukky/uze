@@ -13,7 +13,8 @@ use ratatui::{
 };
 use uze_theme::Token;
 
-use crate::ui::{POPUP_H_PAD, POPUP_V_PAD, theme};
+use super::{POPUP_H_PAD, POPUP_V_PAD};
+use crate::ui::theme;
 
 /// The inset a surface gives its content when it is floating over the
 /// screen rather than sitting in a column.

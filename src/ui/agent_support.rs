@@ -9,8 +9,8 @@ use ratatui::{
 use uze_application::{CapabilityKind, HarnessCapabilities};
 
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Surface, text};
-use crate::ui::{POPUP_H_PAD, POPUP_V_PAD};
+use crate::ui::widget::{POPUP_H_PAD, POPUP_V_PAD, Surface, row, text};
+
 use uze_application::application::{
     AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,
 };
@@ -109,10 +109,7 @@ pub(super) fn render(
     // the harness, this checkout's context, the capabilities delivered.
     // "Support" named the read model behind it (`AgentSupport`), which is
     // this codebase's word, not the operator's question.
-    let mut lines = vec![
-        super::title_row("agent", "esc", inner_width),
-        Line::default(),
-    ];
+    let mut lines = vec![row::title_row("agent", "esc", inner_width), Line::default()];
 
     lines.push(section_header("RUNTIME"));
     lines.push(fact_line(

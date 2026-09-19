@@ -6,11 +6,12 @@
 //! ground a selected row takes is the most-copied decision in the UI.
 
 use ratatui::{
-    style::{Color, Style},
-    text::Span,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
 };
 use uze_theme::Token;
 
+use super::{TRAILING_PAD, text};
 use crate::ui::theme;
 
 /// Where a row stands relative to the reader.
@@ -81,4 +82,43 @@ pub(crate) fn fill(spans: &mut Vec<Span<'_>>, width: u16, state: RowState) {
         return;
     };
     pad_to(spans, width, theme::color(ground));
+}
+
+/// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
+/// divider — the column the agent rows keep their alias in.
+///
+/// `text` is elided rather than allowed to overflow. It is the row's
+/// caption, and a caption that does not fit used to run past the edge and
+/// be cut there by the frame — which is how a long branch name on the Git
+/// section header became an unreadable fragment with no "…" to say it had
+/// been shortened.
+pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
+    let leading: u16 = spans.iter().map(|span| span.width() as u16).sum();
+    // One column of gap between the leading spans and the caption, so the
+    // two never read as one word.
+    let room = width.saturating_sub(leading + TRAILING_PAD + 1).max(1);
+    let text = text::elide(&text, room as usize);
+    let used = leading + text.chars().count() as u16 + TRAILING_PAD;
+    let gap = width.saturating_sub(used).max(1);
+    spans.push(Span::raw(" ".repeat(gap as usize)));
+    spans.push(Span::styled(text, Style::default().fg(hue)));
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+}
+
+/// The first row of an informational popup: its name, and the key that
+/// dismisses it pinned to the right.
+pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::text::Line<'static> {
+    let gap = width
+        .saturating_sub(name.chars().count() + dismiss.chars().count())
+        .max(1);
+    Line::from(vec![
+        Span::styled(
+            name.to_owned(),
+            Style::default()
+                .fg(theme::color(Token::TextBright))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(dismiss.to_owned(), theme::fg(Token::TextMuted)),
+    ])
 }

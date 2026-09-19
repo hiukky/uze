@@ -26,9 +26,9 @@ use super::worker::{
     Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
     spawn_startup,
 };
-use super::{overlay, small_caps, small_digits, view};
+use super::{overlay, view};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{self, Edge, Rule, Surface, text};
+use crate::ui::widget::{self, Edge, Rule, Surface, hint, text};
 
 /// How long a resolution of the machine stands for before opening the
 /// modal re-resolves it. The window exists for one case: the session's
@@ -512,7 +512,7 @@ fn route_label_line(route: Route, style: Style) -> Line<'static> {
     if let Some(badge) = route.badge() {
         spans.push(Span::styled("  ", style));
         spans.push(Span::styled(
-            small_caps(badge),
+            text::small_caps(badge),
             style.fg(theme::color(Token::StateWarning)),
         ));
     }
@@ -675,7 +675,7 @@ fn route_row(
     let label_rect = Rect::new(text_x, rect.y, text_width, 1);
     let label_rect = match count {
         Some(count) => {
-            let count = small_digits(count);
+            let count = text::small_digits(count);
             let [label, count_rect] =
                 Layout::horizontal([Constraint::Min(1), Constraint::Length(count.len() as u16)])
                     .areas(label_rect);
@@ -751,7 +751,7 @@ fn hint_line(model: &TuiModel) -> Line<'static> {
     // The index is not among them: it has a button of its own at the other
     // end of this row, and the button is the mark that opens it. Naming it
     // twice on one line spends the width of a hint on a repetition.
-    crate::ui::hint_for(&scopes, &actions)
+    hint::line(&scopes, &actions)
 }
 
 /// How many of a screen's own actions the footer names before deferring to

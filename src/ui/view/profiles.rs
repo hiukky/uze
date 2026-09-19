@@ -26,7 +26,7 @@ use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{content_area, side_panel_area};
 use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{self, mark};
+use crate::ui::widget::{self, mark, text};
 
 pub(crate) fn render_profiles(
     frame: &mut ratatui::Frame<'_>,
@@ -1045,7 +1045,7 @@ fn caveats(axes: &[AxisPlan], width: u16) -> Vec<Line<'static>> {
 /// mark reads as one block.
 fn wrapped(text: &str, indent: usize, hang: usize, width: u16, color: Color) -> Vec<Line<'static>> {
     let room = (width as usize).saturating_sub(indent + hang).max(20);
-    crate::ui::fold(text, room)
+    text::fold(text, room)
         .into_iter()
         .filter(|line| !line.is_empty())
         .enumerate()

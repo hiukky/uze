@@ -9,9 +9,9 @@ use super::*;
 use crate::ui::Rows;
 use crate::ui::theme::{self, Symbol, Token};
 use crate::ui::widget::{
-    self, Chip, ChipState, Edge, Rule, Surface, action_index, chip, mark, row, text,
+    self, Chip, ChipState, Edge, POPUP_H_PAD, POPUP_V_PAD, Rule, Surface, TRAILING_PAD,
+    action_index, chip, hint, mark, row, text,
 };
-use crate::ui::{POPUP_H_PAD, POPUP_V_PAD, TRAILING_PAD};
 
 pub(super) fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
     PaneSnapshot {
@@ -1032,7 +1032,7 @@ fn render_space_caption(
         space.kind,
     )];
     let hue = theme::color(Token::TextDim);
-    crate::ui::push_trailing(&mut spans, rect.width, caption, hue);
+    row::push_trailing(&mut spans, rect.width, caption, hue);
     if selected {
         row::pad_to(
             &mut spans,
@@ -1176,7 +1176,7 @@ fn draw_tree(
                     .chain(&sync)
                     .map(|span| span.width() as u16)
                     .sum::<u16>()
-                    + crate::ui::TRAILING_PAD;
+                    + TRAILING_PAD;
                 let room = detail_rect.width.saturating_sub(taken).max(1);
                 spans.push(Span::styled(
                     text::elide(&caption.detail, room as usize),
@@ -1358,7 +1358,7 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
     let inner_width = usize::from(width.saturating_sub(2 + 2 * POPUP_H_PAD).max(1));
 
     let mut lines = vec![
-        crate::ui::title_row("commit", "esc", inner_width),
+        row::title_row("commit", "esc", inner_width),
         Line::default(),
         Line::from(vec![
             Span::styled(
@@ -1930,7 +1930,7 @@ fn sync_caption(model: &WorkspaceModel, key: &Path) -> Vec<(String, Color)> {
     .filter(|(_, count, _)| *count > 0)
     .map(|(arrow, count, hue)| {
         (
-            format!("{}{}", theme::glyph(arrow), crate::ui::small_digits(count)),
+            format!("{}{}", theme::glyph(arrow), text::small_digits(count)),
             hue,
         )
     })
@@ -2113,7 +2113,7 @@ fn render_kind_row(
         Rect::new(rect.right().saturating_sub(1 + TRAILING_PAD), rect.y, 1, 1),
         WorkspaceHit::PickSpaceKind(toggle),
     ));
-    crate::ui::push_trailing(
+    row::push_trailing(
         &mut spans,
         rect.width,
         theme::glyph(Symbol::ArrowSwap),
@@ -2412,10 +2412,10 @@ pub(super) fn render_preserved(
             theme::fg(Token::StateWarning),
         ));
         line.spans
-            .extend(crate::ui::hint_for(SCOPES, &[Action::ConfirmDiscard, Action::Dismiss]).spans);
+            .extend(hint::line(SCOPES, &[Action::ConfirmDiscard, Action::Dismiss]).spans);
         line
     } else {
-        crate::ui::hint_for(
+        hint::line(
             SCOPES,
             &[
                 Action::ResumeTask,

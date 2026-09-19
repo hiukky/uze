@@ -25,7 +25,7 @@ use uze_extensions::view::{
 };
 
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Edge, Rule, Scrollbar, Surface, mark, row, text};
+use crate::ui::widget::{Edge, Rule, Scrollbar, Surface, TRAILING_PAD, hint, mark, row, text};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
 /// the content column — the same shape as the host TUI's own
@@ -867,9 +867,9 @@ fn render_navigator(
     )];
     // The panel's own right padding is the gap a trailing caption keeps
     // off the divider, so the row is measured as if it were the pad.
-    crate::ui::push_trailing(
+    row::push_trailing(
         &mut heading,
-        inner.width + crate::ui::TRAILING_PAD,
+        inner.width + TRAILING_PAD,
         navigator.badge.clone(),
         theme::color(Token::TextMuted),
     );
@@ -1154,7 +1154,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     } else {
         text.to_owned()
     };
-    let mut lines: Vec<Line<'static>> = crate::ui::fold(&title, measure)
+    let mut lines: Vec<Line<'static>> = text::fold(&title, measure)
         .into_iter()
         .map(|line| {
             Line::from(TextSpan::styled(
@@ -1166,7 +1166,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     if let Some(hint) = hint {
         lines.push(Line::from(""));
         lines.extend(
-            crate::ui::fold(hint, measure)
+            text::fold(hint, measure)
                 .into_iter()
                 .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
         );
@@ -1454,7 +1454,7 @@ fn render_footer(
     // resolve against — the same stack `Attach::scopes` builds.
     let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Workspace, scope];
     let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
-    frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
+    frame.render_widget(Paragraph::new(hint::line(&scopes, &actions)), area);
 }
 
 /// What each extension command means in the product's own vocabulary, read
@@ -1572,7 +1572,7 @@ pub(crate) fn render_section(
         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
         TextSpan::styled(section.title.clone(), title_style),
     ];
-    crate::ui::push_trailing(
+    row::push_trailing(
         &mut spans,
         header_rect.width,
         section.caption.text.clone(),
@@ -1631,7 +1631,7 @@ pub(crate) fn render_section(
         // reserved for the gap `push_trailing` always leaves between them.
         let name_width = rect
             .width
-            .saturating_sub(marker_width + 1 + trailing_width + crate::ui::TRAILING_PAD);
+            .saturating_sub(marker_width + 1 + trailing_width + TRAILING_PAD);
         let mut spans = vec![
             TextSpan::styled(
                 format!("{mark} "),
@@ -1642,7 +1642,7 @@ pub(crate) fn render_section(
                 Style::default().fg(color(row.name.role)),
             ),
         ];
-        crate::ui::push_trailing(
+        row::push_trailing(
             &mut spans,
             rect.width,
             row.trailing.text.clone(),

@@ -13,7 +13,7 @@ use super::hit::Hit;
 use super::model::{Confirmation, Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Align, Button, Surface, action_index, button_row, mark};
+use crate::ui::widget::{Align, Button, Surface, action_index, button_row, hint, mark, text};
 
 impl TuiModel {
     /// One action, answered by whichever overlay is open.
@@ -458,7 +458,7 @@ pub(crate) fn render_theme_picker(
         })
         .collect();
     lines.push(Line::from(""));
-    lines.push(crate::ui::hint_for(
+    lines.push(hint::line(
         &[uze_keys::Scope::Global, uze_keys::Scope::ThemePicker],
         &[
             uze_keys::Action::SelectNext,
@@ -681,7 +681,7 @@ fn render_dialog(
             theme::fg(Token::TextMuted)
         };
         lines.extend(
-            crate::ui::fold(paragraph, measure)
+            text::fold(paragraph, measure)
                 .into_iter()
                 .map(|line| Line::from(Span::styled(line, style))),
         );

@@ -2431,7 +2431,7 @@ mod workspace_tests {
             })
             .expect("the space header has its toggle");
         assert_eq!(mark.x, toggle.x, "one right-hand column: {rows:#?}");
-        let alias = crate::ui::small_caps("agent");
+        let alias = crate::ui::widget::text::small_caps("agent");
         // Past the header block — its label and its count name the column,
         // not a harness.
         assert!(

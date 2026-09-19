@@ -71,12 +71,26 @@
 //! the adaptation to be written twice. `src/ui/` already owns ratatui, so
 //! what draws belongs here.
 
+/// The gap a row keeps between its right-most content and the divider (or
+/// the frame) beside it. One place, because a row that reserves a different
+/// amount than the row above it reads as ragged rather than as deliberate.
+pub(crate) const TRAILING_PAD: u16 = 1;
+
+/// The inset every anchored popup keeps between its border and its content.
+/// Four popups had grown their own copy of this pair; they were all the same
+/// number, which is the point — a popup that pads differently reads as a
+/// different kind of surface.
+pub(crate) const POPUP_H_PAD: u16 = 2;
+pub(crate) const POPUP_V_PAD: u16 = 1;
+
 pub(crate) mod action_index;
 pub(crate) mod button;
 pub(crate) mod chip;
+pub(crate) mod hint;
 pub(crate) mod mark;
 pub(crate) mod row;
 pub(crate) mod rule;
+pub(crate) mod screen_header;
 pub(crate) mod scrim;
 pub(crate) mod scrollbar;
 pub(crate) mod surface;
