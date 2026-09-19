@@ -30,17 +30,30 @@ pub enum Kind {
 
 impl Kind {
     pub fn of(diagram: &str) -> Self {
-        let keyword = diagram
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with("%%"))
-            .and_then(|line| line.split_whitespace().next())
-            .unwrap_or_default();
+        let keyword = first_word(diagram);
         match keyword {
             "flowchart" | "graph" => Self::Flowchart,
             "sequenceDiagram" => Self::Sequence,
             _ if keyword.starts_with("C4") => Self::C4,
             _ => Self::Other,
+        }
+    }
+
+    /// How far down the model a diagram sits, for the kinds that are a
+    /// model of levels. C4 is read from the outside in — the system, what
+    /// is in it, what is in that — and its views are listed the way they
+    /// are read; the two that are not a level of that descent come after
+    /// the three that are. Everything else is on one level.
+    fn depth(self, diagram: &str) -> u8 {
+        if self != Self::C4 {
+            return 0;
+        }
+        match first_word(diagram) {
+            "C4Context" => 1,
+            "C4Container" => 2,
+            "C4Component" => 3,
+            "C4Dynamic" => 4,
+            _ => 5,
         }
     }
 
@@ -54,10 +67,22 @@ impl Kind {
     }
 }
 
+/// The word a Mermaid diagram opens with, which says what it is.
+fn first_word(diagram: &str) -> &str {
+    diagram
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("%%"))
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Artifact {
     pub name: String,
     pub kind: Kind,
+    /// Its level within its area; see [`Kind::depth`].
+    depth: u8,
     /// Where it lives, as the project would say it.
     pub origin: String,
     /// The file as written, front matter and all — what `Source` shows.
@@ -71,9 +96,11 @@ impl Artifact {
         let name = titled(front_matter)
             .or_else(|| titled(diagram))
             .unwrap_or_else(|| name_from_path(&origin));
+        let kind = Kind::of(diagram);
         Self {
             name,
-            kind: Kind::of(diagram),
+            kind,
+            depth: kind.depth(diagram),
             origin,
             source,
         }
@@ -128,9 +155,9 @@ fn name_from_path(origin: &str) -> String {
     }
 }
 
-/// Every artifact, ordered by area and then by name — which is also the
-/// order the tabs are in, so an index into this is an artifact's identity
-/// for as long as the catalog is.
+/// Every artifact, ordered by area, then by level, then by name — which
+/// is also the order the menu is in, so an index into this is an
+/// artifact's identity for as long as the catalog is.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Catalog {
     artifacts: Vec<Artifact>,
@@ -138,7 +165,7 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn of(mut artifacts: Vec<Artifact>) -> Self {
-        artifacts.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
+        artifacts.sort_by(|a, b| (a.kind, a.depth, &a.name).cmp(&(b.kind, b.depth, &b.name)));
         Self { artifacts }
     }
 
@@ -228,6 +255,33 @@ mod tests {
     fn a_node_called_title_is_not_a_title() {
         let artifact = Artifact::read("x.mmd", "flowchart TD\n  titles --> b\n  title[Heading]\n");
         assert_eq!(artifact.name, "X");
+    }
+
+    #[test]
+    fn c4_views_are_listed_from_the_outside_in() {
+        let catalog = Catalog::of(vec![
+            Artifact::read("a.mmd", "---\ntitle: Core components\n---\nC4Component\n"),
+            Artifact::read("b.mmd", "---\ntitle: Containers\n---\nC4Container\n"),
+            Artifact::read("c.mmd", "---\ntitle: Deployment\n---\nC4Deployment\n"),
+            Artifact::read("d.mmd", "---\ntitle: System context\n---\nC4Context\n"),
+            Artifact::read("e.mmd", "---\ntitle: Agent components\n---\nC4Component\n"),
+        ]);
+        let names: Vec<&str> = catalog
+            .artifacts()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "System context",
+                "Containers",
+                "Agent components",
+                "Core components",
+                "Deployment"
+            ],
+            "by level, and by name only within one"
+        );
     }
 
     #[test]

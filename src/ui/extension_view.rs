@@ -1707,6 +1707,9 @@ mod tests {
             artifacts,
             project: std::path::PathBuf::from("/project"),
         });
+        // The catalog opens on the outermost view; the box this clicks is a
+        // container, one level in.
+        architect::handle_mouse(&mut state, Some(ViewHit::SelectItem(1)), space);
         let (rows, hits) = draw_sized(&architect::view(&state, space), width, height);
         if std::env::var_os("UZE_SHOW_BOARD").is_some() {
             println!("{}", rows.join("\n"));
