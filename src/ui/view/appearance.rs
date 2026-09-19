@@ -27,13 +27,14 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
 use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{self, Surface};
 
 /// The marks a preview shows. Chosen to be the ones that differ most
 /// between sets, and to include a two-cell glyph (`arrow.to` is `->` in
@@ -204,25 +205,14 @@ fn render_card(
     ));
     title.push(Span::raw(" "));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(theme::fg(if selected {
-            Token::Accent
-        } else {
-            Token::BorderFaint
-        }))
-        .title(Line::from(title));
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
+    let inner = Surface::selectable(selected)
+        .title(Line::from(title))
+        .render(frame, rect);
     // Inside the frame, never over it: a fill that covered the border cells
     // too would paint out the one thing that says where the keyboard is,
     // on every card that is in force but not selected.
     if active {
-        frame.render_widget(
-            Block::default().style(theme::bg(Token::SurfaceSelected)),
-            inner,
-        );
+        widget::fill(frame, inner, Token::SurfaceSelected);
     }
 
     let text = Rect::new(

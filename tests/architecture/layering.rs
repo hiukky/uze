@@ -504,6 +504,122 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
     );
 }
 
+/// Chrome is assembled from the widget vocabulary, never from ratatui's
+/// primitives directly.
+///
+/// `theme` settled what a drawn thing may *look* like; this settles what
+/// it may be *made of*. Before `src/ui/widget/` existed, twenty-seven
+/// blocks were built by hand across nine files, and they had drifted in
+/// every way a hand-built thing can: one full-bordered surface wore
+/// `BorderFaint` where the other eight wore `BorderDefault`, one grounded
+/// itself with `theme::on` where the rest used `theme::bg`, the same
+/// accent-bold title was spelled out three times, and five different
+/// paddings stood in for the `POPUP_H_PAD`/`POPUP_V_PAD` pair that was
+/// already named in `ui.rs`.
+///
+/// None of that was a decision. It is what happens when the shared
+/// primitive exists — `modal_block` did, and was consistent inside the one
+/// file that held it — but nothing obliges a new screen to reach for it.
+/// This test is the obligation.
+#[test]
+fn chrome_is_built_from_the_widget_vocabulary() {
+    /// Where a ratatui primitive legitimately appears, and why.
+    const SANCTIONED: &[(&str, &str)] = &[(
+        "src/ui/widget",
+        "the vocabulary itself: the one place a surface, a rule or a \
+         button becomes a ratatui widget",
+    )];
+
+    let root = repository_root();
+    let mut raw = Vec::new();
+    for (path, contents) in production_sources(&root.join("src/ui")) {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if SANCTIONED
+            .iter()
+            .any(|(scope, _)| relative.starts_with(*scope))
+        {
+            continue;
+        }
+        for (number, line) in contents.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            if code.contains("Block::default()") || code.contains("Block::bordered()") {
+                raw.push(format!("  {relative}:{}", number + 1));
+            }
+        }
+    }
+
+    assert!(
+        raw.is_empty(),
+        "\n\nchrome built from ratatui directly:\n\n{}\n\n\
+         Name what it is instead — `Surface::floating()`, `Surface::card()`, \
+         `Rule::new(Edge::Right)`, `widget::fill(..)` — and let the widget \
+         decide its hairline, its ground and its inset. Add a constructor to \
+         `src/ui/widget/` if none of the existing ones says what yours \
+         means; never rebuild one at the call site, which is exactly how \
+         the twenty-seven drifted.\n",
+        raw.join("\n")
+    );
+}
+
+/// A widget knows neither client's model, and reaches nothing outside the
+/// frame it draws into.
+///
+/// The other half of the vocabulary's bargain. `chrome_is_built_from_the_
+/// widget_vocabulary` stops a screen building its own chrome; this stops
+/// the vocabulary growing into a screen. A widget that named `TuiModel`
+/// could not be drawn by the workspace client and vice versa, and the one
+/// that had to be un-coupled by hand — `screen_header`, which took a
+/// `model::Route` — was un-coupled only because somebody happened to look.
+///
+/// Reaching the filesystem, the environment or a process is the same
+/// mistake one layer down: a widget is handed everything it draws, the way
+/// `uze_extensions` is handed everything through its `Host`.
+#[test]
+fn a_widget_knows_no_model_and_reaches_nothing() {
+    /// What a widget may not name, and why it matters.
+    const FORBIDDEN: &[(&str, &str)] = &[
+        ("TuiModel", "the management client's model"),
+        ("WorkspaceModel", "the workspace client's model"),
+        ("crate::ui::model", "either client's model module"),
+        ("std::process", "a process"),
+        ("std::fs", "the filesystem"),
+        ("std::env", "the environment"),
+        ("Command::new", "a process"),
+    ];
+
+    let root = repository_root();
+    let mut reached = Vec::new();
+    for (path, contents) in production_sources(&root.join("src/ui/widget")) {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        for (number, line) in contents.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            for (needle, what) in FORBIDDEN {
+                if code.contains(needle) {
+                    reached.push(format!("  {relative}:{}: {needle} — {what}", number + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        reached.is_empty(),
+        "\n\nwidgets reaching past the frame they draw into:\n\n{}\n\n\
+         A widget is handed what it draws. Take the words rather than the \
+         model — `screen_header` takes a title and a subtitle, not a \
+         `Route` — and let the caller, which is the only thing that knows \
+         which client it is, do the asking.\n",
+        reached.join("\n")
+    );
+}
+
 /// Every `.rs` file a crate carries is a file that crate compiles.
 ///
 /// `crates/uze-extensions/src/git.rs` was 2547 lines the compiler never

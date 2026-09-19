@@ -1,4 +1,4 @@
-journey: an agent names the work it is doing, and a name nobody generated is never replaced
+journey: an agent names the work it is doing, and renames it when the work turns out to be something else
 tags: [gate, tui, workspace]
 proves: web/content/docs/workspace.mdx
 about: |
@@ -8,6 +8,11 @@ about: |
   checkout it is standing in, as the first thing it does: the name states
   an intention, which is what an agent holds before it has read anything,
   and the branch is renamed here with no commit on it yet.
+
+  Naming again renames. An intention stated before reading anything is
+  often the wrong one, and the name is an address rather than a record —
+  what a second name used to strand was a branch UZE had derived from a
+  commit, because nothing downstream could tell that from a chosen one.
 
   Every check reads the machine: the branch Git reports inside the slot,
   the branches the repository carries, and the name recorded in the task
@@ -86,7 +91,7 @@ scenes:
         count: 1
         about: the slot directory keeps its own name — only the branch moved
 
-  - scene: a second name is refused, because the first one is somebody's
+  - scene: the work turns out to be something else, and naming it again renames it
     when:
       - shell: |
           set -e
@@ -96,17 +101,19 @@ scenes:
           # read from the agent's own process rather than from any record
           # (`ps e`, not /proc: the suite runs on macOS too).
           export UZE_AGENT=$(ps eww -o command= -p "$(pgrep -f bin/claude | head -1)" | tr ' ' '\n' | sed -n 's/^UZE_AGENT=//p')
-          {uze} agent task name fix/second-thoughts || true
-        say: the agent tries to rename its own work again
+          {uze} agent task name fix/second-thoughts
+        say: the agent names its work again, having found out what it is
     then:
       - cmd:
           run: "sh -c 'git -C $(ls -d {project}/.worktrees/*/ | head -1) rev-parse --abbrev-ref HEAD'"
-          stdout_contains: "fix/branch-naming"
-        about: the first name stands, in Git
-      - tasks: { newest_branch: "fix/branch-naming" }
-        about: and in the record
-      - git: { branches: "fix/second-thoughts", count: 0 }
-        about: the refused name was never created
+          stdout_contains: "fix/second-thoughts"
+        about: the last name given is the one the checkout is on
+      - tasks: { newest_branch: "fix/second-thoughts" }
+        about: and the one the record keeps
+      - git: { branches: "fix/branch-naming", count: 0 }
+        about: |
+          renamed, not duplicated — the work has one branch, and the name it
+          was called before is not left behind for a reviewer to find
 
   - scene: the operator renames by hand, and that name is respected too
     when:

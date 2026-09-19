@@ -9,6 +9,8 @@ use crate::ui::extension_host::WorkspaceHost;
 use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::ToastKind;
+use crate::ui::widget::{action_index, text};
 use crossterm::event::{
     self, Event, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -17,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    widgets::{Block, Clear, Padding, Paragraph, Wrap},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -257,14 +259,19 @@ struct LaunchedAgent {
 /// pane went quiet — a task delivered from another client, a branch
 /// integrated by hand, a checkout removed.
 const TASK_REFRESH: Duration = Duration::from_secs(20);
-/// How long a finished notice stays on screen. A notice that is still
-/// running has no deadline — it is retired by its own outcome, not by a
-/// clock (see [`Notice::busy`]).
-const NOTICE_TTL: Duration = Duration::from_secs(6);
+
 /// The widest a notice may draw in the header. Past this it is elided:
 /// the chip shares one row with the tabs, and a message that pushes them
 /// off the strip costs more than it says.
 const NOTICE_WIDTH: usize = 34;
+/// How long an outcome stays on screen before it leaves on its own. Longer
+/// than a glance and shorter than a distraction; one that must be answered
+/// is not on this clock at all.
+const TOAST_TTL: Duration = Duration::from_secs(6);
+/// How many outcomes the stack holds. Past this the oldest goes: the
+/// reader is looking at the newest, and a column tall enough to need
+/// scrolling has stopped being a transient message.
+const MAX_TOASTS: usize = 4;
 
 /// What a background evaluation answered.
 struct TaskResolution {
@@ -328,17 +335,7 @@ fn action_index_rows(
     scopes: &[uze_keys::Scope],
     filter: &str,
 ) -> Vec<(uze_keys::Action, Option<uze_keys::Chord>)> {
-    let rows = uze_keys::active().available(scopes);
-    let needle = filter.trim().to_lowercase();
-    if needle.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(|(action, _)| {
-            action.label().to_lowercase().contains(&needle)
-                || action.description().to_lowercase().contains(&needle)
-        })
-        .collect()
+    action_index::narrowed(uze_keys::active().available(scopes), filter)
 }
 
 /// The open index of everything, in the workspace client.
@@ -1359,6 +1356,10 @@ pub(super) enum WorkspaceHit {
     /// The open management modal itself. A click inside it is the
     /// modal's to answer against its own hit list; one outside closes it.
     ManageSurface,
+    /// One toast's own offer, by its place in the stack as drawn.
+    ToastAction(usize),
+    /// The mark that puts one toast away.
+    DismissToast(usize),
     /// The mark on the modal's title that closes it.
     CloseManage,
     /// The first-steps section's header, which folds it.
@@ -1963,28 +1964,39 @@ fn launched_agent_id(tab: &Tab) -> Option<&str> {
         .map(|(_, id)| id.as_str())
 }
 
+/// What the header is saying: the work in flight, and nothing else.
+///
+/// One line, one slot, no clock. It is about something that is happening
+/// now, so there is only ever one of them and it goes when the work does
+/// — everything that *happened* is a toast, which stacks and retires
+/// itself (see [`RaisedToast`]).
 /// A short message on screen, and — for one about a single task — enough
 /// to tell whether that task is the one currently in front of the
 /// operator.
 struct Notice {
     text: String,
-    since: Instant,
-    owner: Option<NoticeOwner>,
-    /// Whether the thing this is about is still happening. A running
-    /// notice draws a spinner and outlives [`NOTICE_TTL`], because the
-    /// message it would age out into is silence about work still in
-    /// flight; the outcome replaces it when there is one.
-    busy: bool,
 }
 
-/// The task a [`Notice`] is about: its id, for matching the selected tab's
-/// own task, and its label, for when that task is not what is on screen —
-/// the tab the chip lands next to already says whose agent this is, so the
-/// label is only worth its columns when the message is about somebody else
-/// (`WorkspaceModel::notice_chip`).
-struct NoticeOwner {
-    task: String,
-    label: String,
+/// An outcome raised for the reader, with the clock that retires it.
+///
+/// Kept apart from [`Notice`] on purpose: a notice is about work *in
+/// flight* and lives in the header for as long as that takes, while this
+/// is about work that finished and leaves on its own. Collapsing them
+/// would mean one of the two rules — "no deadline" and "gone in six
+/// seconds" — winning over a case it is wrong for.
+struct RaisedToast {
+    kind: crate::ui::widget::ToastKind,
+    text: String,
+    /// The line under the title: which task, which remote, what the reason
+    /// was.
+    detail: String,
+    raised: Instant,
+    /// What the reader may do about it, and what that means. `None` for an
+    /// outcome there is nothing to do about.
+    offer: Option<(String, WorkspaceHit)>,
+    /// Whether it leaves on a clock. An outcome the reader has to answer
+    /// stays until they do.
+    stays: bool,
 }
 
 /// The active notice as the header draws it, in the message zone left of
@@ -2151,6 +2163,10 @@ struct Remembered {
     task_mutation_pending: BTreeSet<String>,
     /// A one-line message and when it appeared.
     notice: Option<Notice>,
+    /// Outcomes waiting to be read, newest last. A queue rather than one
+    /// slot, because two things finishing at once is the ordinary case and
+    /// the notice's single slot loses one of them.
+    toasts: VecDeque<RaisedToast>,
     /// The checkout each open pane was first seen in — a pane's slot does
     /// not change when it `cd`s. A directory fact, and the only thing it
     /// answers is slot occupancy; which agent a pane is for is what the
@@ -3188,44 +3204,140 @@ impl WorkspaceModel {
         spawn_task_evaluation(home, key, cwd, occupied, sender.clone());
     }
 
-    fn set_notice(&mut self, text: String) {
-        self.note(text, None, false);
+    /// A hint for work that has started and not finished: it keeps a
+    /// spinner and stays until the work ends.
+    ///
+    /// The header's one message, and only ever this. Outcomes — what
+    /// worked, what did not, what needs the reader — are toasts: they
+    /// arrive whether or not the reader is looking at the strip, they
+    /// stack, and the one that failed can carry the offer to try again.
+    /// A header that said both had to choose between them, and what it
+    /// dropped was whichever arrived second.
+    fn set_busy_notice(&mut self, text: String) {
+        self.note(text);
     }
 
-    /// A notice for work that has started and not finished: it keeps a
-    /// spinner and stays until its own outcome replaces it.
-    fn set_busy_notice(&mut self, text: String) {
-        self.note(text, None, true);
+    /// The work the hint was about has ended. Called where the operation's
+    /// own pending flag is cleared rather than where its outcome is said,
+    /// because an operation that ends with nothing to say still ends.
+    fn clear_busy_notice(&mut self) {
+        if self.remembered.notice.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     /// Same as `set_notice`, but attributed to one task: shown label-free
     /// when that task's tab is the one in front of the operator, since the
     /// tab already says whose agent this is, and labeled when it is not.
-    fn set_task_notice(&mut self, task: &str, label: &str, text: String) {
-        self.note(text, Some((task, label)), false);
+    fn note(&mut self, text: String) {
+        self.remembered.notice = Some(Notice { text });
+        self.dirty = true;
     }
 
-    fn note(&mut self, text: String, owner: Option<(&str, &str)>, busy: bool) {
-        self.remembered.notice = Some(Notice {
-            text,
-            since: Instant::now(),
-            owner: owner.map(|(task, label)| NoticeOwner {
-                task: task.to_owned(),
-                label: label.to_owned(),
-            }),
-            busy,
+    /// Raises an outcome for the reader. It leaves on its own clock unless
+    /// `offer` is something to answer, in which case it stays until it is
+    /// answered or put away — a message with a button that vanished while
+    /// the reader reached for it is worse than no button.
+    fn raise_toast(
+        &mut self,
+        kind: crate::ui::widget::ToastKind,
+        text: impl Into<String>,
+        detail: impl Into<String>,
+        offer: Option<(String, WorkspaceHit)>,
+    ) {
+        // Oldest first out: the reader is looking at the top of the stack,
+        // and a queue that dropped the newest would hide exactly what just
+        // happened.
+        while self.remembered.toasts.len() >= MAX_TOASTS {
+            self.remembered.toasts.pop_front();
+        }
+        self.remembered.toasts.push_back(RaisedToast {
+            kind,
+            text: text.into(),
+            detail: detail.into(),
+            raised: Instant::now(),
+            stays: offer.is_some(),
+            offer,
         });
         self.dirty = true;
+    }
+
+    /// Puts one away by its place in the stack **as drawn**, which is the
+    /// only index a click can carry.
+    ///
+    /// The stack is drawn newest-first and the queue holds them
+    /// oldest-first, so the two count in opposite directions: taking the
+    /// click's index straight to the queue dismissed the toast at the
+    /// other end of the column from the one that was pressed.
+    fn dismiss_toast(&mut self, index: usize) {
+        let Some(at) = self.remembered.toasts.len().checked_sub(index + 1) else {
+            return;
+        };
+        self.remembered.toasts.remove(at);
+        self.dirty = true;
+    }
+
+    /// What one toast's offer answers with, by its place in the stack.
+    fn toast_offer(&self, index: usize) -> Option<WorkspaceHit> {
+        self.remembered
+            .toasts
+            .iter()
+            .rev()
+            .nth(index)
+            .and_then(|toast| toast.offer.as_ref())
+            .map(|(_, hit)| *hit)
+    }
+
+    /// Whether any outcome is still counting down, which is what keeps the
+    /// frame redrawing while the seconds it shows are changing.
+    fn toasts_are_counting(&self) -> bool {
+        self.remembered.toasts.iter().any(|toast| !toast.stays)
+    }
+
+    /// Drops the ones whose clock ran out. Answers whether anything left,
+    /// so the caller can mark the frame dirty exactly when it changed.
+    fn retire_toasts(&mut self) -> bool {
+        let before = self.remembered.toasts.len();
+        self.remembered
+            .toasts
+            .retain(|toast| toast.stays || toast.raised.elapsed() < TOAST_TTL);
+        before != self.remembered.toasts.len()
+    }
+
+    /// The stack as the frame draws it, newest at the top, each with the
+    /// seconds it has left.
+    pub(super) fn toast_stack(&self) -> Vec<crate::ui::widget::Toast> {
+        self.remembered
+            .toasts
+            .iter()
+            .rev()
+            .map(|raised| {
+                let remaining = (!raised.stays).then(|| {
+                    TOAST_TTL
+                        .saturating_sub(raised.raised.elapsed())
+                        .as_secs()
+                        .saturating_add(1)
+                        .min(TOAST_TTL.as_secs())
+                });
+                let mut toast = crate::ui::widget::Toast::new(
+                    raised.kind,
+                    raised.text.clone(),
+                    raised.detail.clone(),
+                )
+                .remaining(remaining);
+                if let Some((label, _)) = &raised.offer {
+                    toast = toast.action(label.clone());
+                }
+                toast
+            })
+            .collect()
     }
 
     /// Whether something the workspace is showing a notice for is still
     /// running — what keeps the spinner's clock turning (see
     /// `workspace_has_active_agent_operation`).
     fn notice_is_busy(&self) -> bool {
-        self.remembered
-            .notice
-            .as_ref()
-            .is_some_and(|notice| notice.busy)
+        self.remembered.notice.is_some()
     }
 
     /// The active notice as the header's message zone draws it, or nothing
@@ -3234,18 +3346,9 @@ impl WorkspaceModel {
     /// land here, the middle one carrying the label that names it.
     pub(super) fn notice_chip(&self) -> Option<NoticeChip> {
         let notice = self.remembered.notice.as_ref()?;
-        let about_selected_task = notice.owner.as_ref().is_some_and(|owner| {
-            self.selected_tab()
-                .and_then(|tab| self.tab_task(tab))
-                .is_some_and(|selected| selected.id == owner.task)
-        });
-        let text = match &notice.owner {
-            Some(owner) if !about_selected_task => format!("{}: {}", owner.label, notice.text),
-            _ => notice.text.clone(),
-        };
         Some(NoticeChip {
-            text: crate::ui::elide_tail(&text, NOTICE_WIDTH),
-            busy: notice.busy,
+            text: text::elide(&notice.text, NOTICE_WIDTH),
+            busy: true,
         })
     }
 
@@ -4096,14 +4199,19 @@ fn deliver_selected_tab(
         return;
     };
     let Some(task) = model.tab_task(tab).cloned() else {
-        model.set_notice("no task on this tab".to_owned());
+        model.raise_toast(
+            ToastKind::Told,
+            "no task on this tab",
+            "nothing here has work to deliver",
+            None,
+        );
         return;
     };
     // The drawn state, not the recorded one: a second press while the
     // first delivery is still running is answered with what is happening
     // rather than with nothing at all.
     if let Some(reason) = model.drawn_state(&task).undeliverable_reason() {
-        model.set_task_notice(&task.id, &task.label, reason.to_owned());
+        model.raise_toast(ToastKind::Told, reason, task.label.clone(), None);
         return;
     }
     // After the directory resolves, never before: a reservation made for

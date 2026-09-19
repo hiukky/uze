@@ -16,7 +16,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span as TextSpan},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    widgets::{Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
     Caret, Choosing, Command, Content, ContentLine, Layout as ViewLayout, LineTone, Mode,
@@ -24,8 +24,8 @@ use uze_extensions::view::{
     Span, TrailStep, View, ViewHit,
 };
 
-use crate::ui::scrollbar::Scrollbar;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{Edge, Rule, Scrollbar, Surface, TRAILING_PAD, hint, mark, row, text};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
 /// the content column — the same shape as the host TUI's own
@@ -277,14 +277,7 @@ pub(crate) fn render(
     let mut title: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
     title.extend(view.title.iter().map(styled));
     title.push(TextSpan::raw(" "));
-    frame.render_widget(
-        Block::default()
-            .title(Line::from(title))
-            .borders(Borders::ALL)
-            .border_style(theme::fg(Token::BorderFaint))
-            .style(theme::bg(Token::SurfaceBackground)),
-        area,
-    );
+    Surface::card().title(Line::from(title)).render(frame, area);
     // This closes the whole overlay, so make it an explicit, comfortably
     // clickable control rather than the compact tab-close glyph.
     let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
@@ -808,24 +801,17 @@ fn render_choice_list(
         .saturating_sub(usize::from(visible) / 2)
         .min(rows.len().saturating_sub(usize::from(visible)));
 
-    let surface = theme::color(Token::SurfaceBackground);
     frame.render_widget(Clear, area);
-    let mut frame_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(Style::default().bg(surface));
+    let mut frame_surface = Surface::card();
     // A list that was cut says so, and where in it the highlight is —
     // otherwise its last row reads as the last there is.
     if rows.len() > usize::from(visible) {
-        frame_block = frame_block.title_bottom(
-            Line::from(TextSpan::styled(
-                format!(" {}/{} ", highlighted + 1, rows.len()),
-                theme::fg(Token::TextDim),
-            ))
-            .right_aligned(),
-        );
+        frame_surface = frame_surface.hint(Line::from(TextSpan::styled(
+            format!(" {}/{} ", highlighted + 1, rows.len()),
+            theme::fg(Token::TextDim),
+        )));
     }
-    frame.render_widget(frame_block, area);
+    frame_surface.render(frame, area);
     for (line, row) in rows.iter().skip(first).take(visible.into()).enumerate() {
         let rect = Rect::new(area.x + 1, area.y + 1 + line as u16, area.width - 2, 1);
         // A filled bar for the highlighted row, not just bold text: the
@@ -834,7 +820,7 @@ fn render_choice_list(
         // affordance.
         let fill = match row.highlighted {
             true => theme::color(Token::Accent),
-            false => surface,
+            false => theme::color(Token::SurfaceBackground),
         };
         let ink = match row.highlighted {
             true => theme::fg_bold(Token::SurfaceBackground),
@@ -867,13 +853,11 @@ fn render_navigator(
     scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> (NavigatorScroll, Option<Scrollbar>) {
-    let panel = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(theme::fg(Token::BorderDefault))
+    let inner = Rule::new(Edge::Right)
+        .tone(Token::BorderDefault)
+        .ground(Token::SurfaceBackground)
         .padding(Padding::new(1, 1, 0, 0))
-        .style(theme::bg(Token::SurfaceBackground));
-    let inner = panel.inner(area);
-    frame.render_widget(panel, area);
+        .render(frame, area);
 
     let mut heading = vec![TextSpan::styled(
         navigator.heading.clone(),
@@ -883,9 +867,9 @@ fn render_navigator(
     )];
     // The panel's own right padding is the gap a trailing caption keeps
     // off the divider, so the row is measured as if it were the pad.
-    crate::ui::push_trailing(
+    row::push_trailing(
         &mut heading,
-        inner.width + crate::ui::TRAILING_PAD,
+        inner.width + TRAILING_PAD,
         navigator.badge.clone(),
         theme::color(Token::TextMuted),
     );
@@ -940,11 +924,7 @@ fn render_navigator(
                 collapsed,
                 icon,
             } => {
-                let fold = theme::glyph(if *collapsed {
-                    Symbol::ChevronCollapsed
-                } else {
-                    Symbol::ChevronExpanded
-                });
+                let fold = mark::disclosure(!*collapsed);
                 let mut spans = vec![
                     TextSpan::raw(" "),
                     TextSpan::raw("  ".repeat(*depth)),
@@ -1005,11 +985,7 @@ fn render_navigator(
                 spans.extend(row_icon(*icon));
                 spans.push(TextSpan::styled(name.clone(), label_style));
                 if *selected {
-                    crate::ui::fill_row_bg(
-                        &mut spans,
-                        rect.width,
-                        theme::color(Token::SurfaceSelected),
-                    );
+                    row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceSelected));
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), rect);
                 hits.push((rect, ViewHit::SelectItem(*id)));
@@ -1178,7 +1154,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     } else {
         text.to_owned()
     };
-    let mut lines: Vec<Line<'static>> = crate::ui::fold(&title, measure)
+    let mut lines: Vec<Line<'static>> = text::fold(&title, measure)
         .into_iter()
         .map(|line| {
             Line::from(TextSpan::styled(
@@ -1190,7 +1166,7 @@ fn message_lines(text: &str, hint: Option<&str>, width: u16, colour: Color) -> V
     if let Some(hint) = hint {
         lines.push(Line::from(""));
         lines.extend(
-            crate::ui::fold(hint, measure)
+            text::fold(hint, measure)
                 .into_iter()
                 .map(|line| Line::from(TextSpan::styled(line, theme::fg(Token::TextMuted)))),
         );
@@ -1478,7 +1454,7 @@ fn render_footer(
     // resolve against — the same stack `Attach::scopes` builds.
     let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Workspace, scope];
     let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
-    frame.render_widget(Paragraph::new(crate::ui::hint_for(&scopes, &actions)), area);
+    frame.render_widget(Paragraph::new(hint::line(&scopes, &actions)), area);
 }
 
 /// What each extension command means in the product's own vocabulary, read
@@ -1596,7 +1572,7 @@ pub(crate) fn render_section(
         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
         TextSpan::styled(section.title.clone(), title_style),
     ];
-    crate::ui::push_trailing(
+    row::push_trailing(
         &mut spans,
         header_rect.width,
         section.caption.text.clone(),
@@ -1607,7 +1583,7 @@ pub(crate) fn render_section(
     // there is no content, and the band reads as a control of its own —
     // two of them stacked at the foot of the sidebar read as a toolbar.
     if !section.collapsed {
-        crate::ui::fill_row_bg(
+        row::pad_to(
             &mut spans,
             header_rect.width,
             theme::color(Token::SurfaceRaised),
@@ -1655,18 +1631,18 @@ pub(crate) fn render_section(
         // reserved for the gap `push_trailing` always leaves between them.
         let name_width = rect
             .width
-            .saturating_sub(marker_width + 1 + trailing_width + crate::ui::TRAILING_PAD);
+            .saturating_sub(marker_width + 1 + trailing_width + TRAILING_PAD);
         let mut spans = vec![
             TextSpan::styled(
                 format!("{mark} "),
                 Style::default().fg(color(row.mark_role)),
             ),
             TextSpan::styled(
-                crate::ui::elide_tail(&row.name.text, name_width as usize),
+                text::elide(&row.name.text, name_width as usize),
                 Style::default().fg(color(row.name.role)),
             ),
         ];
-        crate::ui::push_trailing(
+        row::push_trailing(
             &mut spans,
             rect.width,
             row.trailing.text.clone(),
@@ -2275,7 +2251,7 @@ mod tests {
             .find(|(_, hit)| *hit == ViewHit::DragContentScrollbar)
             .expect("five hundred lines in a short frame is a scrollbar")
             .0;
-        assert_eq!(track.width, crate::ui::scrollbar::Scrollbar::width());
+        assert_eq!(track.width, crate::ui::widget::Scrollbar::width());
         assert!(
             track.height > 1,
             "the whole groove is the target, not just the handle"

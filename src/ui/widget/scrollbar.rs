@@ -32,7 +32,7 @@
 
 use ratatui::{Frame, layout::Rect, text::Span, widgets::Paragraph};
 
-use super::theme::{self, Symbol, Token};
+use crate::ui::theme::{self, Symbol, Token};
 
 /// A scrollbar: where it is drawn, and what it is measuring.
 ///

@@ -1217,8 +1217,7 @@ impl TuiModel {
     /// disagree with the first.
     pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
         let rows = self.key_rows().len();
-        let Some(bar) =
-            super::scrollbar::Scrollbar::measure(track, usize::from(track.height), rows)
+        let Some(bar) = super::widget::Scrollbar::measure(track, usize::from(track.height), rows)
         else {
             return;
         };
@@ -1409,15 +1408,7 @@ impl TuiModel {
                 rows.push((offer.action, keymap.chord_for(offer.action, scopes)));
             }
         }
-        let needle = filter.trim().to_lowercase();
-        if needle.is_empty() {
-            return rows;
-        }
-        rows.retain(|(action, _)| {
-            action.label().to_lowercase().contains(&needle)
-                || action.description().to_lowercase().contains(&needle)
-        });
-        rows
+        crate::ui::widget::action_index::narrowed(rows, filter)
     }
 
     /// What can be done to whatever is selected on this screen.

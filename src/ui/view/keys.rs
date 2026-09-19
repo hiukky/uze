@@ -23,6 +23,7 @@ use super::super::model::{KeyRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{RowState, row, text};
 
 pub(crate) fn render_keys(
     frame: &mut ratatui::Frame<'_>,
@@ -108,7 +109,7 @@ pub(crate) fn render_keys(
         // A column for the track, but only when there is more list than
         // screen: a scrollbar on a list that fits says the opposite of
         // what it is for.
-        let track_width = crate::ui::scrollbar::Scrollbar::width()
+        let track_width = crate::ui::widget::Scrollbar::width()
             .max(theme::width(Symbol::BarThin))
             .max(1);
         let height = usize::from(list_area.height);
@@ -172,8 +173,7 @@ pub(crate) fn render_keys(
         }
 
         if let Some(track) = track
-            && let Some(bar) =
-                crate::ui::scrollbar::Scrollbar::measure(track, height, entries.len())
+            && let Some(bar) = crate::ui::widget::Scrollbar::measure(track, height, entries.len())
         {
             bar.render(frame, first);
             hits.push((track, Hit::KeysTrack(track)));
@@ -263,7 +263,7 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> L
             row.action.description(),
             theme::fg(Token::TextMuted),
         ));
-        crate::ui::management::clip_line(&mut sentence, room);
+        text::clip(&mut sentence, room);
         spans.push(Span::styled(GUTTER, theme::fg(Token::TextDim)));
         spans.extend(sentence.spans);
     }
@@ -285,16 +285,7 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> L
     // brighter word inside it — the same treatment every other list in
     // this mode gives its selection, and the reason one is findable
     // without reading it.
-    if selected {
-        for span in &mut spans {
-            span.style = span.style.bg(theme::color(Token::SurfaceSelected));
-        }
-        let drawn: usize = spans.iter().map(|span| span.width()).sum();
-        spans.push(Span::styled(
-            " ".repeat(usize::from(columns.width).saturating_sub(drawn)),
-            theme::bg(Token::SurfaceSelected),
-        ));
-    }
+    row::fill(&mut spans, columns.width, RowState::of(selected, false));
     Line::from(spans)
 }
 

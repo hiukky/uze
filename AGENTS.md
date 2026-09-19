@@ -76,6 +76,10 @@ explains a non-obvious *why* — the rationale behind a decision, an invariant,
 a workaround, or a subtle constraint the code alone cannot convey. Never
 restate what the code already says; write intent, not implementation.
 
+When the change is in `src/ui/`, chrome comes from `src/ui/widget/` and
+colour from `theme` — neither is assembled at the call site. Both are
+enforced; see the two entries in Workspace layout.
+
 ## Dependencies
 
 The dependency surface is small on purpose: ~22 direct external crates
@@ -193,6 +197,41 @@ need to).
   genuinely comes from content rather than from the design system — a
   pane's own output, syntax highlighting an extension ships — goes through
   `theme::content`.
+- `src/ui/widget/` — the chrome vocabulary: `Surface` (a bordered box),
+  `Rule` (an edge hairline), `Button`/`button_row`, `Chip` (a filled
+  label standing where a control stands), `Field` (a text input, and the
+  caret that is the only thing saying an empty one can be typed into),
+  `Toast` (an outcome, stacked top-right and gone on its own clock),
+  `row` (a list line's ground, its trailing caption, its title), `text`
+  (fitting text to the room there is, and the small-caps forms), `mark`
+  (the disclosure chevron), `hint` (the keys that act here),
+  `screen_header`, `action_index`, `Scrollbar`, `scrim`, the `fill`/`root`
+  grounds, and the `POPUP_H_PAD`/`POPUP_V_PAD`/`TRAILING_PAD` spacing. Nothing in it names
+  anything but `theme` and its own siblings. Where `theme` settles what a drawn thing may
+  *look* like, this settles what it is *made of*. **Nothing outside
+  `src/ui/widget/` may build chrome from ratatui's primitives** —
+  `chrome_is_built_from_the_widget_vocabulary` in
+  `tests/architecture/layering.rs` fails the build over a `Block::default()`
+  anywhere else. Name what it is (`Surface::floating()`, `Surface::card()`,
+  `Rule::new(Edge::Right)`) and let the widget decide the hairline, the
+  ground and the inset; add a constructor when none of the existing ones
+  says what yours means, and never rebuild one at the call site. A widget
+  owns none of hit-testing (a caller passes its `Hit` in and registers the
+  rects it gets back), no state (ratatui is immediate mode — there is
+  nothing to reconcile between frames), and no layout (it fills the rect it
+  is handed). Those three are guarded the other way by
+  `a_widget_knows_no_model_and_reaches_nothing`, which fails the build on a
+  widget naming `TuiModel`, `WorkspaceModel`, the filesystem, the
+  environment or a process — the pair keeps a screen from building its own
+  chrome and the vocabulary from growing into a screen. It lives here
+  rather than in a crate because `ratatui` appears in exactly one manifest,
+  the root's, and `uze-theme` and `uze-extensions` deliberately name no
+  rendering library.
+  Extract on the second *file*, not the second call: a helper three
+  callers in one screen share is that screen's, and moving it here only
+  makes the vocabulary harder to read. A primitive a screen exports is the
+  signal — `clip_line` lived in `management.rs` and four other screens
+  reached across for it as `super::super::management::clip_line`.
 - `crates/uze-extensions` — built-in TUI extensions. An extension answers
   with a `view::View` (a full-frame surface) or a `view::Section` (a
   collapsible block of one of the host's own columns) and never draws,
@@ -432,6 +471,20 @@ properties):
   is `uze plugin remove` — and leaves the project context reconciled, so
   declaring an environment and projecting it are one command rather than
   two.
+- **The header says what is happening; a toast says what happened.** The
+  workspace client's header carries one line, only ever about work in
+  flight, with a spinner and no clock — it goes when the work ends, which
+  is where the operation's own pending flag is cleared rather than where
+  anything is said about it, since an operation that finishes with nothing
+  to report still finishes. Outcomes are toasts, stacked top-right over
+  the pane: a title and a detail — both required, since a message worth
+  interrupting for is worth saying what it is *about*, and one row of
+  words over an empty one reads as a rendering fault. The hue is on the
+  mark alone and the ground is neutral, because four tinted boxes stacked
+  make the reader parse the surface before the words. They carry the
+  seconds they have left; the one that needs answering carries none and
+  stays until it is. A header that said both had to choose between them,
+  and what it dropped was whichever arrived second.
 - **`uze agent …` is an audience, not a category**: its reader is an agent
   UZE launched, not a person, so it is hidden from `uze --help` and
   documented in the region UZE projects into `AGENTS.md` — each audience
@@ -440,8 +493,8 @@ properties):
   vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
   Work that reaches its first commit still unnamed is named from that
   commit's subject, judged against the same vocabulary — a Git fact read on
-  the evaluation pass, never a harness feature. A name anybody chose is
-  never replaced.
+  the evaluation pass, never a harness feature. That derivation fires once
+  and never again; asking by name renames, however often it is asked.
 - **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
   what the project declared (marketplaces, plugins, the `worktrees:` policy);
   the lock holds only what resolving it produced — a commit per marketplace and
@@ -490,7 +543,7 @@ implementation problem forcing it.
 <!-- uze:begin project:worktree-policy/f917b2e7340b7f72 -->
 ## Concurrent work isolation
 
-- Name the work as your first action, before reading a file, planning or editing: `uze agent task name <type>/<subject>`. Types this project accepts: `feat|fix|docs|refactor|perf|test|build|ci|chore|style|revert`. The subject is one or two words naming the intention, not a description of the task — `fix/branch-naming`, not `fix/correct-the-problem-with-agent-branch-names`. The request you were given is where the intention comes from, so nothing you read later makes the name easier to choose. Work that reaches a commit still unnamed is named by UZE from that commit's subject, which is a worse name than the one you would have chosen. Either way your branch is renamed, so ask Git for its name rather than remembering it; a name you or the operator already chose is never replaced.
+- Name the work as your first action, before reading a file, planning or editing: `uze agent task name <type>/<subject>`. Types this project accepts: `feat|fix|docs|refactor|perf|test|build|ci|chore|style|revert`. The subject is one or two words naming the intention, not a description of the task — `fix/branch-naming`, not `fix/correct-the-problem-with-agent-branch-names`. The request you were given is where the intention comes from, so nothing you read later makes the name easier to choose. Work that reaches a commit still unnamed is named by UZE from that commit's subject, which is a worse name than the one you would have chosen. Either way your branch is renamed, so ask Git for its name rather than remembering it. Name it again with the same command whenever the work turns out to be something else — the last name given is the one that stands.
 - Every agent UZE launches works in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>`. If your working directory is inside `.worktrees/`, you are already isolated; do not switch branches.
 - Commit your work on your own branch, as you go. Never commit to, merge into, rebase, or reset the target branch: delivery is UZE's — UZE rebases your branch onto the target, runs the project's checks and publishes it, then asks you to open the request for it; commit on your branch and stop until it does.
 - If UZE tells you a rebase is paused in your checkout, resolve the conflicts preserving the intent of your change, run `git rebase --continue`, run the project's checks, and end your turn.

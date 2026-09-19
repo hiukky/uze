@@ -534,6 +534,16 @@ impl TuiModel {
             // Profiles the wheel did nothing at all, and the only way down
             // the page was the keyboard. Which is the shape of thing this
             // whole mechanism exists to stop shipping.
+            // An open list is still a list: the index scrolls under the
+            // wheel the way it steps under the arrows. Guarding this on
+            // "no overlay" left the one surface that is nothing *but* a
+            // long list as the one the wheel did not reach.
+            MouseEventKind::ScrollDown if matches!(self.overlay, Overlay::ActionIndex { .. }) => {
+                self.overlay_action(Action::SelectNext)
+            }
+            MouseEventKind::ScrollUp if matches!(self.overlay, Overlay::ActionIndex { .. }) => {
+                self.overlay_action(Action::SelectPrevious)
+            }
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_by(1)

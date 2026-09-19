@@ -36,14 +36,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect, text::Span};
 
 use uze_application::{
     ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, Result, SystemProcessRunner,
@@ -61,12 +54,12 @@ mod model;
 mod orchestrator;
 mod overlay;
 mod root_picker;
-mod scrim;
-mod scrollbar;
 pub(crate) mod theme;
 
-use theme::{Symbol, Token};
+use crate::ui::widget::{TRAILING_PAD, row, text};
+use theme::Symbol;
 pub mod view;
+pub(crate) mod widget;
 mod worker;
 
 /// Forces every process the TUI spawns to run silently, regardless of
@@ -278,111 +271,6 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
     }
 }
 
-/// The first row of an informational popup: its name, and the key that
-/// dismisses it pinned to the right.
-pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::text::Line<'static> {
-    use ratatui::{
-        style::{Modifier, Style},
-        text::{Line, Span},
-    };
-    let gap = width
-        .saturating_sub(name.chars().count() + dismiss.chars().count())
-        .max(1);
-    Line::from(vec![
-        Span::styled(
-            name.to_owned(),
-            Style::default()
-                .fg(theme::color(Token::TextBright))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(dismiss.to_owned(), theme::fg(Token::TextMuted)),
-    ])
-}
-
-/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
-/// label without competing with it for weight — the route counts in the
-/// management sidebar, the pull/push counts under an agent's branch.
-pub(crate) fn small_digits(n: usize) -> String {
-    n.to_string()
-        .chars()
-        .map(|c| match c {
-            '0' => '₀',
-            '1' => '₁',
-            '2' => '₂',
-            '3' => '₃',
-            '4' => '₄',
-            '5' => '₅',
-            '6' => '₆',
-            '7' => '₇',
-            '8' => '₈',
-            '9' => '₉',
-            _ => c,
-        })
-        .collect()
-}
-
-/// Renders a label as Unicode small capitals (`Beta` -> `ʙᴇᴛᴀ`) — the
-/// weight of capitals without their full height, for a mark that has to be
-/// noticed beside a name without shouting over it. The input is lowercased
-/// first so a mixed-case label reads as one even run rather than as a
-/// full-height initial followed by small ones. Unicode has no small
-/// capital for `q` or `x`, so those stay lowercase — closer in weight to
-/// their neighbours than the one full-height letter in the run would be —
-/// and anything outside the ASCII alphabet passes through rather than
-/// being dropped.
-///
-/// Every letter maps to exactly one character, and all 24 are East Asian
-/// width *neutral*, so a label keeps both its length and its cell count:
-/// the padded columns it sits in are unaffected.
-///
-/// What this depends on is the reader's font, which is why it is spent
-/// sparingly — the workspace tab's agent alias and the sidebar's badge for
-/// an unsettled route, both short and both read once. The glyphs are
-/// scattered across three blocks (IPA Extensions, Phonetic Extensions,
-/// and `ꜰ`/`ꜱ` alone in Latin Extended-D) and monospace coverage is thin:
-/// measured against the patched Nerd Fonts, Fira Code, JetBrains Mono and
-/// Hack carry none of the 24, DejaVu Sans Mono and Meslo 8, Consolas and
-/// Liberation Mono 22 — missing exactly `ꜰ` and `ꜱ` — and only Iosevka and
-/// Noto Sans Mono all 24. A terminal missing a glyph substitutes a
-/// proportional fallback face, which still occupies its one cell but is
-/// drawn at another size and optical width, so the run looks unevenly
-/// spaced rather than misaligned. That is a font to install rather than a
-/// bug to fix here, but it is the reason a status a reader must be able to
-/// scan across a list is left in ordinary case.
-pub(crate) fn small_caps(s: &str) -> String {
-    s.chars()
-        .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'a' => 'ᴀ',
-            'b' => 'ʙ',
-            'c' => 'ᴄ',
-            'd' => 'ᴅ',
-            'e' => 'ᴇ',
-            'f' => 'ꜰ',
-            'g' => 'ɢ',
-            'h' => 'ʜ',
-            'i' => 'ɪ',
-            'j' => 'ᴊ',
-            'k' => 'ᴋ',
-            'l' => 'ʟ',
-            'm' => 'ᴍ',
-            'n' => 'ɴ',
-            'o' => 'ᴏ',
-            'p' => 'ᴘ',
-            'r' => 'ʀ',
-            's' => 'ꜱ',
-            't' => 'ᴛ',
-            'u' => 'ᴜ',
-            'v' => 'ᴠ',
-            'w' => 'ᴡ',
-            'y' => 'ʏ',
-            'z' => 'ᴢ',
-            other => other,
-        })
-        .collect()
-}
-
 /// The kind a space over `root` is created as when nobody chose.
 pub fn space_kind_for(root: &std::path::Path) -> uze_terminal::SpaceKind {
     default_space_kind(uze_application::root_profile(root))
@@ -457,83 +345,15 @@ const CONTENT_INSET_LEFT: u16 = 2;
 const CONTENT_INSET_RIGHT: u16 = 2;
 const CONTENT_INSET_TOP: u16 = 1;
 
-/// `text` broken between words into rows of at most `width` columns, with
-/// a word wider than a row broken across rows — the one wrapper every
-/// surface folds prose with. Empty text is one empty row.
-///
-/// Folding *before* a paragraph is authored is what keeps a row index a
-/// screen row: the plugin drawer anchors its two clickable rows (the
-/// marketplace name, the address under it) by counting authored lines, and
-/// a description that ratatui's own `Wrap` folded afterwards pushed the
-/// drawn rows down and left the targets sitting above them.
-pub(crate) fn fold(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_owned()];
-    }
-    let mut rows: Vec<String> = Vec::new();
-    let mut row = String::new();
-    for word in text.split_whitespace() {
-        // A word wider than the row is broken across rows rather than
-        // left to overflow — the paragraph's own wrapper does the same,
-        // and a bare URL in a description is exactly that word.
-        let mut word = word;
-        while word.chars().count() > width {
-            if !row.is_empty() {
-                rows.push(std::mem::take(&mut row));
-            }
-            let split = word
-                .char_indices()
-                .nth(width)
-                .map_or(word.len(), |(index, _)| index);
-            let (head, tail) = word.split_at(split);
-            rows.push(head.to_owned());
-            word = tail;
-        }
-        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
-        if projected > width && !row.is_empty() {
-            rows.push(std::mem::take(&mut row));
-        }
-        if !row.is_empty() {
-            row.push(' ');
-        }
-        row.push_str(word);
-    }
-    if !row.is_empty() || rows.is_empty() {
-        rows.push(row);
-    }
-    rows
-}
-
-/// A hint line for `actions`, each printed with the key that reaches it
-/// in `scopes`.
-///
-/// The one way a surface may name a key. An action with no chord in these
-/// scopes is skipped rather than printed keyless: a hint is a list of
-/// shortcuts, and what has none is offered somewhere a pointer can reach.
-pub(crate) fn hint_for(scopes: &[uze_keys::Scope], actions: &[uze_keys::Action]) -> Line<'static> {
-    let keymap = uze_keys::active();
-    let separator = theme::glyph(Symbol::HintSeparator);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    for action in actions {
-        let Some(chord) = keymap.chord_for(*action, scopes) else {
-            continue;
-        };
-        if !spans.is_empty() {
-            spans.push(Span::styled(
-                format!(" {separator} "),
-                theme::fg(Token::TextDim),
-            ));
-        }
-        spans.push(Span::styled(
-            chord.to_string(),
-            theme::fg_bold(Token::Accent),
-        ));
-        spans.push(Span::styled(
-            format!(" {}", action.label().to_lowercase()),
-            theme::fg(Token::TextMuted),
-        ));
-    }
-    Line::from(spans)
+/// [`screen_header`](widget::screen_header) for a management route, which
+/// is what every screen in this client has instead of two strings.
+pub(crate) fn render_screen_header(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    route: model::Route,
+    trailer: Option<Span<'static>>,
+) -> Rect {
+    widget::screen_header::render(frame, area, route.label(), route.subtitle(), trailer)
 }
 
 /// Every content screen's outer inset — the design's `padding: 36px 44px`
@@ -564,53 +384,6 @@ pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
         content.y.saturating_sub(CONTENT_INSET_TOP),
         width + CONTENT_INSET_RIGHT,
         content.height + CONTENT_INSET_TOP,
-    )
-}
-
-/// Every screen's header: the route's name in bold, its subtitle muted on
-/// the next line, and an optional right-aligned trailer on the title's own
-/// row (item count, doctor summary, source count — whatever that route
-/// reports). Exactly the two-line header shape every route in the design
-/// uses. Returns the area still available below the header plus its own
-/// blank spacer row.
-pub(crate) fn render_screen_header(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    route: model::Route,
-    trailer: Option<Span<'static>>,
-) -> Rect {
-    let title = route.label();
-    let title_style = Style::default()
-        .fg(theme::color(Token::TextBright))
-        .add_modifier(Modifier::BOLD);
-    let title_row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
-    if let Some(trailer) = trailer {
-        let trailer_width = trailer.width() as u16;
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(trailer_width)])
-            .split(title_row);
-        frame.render_widget(Paragraph::new(Span::styled(title, title_style)), columns[0]);
-        frame.render_widget(
-            Paragraph::new(trailer).alignment(ratatui::layout::Alignment::Right),
-            columns[1],
-        );
-    } else {
-        frame.render_widget(Paragraph::new(Span::styled(title, title_style)), title_row);
-    }
-    if area.height > 1 {
-        let subtitle_row = Rect::new(area.x, area.y + 1, area.width, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled(route.subtitle(), theme::fg(Token::TextMuted))),
-            subtitle_row,
-        );
-    }
-    let consumed = 3.min(area.height);
-    Rect::new(
-        area.x,
-        area.y + consumed,
-        area.width,
-        area.height.saturating_sub(consumed),
     )
 }
 
@@ -926,14 +699,14 @@ impl ReleaseNotice<'_> {
                 theme::fg(theme::Token::Accent),
             ),
             Span::styled(
-                elide_tail(
+                text::elide(
                     &format!("v{}", notice.version()),
                     room(Symbol::MarkClose, 0),
                 ),
                 theme::fg(theme::Token::TextPrimary),
             ),
         ];
-        push_trailing(
+        row::push_trailing(
             &mut spans,
             version.width,
             theme::glyph(Symbol::MarkClose),
@@ -950,10 +723,10 @@ impl ReleaseNotice<'_> {
             spans.push(Span::styled(joint, theme::fg(theme::Token::TextFaint)));
         }
         spans.push(Span::styled(
-            elide_tail(notice.action(), room(Symbol::ArrowExternal, used)),
+            text::elide(notice.action(), room(Symbol::ArrowExternal, used)),
             theme::fg(theme::Token::TextDim),
         ));
-        push_trailing(
+        row::push_trailing(
             &mut spans,
             action.width,
             theme::glyph(Symbol::ArrowExternal),
@@ -972,67 +745,6 @@ impl ReleaseNotice<'_> {
             ),
         }
     }
-}
-
-/// The gap a row keeps between its right-most content and the divider (or
-/// the frame) beside it. One place, because a row that reserves a different
-/// amount than the row above it reads as ragged rather than as deliberate.
-pub(crate) const TRAILING_PAD: u16 = 1;
-
-/// The inset every anchored popup keeps between its border and its content.
-/// Four popups had grown their own copy of this pair; they were all the same
-/// number, which is the point — a popup that pads differently reads as a
-/// different kind of surface.
-pub(crate) const POPUP_H_PAD: u16 = 2;
-pub(crate) const POPUP_V_PAD: u16 = 1;
-
-/// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
-/// divider — the column the agent rows keep their alias in.
-///
-/// `text` is elided rather than allowed to overflow. It is the row's
-/// caption, and a caption that does not fit used to run past the edge and
-/// be cut there by the frame — which is how a long branch name on the Git
-/// section header became an unreadable fragment with no "…" to say it had
-/// been shortened.
-pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
-    let leading: u16 = spans.iter().map(|span| span.width() as u16).sum();
-    // One column of gap between the leading spans and the caption, so the
-    // two never read as one word.
-    let room = width.saturating_sub(leading + TRAILING_PAD + 1).max(1);
-    let text = elide_tail(&text, room as usize);
-    let used = leading + text.chars().count() as u16 + TRAILING_PAD;
-    let gap = width.saturating_sub(used).max(1);
-    spans.push(Span::raw(" ".repeat(gap as usize)));
-    spans.push(Span::styled(text, Style::default().fg(hue)));
-    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
-}
-
-/// `text` shortened from the right to `width`, keeping its head — a
-/// subject says what it did in its first words.
-pub(crate) fn elide_tail(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let Some(kept) = width.checked_sub(theme::width(Symbol::Ellipsis) as usize) else {
-        return String::new();
-    };
-    let mut kept: String = text.chars().take(kept).collect();
-    kept.push_str(&theme::glyph(Symbol::Ellipsis));
-    kept
-}
-
-/// Stamps `bg` onto every span already in the row, then appends a
-/// trailing background-filled run of spaces so the highlight spans the
-/// row's full width instead of stopping at the last glyph — same pattern
-/// the management views' `render_plugin_row`/`header_line` use for their
-/// own selected-row backgrounds.
-pub(crate) fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
-    for span in spans.iter_mut() {
-        span.style = span.style.bg(bg);
-    }
-    let used: usize = spans.iter().map(Span::width).sum();
-    let gap = (width as usize).saturating_sub(used);
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
 }
 
 #[cfg(test)]

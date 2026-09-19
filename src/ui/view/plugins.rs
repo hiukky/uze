@@ -31,9 +31,10 @@ use uze_application::application::{DoctorReport, MarketplacePluginSummary, Plugi
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
-use super::super::{content_area, fold, render_screen_header};
+use super::super::{content_area, render_screen_header};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{RowState, mark, row, text};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
 /// incidental — pad explicitly so alignment holds even if a future status
@@ -285,11 +286,7 @@ fn header_line(
     is_official: bool,
     label_width: usize,
 ) -> Line<'static> {
-    let chevron = theme::glyph(if collapsed {
-        Symbol::ChevronCollapsed
-    } else {
-        Symbol::ChevronExpanded
-    });
+    let chevron = mark::disclosure(!collapsed);
     // See `group_display_name` — the header shows the display name, while
     // the underlying value (used for toggling, hit-testing, filtering) is
     // untouched; this only affects what's drawn.
@@ -399,17 +396,7 @@ fn plugin_line<'a>(
         Span::raw("  "),
         Span::styled(update, update_style),
     ];
-    if selected {
-        for span in &mut spans {
-            span.style = span.style.bg(theme::color(Token::SurfaceSelected));
-        }
-        let used: usize = spans.iter().map(Span::width).sum();
-        let gap = (row_width as usize).saturating_sub(used);
-        spans.push(Span::styled(
-            " ".repeat(gap),
-            theme::bg(Token::SurfaceSelected),
-        ));
-    }
+    row::fill(&mut spans, row_width, RowState::of(selected, false));
     Line::from(spans)
 }
 
@@ -435,7 +422,7 @@ fn render_plugin_drawer(
         "PLUGIN",
         theme::fg_bold(Token::TextMuted),
     ))];
-    lines.extend(fold(&plugin.name, room).into_iter().map(|row| {
+    lines.extend(text::fold(&plugin.name, room).into_iter().map(|row| {
         Line::from(Span::styled(
             row,
             Style::default()
@@ -445,7 +432,7 @@ fn render_plugin_drawer(
     }));
     lines.push(Line::from(""));
     lines.extend(
-        fold(plugin.description.as_deref().unwrap_or_default(), room)
+        text::fold(plugin.description.as_deref().unwrap_or_default(), room)
             .into_iter()
             .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextSecondary)))),
     );
@@ -454,7 +441,7 @@ fn render_plugin_drawer(
             lines.push(Line::from(""));
         }
         lines.extend(
-            fold(&plugin.keywords.join(", "), room)
+            text::fold(&plugin.keywords.join(", "), room)
                 .into_iter()
                 .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextDim)))),
         );
@@ -516,7 +503,7 @@ fn render_plugin_drawer(
             // this palette's own vocabulary and nothing at all in anyone
             // else's — the row was a target the whole time and still read
             // as a caption.
-            Span::styled(crate::ui::elide_tail(url, address_room), link),
+            Span::styled(text::elide(url, address_room), link),
             Span::raw(" "),
             Span::styled(theme::glyph(Symbol::ArrowExternal), link),
         ]));
@@ -660,7 +647,7 @@ fn resource_lines(capabilities: &[PluginCapability], width: usize) -> Vec<Line<'
         + 2;
     let mut lines = Vec::new();
     for (label, names) in groups {
-        let rows = fold(&names.join(", "), width.saturating_sub(label_width));
+        let rows = text::fold(&names.join(", "), width.saturating_sub(label_width));
         for (index, row) in rows.into_iter().enumerate() {
             let label = if index == 0 { label } else { "" };
             lines.push(Line::from(vec![

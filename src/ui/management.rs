@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Clear, Padding, Paragraph},
 };
 
 use uze_application::{FirstStepsLayout, ManagementLayout, UzeHome};
@@ -26,8 +26,9 @@ use super::worker::{
     Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
     spawn_startup,
 };
-use super::{overlay, scrim, small_caps, small_digits, view};
+use super::{overlay, view};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{self, Edge, Rule, Surface, hint, text};
 
 /// How long a resolution of the machine stands for before opening the
 /// modal re-resolves it. The window exists for one case: the session's
@@ -286,11 +287,7 @@ pub(crate) fn render_modal(
     frame.render_widget(Clear, area);
     // The same border every popup of the workspace draws, so the modal
     // reads as one more of its surfaces rather than a different product.
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::on(Token::TextPrimary, Token::SurfaceBackground));
-    frame.render_widget(block, area);
+    Surface::card().render(frame, area);
 
     // The title row is drawn by hand rather than through the block's own
     // titles so the close mark has a rect the click can be tested against.
@@ -381,10 +378,7 @@ pub(crate) fn render(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    frame.render_widget(
-        Block::default().style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
-        area,
-    );
+    widget::fill(frame, area, Token::SurfaceBackground);
     // Only two columns span the full height — menu (sidebar) and main
     // container — there is no separate global header/footer row. The help
     // toolbar stays, scoped to the container column.
@@ -427,7 +421,7 @@ pub(crate) fn render(
     // anything about. Only this surface recedes: the workspace behind the
     // modal already has.
     if !matches!(model.overlay, Overlay::None) {
-        scrim::render(frame, area);
+        widget::scrim::render(frame, area);
     }
 
     match &model.overlay {
@@ -518,7 +512,7 @@ fn route_label_line(route: Route, style: Style) -> Line<'static> {
     if let Some(badge) = route.badge() {
         spans.push(Span::styled("  ", style));
         spans.push(Span::styled(
-            small_caps(badge),
+            text::small_caps(badge),
             style.fg(theme::color(Token::StateWarning)),
         ));
     }
@@ -541,17 +535,9 @@ fn render_sidebar(
     // it. The border itself is the drag handle (see the `Hit::ResizeSidebar`
     // push in `render`), so it picks up the same accent-while-dragging
     // feedback the workspace sidebar uses.
-    let border_color = if model.dragging_sidebar {
-        theme::color(Token::Accent)
-    } else {
-        theme::color(Token::BorderFaint)
-    };
-    let block = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 0, 0, 0));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rule::draggable(Edge::Right, model.dragging_sidebar)
+        .padding(Padding::new(1, 0, 0, 0))
+        .render(frame, area);
 
     // The quick strip takes its rows out of the column before anything
     // else is laid out — pinned to the foot means the routes above cannot
@@ -655,7 +641,7 @@ fn route_row(
         Token::SurfaceBackground
     };
     if selected {
-        frame.render_widget(Block::default().style(theme::bg(ground)), rect);
+        widget::fill(frame, rect, ground);
     }
     let bar_hue = if selected {
         Token::Accent
@@ -689,7 +675,7 @@ fn route_row(
     let label_rect = Rect::new(text_x, rect.y, text_width, 1);
     let label_rect = match count {
         Some(count) => {
-            let count = small_digits(count);
+            let count = text::small_digits(count);
             let [label, count_rect] =
                 Layout::horizontal([Constraint::Min(1), Constraint::Length(count.len() as u16)])
                     .areas(label_rect);
@@ -718,12 +704,9 @@ fn route_row(
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(theme::fg(Token::BorderFaint))
-        .padding(Padding::new(1, 1, 0, 0));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rule::new(Edge::Top)
+        .padding(Padding::new(1, 1, 0, 0))
+        .render(frame, area);
 
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     // The way into the index is at the foot of the sidebar now, with the
@@ -741,36 +724,13 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     // One row: a line that does not fit is elided rather than wrapped into
     // a second row the footer does not have.
     let mut line = footer_line(model);
-    clip_line(&mut line, columns[0].width as usize);
+    text::clip(&mut line, columns[0].width as usize);
     frame.render_widget(Paragraph::new(line), columns[0]);
     frame.render_widget(
         Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
             .alignment(ratatui::layout::Alignment::Right),
         columns[2],
     );
-}
-
-/// Truncates `line` in place to `max` columns, replacing whatever crosses
-/// the limit with `…`. Spans are trimmed greedily left-to-right, so the
-/// truncation point stays at the text that would have been visible anyway.
-pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
-    let mut used = 0usize;
-    let mut cut = None;
-    for (i, span) in line.spans.iter().enumerate() {
-        let width = span.width();
-        if used + width <= max {
-            used += width;
-        } else {
-            cut = Some(i);
-            break;
-        }
-    }
-    let Some(i) = cut else {
-        return;
-    };
-    line.spans[i].content =
-        std::borrow::Cow::Owned(crate::ui::elide_tail(&line.spans[i].content, max - used));
-    line.spans.truncate(i + 1);
 }
 
 /// The hint line: what can be done here, with the keys that do it.
@@ -791,7 +751,7 @@ fn hint_line(model: &TuiModel) -> Line<'static> {
     // The index is not among them: it has a button of its own at the other
     // end of this row, and the button is the mark that opens it. Naming it
     // twice on one line spends the width of a hint on a repetition.
-    crate::ui::hint_for(&scopes, &actions)
+    hint::line(&scopes, &actions)
 }
 
 /// How many of a screen's own actions the footer names before deferring to

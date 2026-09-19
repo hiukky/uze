@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use uze_application::application::{HarnessPreview, ProfilePreview};
 use uze_application::{
@@ -26,6 +26,7 @@ use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{content_area, side_panel_area};
 use super::{DrawerStatus, drawer_footer_height, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{self, mark, text};
 
 pub(crate) fn render_profiles(
     frame: &mut ratatui::Frame<'_>,
@@ -75,17 +76,6 @@ pub(crate) fn render_profiles(
         0,
         (divider, Hit::ResizePanel(ResizablePanel::ProfileColumns)),
     );
-}
-
-fn panel(right_border: bool, background: Color) -> Block<'static> {
-    Block::default()
-        .borders(if right_border {
-            Borders::RIGHT
-        } else {
-            Borders::NONE
-        })
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(Style::default().bg(background))
 }
 
 fn focus_color(focused: bool) -> Color {
@@ -150,8 +140,8 @@ fn render_profile_tree(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let block = panel(false, theme::color(Token::SurfaceBackground));
-    let panel_inner = block.inner(area);
+    widget::fill(frame, area, Token::SurfaceBackground);
+    let panel_inner = area;
     // The panel reaches one row above the content inset so its edge meets
     // the frame; the text inside starts where every other screen's
     // header does — the content inset itself, no padding of its own.
@@ -161,7 +151,6 @@ fn render_profile_tree(
         panel_inner.width.saturating_sub(1),
         panel_inner.height.saturating_sub(2),
     );
-    frame.render_widget(block, area);
     let header = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -290,10 +279,7 @@ fn render_profile_tree(
             let h = (content_h + 2).min(available as u16);
             if h > 0 {
                 let bg_rect = Rect::new(inner.x, y0, inner.width, h);
-                frame.render_widget(
-                    Block::default().style(theme::bg(Token::SurfaceRaised)),
-                    bg_rect,
-                );
+                widget::fill(frame, bg_rect, Token::SurfaceRaised);
             }
         }
         let mut name_style = Style::default().fg(if profile.active {
@@ -311,11 +297,7 @@ fn render_profile_tree(
         }
         let mut spans = vec![
             Span::styled(
-                theme::glyph(if selected {
-                    Symbol::ChevronExpanded
-                } else {
-                    Symbol::ChevronCollapsed
-                }),
+                mark::disclosure(selected),
                 Style::default().fg(focus_color(
                     selected && model.profile_panel == ProfilePanel::List,
                 )),
@@ -456,8 +438,8 @@ fn render_harnesses(
                 .collect()
         })
         .unwrap_or_default();
-    let block = panel(false, theme::color(Token::SurfaceRecessed));
-    let panel_inner = block.inner(area);
+    widget::fill(frame, area, Token::SurfaceRecessed);
+    let panel_inner = area;
     // This panel is the screen's drawer: it sits on the drawers' surface,
     // so the selected profile's actions end it the way they end every
     // other drawer.
@@ -476,7 +458,6 @@ fn render_harnesses(
         panel_inner.width.saturating_sub(3),
         panel_inner.height.saturating_sub(2 + footer_height),
     );
-    frame.render_widget(block, area);
     let checked: Vec<&str> = harnesses
         .iter()
         .filter(|harness| {
@@ -880,14 +861,7 @@ fn harness_row(
             theme::fg(Token::Accent),
         ),
         Span::styled(
-            format!(
-                "{} ",
-                theme::glyph(if open {
-                    Symbol::ChevronExpanded
-                } else {
-                    Symbol::ChevronCollapsed
-                })
-            ),
+            format!("{} ", mark::disclosure(open)),
             theme::fg(Token::TextMuted),
         ),
         Span::styled(
@@ -1071,7 +1045,7 @@ fn caveats(axes: &[AxisPlan], width: u16) -> Vec<Line<'static>> {
 /// mark reads as one block.
 fn wrapped(text: &str, indent: usize, hang: usize, width: u16, color: Color) -> Vec<Line<'static>> {
     let room = (width as usize).saturating_sub(indent + hang).max(20);
-    crate::ui::fold(text, room)
+    text::fold(text, room)
         .into_iter()
         .filter(|line| !line.is_empty())
         .enumerate()

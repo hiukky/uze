@@ -21,6 +21,7 @@ use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::RowState;
 
 /// Two states, because there are two answers a person can act on: UZE has
 /// set this harness up, or it has not. A binary that is not on the machine
@@ -263,11 +264,11 @@ fn render_harness_card(
     hits: &mut Vec<(Rect, Hit)>,
     index: usize,
 ) {
-    let background = if selected {
-        theme::color(Token::SurfaceSelected)
-    } else {
-        theme::color(Token::SurfaceRecessed)
-    };
+    let background = theme::color(
+        RowState::of(selected, false)
+            .ground()
+            .unwrap_or(Token::SurfaceRecessed),
+    );
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(background)),
         rect,

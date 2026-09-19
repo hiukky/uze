@@ -118,6 +118,15 @@ vocabulary! {
         MarkAttention = "mark.attention",
         /// Dismisses what it sits on.
         MarkClose = "mark.close",
+        /// Something did not succeed.
+        ///
+        /// Its own meaning rather than [`MarkClose`](Self::MarkClose),
+        /// which those two are drawn alike in the built-in set and are not
+        /// the same thing at all: close is a control the reader presses,
+        /// and this is an outcome they are being told. A glyph set free to
+        /// spell a button differently from a verdict can only do so if the
+        /// two are named apart.
+        MarkFailed = "mark.failed",
         /// A list bullet in running text.
         MarkDot = "mark.dot",
         /// Multiplication/removal in a count or a label, not a button.
