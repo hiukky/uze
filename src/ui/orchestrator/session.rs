@@ -1080,18 +1080,7 @@ impl Attach<'_> {
     /// finished here, like the code surface's caret: the render knew which
     /// row it drew, and only the pointer knows how far along it landed.
     fn architect_press(&mut self, column: u16, row: u16) {
-        let hit = self.model.hits.iter().find_map(|(rect, hit)| {
-            let inside = rect.x <= column
-                && column < rect.x + rect.width
-                && rect.y <= row
-                && row < rect.y + rect.height;
-            match hit {
-                WorkspaceHit::Extension(ExtensionHit::Architect(hit)) if inside => {
-                    Some((*rect, *hit))
-                }
-                _ => None,
-            }
-        });
+        let hit = self.architect_hit_at(column, row);
         let view_hit = hit.map(|(rect, hit)| match hit {
             ViewHit::PlaceCaret { line, cell } => ViewHit::PlaceCaret {
                 line,
@@ -1122,6 +1111,28 @@ impl Attach<'_> {
             self.follow_architect(outcome);
         }
         self.model.dirty = true;
+    }
+
+    /// The architect's own hit under a pointer, resolved the way that
+    /// surface hands its hits down: **first** in the list is topmost, an
+    /// open list having been spliced in front of the board it covers.
+    /// The workspace's own `hit_at` reads the other way round — latest
+    /// drawn first — which is right for chrome it drew itself and wrong
+    /// for a list somebody else ordered. One resolver, so a press and a
+    /// hover cannot land on two different things.
+    fn architect_hit_at(&self, column: u16, row: u16) -> Option<(Rect, ViewHit)> {
+        self.model.hits.iter().find_map(|(rect, hit)| {
+            let inside = rect.x <= column
+                && column < rect.x + rect.width
+                && rect.y <= row
+                && row < rect.y + rect.height;
+            match hit {
+                WorkspaceHit::Extension(ExtensionHit::Architect(hit)) if inside => {
+                    Some((*rect, *hit))
+                }
+                _ => None,
+            }
+        })
     }
 
     fn architect_space(&self) -> uze_extensions::view::Size {
@@ -1972,6 +1983,20 @@ impl Attach<'_> {
             // across the pane must not cost a frame a tick.
             _ => {
                 let hovered = hit_at(&self.model, mouse.column, mouse.row);
+                // An extension's own open list follows the pointer too,
+                // by the same rule — but resolved its way, not the
+                // chrome's, or the hover lands on the board beneath it.
+                let over = self
+                    .architect_hit_at(mouse.column, mouse.row)
+                    .map(|(_, hit)| hit);
+                if self
+                    .model
+                    .architect
+                    .as_mut()
+                    .is_some_and(|view| architect::handle_hover(view, over))
+                {
+                    self.model.dirty = true;
+                }
                 if self.model.hovered != hovered {
                     self.model.hovered = hovered;
                     self.model.dirty = true;
