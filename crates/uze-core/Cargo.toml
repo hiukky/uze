@@ -13,6 +13,7 @@ publish = false
 # subscribes (see `src/telemetry.rs`).
 tracing = "0.1"
 uze-git = { path = "../uze-git" }
+uze-document = { path = "../uze-document" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 noyalib = { version = "0.0.43", features = ["compat-serde-yaml"] }

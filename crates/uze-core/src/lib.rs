@@ -77,6 +77,11 @@ pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
     project_root, task, text_region, workspace, worktree,
 };
+/// How a record written by another build is read by this one. A leaf crate
+/// rather than a module here, because the terminal runtime holds the
+/// workspace and depends on nothing of UZE's — and one rule written in two
+/// places is the failure it exists to end.
+pub use uze_document as document;
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use capability::Resource;
