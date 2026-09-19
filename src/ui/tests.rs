@@ -2718,6 +2718,99 @@ fn refreshed_updates_workspace_state() {
     );
 }
 
+/// The header counts what is on the machine, not how many harnesses UZE
+/// knows about. It counted the cards, so a machine carrying three of the
+/// four UZE supports was told "4 installed" — and removing one changed
+/// nothing, which is how the number was caught.
+#[test]
+fn the_catalog_counts_the_harnesses_that_are_actually_installed() {
+    let mut model = model_with_data();
+    model.set_route(Route::Harnesses);
+    model.focus = Focus::Content;
+    let header = |model: &TuiModel| {
+        let mut terminal = Terminal::new(TestBackend::new(150, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, frame.area(), model, &mut hits))
+            .unwrap();
+        buffer_rows(&terminal)
+            .into_iter()
+            .find(|row| row.contains("installed"))
+            .expect("the screen header counts them")
+    };
+
+    assert!(
+        header(&model).contains("2 installed"),
+        "both fixtures are on the machine: {}",
+        header(&model)
+    );
+
+    model
+        .remembered
+        .doctor
+        .as_mut()
+        .expect("the fixture has a report")
+        .harnesses[1]
+        .detection
+        .present = false;
+
+    assert!(
+        header(&model).contains("1 installed"),
+        "and one that is gone is not installed: {}",
+        header(&model)
+    );
+}
+
+/// A drawer whose one action cannot run says why, where the button would
+/// have been. UZE sets up a harness it can find; for one that is not on
+/// the machine there is nothing to run, and a row that simply goes empty
+/// under "Not configured" reads as a button that failed to draw.
+#[test]
+fn a_harness_that_cannot_be_set_up_says_so_where_its_button_would_be() {
+    let mut model = model_with_data();
+    model.set_route(Route::Harnesses);
+    model.focus = Focus::Content;
+    // The fixture's second harness is detected and unconfigured: the one
+    // case where setting it up is exactly what to do.
+    model.remembered.harness_screen.selected = 1;
+    let drawn = |model: &TuiModel| {
+        let mut terminal = Terminal::new(TestBackend::new(150, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, frame.area(), model, &mut hits))
+            .unwrap();
+        (buffer_rows(&terminal).join("\n"), hits)
+    };
+
+    let (rows, hits) = drawn(&model);
+    assert!(
+        hits.iter()
+            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::SetupHarness)),
+        "an installed harness offers the button: {rows}"
+    );
+
+    model
+        .remembered
+        .doctor
+        .as_mut()
+        .expect("the fixture has a report")
+        .harnesses[1]
+        .detection
+        .present = false;
+
+    let (rows, hits) = drawn(&model);
+    assert!(
+        !hits
+            .iter()
+            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::SetupHarness)),
+        "one that is not on the machine cannot be set up: {rows}"
+    );
+    assert!(
+        rows.contains("not installed on this machine"),
+        "and the row the button was on carries the reason: {rows}"
+    );
+}
+
 /// The catalog asks one question of each harness and marks only a "yes".
 /// A harness UZE configured wears its mark; one it has not wears nothing
 /// — being unmarked is already the whole state, and a second way of

@@ -466,7 +466,7 @@ fn render_harnesses(
         .map(|profile| profile.offers())
         .unwrap_or_default();
     let footer_height = if model.selected_profile().is_some() {
-        drawer_footer_height(&offers)
+        drawer_footer_height(&offers, None)
     } else {
         0
     };
@@ -496,6 +496,7 @@ fn render_harnesses(
                 color,
                 headline,
                 subtitle: &subtitle,
+                nothing_to_do: None,
             },
             &offers,
             model.hovered_offer,
