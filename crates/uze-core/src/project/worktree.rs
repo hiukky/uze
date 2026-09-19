@@ -449,7 +449,8 @@ impl WorktreePolicy {
              makes the name easier to choose. Work that reaches a commit still unnamed is named \
              by UZE from that commit's subject, which is a worse name than the one you would \
              have chosen. Either way your branch is renamed, so ask Git for its name rather than \
-             remembering it; a name you or the operator already chose is never replaced.\n",
+             remembering it. Name it again with the same command whenever the work turns out to \
+             be something else — the last name given is the one that stands.\n",
             types = self.branch.spelled()
         )
     }

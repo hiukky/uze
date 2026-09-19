@@ -353,9 +353,16 @@ impl Workspace<'_> {
     /// the operator's branch, which already has the name it will keep, and
     /// may stand in a directory that is no repository at all.
     ///
-    /// First-writer-wins: a task that already carries a chosen name is
-    /// refused, so nothing an agent or an operator decided is ever
-    /// replaced by a later mechanism.
+    /// Asking renames, however often it is asked. A branch is an address,
+    /// and the work it holds turns out to be something else often enough
+    /// that naming it once was never the realistic case — what refusing a
+    /// second name actually stranded was a branch UZE had derived from a
+    /// commit, because nothing downstream could tell that name from one an
+    /// agent had chosen.
+    ///
+    /// Renaming to the name it already carries is not an error — the
+    /// record is confirmed and Git is left alone — so an agent may state
+    /// its branch's name without first asking what it is.
     #[tracing::instrument(name = "workspace.name_task", skip_all, fields(agent = %claim.id, cwd = %claim.cwd.display(), proposed = %proposed), err)]
     pub fn name_task(&self, claim: Claim<'_>, proposed: &str) -> Result<NamedTask> {
         let not_an_agent =
@@ -377,24 +384,20 @@ impl Workspace<'_> {
         task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
             let task = store.get_mut(&owner.agent).ok_or_else(not_an_agent)?;
-            if task.is_named() {
-                return Err(UzeError::TaskNaming(format!(
-                    "this work is already named `{}`; a name nobody generated is never replaced",
-                    task.branch
-                )));
-            }
             if checkout::current_branch(claim.cwd).as_deref() != Some(task.branch.as_str()) {
                 return Err(UzeError::TaskNaming(
                     "this checkout is not on the task's branch — finish the rebase first"
                         .to_owned(),
                 ));
             }
-            if checkout::branch_exists(&primary, &branch) {
-                return Err(UzeError::TaskNaming(format!(
-                    "`{branch}` already exists in this repository"
-                )));
+            if task.branch != branch {
+                if checkout::branch_exists(&primary, &branch) {
+                    return Err(UzeError::TaskNaming(format!(
+                        "`{branch}` already exists in this repository"
+                    )));
+                }
+                checkout::rename_branch(&primary, &task.branch.clone(), &branch)?;
             }
-            checkout::rename_branch(&primary, &task.branch.clone(), &branch)?;
             task.take_name(branch.clone());
             Ok(NamedTask {
                 task: task.id.as_str().to_owned(),
@@ -3559,23 +3562,65 @@ mod naming_tests {
         std::fs::remove_dir_all(plain).unwrap();
     }
 
-    /// First-writer-wins: the second call is refused and the first name
-    /// stands, in Git as well as in the record.
+    /// Naming again renames: the work turning out to be something else is
+    /// the ordinary case, and the last name given is the one that stands,
+    /// in Git as well as in the record.
     #[test]
-    fn a_second_name_is_refused_and_the_first_one_stands() {
+    fn naming_again_renames_and_the_last_name_stands() {
         let (app, repository) = naming_project("naming-twice");
         let placed = placed(&app, repository.root());
         app.workspace()
             .name_task(placed.claim(), "fix/first-name")
             .unwrap();
 
-        let error = app
+        let named = app
             .workspace()
             .name_task(placed.claim(), "fix/second-name")
+            .unwrap();
+
+        assert_eq!(named.branch, "fix/second-name");
+        assert_eq!(named.label, "second name", "the label follows the branch");
+        assert_eq!(branch_of(&placed.checkout), "fix/second-name");
+    }
+
+    /// The name it already carries is not a collision with itself: an
+    /// agent may state its branch's name without first asking Git what it
+    /// is, and nothing is renamed.
+    #[test]
+    fn naming_the_name_it_already_has_is_confirmed_rather_than_refused() {
+        let (app, repository) = naming_project("naming-idempotent");
+        let placed = placed(&app, repository.root());
+        app.workspace()
+            .name_task(placed.claim(), "fix/same-name")
+            .unwrap();
+
+        let named = app
+            .workspace()
+            .name_task(placed.claim(), "fix/same-name")
+            .unwrap();
+
+        assert_eq!(named.branch, "fix/same-name");
+        assert_eq!(branch_of(&placed.checkout), "fix/same-name");
+    }
+
+    /// A rename still answers to the repository: a name another branch
+    /// already holds is refused, and the work keeps the one it had.
+    #[test]
+    fn a_rename_onto_an_existing_branch_is_refused() {
+        let (app, repository) = naming_project("naming-collision");
+        let placed = placed(&app, repository.root());
+        app.workspace()
+            .name_task(placed.claim(), "fix/first-name")
+            .unwrap();
+        repository.git(&["branch", "fix/taken"]);
+
+        let error = app
+            .workspace()
+            .name_task(placed.claim(), "fix/taken")
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("already named"), "{error}");
+        assert!(error.contains("already exists"), "{error}");
         assert_eq!(branch_of(&placed.checkout), "fix/first-name");
     }
 
