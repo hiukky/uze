@@ -15,8 +15,7 @@ use uze_core::{
     conversation::{self, Claim},
     landing::{self, Delivered, DeliveryFailure, Readiness},
     manifest, prompt_history,
-    task::{self, AgentId, AgentKind, Base, Task, TaskState, TaskStore},
-    tenant::Tenant,
+    task::{self, Agent, AgentId, Base, Isolation, TaskState, TaskStore},
     workspace,
     worktree::{self, BranchVocabulary, CompletionBehavior, NameRefusal, WorktreePolicy},
 };
@@ -177,10 +176,10 @@ impl Workspace<'_> {
         occupied: &[PathBuf],
     ) -> Result<AgentPlacement> {
         match kind {
-            PlacementKind::Slot => self.place_in_slot(pane_cwd, occupied),
+            PlacementKind::Slot => self.place_in_slot(pane_cwd, harness, occupied),
             PlacementKind::Tenant => {
                 let root = canonical(pane_cwd);
-                let tenant = self.record_tenant(&root, harness)?;
+                let tenant = self.record_in_the_root(&root, harness)?;
                 Ok(AgentPlacement {
                     cwd: root,
                     placement: Placement::Tenant { id: tenant.id },
@@ -190,7 +189,12 @@ impl Workspace<'_> {
         }
     }
 
-    fn place_in_slot(&self, pane_cwd: &Path, occupied: &[PathBuf]) -> Result<AgentPlacement> {
+    fn place_in_slot(
+        &self,
+        pane_cwd: &Path,
+        harness: &str,
+        occupied: &[PathBuf],
+    ) -> Result<AgentPlacement> {
         let refused = |reason: String| UzeError::AgentPlacement(reason);
         let primary = worktree::primary_checkout(pane_cwd)
             .ok_or_else(|| refused("not inside a Git working tree".to_owned()))?;
@@ -213,19 +217,23 @@ impl Workspace<'_> {
         // Whatever the lock's answer, this is what was taken from Git
         // before it: the slot has to be given back when the record of it
         // cannot be written.
-        let mut taken: Option<Task> = None;
+        let mut taken: Option<Agent> = None;
         let recorded = task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let mut task = Task::new(
+            let mut agent = Agent::isolated(
+                harness,
                 None,
                 Base::Ref(target.clone()),
                 base_tip.clone(),
                 target.clone(),
             );
+            let isolation = agent
+                .isolation_mut()
+                .expect("an agent built isolated carries its isolation");
             let acquired = match checkout::acquire(
                 &primary,
                 store,
-                &task,
+                isolation,
                 &base_tip,
                 policy.slots,
                 occupied,
@@ -235,8 +243,9 @@ impl Workspace<'_> {
                 // still worth writing back.
                 Err(refusal) => return Ok(Err(refusal.to_string())),
             };
-            task.checkout = Some(acquired.id.clone());
-            store.upsert(task.clone());
+            isolation.checkout = Some(acquired.id.clone());
+            let task = agent.clone();
+            store.upsert(agent);
             taken = Some(task.clone());
             Ok(Ok((task, acquired)))
         });
@@ -249,10 +258,10 @@ impl Workspace<'_> {
             // unowned, and the agent is told it is isolated. Give the slot
             // and its empty branch back, and refuse the launch.
             Err(error) => {
-                let Some(task) = &taken else {
+                let Some(isolation) = taken.as_ref().and_then(Agent::isolation) else {
                     return Err(refused(format!("task state could not be read: {error}")));
                 };
-                let _ = checkout::discard(&primary, task);
+                let _ = checkout::discard(&primary, isolation);
                 return Err(refused(format!(
                     "the agent's task could not be recorded: {error}"
                 )));
@@ -262,7 +271,13 @@ impl Workspace<'_> {
         // Outside the document's lock on purpose: the project's `setup` is
         // the one unbounded thing a launch runs, and every other mutation
         // would wait behind it.
-        let mut warnings = sync.concern(&task.target).into_iter().collect::<Vec<_>>();
+        let isolation = task
+            .isolation()
+            .expect("an agent placed in a slot carries its isolation");
+        let mut warnings = sync
+            .concern(&isolation.target)
+            .into_iter()
+            .collect::<Vec<_>>();
         warnings.extend(checkout::materialize(
             &primary,
             &acquired.path,
@@ -301,7 +316,11 @@ impl Workspace<'_> {
         let mut placement = task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
             let snapshot = store.clone();
-            let task = task_mut(store, task_id)
+            let agent = task_mut(store, task_id)
+                .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+            let id = agent.id.clone();
+            let task = agent
+                .isolation_mut()
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
             if let (Some(existing), Some(checkout)) =
                 (landing::slot_path(&primary, task), task.checkout.clone())
@@ -309,7 +328,7 @@ impl Workspace<'_> {
                 return Ok(AgentPlacement {
                     cwd: existing,
                     placement: Placement::Slot {
-                        task: task.id.clone(),
+                        task: id,
                         checkout,
                         branch: task.branch.clone(),
                         reused: true,
@@ -322,7 +341,7 @@ impl Workspace<'_> {
             task.checkout = Some(acquired.id.clone());
             task.state = TaskState::Running;
             let placement = Placement::Slot {
-                task: task.id.clone(),
+                task: id,
                 checkout: acquired.id.clone(),
                 branch: acquired.branch.clone(),
                 reused: !acquired.created,
@@ -349,9 +368,10 @@ impl Workspace<'_> {
     /// names its identifier and the directory is the record's own. The
     /// stamp says which agent and the directory says where, so a process
     /// editing its own environment cannot reach another agent's branch.
-    /// A tenant is refused before anything else is resolved — it works on
-    /// the operator's branch, which already has the name it will keep, and
-    /// may stand in a directory that is no repository at all.
+    /// An agent that is not isolated is refused before anything else is
+    /// resolved — it works on the operator's branch, which already has
+    /// the name it will keep, and may stand in a directory that is no
+    /// repository at all.
     ///
     /// Asking renames, however often it is asked. A branch is an address,
     /// and the work it holds turns out to be something else often enough
@@ -368,7 +388,7 @@ impl Workspace<'_> {
         let not_an_agent =
             || UzeError::TaskNaming("this process is not an agent UZE launched".to_owned());
         let owner = conversation::owner_of(&self.0.home, claim).ok_or_else(not_an_agent)?;
-        if owner.kind == AgentKind::Tenant {
+        if !owner.isolated {
             return Err(UzeError::TaskNaming(
                 "this agent works in the operator's checkout; its work is not named".to_owned(),
             ));
@@ -383,7 +403,8 @@ impl Workspace<'_> {
         let target = target_of(&primary, &policy);
         task::locked(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
-            let task = store.get_mut(&owner.agent).ok_or_else(not_an_agent)?;
+            let agent = store.get_mut(&owner.agent).ok_or_else(not_an_agent)?;
+            let task = agent.isolation().ok_or_else(not_an_agent)?;
             if checkout::current_branch(claim.cwd).as_deref() != Some(task.branch.as_str()) {
                 return Err(UzeError::TaskNaming(
                     "this checkout is not on the task's branch — finish the rebase first"
@@ -398,11 +419,11 @@ impl Workspace<'_> {
                 }
                 checkout::rename_branch(&primary, &task.branch.clone(), &branch)?;
             }
-            task.take_name(branch.clone());
+            agent.take_name(branch.clone());
             Ok(NamedTask {
-                task: task.id.as_str().to_owned(),
+                task: agent.id.as_str().to_owned(),
                 branch,
-                label: task.label.clone(),
+                label: agent.label.clone(),
             })
         })
     }
@@ -553,7 +574,7 @@ impl Workspace<'_> {
         };
         let target = target_of(&primary, &policy);
         let mut notices = Vec::new();
-        let mut ask_the_remote: Vec<Task> = Vec::new();
+        let mut ask_the_remote: Vec<(AgentId, Isolation)> = Vec::new();
         let completion = policy.completion;
         let evaluated = task::locked_reporting(&self.0.home, &primary, |store| {
             checkout::reconcile(&primary, store, &target);
@@ -564,8 +585,8 @@ impl Workspace<'_> {
                 vocabulary: &policy.branch,
                 completion,
             };
-            for task in &mut store.tasks {
-                if let Some(read) = pass.evaluate(task) {
+            for agent in store.agents.iter_mut().filter(|agent| agent.is_isolated()) {
+                if let Some(read) = pass.evaluate(agent) {
                     ask_the_remote.extend(read.ask_the_remote);
                     notices.extend(read.notice);
                 }
@@ -604,23 +625,23 @@ impl Workspace<'_> {
         &self,
         primary: &Path,
         completion: CompletionBehavior,
-        asked: &[Task],
+        asked: &[(AgentId, Isolation)],
         evaluation: &mut Evaluation,
     ) {
-        let observed: Vec<(&Task, landing::RequestObservation)> = asked
+        let observed: Vec<(&(AgentId, Isolation), landing::RequestObservation)> = asked
             .iter()
-            .map(|task| (task, landing::observe_request(primary, task)))
+            .map(|asked| (asked, landing::observe_request(primary, &asked.1)))
             .collect();
         if observed.is_empty() {
             return;
         }
         let adopted = task::locked(&self.0.home, primary, |store| {
-            for (asked, observation) in &observed {
+            for ((id, asked), observation) in &observed {
                 // Only onto the record the question was asked about.
                 // Anything that moved it since — a delivery that pushed
                 // the branch and found the request itself — knows more
                 // about this than an answer taken before it ran.
-                if let Some(record) = task_mut(store, asked.id.as_str())
+                if let Some(record) = task_mut(store, id.as_str()).and_then(Agent::isolation_mut)
                     && record.branch == asked.branch
                     && record.published_as == asked.published_as
                     && record.published_request == asked.published_request
@@ -660,10 +681,13 @@ impl Workspace<'_> {
         };
         let mut ready: Vec<(u64, String)> = repository
             .store
-            .tasks
-            .iter()
-            .filter(|task| task.state == TaskState::Ready)
-            .map(|task| (task.created_at_unix, task.id.as_str().to_owned()))
+            .isolated()
+            .filter(|agent| {
+                agent
+                    .isolation()
+                    .is_some_and(|isolation| isolation.state == TaskState::Ready)
+            })
+            .map(|agent| (agent.created_at_unix, agent.id.as_str().to_owned()))
             .collect();
         ready.sort();
         // One claim per task, in order, so the second is claimed against
@@ -707,13 +731,20 @@ impl Workspace<'_> {
         task_id: &str,
     ) -> Option<DeliveryReport> {
         let claimed = task::locked(&self.0.home, primary, |store| {
-            Ok(task_mut(store, task_id).map(|record| {
-                let claimed = record.clone();
-                record.state = TaskState::Integrating;
-                claimed
+            Ok(task_mut(store, task_id).and_then(|agent| {
+                // Claimed as it stands, then marked: the delivery reads
+                // the state the operator's record was in, and
+                // `Integrating` is what the *document* says while it runs
+                // — the claim, not an input to it.
+                let claimed = agent.clone();
+                agent.isolation_mut()?.state = TaskState::Integrating;
+                Some(claimed)
             }))
         });
-        let mut task = match claimed {
+        // The whole record, not only the branch: what the delivery
+        // reports is a view of the agent, and the agent is what the
+        // document will be asked to take back.
+        let mut agent = match claimed {
             Ok(claimed) => claimed?,
             // Nothing was delivered and nothing was written — said as a
             // report rather than as `None`, which the client renders as
@@ -723,12 +754,14 @@ impl Workspace<'_> {
                 return self.unclaimed_delivery(primary, policy, task_id, &error);
             }
         };
-        let outcome = deliver_one(primary, policy, &mut task);
+        let id = agent.id.clone();
+        let outcome = deliver_one(primary, policy, &id, agent.isolation_mut()?);
         let mut report = DeliveryReport {
-            task: TaskView::from_task(primary, &task, policy.completion),
+            task: TaskView::from_agent(primary, &agent, policy.completion)?,
             outcome,
             warnings: Vec::new(),
         };
+        let task = agent.isolation()?.clone();
         let recorded = task::locked(&self.0.home, primary, |store| {
             let Some(record) = task_mut(store, task_id) else {
                 return Ok(Recorded::Superseded);
@@ -736,6 +769,9 @@ impl Workspace<'_> {
             // Only the record this delivery claimed. The operator can
             // finish or discard a task while its gate runs, and what they
             // decided about it is newer than this.
+            let Some(record) = record.isolation_mut() else {
+                return Ok(Recorded::Superseded);
+            };
             if record.state != TaskState::Integrating {
                 return Ok(Recorded::Superseded);
             }
@@ -766,12 +802,9 @@ impl Workspace<'_> {
         error: &UzeError,
     ) -> Option<DeliveryReport> {
         let store = task::load(&self.0.home, primary).ok()?;
-        let task = store
-            .tasks
-            .iter()
-            .find(|task| task.id.as_str() == task_id)?;
+        let agent = store.agent(task_id)?;
         Some(DeliveryReport {
-            task: TaskView::from_task(primary, task, policy.completion),
+            task: TaskView::from_agent(primary, agent, policy.completion)?,
             outcome: DeliveryOutcome::Refused(format!("the delivery could not start: {error}")),
             warnings: Vec::new(),
         })
@@ -836,21 +869,23 @@ impl Workspace<'_> {
     }
 
     /// Records an agent launched into `root` itself — the space's own
-    /// directory, on whatever branch it is on. No repository is needed: a
-    /// tenant is keyed by the directory it works in, which is every
-    /// directory.
-    fn record_tenant(&self, root: &Path, harness: &str) -> Result<Tenant> {
+    /// directory, on whatever branch it is on. No repository is needed:
+    /// an agent that is not isolated is keyed by the directory it works
+    /// in, which is every directory.
+    fn record_in_the_root(&self, root: &Path, harness: &str) -> Result<Agent> {
         task::locked(&self.0.home, root, |store| {
-            let tenant = Tenant::new(harness, root);
-            store.upsert_tenant(tenant.clone());
-            Ok(tenant)
+            let agent = Agent::in_the_root(harness);
+            store.upsert(agent.clone());
+            Ok(agent)
         })
     }
 
-    /// Ends every live tenant of `root` that no live tab was launched for,
-    /// and answers the identifiers it ended. A tenant a tab still echoes
+    /// Ends every live agent of `root` that no live tab was launched for,
+    /// and answers the identifiers it ended. An agent a tab still echoes
     /// stays live whatever else is true. Needs no repository, and writes
-    /// nothing where nothing was ever recorded.
+    /// nothing where nothing was ever recorded. Only the agents working
+    /// in the root: an isolated one is ended by its slot's own sweep,
+    /// which knows what its checkout still holds.
     #[tracing::instrument(name = "workspace.end_abandoned_tenants", skip_all, fields(root = %root.display()))]
     pub fn end_abandoned_tenants(&self, root: &Path, echoed: &[String]) -> Vec<String> {
         let root = canonical(root);
@@ -859,12 +894,12 @@ impl Workspace<'_> {
         }
         task::locked(&self.0.home, &root, |store| {
             let mut ended = Vec::new();
-            for tenant in &mut store.tenants {
-                if !tenant.is_live() || echoed.iter().any(|id| id == tenant.id.as_str()) {
+            for agent in store.agents.iter_mut().filter(|agent| !agent.is_isolated()) {
+                if !agent.is_live() || echoed.iter().any(|id| id == agent.id.as_str()) {
                     continue;
                 }
-                tenant.end();
-                ended.push(tenant.id.as_str().to_owned());
+                agent.end();
+                ended.push(agent.id.as_str().to_owned());
             }
             Ok(ended)
         })
@@ -896,21 +931,26 @@ impl Workspace<'_> {
         let target = target_of(&primary, &policy);
         let mut released = Vec::new();
         let recorded = task::locked(&self.0.home, &primary, |store| {
-            for task in &mut store.tasks {
-                // A delivery in flight owns the task until it answers.
+            for agent in store.agents.iter_mut() {
+                let id = agent.id.clone();
+                let label = agent.label.clone();
+                let Some(task) = agent.isolation_mut() else {
+                    continue;
+                };
+                // A delivery in flight owns the agent until it answers.
                 if !is_agents_turn(&task.state) {
                     continue;
                 }
                 let in_its_slot = landing::slot_path(&primary, task)
                     .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
-                let launched_for = echoed.iter().any(|id| id == task.id.as_str());
+                let launched_for = echoed.iter().any(|echo| echo == id.as_str());
                 if in_its_slot || launched_for {
                     continue;
                 }
                 let slot = checkout::release(&primary, task, &target);
                 released.push(ReleasedTask {
-                    id: task.id.as_str().to_owned(),
-                    label: task.label.clone(),
+                    id: id.as_str().to_owned(),
+                    label,
                     parked: slot == checkout::SlotState::Parked,
                 });
             }
@@ -960,6 +1000,7 @@ impl Workspace<'_> {
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
         task::locked(&self.0.home, &primary, |store| {
             let task = task_mut(store, task_id)
+                .and_then(Agent::isolation_mut)
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
             task.state = TaskState::Integrated;
             Ok(())
@@ -974,19 +1015,23 @@ impl Workspace<'_> {
             .repository_context(cwd)
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
         task::locked(&self.0.home, &primary, |store| {
-            let task = task_mut(store, task_id)
+            let agent = task_mut(store, task_id)
+                .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+            let agent_id = agent.id.clone();
+            let task = agent
+                .isolation()
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?
                 .clone();
             checkout::discard(&primary, &task).map_err(UzeError::Discard)?;
             store
-                .tasks
+                .agents
                 .retain(|recorded| recorded.id.as_str() != task_id);
             // The one place a task stops existing, and therefore the one
             // place its conversations stop being reachable. Finishing is
             // deliberately not such a place: an integrated task whose agent
             // kept working is revived by reconciliation, and it would come
             // back without the conversation it never left.
-            conversation::forget(&self.0.home, &primary, &task.id);
+            conversation::forget(&self.0.home, &primary, &agent_id);
             Ok(())
         })
     }
@@ -1020,7 +1065,7 @@ fn is_agents_turn(state: &TaskState) -> bool {
 /// is to be asked about it, where completion opens a request, and the
 /// conflict its agent is told about when following the target produced one.
 struct Read {
-    ask_the_remote: Option<Task>,
+    ask_the_remote: Option<(AgentId, Isolation)>,
     notice: Option<AgentNotice>,
 }
 
@@ -1037,9 +1082,25 @@ struct EvaluationPass<'a> {
 impl EvaluationPass<'_> {
     /// Reads `task` from its checkout, or `None` when it was not read:
     /// nobody's turn, or settled without needing to be.
-    fn evaluate(&self, task: &mut Task) -> Option<Read> {
+    fn evaluate(&self, agent: &mut Agent) -> Option<Read> {
         let primary = self.primary;
-        let slot = landing::slot_path(primary, task);
+        let id = agent.id.clone();
+        // The branch a task is on is a Git fact, and the recorded branch
+        // is a cache of it. Re-read before anything is asked *about* the
+        // branch: an operator renaming it by hand otherwise leaves every
+        // later question pointed at a ref that no longer exists, and
+        // `commits_ahead` answers such a question with `0` — which reads
+        // as "nothing to deliver" rather than as "wrong branch". A
+        // checkout mid-rebase is on no branch and is left alone. Taken
+        // before the isolation is borrowed, since a rename is the agent's
+        // label as much as its branch.
+        let slot = landing::slot_path(primary, agent.isolation()?);
+        if let Some(actual) = slot.as_deref().and_then(checkout::current_branch)
+            && actual != agent.isolation()?.branch
+        {
+            agent.take_name(actual);
+        }
+        let task = agent.isolation_mut()?;
         // A task that ended is still looked at while it owns its slot: the
         // agent that delivered usually keeps working in the same checkout,
         // and skipping every non-live task froze that row on `delivered`
@@ -1053,7 +1114,7 @@ impl EvaluationPass<'_> {
         // agent that is there makes it a lie, whichever way it got there —
         // a release that raced the tab opening, a resume.
         let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
-            && self.owners.contains(&task.id);
+            && self.owners.contains(&id);
         let parked_with_agent = task.state == TaskState::Parked
             && slot
                 .as_ref()
@@ -1079,20 +1140,7 @@ impl EvaluationPass<'_> {
         if paused && landing::settle_delivered(primary, task) {
             return None;
         }
-        // The branch a task is on is a Git fact, and `task.branch` is a
-        // cache of it. Re-read before anything is asked *about* the branch:
-        // an operator renaming it by hand otherwise leaves every later
-        // question pointed at a ref that no longer exists, and
-        // `commits_ahead` answers such a question with `0` — which reads as
-        // "nothing to deliver" rather than as "wrong branch". A checkout
-        // mid-rebase is on no branch and is left alone.
-        if let Some(actual) = slot.as_deref().and_then(checkout::current_branch)
-            && actual != task.branch
-        {
-            task.take_name(actual);
-        }
         self.read_readiness(task, ended_owner);
-        self.name_from_the_work(task);
         // The other half of what a delivery would do, learned the same way
         // readiness is: an agent told to push and open the request itself
         // is the one case UZE's own records can never cover, and until this
@@ -1105,7 +1153,8 @@ impl EvaluationPass<'_> {
         // ls-remote` per task, and inside the lock one slow remote made
         // every delivery and every placement in the project wait behind the
         // whole pass.
-        let ask_the_remote = (self.completion == CompletionBehavior::Pr).then(|| task.clone());
+        let ask_the_remote =
+            (self.completion == CompletionBehavior::Pr).then(|| (id.clone(), task.clone()));
         // Following a moved target costs a clean task nothing and a dirty
         // one its work in progress, which `refresh` refuses. Whatever the
         // completion behaviour: a task that follows the target as it moves
@@ -1119,20 +1168,23 @@ impl EvaluationPass<'_> {
             && let Some(slot) = slot
         {
             Some(AgentNotice {
-                task: task.id.as_str().to_owned(),
+                task: id.as_str().to_owned(),
                 checkout: slot,
                 message: landing::conflict_message(task, &files, target_moved),
             })
         } else {
             None
         };
+        // The automatic half of naming is the agent's label as much as its
+        // branch, so it runs with the isolation's borrow released.
+        self.name_from_the_work(agent);
         Some(Read {
             ask_the_remote,
             notice,
         })
     }
 
-    fn read_readiness(&self, task: &mut Task, ended_owner: bool) {
+    fn read_readiness(&self, task: &mut Isolation, ended_owner: bool) {
         let primary = self.primary;
         match landing::readiness(primary, task) {
             // Nothing new since it ended leaves the ending standing: the
@@ -1177,16 +1229,19 @@ impl EvaluationPass<'_> {
     /// Nothing about this reaches a harness. It is a Git fact read on a
     /// pass that already runs, which is why it works on every harness and
     /// on the next one.
-    fn name_from_the_work(&self, task: &mut Task) {
+    fn name_from_the_work(&self, agent: &mut Agent) {
         let primary = self.primary;
+        let Some(isolation) = agent.isolation() else {
+            return;
+        };
         if self.vocabulary.names_work()
-            && task.state == TaskState::Ready
-            && !task.is_named()
-            && let Some(derived) = landing::derived_name(primary, task, self.vocabulary)
+            && isolation.state == TaskState::Ready
+            && !agent.is_named()
+            && let Some(derived) = landing::derived_name(primary, isolation, self.vocabulary)
             && !checkout::branch_exists(primary, &derived)
-            && checkout::rename_branch(primary, &task.branch.clone(), &derived).is_ok()
+            && checkout::rename_branch(primary, &isolation.branch.clone(), &derived).is_ok()
         {
-            task.take_name(derived);
+            agent.take_name(derived);
         }
     }
 }
@@ -1201,15 +1256,15 @@ fn target_of(primary: &Path, policy: &WorktreePolicy) -> String {
         .unwrap_or_else(|| "HEAD".to_owned())
 }
 
-fn task_mut<'a>(store: &'a mut TaskStore, id: &str) -> Option<&'a mut Task> {
-    store.tasks.iter_mut().find(|task| task.id.as_str() == id)
+fn task_mut<'a>(store: &'a mut TaskStore, id: &str) -> Option<&'a mut Agent> {
+    store.agent_mut(id)
 }
 
 fn task_views(primary: &Path, store: &TaskStore, completion: CompletionBehavior) -> Vec<TaskView> {
     store
-        .tasks
+        .agents
         .iter()
-        .map(|task| TaskView::from_task(primary, task, completion))
+        .filter_map(|agent| TaskView::from_agent(primary, agent, completion))
         .collect()
 }
 
@@ -1239,7 +1294,12 @@ enum Recorded {
 /// Takes the record rather than the document: this is the unbounded half
 /// — the project's gate, then a fetch, a push or a merge — and it runs
 /// with the tasks document unlocked, under Git's own write lock alone.
-fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> DeliveryOutcome {
+fn deliver_one(
+    primary: &Path,
+    policy: &WorktreePolicy,
+    id: &AgentId,
+    task: &mut Isolation,
+) -> DeliveryOutcome {
     let completion = policy.completion;
     let gate = policy.gate.clone();
     let policy = landing::Policy {
@@ -1256,7 +1316,7 @@ fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> Deli
             branch: _,
             instruction,
         }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
-            task: task.id.as_str().to_owned(),
+            task: id.as_str().to_owned(),
             checkout: landing::slot_path(primary, task).unwrap_or_default(),
             message: instruction,
         }),
@@ -1264,13 +1324,13 @@ fn deliver_one(primary: &Path, policy: &WorktreePolicy, task: &mut Task) -> Deli
             files,
             target_moved,
         }) => DeliveryOutcome::ReturnedToAgent(AgentNotice {
-            task: task.id.as_str().to_owned(),
+            task: id.as_str().to_owned(),
             checkout: landing::slot_path(primary, task).unwrap_or_default(),
             message: landing::conflict_message(task, &files, target_moved),
         }),
         Err(DeliveryFailure::GateFailed { command, output }) => {
             DeliveryOutcome::ReturnedToAgent(AgentNotice {
-                task: task.id.as_str().to_owned(),
+                task: id.as_str().to_owned(),
                 checkout: landing::slot_path(primary, task).unwrap_or_default(),
                 message: landing::gate_failure_message(task, &command, &output),
             })
@@ -1412,7 +1472,10 @@ pub struct TaskView {
 }
 
 impl TaskView {
-    fn from_task(primary: &Path, task: &Task, completion: CompletionBehavior) -> Self {
+    /// `None` for an agent working in the project's root: every field
+    /// here is about a branch of its own, and it has none.
+    fn from_agent(primary: &Path, agent: &Agent, completion: CompletionBehavior) -> Option<Self> {
+        let task = agent.isolation()?;
         // What the remote holds, not what UZE remembers having sent: a
         // push the agent made is a push, and a view built from UZE's own
         // record of its own deliveries goes on offering to send commits
@@ -1428,9 +1491,9 @@ impl TaskView {
         let unsynced = published
             .as_ref()
             .map(|published| checkout::commits_ahead(primary, &published.tip, &task.branch));
-        Self {
-            id: task.id.as_str().to_owned(),
-            label: task.label.clone(),
+        Some(Self {
+            id: agent.id.as_str().to_owned(),
+            label: agent.label.clone(),
             branch: task.branch.clone(),
             target: task.target.clone(),
             checkout: landing::slot_path(primary, task),
@@ -1440,8 +1503,8 @@ impl TaskView {
             published_as: published.map(|published| published.branch),
             published_request: task.published_request,
             unsynced,
-            created_at_unix: task.created_at_unix,
-        }
+            created_at_unix: agent.created_at_unix,
+        })
     }
 }
 
@@ -1453,7 +1516,7 @@ impl TaskView {
 /// anything is still waiting to be handed over. Only where the completion
 /// publishes — `published` is `None` everywhere else, and the record's own
 /// state stands.
-fn drawn_state(primary: &Path, task: &Task, unsynced: Option<usize>) -> TaskStateView {
+fn drawn_state(primary: &Path, task: &Isolation, unsynced: Option<usize>) -> TaskStateView {
     // Parked says only that nobody is there. A rebase paused in the
     // checkout is what the operator will find, and "uncommitted changes"
     // sent them looking for edits that were really conflict markers.
@@ -2014,14 +2077,14 @@ mod placement_tests {
         assert_eq!(live_tenants(&app, &root).len(), 2);
     }
 
-    /// The live tenants the store records for `root`, read the way every
-    /// other reader of the store reads them.
-    fn live_tenants(app: &UzeApplication, root: &Path) -> Vec<Tenant> {
+    /// The live agents in the root the store records for `root`, read
+    /// the way every other reader of the store reads them.
+    fn live_tenants(app: &UzeApplication, root: &Path) -> Vec<Agent> {
         task::load(&app.home, &canonical(root))
             .unwrap()
-            .tenants
+            .agents
             .into_iter()
-            .filter(Tenant::is_live)
+            .filter(|agent| !agent.is_isolated() && agent.is_live())
             .collect()
     }
 
@@ -2090,7 +2153,11 @@ mod placement_tests {
             .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
+        store
+            .get_mut(slot(&first))
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = uze_core::task::TaskState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
         let second = app
@@ -2121,7 +2188,11 @@ mod placement_tests {
         let before = slot(&first).clone();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Closed;
+        store
+            .get_mut(&before)
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = uze_core::task::TaskState::Closed;
         task::save(&app.home, &primary, &store).unwrap();
         let second = app
             .workspace()
@@ -2129,7 +2200,11 @@ mod placement_tests {
             .unwrap();
         assert_eq!(second.cwd, first.cwd, "the freed slot is reused");
         let mut store = task::load(&app.home, &primary).unwrap();
-        store.get_mut(&before).unwrap().state = uze_core::task::TaskState::Running;
+        store
+            .get_mut(&before)
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = uze_core::task::TaskState::Running;
         task::save(&app.home, &primary, &store).unwrap();
 
         let evaluation = app
@@ -2202,7 +2277,11 @@ mod placement_tests {
     fn recorded(app: &UzeApplication, root: &Path, task: &AgentId, state: TaskState) {
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store.get_mut(task).unwrap().state = state;
+        store
+            .get_mut(task)
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = state;
         task::save(&app.home, &primary, &store).unwrap();
     }
 
@@ -2345,8 +2424,9 @@ mod placement_tests {
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         let recorded = store.get_mut(&id).unwrap();
-        recorded.published_request = Some(51);
-        recorded.request_branch = Some(recorded.branch.clone());
+        let isolation = recorded.isolation_mut().expect("the agent is isolated");
+        isolation.published_request = Some(51);
+        isolation.request_branch = Some(isolation.branch.clone());
         task::save(&app.home, &primary, &store).unwrap();
         let occupied = std::slice::from_ref(&placed.cwd);
         let view = |evaluation: Evaluation| {
@@ -2396,7 +2476,11 @@ mod placement_tests {
             .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
+        store
+            .get_mut(slot(&first))
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = uze_core::task::TaskState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
         let still_inside = vec![first.cwd.clone()];
@@ -3263,7 +3347,7 @@ mod task_service_tests {
         let spawned = std::time::Instant::now();
         let claimed = loop {
             let store = task::load(&home, &root).expect("the document is readable");
-            if store.tasks[0].state == TaskState::Integrating {
+            if store.agents[0].isolation().unwrap().state == TaskState::Integrating {
                 break std::time::Instant::now();
             }
             assert!(
@@ -3306,7 +3390,10 @@ mod task_service_tests {
         agent_commits(&repository, &slot, "work.rs", "");
         app.workspace().evaluate_tasks(&root, &[]);
         task::locked(&app.home, &root, |store| {
-            task_mut(store, &id).expect("the task is recorded").state = TaskState::Integrating;
+            task_mut(store, &id)
+                .and_then(Agent::isolation_mut)
+                .expect("the task is recorded")
+                .state = TaskState::Integrating;
             Ok(())
         })
         .unwrap();

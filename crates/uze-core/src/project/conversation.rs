@@ -45,7 +45,7 @@ use crate::{
     harness_runtime::project_id_for,
     home::UzeHome,
     persistence::write_atomic,
-    task::{self, AgentId, AgentKind, now_unix},
+    task::{self, AgentId, now_unix},
 };
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -260,7 +260,10 @@ pub fn forget(home: &UzeHome, project_root: &Path, agent: &AgentId) {
 pub struct Owner {
     pub project_root: PathBuf,
     pub agent: AgentId,
-    pub kind: AgentKind,
+    /// Whether the agent works in a checkout of its own. What a caller
+    /// asks before offering anything that only means something against a
+    /// branch — naming the work, delivering it.
+    pub isolated: bool,
 }
 
 /// What a process says about itself: the identifier its launch carried,
@@ -299,8 +302,8 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
         let own = own.canonicalize().unwrap_or(own);
         cwd.starts_with(&own).then(|| Owner {
             project_root: root.to_path_buf(),
-            agent: record.id().clone(),
-            kind: record.kind(),
+            agent: record.id.clone(),
+            isolated: record.is_isolated(),
         })
     })
 }
@@ -308,7 +311,7 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Base, Task, TaskStore};
+    use crate::task::{Agent, Base, TaskStore};
 
     fn home(label: &str) -> UzeHome {
         UzeHome::at(uze_testkit::temp::scratch(label))
@@ -322,10 +325,17 @@ mod tests {
         root
     }
 
-    fn task_named(checkout: &str) -> Task {
-        let mut task = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
-        task.checkout = Some(crate::checkout::CheckoutId::adopted(checkout));
-        task
+    fn task_named(checkout: &str) -> Agent {
+        let mut agent = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            String::new(),
+            "main".into(),
+        );
+        agent.isolation_mut().unwrap().checkout =
+            Some(crate::checkout::CheckoutId::adopted(checkout));
+        agent
     }
 
     #[test]
@@ -507,7 +517,7 @@ mod tests {
         )
         .expect("the claim is backed by its record");
         assert_eq!(owner.agent, current_id);
-        assert_eq!(owner.kind, AgentKind::Task);
+        assert!(owner.isolated);
         assert_eq!(owner.project_root, primary.canonicalize().unwrap());
         // Two records over one slot are told apart by the identifier alone.
         let previous_owner = owner_of(
@@ -529,10 +539,10 @@ mod tests {
             .unwrap();
         let nested = root.join("src");
         fs::create_dir_all(&nested).unwrap();
-        let tenant = crate::tenant::Tenant::new("claude-code", &root);
+        let tenant = Agent::in_the_root("claude-code");
         let id = tenant.id.clone();
         let mut store = TaskStore::default();
-        store.upsert_tenant(tenant);
+        store.upsert(tenant);
         task::save(&home, &root, &store).unwrap();
 
         let owner = owner_of(
@@ -544,7 +554,7 @@ mod tests {
         )
         .expect("a tenant's claim is backed by its record");
         assert_eq!(owner.agent, id);
-        assert_eq!(owner.kind, AgentKind::Tenant);
+        assert!(!owner.isolated);
         assert_eq!(owner.project_root, root);
     }
 

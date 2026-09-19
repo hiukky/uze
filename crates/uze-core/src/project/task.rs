@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result, UzeError, checkout::CheckoutId, digest, harness_runtime::project_id_for, home::UzeHome,
-    persistence::write_atomic, tenant::Tenant, worktree::BRANCH_PREFIX,
+    persistence::write_atomic, worktree::BRANCH_PREFIX,
 };
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -137,9 +137,33 @@ pub enum TaskState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Task {
+pub struct Agent {
     pub id: AgentId,
+    /// The harness this agent runs, recorded at launch. A fact rather
+    /// than an inference: the process a pane is running answers "what is
+    /// alive there now", which is a different question and stops being
+    /// answerable the moment the harness exits.
+    pub harness: String,
+    /// The name a person reads for this agent. Derived from the branch
+    /// once the work is named (`worktree::label_of`), and the identifier
+    /// until then.
     pub label: String,
+    pub created_at_unix: u64,
+    /// When no live pane carried this agent any more. `None` while live.
+    pub ended_at_unix: Option<u64>,
+    /// The checkout of its own, once it has one. `None` is an agent
+    /// working in the project's root, on whatever branch the operator is
+    /// on: it has no branch of its own to deliver, nothing to be ready,
+    /// and nothing to preserve — which is why every one of those facts
+    /// lives inside this and not beside it.
+    pub isolation: Option<Isolation>,
+}
+
+/// What an isolated agent has that an agent in the root does not: a
+/// branch of its own, a checkout to work in, and the whole vocabulary of
+/// readiness and delivery that only means anything against them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Isolation {
     pub base: Base,
     /// The base's tip when the branch was last rebased onto it — what a
     /// restack would use as the old base, so the parent's commits are never
@@ -151,7 +175,7 @@ pub struct Task {
     pub state: TaskState,
     /// The readable name UZE published the branch under, when that is not
     /// the branch's own name. The one half of publication that Git cannot
-    /// be asked for: an unnamed task's branch leaves under a name derived
+    /// be asked for: an unnamed agent's branch leaves under a name derived
     /// for it, and nothing on the machine ties the two together but this.
     /// Everything else about publication — whether the branch is on the
     /// remote at all, and what the remote holds — is read from the
@@ -163,7 +187,7 @@ pub struct Task {
     /// readiness fact, never announced by the agent that opened it.
     pub published_request: Option<u32>,
     /// The branch `published_request` was found for. A number answers for
-    /// one branch, and the task outlives it: the agent that delivered keeps
+    /// one branch, and the agent outlives it: the agent that delivered keeps
     /// working, often on a new branch with a request of its own.
     pub request_branch: Option<String>,
     /// When the remote was last asked whether a request exists for this
@@ -171,10 +195,48 @@ pub struct Task {
     /// evaluation: it is the one publication fact that costs a network
     /// round trip, and it stops being asked the moment it is answered.
     pub request_asked_at_unix: Option<u64>,
-    pub created_at_unix: u64,
 }
 
-impl Task {
+impl Agent {
+    /// The agent's own isolation, when it has one.
+    pub fn isolation(&self) -> Option<&Isolation> {
+        self.isolation.as_ref()
+    }
+
+    pub fn isolation_mut(&mut self) -> Option<&mut Isolation> {
+        self.isolation.as_mut()
+    }
+
+    pub fn is_isolated(&self) -> bool {
+        self.isolation.is_some()
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.ended_at_unix.is_none()
+    }
+
+    /// Records that the agent's last pane is gone. Idempotent: the first
+    /// ending stands.
+    pub fn end(&mut self) {
+        if self.ended_at_unix.is_none() {
+            self.ended_at_unix = Some(now_unix());
+        }
+    }
+
+    /// The directory this agent may stand in, under the project root the
+    /// store is keyed by: its own slot, or the project's root. `None` for
+    /// an isolated agent whose checkout is gone — nowhere is its own any
+    /// more.
+    pub fn own_directory(&self, project_root: &Path) -> Option<PathBuf> {
+        match &self.isolation {
+            Some(isolation) => isolation
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.directory(project_root)),
+            None => Some(project_root.to_path_buf()),
+        }
+    }
+
     /// Whether this work carries a name somebody chose, rather than one
     /// UZE is still holding for it.
     ///
@@ -187,20 +249,79 @@ impl Task {
     /// One predicate for the whole codebase: a name anybody chose — the
     /// agent, the operator, an earlier automatic step — is final, and every
     /// later mechanism asks this same question rather than inventing its
-    /// own notion of "unnamed".
+    /// own notion of "unnamed". An agent with no branch has nothing to
+    /// name, and answers `false` to a question nobody should be asking it.
     pub fn is_named(&self) -> bool {
-        !self.branch.starts_with(BRANCH_PREFIX)
+        self.isolation
+            .as_ref()
+            .is_some_and(|isolation| !isolation.branch.starts_with(BRANCH_PREFIX))
     }
 
-    /// Takes `branch` as this task's name, deriving the visible label from
-    /// it. The caller owns the Git rename and the validation; this is the
-    /// record of it.
+    /// Takes `branch` as this agent's name, deriving the visible label
+    /// from it. The caller owns the Git rename and the validation; this is
+    /// the record of it, and only an isolated agent has a branch to be
+    /// named by — naming any other is refused before this is reached.
     pub fn take_name(&mut self, branch: String) {
+        debug_assert!(
+            self.is_isolated(),
+            "an agent with no branch has no name to take"
+        );
         self.label = crate::worktree::label_of(&branch);
-        self.branch = branch;
+        if let Some(isolation) = &mut self.isolation {
+            isolation.branch = branch;
+        }
     }
 
-    /// Drops the request this task had, so the next evaluation asks the
+    /// An agent launched into the project's own root: no branch, no
+    /// checkout, nothing to deliver.
+    pub fn in_the_root(harness: &str) -> Self {
+        let id = AgentId::generate();
+        Self {
+            label: id.as_str().to_owned(),
+            id,
+            harness: harness.to_owned(),
+            created_at_unix: now_unix(),
+            ended_at_unix: None,
+            isolation: None,
+        }
+    }
+
+    /// An agent launched straight into a checkout of its own, as a
+    /// project that declares isolation by default does it.
+    pub fn isolated(
+        harness: &str,
+        prompt: Option<&str>,
+        base: Base,
+        base_commit: String,
+        target: String,
+    ) -> Self {
+        let mut agent = Self::in_the_root(harness);
+        if let Some(prompt) = prompt {
+            agent.label = label_from_prompt(prompt, &agent.id);
+        }
+        agent.isolation = Some(Isolation::cut(&agent.id, base, base_commit, target));
+        agent
+    }
+}
+
+impl Isolation {
+    /// A branch of this agent's own, cut from `base_commit`.
+    pub fn cut(id: &AgentId, base: Base, base_commit: String, target: String) -> Self {
+        Self {
+            base,
+            base_commit,
+            target,
+            branch: generated_branch(id),
+            checkout: None,
+            state: TaskState::Running,
+            published_as: None,
+            published_request: None,
+            request_branch: None,
+            request_asked_at_unix: None,
+        }
+    }
+
+    /// Drops the request this agent had, so the next evaluation asks the
     /// remote afresh.
     pub fn forget_request(&mut self) {
         self.published_request = None;
@@ -213,29 +334,6 @@ impl Task {
     pub fn forget_request_unless_for(&mut self, branch: Option<&str>) {
         if self.published_request.is_some() && self.request_branch.as_deref() != branch {
             self.forget_request();
-        }
-    }
-
-    pub fn new(prompt: Option<&str>, base: Base, base_commit: String, target: String) -> Self {
-        let id = AgentId::generate();
-        let label = prompt
-            .map(|prompt| label_from_prompt(prompt, &id))
-            .unwrap_or_else(|| id.as_str().to_owned());
-        let branch = generated_branch(&id);
-        Self {
-            id,
-            label,
-            base,
-            base_commit,
-            target,
-            branch,
-            checkout: None,
-            state: TaskState::Running,
-            published_as: None,
-            published_request: None,
-            request_branch: None,
-            request_asked_at_unix: None,
-            created_at_unix: now_unix(),
         }
     }
 }
@@ -288,129 +386,81 @@ pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskStore {
     pub schema_version: u32,
-    pub tasks: Vec<Task>,
-    pub tenants: Vec<Tenant>,
+    /// Every agent this project's launches recorded, isolated or not.
+    /// One collection, because one identifier names one agent: a reader
+    /// handed an id used to have to ask which of two lists it came from,
+    /// and isolating an agent used to mean moving it between them while
+    /// a sweep could see it twice.
+    pub agents: Vec<Agent>,
 }
 
 impl Default for TaskStore {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
-            tasks: Vec::new(),
-            tenants: Vec::new(),
-        }
-    }
-}
-
-/// One record of the store, whichever kind: what a reader that was handed
-/// an identifier consults. Every variant knows the one directory the agent
-/// it records is allowed to stand in, so a reader verifying a claim matches
-/// on nothing — a later kind of record adds a variant and a directory here,
-/// never a branch in a reader.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AgentRecord<'a> {
-    Task(&'a Task),
-    Tenant(&'a Tenant),
-}
-
-/// Which kind of record an identifier named, for a reader that must treat
-/// the two differently and has no use for the record itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AgentKind {
-    Task,
-    Tenant,
-}
-
-impl AgentRecord<'_> {
-    pub fn kind(&self) -> AgentKind {
-        match self {
-            Self::Task(_) => AgentKind::Task,
-            Self::Tenant(_) => AgentKind::Tenant,
-        }
-    }
-
-    pub fn id(&self) -> &AgentId {
-        match self {
-            Self::Task(task) => &task.id,
-            Self::Tenant(tenant) => &tenant.id,
-        }
-    }
-
-    /// The directory the agent may stand in, under the project root the
-    /// store is keyed by: a task's own slot, a tenant's own root. `None`
-    /// for a task whose checkout is gone: nowhere is its own any more.
-    pub fn own_directory(&self, project_root: &Path) -> Option<PathBuf> {
-        match self {
-            Self::Task(task) => task
-                .checkout
-                .as_ref()
-                .map(|checkout| checkout.directory(project_root)),
-            Self::Tenant(tenant) => Some(tenant.root.clone()),
+            agents: Vec::new(),
         }
     }
 }
 
 impl TaskStore {
-    pub fn get(&self, id: &AgentId) -> Option<&Task> {
-        self.tasks.iter().find(|task| &task.id == id)
+    pub fn get(&self, id: &AgentId) -> Option<&Agent> {
+        self.agents.iter().find(|agent| &agent.id == id)
     }
 
-    /// The task standing in `checkout` now: the newest to have been given
-    /// it. A slot outlives the tasks that ran in it and each went on naming
-    /// it; anything older is history, and answering for it would hand the
-    /// current agent's work to a task long gone.
-    pub fn slot_owner(&self, checkout: &CheckoutId) -> Option<&Task> {
-        self.tasks
+    pub fn get_mut(&mut self, id: &AgentId) -> Option<&mut Agent> {
+        self.agents.iter_mut().find(|agent| &agent.id == id)
+    }
+
+    /// The agent an identifier names.
+    pub fn agent(&self, id: &str) -> Option<&Agent> {
+        self.agents.iter().find(|agent| agent.id.as_str() == id)
+    }
+
+    pub fn agent_mut(&mut self, id: &str) -> Option<&mut Agent> {
+        self.agents.iter_mut().find(|agent| agent.id.as_str() == id)
+    }
+
+    /// Every isolated agent, in the order they were recorded.
+    pub fn isolated(&self) -> impl Iterator<Item = &Agent> {
+        self.agents.iter().filter(|agent| agent.is_isolated())
+    }
+
+    pub fn isolated_mut(&mut self) -> impl Iterator<Item = &mut Agent> {
+        self.agents.iter_mut().filter(|agent| agent.is_isolated())
+    }
+
+    /// The agent standing in `checkout` now: the newest to have been given
+    /// it. A slot outlives the agents that ran in it and each went on
+    /// naming it; anything older is history, and answering for it would
+    /// hand the current agent's work to one long gone.
+    pub fn slot_owner(&self, checkout: &CheckoutId) -> Option<&Agent> {
+        self.agents
             .iter()
-            .filter(|task| task.checkout.as_ref() == Some(checkout))
-            .max_by_key(|task| task.created_at_unix)
+            .filter(|agent| {
+                agent
+                    .isolation
+                    .as_ref()
+                    .is_some_and(|isolation| isolation.checkout.as_ref() == Some(checkout))
+            })
+            .max_by_key(|agent| agent.created_at_unix)
     }
 
-    /// Every task that is the [`slot_owner`](Self::slot_owner) of its own
+    /// Every agent that is the [`slot_owner`](Self::slot_owner) of its own
     /// checkout.
     pub fn slot_owners(&self) -> BTreeSet<AgentId> {
-        self.tasks
+        self.agents
             .iter()
-            .filter_map(|task| self.slot_owner(task.checkout.as_ref()?))
+            .filter_map(|agent| self.slot_owner(agent.isolation.as_ref()?.checkout.as_ref()?))
             .map(|owner| owner.id.clone())
             .collect()
     }
 
-    /// The record an identifier names, of whichever kind.
-    pub fn agent(&self, id: &str) -> Option<AgentRecord<'_>> {
-        self.tasks
-            .iter()
-            .find(|task| task.id.as_str() == id)
-            .map(AgentRecord::Task)
-            .or_else(|| {
-                self.tenants
-                    .iter()
-                    .find(|tenant| tenant.id.as_str() == id)
-                    .map(AgentRecord::Tenant)
-            })
-    }
-
-    pub fn tenant_mut(&mut self, id: &AgentId) -> Option<&mut Tenant> {
-        self.tenants.iter_mut().find(|tenant| &tenant.id == id)
-    }
-
-    /// Adds or replaces a tenant by identifier.
-    pub fn upsert_tenant(&mut self, tenant: Tenant) {
-        match self.tenant_mut(&tenant.id) {
-            Some(existing) => *existing = tenant,
-            None => self.tenants.push(tenant),
-        }
-    }
-
-    pub fn get_mut(&mut self, id: &AgentId) -> Option<&mut Task> {
-        self.tasks.iter_mut().find(|task| &task.id == id)
-    }
-
     /// Adds or replaces by identifier.
-    pub fn upsert(&mut self, task: Task) {
-        match self.get_mut(&task.id) {
-            Some(existing) => *existing = task,
-            None => self.tasks.push(task),
+    pub fn upsert(&mut self, agent: Agent) {
+        match self.get_mut(&agent.id) {
+            Some(existing) => *existing = agent,
+            None => self.agents.push(agent),
         }
     }
 }
@@ -708,13 +758,19 @@ mod tests {
         UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
-    fn task(prompt: &str) -> Task {
-        Task::new(
+    fn task(prompt: &str) -> Agent {
+        Agent::isolated(
+            "claude",
             Some(prompt),
             Base::Ref("main".into()),
             "0123abcd".into(),
             "main".into(),
         )
+    }
+
+    /// The branch half of an agent the test built isolated.
+    fn isolation(agent: &Agent) -> &Isolation {
+        agent.isolation().expect("the agent was built isolated")
     }
 
     #[test]
@@ -736,8 +792,8 @@ mod tests {
     fn the_label_comes_from_the_prompt_and_the_branch_from_the_identifier() {
         let task = task("  \nFix the auth redirect loop!\nMore details below.");
         assert_eq!(task.label, "fix-the-auth-redirect-loop");
-        assert_eq!(task.branch, format!("agent/{}", task.id));
-        assert!(!task.branch.contains(&task.label));
+        assert_eq!(isolation(&task).branch, format!("agent/{}", task.id));
+        assert!(!isolation(&task).branch.contains(&task.label));
     }
 
     #[test]
@@ -757,7 +813,13 @@ mod tests {
         let id = AgentId::generate();
         assert_eq!(label_from_prompt("   \n\n", &id), id.as_str());
         assert_eq!(label_from_prompt("!!! ???", &id), id.as_str());
-        let unprompted = Task::new(None, Base::Ref("main".into()), "x".into(), "main".into());
+        let unprompted = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            "x".into(),
+            "main".into(),
+        );
         assert_eq!(unprompted.label, unprompted.id.as_str());
     }
 
@@ -779,8 +841,8 @@ mod tests {
         let reloaded = load(&home, &root).unwrap();
         let task = reloaded.get(&original.id).unwrap();
         assert_eq!(task.label, "second-name");
-        assert_eq!(task.branch, original.branch);
-        assert_eq!(reloaded.tasks.len(), 1);
+        assert_eq!(isolation(&task).branch, isolation(&original).branch);
+        assert_eq!(reloaded.agents.len(), 1);
     }
 
     #[test]
@@ -790,8 +852,8 @@ mod tests {
         let checkout_dir = root.join(".worktrees").join("abc123");
         fs::create_dir_all(&checkout_dir).unwrap();
         let mut task = task("work that outlives its directory");
-        task.checkout = Some(CheckoutId::generate());
-        task.state = TaskState::Ready;
+        task.isolation_mut().unwrap().checkout = Some(CheckoutId::generate());
+        task.isolation_mut().unwrap().state = TaskState::Ready;
         let mut store = TaskStore::default();
         store.upsert(task.clone());
         save(&home, &root, &store).unwrap();
@@ -866,7 +928,7 @@ mod tests {
 
         let (recorded, recovery) = locked_reporting(&home, &root, |store| {
             store.upsert(task("after the recovery"));
-            Ok(store.tasks.len())
+            Ok(store.agents.len())
         })
         .expect("an unreadable document is recovered from, not refused");
         assert_eq!(
@@ -885,7 +947,7 @@ mod tests {
             "and the reason travels with them"
         );
         assert_eq!(
-            load(&home, &root).unwrap().tasks.len(),
+            load(&home, &root).unwrap().agents.len(),
             1,
             "what the mutation wrote is what the next pass reads"
         );
@@ -956,7 +1018,8 @@ mod tests {
                     // Long enough that an unlocked pass would certainly
                     // have read this document before it is written back.
                     std::thread::sleep(Duration::from_millis(80));
-                    store.get_mut(&id).unwrap().state = TaskState::Integrated;
+                    store.get_mut(&id).unwrap().isolation_mut().unwrap().state =
+                        TaskState::Integrated;
                     Ok(())
                 })
                 .unwrap();
@@ -967,7 +1030,7 @@ mod tests {
             std::thread::spawn(move || {
                 locked(&home, &root, |store| {
                     std::thread::sleep(Duration::from_millis(80));
-                    store.get_mut(&id).unwrap().state = TaskState::Ready;
+                    store.get_mut(&id).unwrap().isolation_mut().unwrap().state = TaskState::Ready;
                     Ok(())
                 })
                 .unwrap();
@@ -977,8 +1040,14 @@ mod tests {
         evaluator.join().unwrap();
 
         let store = load(&home, &root).unwrap();
-        assert_eq!(store.get(&first.id).unwrap().state, TaskState::Integrated);
-        assert_eq!(store.get(&second.id).unwrap().state, TaskState::Ready);
+        assert_eq!(
+            store.get(&first.id).unwrap().isolation().unwrap().state,
+            TaskState::Integrated
+        );
+        assert_eq!(
+            store.get(&second.id).unwrap().isolation().unwrap().state,
+            TaskState::Ready
+        );
     }
 
     /// A mutation that gives up writes nothing, so a caller can abandon a
@@ -995,13 +1064,24 @@ mod tests {
         .unwrap();
 
         let refused = locked(&home, &root, |store| {
-            store.get_mut(&seed.id).unwrap().state = TaskState::Integrated;
+            store
+                .get_mut(&seed.id)
+                .unwrap()
+                .isolation_mut()
+                .unwrap()
+                .state = TaskState::Integrated;
             Err::<(), _>(UzeError::UnknownTask("gave up".into()))
         });
 
         assert!(refused.is_err());
         assert_eq!(
-            load(&home, &root).unwrap().get(&seed.id).unwrap().state,
+            load(&home, &root)
+                .unwrap()
+                .get(&seed.id)
+                .unwrap()
+                .isolation()
+                .unwrap()
+                .state,
             TaskState::Running
         );
     }
@@ -1060,8 +1140,8 @@ mod tests {
         writer.wait().unwrap();
 
         let store = load(&home, &root).expect("the document is whole or previous, never torn");
-        assert_eq!(store.tasks.len(), 1);
-        let round: u64 = store.tasks[0]
+        assert_eq!(store.agents.len(), 1);
+        let round: u64 = store.agents[0]
             .label
             .parse()
             .expect("a label the writer produced");
@@ -1073,8 +1153,9 @@ mod tests {
 mod naming_tests {
     use super::*;
 
-    fn task() -> Task {
-        Task::new(
+    fn task() -> Agent {
+        Agent::isolated(
+            "claude",
             None,
             Base::Ref("main".into()),
             "0123abcd".into(),
@@ -1090,7 +1171,7 @@ mod naming_tests {
     fn only_a_branch_outside_uzes_namespace_reads_as_named() {
         let mut task = task();
         assert!(!task.is_named(), "the generated identifier is not a name");
-        task.branch = format!("{BRANCH_PREFIX}adopted-from-somewhere");
+        task.isolation_mut().unwrap().branch = format!("{BRANCH_PREFIX}adopted-from-somewhere");
         assert!(
             !task.is_named(),
             "a branch inside UZE's namespace is still UZE's to name"
@@ -1102,14 +1183,17 @@ mod naming_tests {
     #[test]
     fn taking_a_name_sets_both_halves_and_disturbs_nothing_else() {
         let mut task = task();
-        let (id, checkout, created) =
-            (task.id.clone(), task.checkout.clone(), task.created_at_unix);
+        let (id, checkout, created) = (
+            task.id.clone(),
+            task.isolation().unwrap().checkout.clone(),
+            task.created_at_unix,
+        );
         task.take_name("fix/branch-naming".to_owned());
-        assert_eq!(task.branch, "fix/branch-naming");
+        assert_eq!(task.isolation().unwrap().branch, "fix/branch-naming");
         assert_eq!(task.label, "branch naming");
         assert!(task.is_named());
         assert_eq!(task.id, id);
-        assert_eq!(task.checkout, checkout);
+        assert_eq!(task.isolation().unwrap().checkout, checkout);
         assert_eq!(task.created_at_unix, created);
     }
 }

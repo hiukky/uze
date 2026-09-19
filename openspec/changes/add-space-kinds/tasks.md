@@ -59,9 +59,9 @@
 
 ## 8. One record per agent
 
-- [ ] 8.1 `Agent { id, harness, created_at_unix, ended_at_unix, isolation: Option<Isolation> }` in `uze-core`, with `Isolation { checkout, branch, base, base_commit, target, state, published_as, published_request, request_branch, request_asked_at_unix }`; `TaskStore.agents` replaces `tasks` and `tenants`; `SCHEMA_VERSION` bumps.
-- [ ] 8.2 Delete `Tenant` and `AgentRecord` (undoes 2.2): one record answers for an identifier, so there is nothing to unify and nothing to match on.
-- [ ] 8.3 Every reader of `store.tasks`/`store.tenants` reads one collection; readiness, delivery, naming and the sweep take an isolated agent and say so in their signatures.
+- [x] 8.1 `Agent { id, harness, created_at_unix, ended_at_unix, isolation: Option<Isolation> }` in `uze-core`, with `Isolation { checkout, branch, base, base_commit, target, state, published_as, published_request, request_branch, request_asked_at_unix }`; `TaskStore.agents` replaces `tasks` and `tenants`; `SCHEMA_VERSION` bumps.
+- [x] 8.2 Delete `Tenant` and `AgentRecord` (undoes 2.2): one record answers for an identifier, so there is nothing to unify and nothing to match on.
+- [x] 8.3 Every reader of `store.tasks`/`store.tenants` reads one collection; readiness, delivery, naming and the sweep take an isolated agent and say so in their signatures.
 - [ ] 8.4 Core tests: an agent with no isolation has no branch, no readiness and no delivery; `Ready` cannot be expressed without an isolation; a document of the previous schema is set aside by the rule already in `locked_reporting`.
 
 ## 9. Isolation as an action
