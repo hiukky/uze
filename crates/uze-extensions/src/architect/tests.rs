@@ -234,3 +234,34 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
     };
     assert!(text.contains("docs/diagrams"), "{text}");
 }
+
+#[test]
+fn the_list_of_areas_opens_on_the_one_on_show_and_a_choice_shuts_it() {
+    let mut state = showing("uze install");
+    let areas = state.areas();
+    handle_command(&mut state, Command::ChooseGroup, SPACE);
+    assert_eq!(state.choosing, Some(areas[1]), "it opens on Sequence");
+    handle_command(&mut state, Command::Pan(PanDirection::Down), SPACE);
+    assert_eq!(state.choosing, Some(areas[2]));
+    handle_command(&mut state, Command::Pan(PanDirection::Down), SPACE);
+    assert_eq!(state.choosing, Some(areas[0]), "and goes round");
+    handle_command(&mut state, Command::Activate, SPACE);
+    assert_eq!((state.selected, state.choosing), (areas[0], None));
+}
+
+#[test]
+fn leaving_the_list_of_areas_leaves_the_surface_open() {
+    let mut state = opened();
+    handle_command(&mut state, Command::ChooseGroup, SPACE);
+    let outcome = handle_command(&mut state, Command::Close, SPACE);
+    assert_eq!((outcome, state.choosing), (ArchitectOutcome::Stay, None));
+
+    handle_mouse(&mut state, Some(ViewHit::ChooseGroup), SPACE);
+    let before = state.selected;
+    handle_mouse(&mut state, Some(ViewHit::SelectItem(before + 1)), SPACE);
+    assert_eq!(
+        (state.selected, state.choosing),
+        (before, None),
+        "a click off the list shuts it and does nothing else"
+    );
+}

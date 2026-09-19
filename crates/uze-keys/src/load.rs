@@ -353,7 +353,11 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Architect, "down", Action::PanDown),
         bind(Scope::Architect, "tab", Action::NextDiagram),
         bind(Scope::Architect, "shift+tab", Action::PreviousDiagram),
-        bind(Scope::Architect, "v", Action::NextRendering),
+        // Free letters, both: `v` previews a profile and `a` analyses a
+        // context elsewhere, and a letter names one action everywhere.
+        bind(Scope::Architect, "g", Action::NextRendering),
+        bind(Scope::Architect, "o", Action::ChooseArea),
+        bind(Scope::Architect, "enter", Action::Activate),
         bind(Scope::Architect, "pagedown", Action::ScrollPageDown),
         bind(Scope::Architect, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "e", Action::EditFile),

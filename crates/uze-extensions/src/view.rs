@@ -181,6 +181,12 @@ pub struct Navigator {
     /// long way from the selection without the selection dragging the
     /// list back.
     pub anchor: Option<usize>,
+    /// The `id` of the group highlighted in the list of groups, while
+    /// that list is open — which only a [`Layout::Board`] offers, where
+    /// the groups fold into one selector. `None` when it is shut. The
+    /// extension's to say, like what a fold hides: opening it is a state
+    /// of the surface, and what is highlighted in it is a selection.
+    pub choosing: Option<usize>,
 }
 
 /// What a navigator row *is*, so the host can mark it.
@@ -384,6 +390,9 @@ pub enum ViewHit {
     SelectItem(usize),
     /// The `id` of a [`NavigatorRow::Group`], clicked to fold or unfold it.
     ToggleGroup(usize),
+    /// The selector that offers the groups, pressed: open the list of
+    /// them, or shut it.
+    ChooseGroup,
     /// A click inside [`Content::Lines`], as far as the host can resolve
     /// it: which line, and how many display cells into that line's text
     /// the pointer landed.
@@ -509,6 +518,8 @@ pub enum Command {
     PreviousView,
     /// The next of the [`View::modes`] offered.
     NextMode,
+    /// Open the list of groups, or shut it.
+    ChooseGroup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

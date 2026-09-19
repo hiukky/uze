@@ -2396,6 +2396,7 @@ impl Attach<'_> {
                 ),
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
+                | ViewHit::ChooseGroup
                 | ViewHit::PlaceCaret { .. }
                 | ViewHit::SelectMode(_)
                 | ViewHit::DragContentScrollbar

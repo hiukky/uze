@@ -124,10 +124,11 @@ pub(crate) fn content_columns(
     (columns[0], content_rows[0], content_rows[1])
 }
 
-/// A board's rows, top to bottom: the tabs, the heading, the board itself
-/// and the footer. The board gets everything the other three do not need —
-/// no navigator column, no blank row under the title, no reading margin.
-pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect, Rect) {
+/// A board's rows, top to bottom: its menu, the board itself and the
+/// footer. The board gets everything the other two do not need — no
+/// navigator column, no blank row under the title, no reading margin, and
+/// one row of menu rather than one per level of it.
+pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
         frame_area.y + 1,
@@ -138,18 +139,17 @@ pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect, Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(2),
         ])
         .split(inner);
-    (rows[0], rows[1], rows[2], rows[3])
+    (rows[0], rows[1], rows[2])
 }
 
 /// How many cells a board has to show its drawing in — exact, unlike
 /// [`content_space`]: the extension cuts the screen it hands over to this.
 pub(crate) fn board_space(frame_area: Rect) -> Size {
-    let (_, _, board, _) = board_rows(frame_area);
+    let (_, board, _) = board_rows(frame_area);
     Size {
         width: board.width,
         height: board.height,
@@ -349,18 +349,9 @@ fn render_board(
     scope: uze_keys::Scope,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> Rendered {
-    let (tabs, heading_row, board, footer) = board_rows(area);
+    let (menu, board, footer) = board_rows(area);
     let mut rendered = Rendered::default();
-    render_modes(frame, tabs, &view.modes, hits);
-    let heading = match &view.content {
-        Content::Lines { heading, .. } => heading.as_str(),
-        Content::Message { .. } => "",
-    };
-    if let Some(navigator) = view.navigator.as_ref() {
-        let room = tabs.width.saturating_sub(modes_width(&view.modes) + 2);
-        render_areas(frame, Rect::new(tabs.x, tabs.y, room, 1), navigator, hits);
-        render_artifacts(frame, heading_row, navigator, heading, hits);
-    }
+    render_modes(frame, menu, &view.modes, hits);
     match &view.content {
         Content::Message { text, hint, role } => {
             render_message(frame, board, text, hint.as_deref(), color(*role));
@@ -409,69 +400,127 @@ fn render_board(
         }
     }
     render_footer(frame, footer, &view.footer, scope);
+    if let Content::Lines { heading, .. } = &view.content {
+        let width = (TextSpan::raw(heading.as_str()).width() as u16).min(footer.width / 2);
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(
+                heading.clone(),
+                theme::fg(Token::TextMuted),
+            ))
+            .alignment(ratatui::layout::Alignment::Right),
+            Rect::new(footer.right() - width, footer.y, width, 1),
+        );
+    }
+    // Last, because its list of groups opens over the board — and its
+    // hits first, because a click on that list must not reach the row of
+    // board lying under it.
+    if let Some(navigator) = view.navigator.as_ref() {
+        let room = menu.width.saturating_sub(modes_width(&view.modes) + 2);
+        let mut menu_hits = Vec::new();
+        render_menu(
+            frame,
+            Rect::new(menu.x, menu.y, room, 1),
+            board,
+            navigator,
+            &mut menu_hits,
+        );
+        hits.splice(0..0, menu_hits);
+    }
     rendered
 }
 
-/// The list's groups, which on a board are its *areas*: the first of two
-/// levels, drawn the way the mode segments beside them are, because both
-/// are a choice between a few fixed things.
+/// A board's menu, on one row: the group on show folded into a selector,
+/// then the items of that group beside it.
 ///
-/// Two rows rather than one, because one row of areas and artifacts mixed
-/// is a row where nothing says which word is a heading and which is a
-/// choice — the reader has to work out the grammar before reading it.
-fn render_areas(
+/// One level is visible at a time, which is what keeps the row readable —
+/// two levels side by side is a row where nothing says which word is a
+/// heading and which is a choice. Changing group is one step further
+/// away for it, and it is the rarer of the two moves.
+fn render_menu(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    board: Rect,
     navigator: &Navigator,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
-    let active = active_group(navigator);
-    let mut x = area.x;
-    for (index, row) in navigator.rows.iter().enumerate() {
-        let NavigatorRow::Group { id, name, .. } = row else {
-            continue;
-        };
-        let count = navigator.rows[index + 1..]
-            .iter()
-            .take_while(|row| matches!(row, NavigatorRow::Item { .. }))
-            .count();
-        let is_active = active == Some(*id);
-        let (fill, ink, quiet) = match is_active {
-            true => (
-                Token::SurfaceSelected,
-                Token::TextBright,
-                Token::TextSecondary,
-            ),
-            false => (
-                Token::SurfaceBackground,
-                Token::TextSecondary,
-                Token::TextDim,
-            ),
-        };
-        let fill = theme::color(fill);
-        let mut label = Style::default().fg(theme::color(ink)).bg(fill);
-        if is_active {
-            label = label.add_modifier(Modifier::BOLD);
-        }
-        let spans = vec![
-            TextSpan::styled(format!(" {name} "), label),
-            TextSpan::styled(
-                format!("{count} "),
-                Style::default().fg(theme::color(quiet)).bg(fill),
-            ),
-        ];
-        let width = spans.iter().map(TextSpan::width).sum::<usize>() as u16;
-        if x.saturating_add(width) > area.right() {
-            break;
-        }
-        let rect = Rect::new(x, area.y, width, 1);
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        hits.push((rect, ViewHit::ToggleGroup(*id)));
-        x = x.saturating_add(width + 1);
+    let groups = groups_of(navigator);
+    let Some(active) = active_group(navigator).and_then(|id| groups.iter().find(|g| g.id == id))
+    else {
+        return;
+    };
+
+    let raised = theme::color(Token::SurfaceRaised);
+    let selector = vec![
+        TextSpan::styled(
+            format!(" {} ", active.name),
+            theme::fg_bold(Token::TextBright).bg(raised),
+        ),
+        TextSpan::styled(
+            format!("{} ", active.items),
+            theme::fg(Token::TextDim).bg(raised),
+        ),
+        TextSpan::styled(
+            format!("{} ", theme::glyph(Symbol::ChevronExpanded)),
+            theme::fg(Token::TextMuted).bg(raised),
+        ),
+    ];
+    let selector_width = spans_width(&selector).min(area.width);
+    let selector_rect = Rect::new(area.x, area.y, selector_width, 1);
+    frame.render_widget(Paragraph::new(Line::from(selector)), selector_rect);
+    hits.push((selector_rect, ViewHit::ChooseGroup));
+
+    let divider = "  /  ";
+    let mut x = selector_rect.right();
+    if x.saturating_add(divider.len() as u16) < area.right() {
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(divider, theme::fg(Token::TextDim))),
+            Rect::new(x, area.y, divider.len() as u16, 1),
+        );
+        x += divider.len() as u16;
+    }
+    render_items(
+        frame,
+        Rect::new(x, area.y, area.right().saturating_sub(x), 1),
+        navigator,
+        active.id,
+        hits,
+    );
+
+    if let Some(highlighted) = navigator.choosing {
+        render_group_list(frame, selector_rect, board, &groups, highlighted, hits);
     }
 }
 
-/// The group the selection is in — the area whose artifacts are on show.
+struct MenuGroup<'a> {
+    id: usize,
+    name: &'a str,
+    items: usize,
+}
+
+fn groups_of(navigator: &Navigator) -> Vec<MenuGroup<'_>> {
+    let mut groups: Vec<MenuGroup<'_>> = Vec::new();
+    for row in &navigator.rows {
+        match row {
+            NavigatorRow::Group { id, name, .. } => groups.push(MenuGroup {
+                id: *id,
+                name,
+                items: 0,
+            }),
+            NavigatorRow::Item { .. } => {
+                if let Some(group) = groups.last_mut() {
+                    group.items += 1;
+                }
+            }
+        }
+    }
+    groups
+}
+
+fn spans_width(spans: &[TextSpan<'_>]) -> u16 {
+    spans.iter().map(TextSpan::width).sum::<usize>() as u16
+}
+
+/// The group the selection is in — the one whose items are on show.
 fn active_group(navigator: &Navigator) -> Option<usize> {
     let mut group = None;
     for row in &navigator.rows {
@@ -481,56 +530,153 @@ fn active_group(navigator: &Navigator) -> Option<usize> {
             NavigatorRow::Item { .. } => {}
         }
     }
-    None
+    // Nothing selected is still somewhere: the first group.
+    navigator.rows.iter().find_map(|row| match row {
+        NavigatorRow::Group { id, .. } => Some(*id),
+        NavigatorRow::Item { .. } => None,
+    })
 }
 
-/// The second level: the artifacts of the area on show, as plain words —
-/// the chosen one bright and underlined, the rest legible rather than
-/// faint, since every one of them is something to click. What the content
-/// says about itself sits at the far end of the same row.
-fn render_artifacts(
+/// The items of the group on show. The chosen one is a filled segment,
+/// the rest legible rather than faint, since every one is something to
+/// click. When they do not all fit, the row is cut around the chosen one
+/// and says so at the end it was cut at.
+fn render_items(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     navigator: &Navigator,
-    heading: &str,
+    group: usize,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
-    let active = active_group(navigator);
-    let heading_width = TextSpan::raw(heading).width() as u16;
-    let room = area.width.saturating_sub(heading_width + 3);
-    let mut x = area.x.saturating_add(1);
-    let mut group = None;
+    let mut items: Vec<(usize, &str, bool)> = Vec::new();
+    let mut current = None;
     for row in &navigator.rows {
         match row {
-            NavigatorRow::Group { id, .. } => group = Some(*id),
+            NavigatorRow::Group { id, .. } => current = Some(*id),
             NavigatorRow::Item {
                 id, name, selected, ..
-            } if group == active => {
-                let width = TextSpan::raw(name.as_str()).width() as u16;
-                if x.saturating_add(width) > area.x.saturating_add(room) {
-                    break;
-                }
-                let style = match selected {
-                    true => theme::fg_bold(Token::Accent).add_modifier(Modifier::UNDERLINED),
-                    false => theme::fg(Token::TextSecondary),
-                };
-                let rect = Rect::new(x, area.y, width, 1);
-                frame.render_widget(Paragraph::new(TextSpan::styled(name.clone(), style)), rect);
-                hits.push((rect, ViewHit::SelectItem(*id)));
-                x = x.saturating_add(width + 3);
-            }
+            } if current == Some(group) => items.push((*id, name.as_str(), *selected)),
             NavigatorRow::Item { .. } => {}
         }
     }
-    if heading_width < area.width {
-        frame.render_widget(
-            Paragraph::new(TextSpan::styled(
-                heading.to_owned(),
-                theme::fg(Token::TextMuted),
-            )),
-            Rect::new(area.right() - heading_width, area.y, heading_width, 1),
-        );
+    let width_of = |name: &str| TextSpan::raw(name).width() as u16 + 3;
+    let chosen = items
+        .iter()
+        .position(|(_, _, selected)| *selected)
+        .unwrap_or(0);
+    let more = theme::glyph(Symbol::Ellipsis);
+    let more_width = TextSpan::raw(more.as_str()).width() as u16 + 1;
+
+    // Start as far left as still leaves room for the chosen one.
+    let mut first = 0;
+    while first < chosen {
+        let needed: u16 = items[first..=chosen]
+            .iter()
+            .map(|(_, name, _)| width_of(name))
+            .sum();
+        let lead = if first > 0 { more_width } else { 0 };
+        if needed + lead + more_width <= area.width {
+            break;
+        }
+        first += 1;
     }
+
+    let mut x = area.x;
+    let quiet = theme::fg(Token::TextDim);
+    if first > 0 {
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(more.clone(), quiet)),
+            Rect::new(x, area.y, more_width, 1),
+        );
+        x += more_width;
+    }
+    for (index, (id, name, selected)) in items.iter().enumerate().skip(first) {
+        let width = width_of(name) - 1;
+        let is_last = index + 1 == items.len();
+        let reserve = if is_last { 0 } else { more_width };
+        if x.saturating_add(width + reserve) > area.right() {
+            frame.render_widget(
+                Paragraph::new(TextSpan::styled(more.clone(), quiet)),
+                Rect::new(x, area.y, more_width.min(area.right().saturating_sub(x)), 1),
+            );
+            break;
+        }
+        let style = match selected {
+            true => theme::fg_bold(Token::TextBright).bg(theme::color(Token::SurfaceSelected)),
+            false => theme::fg(Token::TextSecondary),
+        };
+        let rect = Rect::new(x, area.y, width, 1);
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(format!(" {name} "), style)),
+            rect,
+        );
+        hits.push((rect, ViewHit::SelectItem(*id)));
+        x += width + 1;
+    }
+}
+
+/// The open list of groups, hung from the selector and drawn over the
+/// board: each with what it holds at the far edge, the highlighted one
+/// filled.
+fn render_group_list(
+    frame: &mut ratatui::Frame<'_>,
+    selector: Rect,
+    board: Rect,
+    groups: &[MenuGroup<'_>],
+    highlighted: usize,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let widest = groups
+        .iter()
+        .map(|group| TextSpan::raw(group.name).width())
+        .max()
+        .unwrap_or(0) as u16;
+    let area = Rect::new(
+        selector.x,
+        selector.bottom(),
+        (widest + 10).max(selector.width).min(board.width),
+        (groups.len() as u16 + 2).min(board.height),
+    );
+    let raised = theme::color(Token::SurfaceRaised);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::fg(Token::BorderDefault))
+            .style(Style::default().bg(raised)),
+        area,
+    );
+    for (row, group) in groups
+        .iter()
+        .enumerate()
+        .take(area.height.saturating_sub(2).into())
+    {
+        let rect = Rect::new(area.x + 1, area.y + 1 + row as u16, area.width - 2, 1);
+        let is_highlighted = group.id == highlighted;
+        let fill = match is_highlighted {
+            true => theme::color(Token::SurfaceSelected),
+            false => raised,
+        };
+        let ink = match is_highlighted {
+            true => theme::fg_bold(Token::TextBright),
+            false => theme::fg(Token::TextSecondary),
+        };
+        let count = group.items.to_string();
+        let gap = usize::from(rect.width)
+            .saturating_sub(TextSpan::raw(group.name).width() + count.len() + 2);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                TextSpan::styled(format!(" {}", group.name), ink.bg(fill)),
+                TextSpan::styled(" ".repeat(gap), Style::default().bg(fill)),
+                TextSpan::styled(format!("{count} "), theme::fg(Token::TextDim).bg(fill)),
+            ])),
+            rect,
+        );
+        hits.push((rect, ViewHit::ToggleGroup(group.id)));
+    }
+    // The list's own frame is still the list: a click on it is not a
+    // click on the board beneath.
+    hits.push((area, ViewHit::ChooseGroup));
 }
 
 fn render_navigator(
@@ -1160,7 +1306,7 @@ fn render_footer(
 /// is bound to. Kept here, beside the render that needs it, rather than in
 /// the extension, which knows nothing of either. Where two actions reach
 /// one command, the first row is the one a footer names.
-const COMMAND_ACTIONS: [(Command, uze_keys::Action); 29] = [
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 30] = [
     (Command::Close, uze_keys::Action::Dismiss),
     (Command::FocusNext, uze_keys::Action::FocusNext),
     (Command::FocusNext, uze_keys::Action::FocusPrevious),
@@ -1193,6 +1339,7 @@ const COMMAND_ACTIONS: [(Command, uze_keys::Action); 29] = [
     (Command::NextView, uze_keys::Action::NextDiagram),
     (Command::PreviousView, uze_keys::Action::PreviousDiagram),
     (Command::NextMode, uze_keys::Action::NextRendering),
+    (Command::ChooseGroup, uze_keys::Action::ChooseArea),
 ];
 
 /// The action a command is named by. `None` for typing, which has no
@@ -1344,6 +1491,7 @@ mod tests {
                 badge: "2".to_owned(),
                 focused: true,
                 anchor: Some(1),
+                choosing: None,
                 rows: vec![
                     NavigatorRow::Group {
                         id: 0,
@@ -1481,18 +1629,20 @@ mod tests {
             println!("{}", rows.join("\n"));
         }
         assert!(
-            rows[1].contains("C4 2") && rows[1].contains("Flowchart 2"),
-            "the areas are the first row, each with what it holds: {}",
+            rows[1].contains("C4 2") && rows[1].contains("Containers"),
+            "one row: the area on show as a selector, then its artifacts: {}",
             rows[1]
         );
         assert!(
-            rows[2].contains("Containers") && !rows[2].contains("Crate layering"),
-            "the second row is the area on show, and only that: {}",
-            rows[2]
+            !rows[1].contains("Sequence") && !rows[1].contains("Crate layering"),
+            "and nothing of the areas that are not on show: {}",
+            rows[1]
         );
         let footer = rows[usize::from(height) - 3].as_str();
         assert!(
-            footer.contains("tab next artifact") && footer.contains("v rendering"),
+            footer.contains("o areas")
+                && footer.contains("tab next artifact")
+                && footer.contains("containers.mmd"),
             "the footer names the board's own keys: {footer}"
         );
 
@@ -2182,6 +2332,7 @@ mod tests {
                 badge: String::new(),
                 focused: true,
                 anchor: None,
+                choosing: None,
                 rows: vec![
                     NavigatorRow::Group {
                         id: 0,

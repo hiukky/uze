@@ -241,6 +241,8 @@ actions! {
         "Previous artifact", "Show the previous artifact on the board";
     NextRendering => "next-rendering", false,
         "Rendering", "Draw the diagram the next way it can be drawn";
+    ChooseArea => "choose-area", false,
+        "Areas", "Open the list of areas, to show another one's artifacts";
 
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,

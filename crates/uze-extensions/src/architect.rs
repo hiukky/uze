@@ -93,6 +93,10 @@ pub struct ArchitectView {
     /// Why there is nothing on the board, while there is nothing: the
     /// read still in flight, or what it found instead of artifacts.
     nothing: Option<(String, Option<String>)>,
+    /// The area highlighted in the list of areas, while it is open — by
+    /// the index of its first artifact, which is how an area is named
+    /// everywhere here.
+    choosing: Option<usize>,
 }
 
 /// Where the host found the project's artifacts to be declared. The
@@ -170,6 +174,7 @@ impl ArchitectView {
             drawing: Drawing::Unreadable(String::new()),
             canvas: None,
             nothing: Some(("Reading the project's artifacts".to_owned(), None)),
+            choosing: None,
         }
     }
 
@@ -187,7 +192,37 @@ impl ArchitectView {
         }
     }
 
+    /// Every area, as the index of its first artifact.
+    fn areas(&self) -> Vec<usize> {
+        let artifacts = self.catalog.artifacts();
+        (0..artifacts.len())
+            .filter(|&index| index == 0 || artifacts[index - 1].kind != artifacts[index].kind)
+            .collect()
+    }
+
+    /// The area the artifact on show belongs to.
+    fn area(&self) -> Option<usize> {
+        self.areas()
+            .into_iter()
+            .take_while(|&first| first <= self.selected)
+            .last()
+    }
+
+    /// Moves the highlight in the open list of areas, round and round.
+    fn highlight(&mut self, step: isize) {
+        let areas = self.areas();
+        let Some(at) = self
+            .choosing
+            .and_then(|first| areas.iter().position(|&area| area == first))
+        else {
+            return;
+        };
+        let next = (at as isize + step).rem_euclid(areas.len() as isize) as usize;
+        self.choosing = Some(areas[next]);
+    }
+
     fn open(&mut self, artifact: usize) {
+        self.choosing = None;
         let count = self.catalog.artifacts().len().max(1);
         self.selected = artifact % count;
         self.corner = None;
@@ -421,9 +456,15 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             focused: false,
             rows,
             anchor: None,
+            choosing: state.choosing,
         }),
         content: content(state, space),
-        footer: vec![Command::Close, Command::NextView, Command::NextMode],
+        footer: vec![
+            Command::Close,
+            Command::ChooseGroup,
+            Command::NextView,
+            Command::NextMode,
+        ],
         modes: MODES
             .iter()
             .map(|&(showing, label)| Mode {
@@ -497,8 +538,26 @@ pub fn handle_command(
 ) -> ArchitectOutcome {
     let page = i32::from(space.height.saturating_sub(2).max(1));
     let count = state.catalog.artifacts().len().max(1);
+    // The open list of areas takes the keys that mean something in a
+    // list, and the one that leaves: a list open over the board is what
+    // is being talked to, and the board under it waits.
+    if state.choosing.is_some() {
+        match command {
+            Command::Pan(PanDirection::Up) => state.highlight(-1),
+            Command::Pan(PanDirection::Down) => state.highlight(1),
+            Command::Activate => {
+                if let Some(first) = state.choosing {
+                    state.open(first);
+                }
+            }
+            Command::Close | Command::ChooseGroup => state.choosing = None,
+            _ => {}
+        }
+        return ArchitectOutcome::Stay;
+    }
     match command {
         Command::Close => return ArchitectOutcome::Close,
+        Command::ChooseGroup => state.choosing = state.area(),
         Command::NextView => state.open(state.selected + 1),
         Command::PreviousView => state.open(state.selected + count - 1),
         Command::Pan(PanDirection::Left) => state.move_by(-PAN_COLUMNS, 0, space),
@@ -524,12 +583,15 @@ pub fn handle_mouse(
     hit: Option<ViewHit>,
     space: Size,
 ) -> ArchitectOutcome {
+    // A click anywhere but on the list shuts it, and is spent doing so —
+    // the same rule every menu over this client follows.
+    let list_was_open = state.choosing.take().is_some();
     match hit {
         Some(ViewHit::Close) => return ArchitectOutcome::Close,
-        Some(ViewHit::SelectItem(artifact)) => state.open(artifact),
-        // An area is entered by its first artifact: the group's id is
-        // that artifact's index, so there is nothing to look up.
+        Some(ViewHit::ChooseGroup) if !list_was_open => state.choosing = state.area(),
         Some(ViewHit::ToggleGroup(first)) => state.open(first),
+        _ if list_was_open => {}
+        Some(ViewHit::SelectItem(artifact)) => state.open(artifact),
         Some(ViewHit::SelectMode(mode)) => {
             if let Some(&(showing, _)) = MODES.get(mode) {
                 state.show(showing);

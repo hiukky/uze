@@ -170,6 +170,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::NextRendering,
         Control("clicking a rendering segment"),
     );
+    put(
+        Action::ChooseArea,
+        Control("the area selector at the head of the board's menu"),
+    );
 
     // --- The code surface, and typing into a file -----------------------
     put(

@@ -141,6 +141,7 @@ pub(super) fn changes_navigator(code: &CodeView) -> Navigator {
         badge: code.changes.files.len().to_string(),
         focused: code.focus == Focus::Navigator,
         anchor: selected_tree_row(&items, selected),
+        choosing: None,
         rows: items
             .iter()
             .enumerate()
@@ -184,6 +185,7 @@ fn files_navigator(code: &CodeView) -> Navigator {
         badge: rows.iter().filter(|row| !row.directory).count().to_string(),
         focused: code.focus == Focus::Navigator,
         anchor,
+        choosing: None,
         rows: rows
             .iter()
             .enumerate()
