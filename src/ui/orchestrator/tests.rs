@@ -49,7 +49,8 @@ mod workspace_tests {
         },
         scroll_timeline, scroll_tree, selected_pane_cwd, space_context_agent, space_cwd,
         space_own_tab, strip_tabs, sync_slot_occupancy, tab_drag_group, tab_drag_group_members,
-        tab_needs_replacement_shell, toggle_timeline, workspace_has_active_agent_operation,
+        tab_needs_replacement_shell, toggle_space_collapsed, toggle_timeline,
+        workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -6632,7 +6633,7 @@ mod workspace_tests {
         );
 
         let mut model = model_of(session.clone());
-        model.remembered.collapsed_spaces.insert(space);
+        toggle_space_collapsed(&mut model, space);
         let Sidebar { rows, hits, .. } = sidebar(&model, &tenant_identities());
         let header = space_header(&hits, space).y as usize;
         assert!(
@@ -6762,7 +6763,7 @@ mod workspace_tests {
         );
         assert!(!lit, "and the agent carries the selection: {open:?}");
 
-        model.remembered.collapsed_spaces.insert(three);
+        toggle_space_collapsed(&mut model, three);
         let (folded, lit) = header_row(&model);
         assert!(folded.contains(&completed), "{folded:?}");
         assert!(lit, "{folded:?}");
@@ -6786,7 +6787,7 @@ mod workspace_tests {
             "open, the agents follow the header: {open:?}"
         );
 
-        model.remembered.collapsed_spaces.insert(one);
+        toggle_space_collapsed(&mut model, one);
         let (header, row) = rows_at(&model, one);
         assert!(
             row.contains("/one") && !row.contains("shell"),
@@ -6827,13 +6828,68 @@ mod workspace_tests {
             session.update_pane_status(pane, root, "agent".into());
         }
         let open = sidebar(&model, &identities_fixture()).metrics.tree_overflow;
-        model.remembered.collapsed_spaces.insert(SpaceId(1));
+        toggle_space_collapsed(&mut model, SpaceId(1));
         let folded = sidebar(&model, &identities_fixture()).metrics.tree_overflow;
         assert!(open > 2, "the column overflows: {open}");
         assert_eq!(
             open - folded,
             1,
             "the agent's two rows give way to one caption"
+        );
+    }
+
+    /// A fold is a preference, not a transient. Minimizing a space and
+    /// closing uze used to open it again on the next run: the fold lived
+    /// with what this client had *resolved*, which dies with the process,
+    /// instead of with what the operator *chose*, which is the layout both
+    /// surfaces share. It travels by root, because the identifier the
+    /// server minted for a space is minted again the next time it restores
+    /// the workspace.
+    #[test]
+    fn a_minimized_space_is_still_minimized_on_the_next_run() {
+        let mut folded = three_spaces();
+        let one = SpaceId(1);
+        let root = folded.session.as_ref().unwrap().workspace.spaces[0]
+            .root
+            .clone();
+
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        folded.layout_recorder = Some(recorder);
+
+        toggle_space_collapsed(&mut folded, one);
+
+        let kept = recorded.try_recv().expect("the fold is recorded").workspace;
+        assert!(
+            kept.collapsed_space_roots.contains(&root),
+            "the fold is kept, by the root the space is over: {kept:?}"
+        );
+
+        // The next run: the same workspace, drawn by a model that knows
+        // nothing but the layout the last one left behind.
+        let mut next = three_spaces();
+        next.collapsed_space_roots = kept.collapsed_space_roots.clone();
+        assert_eq!(
+            sidebar(&next, &identities_fixture()).rows,
+            sidebar(&folded, &identities_fixture()).rows,
+            "the column opens on the space still minimized"
+        );
+        assert_ne!(
+            sidebar(&next, &identities_fixture()).rows,
+            sidebar(&three_spaces(), &identities_fixture()).rows,
+            "which is not the column a run that was told nothing draws"
+        );
+
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        next.layout_recorder = Some(recorder);
+        toggle_space_collapsed(&mut next, one);
+        assert!(
+            recorded
+                .try_recv()
+                .expect("opening it again is recorded")
+                .workspace
+                .collapsed_space_roots
+                .is_empty(),
+            "and opening it again is kept too"
         );
     }
 
