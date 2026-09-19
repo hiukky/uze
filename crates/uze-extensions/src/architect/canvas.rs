@@ -238,6 +238,51 @@ pub fn leads_glyph(out_of_the_board: bool, glyphs: Glyphs) -> &'static str {
     }
 }
 
+/// How much a tile is filled, for a drawing that says something by how
+/// dark a region is: nothing, light, heavy. A second channel beside the
+/// role, because two roles a theme renders alike still differ in ink.
+pub fn shade_glyph(weight: u8, glyphs: Glyphs) -> char {
+    match (glyphs, weight) {
+        (_, 0) => ' ',
+        (Glyphs::Unicode, 1) => '░',
+        (Glyphs::Unicode, _) => '▒',
+        (Glyphs::Ascii, 1) => ':',
+        (Glyphs::Ascii, _) => '#',
+    }
+}
+
+/// The mark on something that differs from what was last committed.
+pub fn changed_glyph(glyphs: Glyphs) -> char {
+    match glyphs {
+        Glyphs::Unicode => '●',
+        Glyphs::Ascii => '*',
+    }
+}
+
+/// `text` cut to `width` columns, saying so when it was cut.
+pub fn fitted(text: &str, width: i32, glyphs: Glyphs) -> String {
+    if text_width(text) <= width {
+        return text.to_owned();
+    }
+    let cut = match glyphs {
+        Glyphs::Unicode => '…',
+        Glyphs::Ascii => '~',
+    };
+    let mut fitted = String::new();
+    let mut used = 1;
+    for glyph in text.chars() {
+        used += glyph.width().unwrap_or(0) as i32;
+        if used > width {
+            break;
+        }
+        fitted.push(glyph);
+    }
+    if width >= 1 {
+        fitted.push(cut);
+    }
+    fitted
+}
+
 pub fn arrow_glyph(heading: u8, glyphs: Glyphs) -> char {
     match (glyphs, heading) {
         (Glyphs::Unicode, NORTH) => '▲',

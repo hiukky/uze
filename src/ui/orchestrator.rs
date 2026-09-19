@@ -869,7 +869,15 @@ fn spawn_changes_refresh(
 /// asked about.
 struct ArtifactsResolution {
     root: PathBuf,
-    answer: architect::ArtifactsAnswer,
+    answer: ArchitectAnswer,
+}
+
+/// The two things the architect surface asks for, each on a thread of its
+/// own so a large checkout's measurement never holds the diagrams back.
+enum ArchitectAnswer {
+    Artifacts(architect::ArtifactsAnswer),
+    /// `None` outside a repository, where there is no code map.
+    Code(Option<architect::CodeMeasure>),
 }
 
 /// Resolving the manifest, walking the declared directory and reading
@@ -907,6 +915,20 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
             },
             silence,
         );
+        let answer = ArchitectAnswer::Artifacts(answer);
+        let _ = sender.send(ArtifactsResolution { root, answer });
+    });
+}
+
+/// Measuring the checkout for the code map: a `git grep` over every file
+/// in it, which is as unbounded as a read gets.
+fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.architect_code_measure").entered();
+        let measure = answered_or(|| architect::measure_code(&WorkspaceHost, &root), None);
+        let answer = ArchitectAnswer::Code(measure);
         let _ = sender.send(ArtifactsResolution { root, answer });
     });
 }
@@ -3387,14 +3409,19 @@ impl WorkspaceModel {
         }
         if let Some(root) = self.architect_root.clone() {
             self.architect_asked = true;
-            spawn_artifacts_read(root, sender.clone());
+            spawn_artifacts_read(root.clone(), sender.clone());
+            spawn_code_measure(root, sender.clone());
         }
     }
 
     fn absorb_artifacts(&mut self, resolution: ArtifactsResolution) -> bool {
         match self.architect.as_mut() {
             Some(view) if self.architect_root.as_ref() == Some(&resolution.root) => {
-                view.absorb(resolution.answer);
+                match resolution.answer {
+                    ArchitectAnswer::Artifacts(answer) => view.absorb(answer),
+                    ArchitectAnswer::Code(Some(measure)) => view.absorb_code(measure),
+                    ArchitectAnswer::Code(None) => {}
+                }
                 true
             }
             _ => false,

@@ -434,3 +434,173 @@ fn the_keys_walk_from_box_to_box() {
         "down is down"
     );
 }
+
+fn measured() -> CodeMeasure {
+    let file = |path: &str, lines: u32, commits: u32| codemap::FileMeasure {
+        path: path.to_owned(),
+        lines,
+        commits,
+        changed: false,
+    };
+    CodeMeasure {
+        root: PathBuf::from("/checkout"),
+        files: vec![
+            file("src/main.rs", 900, 12),
+            file("src/ui/render.rs", 700, 30),
+            file("src/ui/input.rs", 400, 3),
+            file("docs/guide.md", 300, 1),
+        ],
+    }
+}
+
+fn areas_listed(state: &ArchitectView) -> Vec<String> {
+    view(state, SPACE)
+        .navigator
+        .expect("a menu")
+        .rows
+        .into_iter()
+        .filter_map(|row| match row {
+            NavigatorRow::Group { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_code_map_is_listed_last_and_a_late_measurement_moves_nothing() {
+    let mut state = showing("Containers");
+    let before = state.selected;
+    state.absorb_code(measured());
+    assert_eq!(state.selected, before, "what was on show stays on show");
+    assert_eq!(
+        areas_listed(&state),
+        ["C4", "Sequence", "Flowchart", "Code"]
+    );
+    assert_eq!(
+        state.catalog.artifacts().last().map(|a| a.name.as_str()),
+        Some("Code map")
+    );
+    assert_eq!(state.insides.len(), state.catalog.artifacts().len());
+}
+
+#[test]
+fn a_project_that_declares_nothing_still_has_its_code_map() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    assert!(
+        matches!(state.drawing, Drawing::Code),
+        "shown as soon as it is measured"
+    );
+    assert!(
+        !state.caption(SPACE).contains("declares"),
+        "nothing is the matter yet"
+    );
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: "This project declares no artifacts yet".to_owned(),
+        hint: "Add `artifacts:` to agents.yaml".to_owned(),
+    });
+    assert!(matches!(state.drawing, Drawing::Code));
+    let Content::Lines { heading, lines, .. } = view(&state, SPACE).content else {
+        panic!("the map is drawn");
+    };
+    assert!(heading.contains("declares no artifacts"), "{heading}");
+    assert!(heading.starts_with("4 files · 2,300 lines"), "{heading}");
+    assert_eq!(lines.len(), usize::from(SPACE.height), "it fills the space");
+
+    // The other way round: the declaration answered first.
+    let mut state = ArchitectView::opening();
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: "This project declares no artifacts yet".to_owned(),
+        hint: "Add `artifacts:` to agents.yaml".to_owned(),
+    });
+    state.absorb_code(measured());
+    assert!(matches!(state.drawing, Drawing::Code));
+    assert!(state.nothing.is_none());
+}
+
+#[test]
+fn the_map_is_entered_and_left_and_a_file_on_it_opens_the_code() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: "declares nothing".to_owned(),
+        hint: String::new(),
+    });
+    let map = state.code.as_mut().expect("measured");
+    map.pick_toward(PanDirection::Right, (100, 30));
+    let mut safety = 0;
+    while !map.caption((100, 30)).starts_with("src/ ") {
+        map.pick_toward(PanDirection::Left, (100, 30));
+        safety += 1;
+        assert!(safety < 8, "src is somewhere to the left");
+    }
+    assert_eq!(
+        handle_command(&mut state, Command::Activate, SPACE),
+        ArchitectOutcome::Stay
+    );
+    assert_eq!(trail(&state), ["Code map", "src"]);
+    assert_eq!(
+        state.corner(SPACE),
+        (0, 0),
+        "a map that fits is never moved"
+    );
+    assert!(state.minimap(SPACE).is_none());
+
+    let map = state.code.as_mut().expect("measured");
+    map.pick_toward(PanDirection::Right, (100, 30));
+    while !map.caption((100, 30)).starts_with("src/main.rs ") {
+        map.pick_toward(PanDirection::Left, (100, 30));
+        safety += 1;
+        assert!(safety < 16, "main.rs is on the map of src");
+    }
+    assert_eq!(
+        handle_command(&mut state, Command::Activate, SPACE),
+        ArchitectOutcome::OpenPath {
+            project: PathBuf::from("/checkout"),
+            target: PathBuf::from("/checkout/src/main.rs"),
+        }
+    );
+
+    handle_command(&mut state, Command::Back, SPACE);
+    assert!(trail(&state).is_empty());
+    assert!(
+        state.caption(SPACE).starts_with("src/ "),
+        "back with the directory that was entered selected: {}",
+        state.caption(SPACE)
+    );
+}
+
+#[test]
+fn the_map_is_laid_out_again_for_a_narrower_space() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: String::new(),
+        hint: String::new(),
+    });
+    let narrow = Size {
+        width: 60,
+        height: 18,
+    };
+    for space in [SPACE, narrow] {
+        let Content::Lines { lines, .. } = view(&state, space).content else {
+            panic!("the map is drawn");
+        };
+        assert_eq!(lines.len(), usize::from(space.height));
+        let widest = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.text.chars().count())
+                    .sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            widest,
+            usize::from(space.width),
+            "filled edge to edge at {space:?}"
+        );
+    }
+}
