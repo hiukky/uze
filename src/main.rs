@@ -601,7 +601,7 @@ fn run(cli: Cli) -> Result<()> {
         && std::io::stdout().is_terminal()
         && std::io::stdin().is_terminal();
     let sink = if opens_the_tui {
-        uze::telemetry::Sink::File(home.state_dir().join("logs").join("uze.log"))
+        uze::telemetry::Sink::File(home.logs_dir().join("uze.log"))
     } else {
         uze::telemetry::Sink::Stderr
     };
@@ -1363,7 +1363,7 @@ fn run_setup(
             println!("{}", msg);
         }
     }
-    let logs_dir = home.state_dir().join("logs");
+    let logs_dir = home.logs_dir();
     let _ = std::fs::create_dir_all(&logs_dir);
     let mut had_warning = false;
     let mut failed_harnesses: Vec<String> = Vec::new();

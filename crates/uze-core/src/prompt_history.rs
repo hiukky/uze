@@ -213,9 +213,7 @@ pub fn clear(home: &UzeHome, workspace_root: &Path) -> Result<()> {
 }
 
 fn path(home: &UzeHome, workspace_root: &Path) -> PathBuf {
-    home.state_dir()
-        .join("prompt-history")
-        .join(format!("{}.json", project_id_for(workspace_root)))
+    home.prompt_history_path(&project_id_for(workspace_root))
 }
 
 /// Oldest first — the order the file is written in.

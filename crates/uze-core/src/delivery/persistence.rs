@@ -3,6 +3,44 @@
 //! They intentionally do not attempt distributed transactions with vendor
 //! CLIs. A confirmed external side effect is recorded immediately by the
 //! caller, while these helpers keep registry and ledger replacement atomic.
+//!
+//! # What UZE keeps, and what losing it costs
+//!
+//! Everything UZE persists belongs to exactly one tier, and the tier is
+//! decided by what deleting it costs — never by which module happened to
+//! write it:
+//!
+//! - **bytes** (`store/`) — the installed packages.
+//! - **record** (`state/`) — what UZE was told or decided: intent and
+//!   ownership. Nothing else on the machine knows it, so removing it costs
+//!   the operator. Only this tier declares a shape.
+//! - **generated** (`runtime/`, `shims/`) — what UZE produced for another
+//!   program to read. Removing it costs nothing; it is produced again.
+//! - **remembered** (`cache/`) — what UZE observed and kept to go faster.
+//!   Removing it costs nothing; it is observed again.
+//!
+//! A thing must not sit in a tier that claims a different cost than it has.
+//! Generated content used to live at `state/attachments/`, one letter from
+//! `attachments.json` — the ledger that says who owns what inside it — so
+//! the directory read as authoritative while every byte in it was
+//! reproducible. An operator deciding what was safe to delete had no way to
+//! tell the two apart, and the answer is opposite for each.
+//!
+//! # Reading a record another build wrote
+//!
+//! That rule lives in [`crate::document`], because the terminal runtime
+//! holds the workspace and depends on nothing of UZE's — and a durability
+//! rule written in two places is the failure it exists to end. In short:
+//! a shape this build knows is **carried across, silently**; setting a
+//! record aside is the floor beneath that, not the policy; recovery has a
+//! direction, so a record from a newer build is never taken; the shape is
+//! read *before* the record; and a record with no shape at all is shape 1.
+//!
+//! A new document declares its tier by where [`crate::home::UzeHome`] puts
+//! it, and — if it is a record — its shape and its ladder by implementing
+//! [`crate::document::Shaped`]. Nothing else is needed, and nothing else is
+//! allowed: every path UZE owns is named in the map, which
+//! `every_path_uze_owns_is_named_in_the_map` fails the build over.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -135,7 +173,7 @@ pub struct MutationLock {
 impl MutationLock {
     pub fn acquire(home: &UzeHome) -> Result<Self> {
         home.ensure_layout()?;
-        let path = home.state_dir().join("mutation.lock");
+        let path = home.mutation_lock_path();
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(false)

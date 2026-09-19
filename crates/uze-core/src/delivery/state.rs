@@ -43,7 +43,7 @@ struct AttachmentLedger {
 }
 
 fn attachments_path(home: &UzeHome) -> PathBuf {
-    home.state_dir().join("attachments.json")
+    home.attachments_path()
 }
 
 pub fn receipts(

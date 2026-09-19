@@ -146,6 +146,72 @@ impl UzeHome {
         self.root.join("keys.json")
     }
 
+    /// The ledger of which package UZE attached where, per integration.
+    ///
+    /// The one record ownership lives in: an artifact on a harness's disk
+    /// says what it is, never who put it there, so nothing else on the
+    /// machine can answer this and nothing re-derives it.
+    pub fn attachments_path(&self) -> PathBuf {
+        self.state_dir().join("attachments.json")
+    }
+
+    /// The process-wide mutation guard for this home (see
+    /// [`crate::persistence::MutationLock`]). A lock, not a record: it
+    /// carries no shape and nothing reads it across versions.
+    pub fn mutation_lock_path(&self) -> PathBuf {
+        self.state_dir().join("mutation.lock")
+    }
+
+    /// What UZE remembers about its own binary between runs: when it last
+    /// asked for the latest release, and what the operator was told.
+    pub fn binary_path(&self) -> PathBuf {
+        self.state_dir().join("update.json")
+    }
+
+    /// The receipt `install.sh` leaves: the file it placed and the release
+    /// it was. Inbound — UZE reads it and never writes it — which is why it
+    /// is a document of its own rather than part of [`Self::binary_path`].
+    pub fn install_receipt_path(&self) -> PathBuf {
+        self.state_dir().join("install.json")
+    }
+
+    /// Where an update keeps the revision it is replacing, under UZE's own
+    /// state rather than beside the plugins: nothing that reads the Store
+    /// may mistake it for an installed package. Generated — removing it
+    /// costs nothing.
+    pub fn superseded_dir(&self) -> PathBuf {
+        self.state_dir().join("superseded")
+    }
+
+    /// One workspace root's prompt history, keyed the way every project
+    /// record is.
+    pub fn prompt_history_path(&self, project_id: &str) -> PathBuf {
+        self.state_dir()
+            .join("prompt-history")
+            .join(format!("{project_id}.json"))
+    }
+
+    /// Where UZE writes its own log when asked to. Disposable, which is
+    /// why it sits with the caches rather than with the records.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.cache_dir().join("logs")
+    }
+
+    /// Everything UZE *generates* for one harness to read: generated
+    /// marketplaces, staged skill directories, the wrappers a bridge is
+    /// made of.
+    ///
+    /// Under the runtime tree rather than beside the records, because that
+    /// is what it is. It used to live at `state/attachments/`, one letter
+    /// from `attachments.json` — the ledger that says who owns what in
+    /// here — so the directory read as authoritative while every byte in
+    /// it is produced again from the Store and the Engine alone. An
+    /// operator deciding what is safe to delete had no way to tell the two
+    /// apart, and the answer is opposite for each.
+    pub fn generated_attachments_dir(&self, vendor: &str) -> PathBuf {
+        self.runtime_dir().join("attachments").join(vendor)
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }

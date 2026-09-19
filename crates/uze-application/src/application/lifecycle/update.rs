@@ -48,7 +48,7 @@ impl Plugins<'_> {
         // ingest running out of disk, a revision whose environment will not
         // compose — so the installed bytes are kept aside until the install
         // below has answered for them.
-        let superseded = self.0.home.state_dir().join(SUPERSEDED_DIRECTORY);
+        let superseded = self.0.home.superseded_dir();
         let _ = fs::remove_dir_all(&superseded);
         self.0.store.copy_package_to(&installed.id, &superseded)?;
 
@@ -146,11 +146,6 @@ impl Plugins<'_> {
         .map(|_| ())
     }
 }
-
-/// Where an update keeps the revision it is replacing, under UZE's own
-/// state rather than beside the plugins: nothing that reads the Store may
-/// mistake it for an installed package.
-const SUPERSEDED_DIRECTORY: &str = "superseded";
 
 impl Plugins<'_> {
     /// Applies every pending update this machine can settle on its own,
