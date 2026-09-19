@@ -243,6 +243,16 @@ actions! {
         "Rendering", "Draw the diagram the next way it can be drawn";
     ChooseArea => "choose-area", false,
         "Areas", "Open the list of areas, to show another one's artifacts";
+    SelectBoxLeft => "select-box-left", false,
+        "Box to the left", "Select the box to the left of the selected one";
+    SelectBoxRight => "select-box-right", false,
+        "Box to the right", "Select the box to the right of the selected one";
+    SelectBoxUp => "select-box-up", false,
+        "Box above", "Select the box above the selected one";
+    SelectBoxDown => "select-box-down", false,
+        "Box below", "Select the box below the selected one";
+    LevelUp => "level-up", false,
+        "Level up", "Go back to the diagram this one was entered from";
 
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,

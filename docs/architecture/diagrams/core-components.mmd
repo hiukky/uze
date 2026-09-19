@@ -1,0 +1,24 @@
+---
+title: Core components
+---
+C4Component
+  Container(app, "Application", "uze-application", "Orchestrates lifecycle operations")
+  Container(integrations, "Integrations", "uze-integrations", "One vertical per harness")
+  Container_Boundary(core, "Core") {
+    Component(package, "package", "Rust module", "Where a package's bytes come from and where they live", $link="crates/uze-core/src/package")
+    Component(capability, "capability", "Rust module", "What a plugin declares, portably: skill, hook", $link="crates/uze-core/src/capability")
+    Component(delivery, "delivery", "Rust module", "How a capability reaches a harness: router, engine, receipts", $link="crates/uze-core/src/delivery")
+    Component(project, "project", "Rust module", "What a project declares and what UZE writes into it", $link="crates/uze-core/src/project/manifest.rs")
+    Component(machine, "machine", "Rust module", "The local environment outside UZE's own state", $link="crates/uze-core/src/machine")
+  }
+  ContainerDb(store, "Store", "Filesystem", "Installed package bytes and typed receipts")
+  System_Ext(git, "Git", "Marketplaces and the project's own history")
+  Rel(app, package, "Installs through")
+  Rel(app, delivery, "Plans and applies")
+  Rel(app, project, "Reads the manifest")
+  Rel(integrations, delivery, "Implements IntegrationPort")
+  Rel(delivery, capability, "Routes")
+  Rel(delivery, machine, "Runs on")
+  Rel(package, store, "Owns")
+  Rel(package, git, "Clones", "uze-git")
+  Rel(project, git, "Reads and writes", "uze-git")

@@ -43,6 +43,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             footer,
             modes: Vec::new(),
             layout: Layout::Sidebar,
+            trail: Vec::new(),
         };
     }
 
@@ -60,6 +61,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
         footer,
         modes: modes(code),
         layout: Layout::Sidebar,
+        trail: Vec::new(),
     }
 }
 

@@ -1112,11 +1112,14 @@ impl Attach<'_> {
             {
                 architect::scroll_to(view, bar.first_at(row), space);
             }
-        } else if let Some(space) = Some(self.architect_space())
-            && let Some(view) = self.model.architect.as_mut()
-            && architect::handle_mouse(view, view_hit, space) == architect::ArchitectOutcome::Close
-        {
-            self.model.architect = None;
+        } else {
+            let space = self.architect_space();
+            let outcome = self
+                .model
+                .architect
+                .as_mut()
+                .map(|view| architect::handle_mouse(view, view_hit, space));
+            self.follow_architect(outcome);
         }
         self.model.dirty = true;
     }
@@ -1149,9 +1152,25 @@ impl Attach<'_> {
         let space = self.architect_space();
         if let Some(grab) = self.model.architect_grab.take()
             && !grab.moved
-            && let Some(view) = self.model.architect.as_mut()
         {
-            architect::handle_mouse(view, Some(grab.click), space);
+            let outcome = self
+                .model
+                .architect
+                .as_mut()
+                .map(|view| architect::handle_mouse(view, Some(grab.click), space));
+            self.follow_architect(outcome);
+        }
+    }
+
+    /// What the architect surface asked for by answering: to stay, to be
+    /// closed, or to hand over to the code a box stands for.
+    fn follow_architect(&mut self, outcome: Option<architect::ArchitectOutcome>) {
+        match outcome {
+            Some(architect::ArchitectOutcome::Close) => self.model.architect = None,
+            Some(architect::ArchitectOutcome::OpenPath { project, target }) => {
+                open_code_at(&mut self.model, &project, &target);
+            }
+            Some(architect::ArchitectOutcome::Stay) | None => {}
         }
     }
 
@@ -1228,13 +1247,13 @@ impl Attach<'_> {
             Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
             _ => {
                 let space = self.architect_space();
-                if let Some(command) = crate::ui::extension_view::command_for(action)
-                    && let Some(view) = self.model.architect.as_mut()
-                    && architect::handle_command(view, command, space)
-                        == architect::ArchitectOutcome::Close
-                {
-                    self.model.architect = None;
-                }
+                let outcome = crate::ui::extension_view::command_for(action).and_then(|command| {
+                    self.model
+                        .architect
+                        .as_mut()
+                        .map(|view| architect::handle_command(view, command, space))
+                });
+                self.follow_architect(outcome);
             }
         }
         self.model.dirty = true;
@@ -2397,6 +2416,7 @@ impl Attach<'_> {
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
                 | ViewHit::ChooseGroup
+                | ViewHit::SelectTrail(_)
                 | ViewHit::PlaceCaret { .. }
                 | ViewHit::SelectMode(_)
                 | ViewHit::DragContentScrollbar

@@ -137,6 +137,14 @@ pub struct View {
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
     pub layout: Layout,
+    /// The way in: what was entered to reach what is on show, outermost
+    /// first and ending with it. Empty when nothing was entered — which
+    /// is most surfaces, and every surface until something is.
+    ///
+    /// A path rather than a position, which is why it is not the list's
+    /// job: the list says what there is, this says how the viewer got
+    /// here, and only the second can be walked back.
+    pub trail: Vec<String>,
 }
 
 /// How a view's list and its content share the frame.
@@ -393,6 +401,8 @@ pub enum ViewHit {
     /// The selector that offers the groups, pressed: open the list of
     /// them, or shut it.
     ChooseGroup,
+    /// A step of the [`View::trail`], by its index: go back to there.
+    SelectTrail(usize),
     /// A click inside [`Content::Lines`], as far as the host can resolve
     /// it: which line, and how many display cells into that line's text
     /// the pointer landed.
@@ -520,6 +530,11 @@ pub enum Command {
     NextMode,
     /// Open the list of groups, or shut it.
     ChooseGroup,
+    /// Select what lies this way from what is selected — on a board,
+    /// where things are beside one another rather than in a list.
+    SelectToward(PanDirection),
+    /// Leave what was entered, for where it was entered from.
+    Back,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

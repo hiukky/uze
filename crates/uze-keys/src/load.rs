@@ -357,7 +357,15 @@ fn default_bindings() -> Vec<Binding> {
         // context elsewhere, and a letter names one action everywhere.
         bind(Scope::Architect, "g", Action::NextRendering),
         bind(Scope::Architect, "o", Action::ChooseArea),
+        // Enter goes *into* the selected box — the level below it, or the
+        // code it names — and backspace comes back out. Shift turns the
+        // arrows from moving the board to moving the selection on it.
         bind(Scope::Architect, "enter", Action::Activate),
+        bind(Scope::Architect, "backspace", Action::LevelUp),
+        bind(Scope::Architect, "shift+left", Action::SelectBoxLeft),
+        bind(Scope::Architect, "shift+right", Action::SelectBoxRight),
+        bind(Scope::Architect, "shift+up", Action::SelectBoxUp),
+        bind(Scope::Architect, "shift+down", Action::SelectBoxDown),
         bind(Scope::Architect, "pagedown", Action::ScrollPageDown),
         bind(Scope::Architect, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "e", Action::EditFile),

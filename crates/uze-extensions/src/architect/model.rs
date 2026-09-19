@@ -41,6 +41,9 @@ pub struct Node {
     /// Outside the system being described, so drawn quieter than it.
     pub external: bool,
     pub cluster: Option<usize>,
+    /// Where in the project this is, when the diagram says — Mermaid's
+    /// own `$link` on a C4 element, or a flowchart's `click … href`.
+    pub link: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,6 +57,10 @@ pub struct Edge {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cluster {
+    /// What the notation calls it — a C4 boundary's alias. It is what
+    /// joins one level to the next: the boundary `core` is the inside of
+    /// the box `core` a level up.
+    pub id: String,
     pub title: String,
     pub parent: Option<usize>,
 }

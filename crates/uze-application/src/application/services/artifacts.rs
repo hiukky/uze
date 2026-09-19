@@ -21,6 +21,9 @@ pub enum ProjectArtifacts {
     Declared {
         directory: PathBuf,
         declared: PathBuf,
+        /// The project it was declared in: what a path written inside an
+        /// artifact is relative to.
+        project: PathBuf,
     },
     /// Declared, and not something UZE will follow.
     Refused(String),
@@ -41,6 +44,7 @@ pub fn project_artifacts(cwd: &Path) -> ProjectArtifacts {
         Some(artifacts) if stays_inside(&artifacts.path) => ProjectArtifacts::Declared {
             directory: root.join(&artifacts.path),
             declared: artifacts.path,
+            project: root,
         },
         Some(artifacts) => ProjectArtifacts::Refused(format!(
             "`artifacts.path` is `{}`, which leaves the project — it has to be a \
@@ -77,11 +81,13 @@ mod tests {
         let ProjectArtifacts::Declared {
             directory,
             declared,
+            project: root,
         } = project_artifacts(&nested)
         else {
             panic!("the project declares a directory");
         };
         assert_eq!(declared, PathBuf::from("docs/architecture"));
+        assert_eq!(directory, root.join("docs/architecture"));
         assert!(directory.ends_with("docs/architecture"));
         assert!(directory.is_absolute());
     }

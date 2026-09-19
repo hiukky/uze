@@ -422,6 +422,7 @@ fn render_board(
             Rect::new(menu.x, menu.y, room, 1),
             board,
             navigator,
+            &view.trail,
             &mut menu_hits,
         );
         hits.splice(0..0, menu_hits);
@@ -441,6 +442,7 @@ fn render_menu(
     area: Rect,
     board: Rect,
     navigator: &Navigator,
+    trail: &[String],
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
     let groups = groups_of(navigator);
@@ -478,13 +480,13 @@ fn render_menu(
         );
         x += divider.len() as u16;
     }
-    render_items(
-        frame,
-        Rect::new(x, area.y, area.right().saturating_sub(x), 1),
-        navigator,
-        active.id,
-        hits,
-    );
+    let rest = Rect::new(x, area.y, area.right().saturating_sub(x), 1);
+    // Once something has been entered, the way in is what the row is
+    // about: the siblings are a step back, and the path is here.
+    match trail.len() {
+        0 | 1 => render_items(frame, rest, navigator, active.id, hits),
+        _ => render_trail(frame, rest, trail, hits),
+    }
 
     if let Some(highlighted) = navigator.choosing {
         render_group_list(frame, selector_rect, board, &groups, highlighted, hits);
@@ -612,6 +614,67 @@ fn render_items(
         );
         hits.push((rect, ViewHit::SelectItem(*id)));
         x += width + 1;
+    }
+}
+
+/// The way in, outermost first: every step but the last is somewhere to
+/// go back to, and the last is where the viewer is. Cut from the far end
+/// when it does not fit, because the near end is the one that is true
+/// right now.
+fn render_trail(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    trail: &[String],
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let chevron = format!(" {} ", theme::glyph(Symbol::ChevronRight));
+    let chevron_width = TextSpan::raw(chevron.as_str()).width() as u16;
+    let width_of = |name: &str| TextSpan::raw(name).width() as u16 + 2;
+    let more = theme::glyph(Symbol::Ellipsis);
+    let more_width = TextSpan::raw(more.as_str()).width() as u16;
+
+    let mut first = 0;
+    while first + 1 < trail.len() {
+        let needed: u16 = trail[first..]
+            .iter()
+            .map(|name| width_of(name) + chevron_width)
+            .sum();
+        let lead = if first > 0 {
+            more_width + chevron_width
+        } else {
+            0
+        };
+        if needed + lead <= area.width + chevron_width {
+            break;
+        }
+        first += 1;
+    }
+
+    let quiet = theme::fg(Token::TextDim);
+    let mut x = area.x;
+    let draw = |frame: &mut ratatui::Frame<'_>, text: String, style: Style, x: &mut u16| {
+        let width =
+            (TextSpan::raw(text.as_str()).width() as u16).min(area.right().saturating_sub(*x));
+        let rect = Rect::new(*x, area.y, width, 1);
+        frame.render_widget(Paragraph::new(TextSpan::styled(text, style)), rect);
+        *x += width;
+        rect
+    };
+    if first > 0 {
+        draw(frame, more, quiet, &mut x);
+        draw(frame, chevron.clone(), quiet, &mut x);
+    }
+    for (index, name) in trail.iter().enumerate().skip(first) {
+        let is_here = index + 1 == trail.len();
+        let style = match is_here {
+            true => theme::fg_bold(Token::TextBright).bg(theme::color(Token::SurfaceSelected)),
+            false => theme::fg(Token::TextSecondary),
+        };
+        let rect = draw(frame, format!(" {name} "), style, &mut x);
+        if !is_here {
+            hits.push((rect, ViewHit::SelectTrail(index)));
+            draw(frame, chevron.clone(), quiet, &mut x);
+        }
     }
 }
 
@@ -1306,7 +1369,7 @@ fn render_footer(
 /// is bound to. Kept here, beside the render that needs it, rather than in
 /// the extension, which knows nothing of either. Where two actions reach
 /// one command, the first row is the one a footer names.
-const COMMAND_ACTIONS: [(Command, uze_keys::Action); 30] = [
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 35] = [
     (Command::Close, uze_keys::Action::Dismiss),
     (Command::FocusNext, uze_keys::Action::FocusNext),
     (Command::FocusNext, uze_keys::Action::FocusPrevious),
@@ -1340,6 +1403,23 @@ const COMMAND_ACTIONS: [(Command, uze_keys::Action); 30] = [
     (Command::PreviousView, uze_keys::Action::PreviousDiagram),
     (Command::NextMode, uze_keys::Action::NextRendering),
     (Command::ChooseGroup, uze_keys::Action::ChooseArea),
+    (
+        Command::SelectToward(PanDirection::Left),
+        uze_keys::Action::SelectBoxLeft,
+    ),
+    (
+        Command::SelectToward(PanDirection::Right),
+        uze_keys::Action::SelectBoxRight,
+    ),
+    (
+        Command::SelectToward(PanDirection::Up),
+        uze_keys::Action::SelectBoxUp,
+    ),
+    (
+        Command::SelectToward(PanDirection::Down),
+        uze_keys::Action::SelectBoxDown,
+    ),
+    (Command::Back, uze_keys::Action::LevelUp),
 ];
 
 /// The action a command is named by. `None` for typing, which has no
@@ -1531,6 +1611,7 @@ mod tests {
             footer: vec![Command::Close],
             modes: Vec::new(),
             layout: ViewLayout::Sidebar,
+            trail: Vec::new(),
         }
     }
 
@@ -1598,32 +1679,34 @@ mod tests {
         let (width, height) = (150, 45);
         let space = board_space(Rect::new(0, 0, width, height));
         let mut state = architect::ArchitectView::opening();
-        state.absorb(architect::ArtifactsAnswer::Found(
-            [
-                (
-                    "containers.mmd",
-                    include_str!("../../docs/architecture/diagrams/containers.mmd"),
-                ),
-                (
-                    "system-context.mmd",
-                    include_str!("../../docs/architecture/diagrams/system-context.mmd"),
-                ),
-                (
-                    "install-sequence.mmd",
-                    include_str!("../../docs/architecture/diagrams/install-sequence.mmd"),
-                ),
-                (
-                    "crate-layering.mmd",
-                    include_str!("../../docs/architecture/diagrams/crate-layering.mmd"),
-                ),
-                (
-                    "install-pipeline.mmd",
-                    include_str!("../../docs/architecture/diagrams/install-pipeline.mmd"),
-                ),
-            ]
-            .map(|(origin, source)| architect::Artifact::read(origin, source))
-            .into(),
-        ));
+        let artifacts: Vec<architect::Artifact> = [
+            (
+                "containers.mmd",
+                include_str!("../../docs/architecture/diagrams/containers.mmd"),
+            ),
+            (
+                "system-context.mmd",
+                include_str!("../../docs/architecture/diagrams/system-context.mmd"),
+            ),
+            (
+                "install-sequence.mmd",
+                include_str!("../../docs/architecture/diagrams/install-sequence.mmd"),
+            ),
+            (
+                "crate-layering.mmd",
+                include_str!("../../docs/architecture/diagrams/crate-layering.mmd"),
+            ),
+            (
+                "install-pipeline.mmd",
+                include_str!("../../docs/architecture/diagrams/install-pipeline.mmd"),
+            ),
+        ]
+        .map(|(origin, source)| architect::Artifact::read(origin, source))
+        .into();
+        state.absorb(architect::ArtifactsAnswer::Found {
+            artifacts,
+            project: std::path::PathBuf::from("/project"),
+        });
         let (rows, hits) = draw_sized(&architect::view(&state, space), width, height);
         if std::env::var_os("UZE_SHOW_BOARD").is_some() {
             println!("{}", rows.join("\n"));

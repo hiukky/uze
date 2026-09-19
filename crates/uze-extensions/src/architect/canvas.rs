@@ -227,6 +227,17 @@ impl Frame {
     }
 }
 
+/// What a box leads to, written into its border: further into the
+/// drawing, or out of it to the code it stands for.
+pub fn leads_glyph(out_of_the_board: bool, glyphs: Glyphs) -> &'static str {
+    match (glyphs, out_of_the_board) {
+        (Glyphs::Unicode, false) => "»",
+        (Glyphs::Unicode, true) => "↗",
+        (Glyphs::Ascii, false) => ">>",
+        (Glyphs::Ascii, true) => "^",
+    }
+}
+
 pub fn arrow_glyph(heading: u8, glyphs: Glyphs) -> char {
     match (glyphs, heading) {
         (Glyphs::Unicode, NORTH) => '▲',

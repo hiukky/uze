@@ -1292,3 +1292,28 @@ fn the_changes_list_marks_status_rather_than_kind() {
         "the changes list asked for a file icon: {rows:?}"
     );
 }
+
+#[test]
+fn a_place_somebody_was_sent_to_opens_every_directory_on_the_way() {
+    let root = Path::new("/project");
+    let file = CodePlace::at(root, Path::new("/project/crates/core/src/store.rs"), false);
+    assert_eq!(
+        file.selected.as_deref(),
+        Some(Path::new("/project/crates/core/src/store.rs"))
+    );
+    let opened: Vec<&Path> = file.expanded.iter().map(PathBuf::as_path).collect();
+    assert_eq!(
+        opened,
+        [
+            Path::new("/project"),
+            Path::new("/project/crates"),
+            Path::new("/project/crates/core"),
+            Path::new("/project/crates/core/src"),
+        ],
+        "and nothing above the project"
+    );
+
+    let directory = CodePlace::at(root, Path::new("/project/crates"), true);
+    assert_eq!(directory.selected, None, "a directory is opened, not read");
+    assert!(directory.expanded.contains(Path::new("/project/crates")));
+}

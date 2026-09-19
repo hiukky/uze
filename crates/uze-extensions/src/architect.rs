@@ -42,7 +42,7 @@ use catalog::Catalog;
 pub use catalog::Artifact;
 use minimap::Minimap;
 use model::Diagram;
-use paint::Scene;
+use paint::{Leads, Scene};
 
 pub const CATALOG: BuiltinExtension = BuiltinExtension {
     id: "architect",
@@ -97,6 +97,15 @@ pub struct ArchitectView {
     /// the index of its first artifact, which is how an area is named
     /// everywhere here.
     choosing: Option<usize>,
+    /// The levels entered to reach what is on show: each the artifact
+    /// that was left and the box it was left through, so coming back can
+    /// put the viewer where they were standing.
+    trail: Vec<(usize, String)>,
+    /// The boundaries each artifact draws the inside of, by alias. What
+    /// joins one level to the next is only this: the boundary `core` is
+    /// the inside of the box `core`, wherever that box is drawn.
+    insides: Vec<Vec<String>>,
+    project: PathBuf,
 }
 
 /// Where the host found the project's artifacts to be declared. The
@@ -105,8 +114,13 @@ pub struct ArchitectView {
 pub enum ArtifactSource {
     /// The project declares none.
     Undeclared,
-    /// The declared directory, and how the project itself spells it.
-    Directory { path: PathBuf, declared: String },
+    /// The declared directory, how the project itself spells it, and the
+    /// project it was declared in.
+    Directory {
+        path: PathBuf,
+        declared: String,
+        project: PathBuf,
+    },
     /// Declared, and not something the host will follow.
     Refused(String),
 }
@@ -115,12 +129,13 @@ pub enum ArtifactSource {
 /// saying "reading".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArtifactsAnswer {
-    Found(Vec<Artifact>),
-    /// Nothing to draw, in two levels: what is the matter, and what to do.
-    Nothing {
-        text: String,
-        hint: String,
+    Found {
+        artifacts: Vec<Artifact>,
+        /// What a box's link is relative to.
+        project: PathBuf,
     },
+    /// Nothing to draw, in two levels: what is the matter, and what to do.
+    Nothing { text: String, hint: String },
 }
 
 /// Reads a source. Unbounded — a directory walk and a read per file — so
@@ -141,13 +156,17 @@ pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswe
             reason,
             "Fix `artifacts:` in agents.yaml and open this again.",
         ),
-        ArtifactSource::Directory { path, declared } => match catalog::read(host, &path) {
+        ArtifactSource::Directory {
+            path,
+            declared,
+            project,
+        } => match catalog::read(host, &path) {
             Ok(artifacts) if artifacts.is_empty() => nothing(
                 format!("`{declared}` holds no Mermaid files yet"),
                 "Add a .mmd file there: a diagram that starts with `C4Context`, \
                  `sequenceDiagram` or `flowchart` is drawn here.",
             ),
-            Ok(artifacts) => ArtifactsAnswer::Found(artifacts),
+            Ok(artifacts) => ArtifactsAnswer::Found { artifacts, project },
             Err(reason) => nothing(
                 format!("`{declared}` could not be read"),
                 &format!("{reason}. It is the `artifacts.path` agents.yaml declares."),
@@ -156,10 +175,17 @@ pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswe
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArchitectOutcome {
     Stay,
     Close,
+    /// A box that stands for code was followed: the host shows `target`,
+    /// which is where the board ends and the checkout begins. `project`
+    /// is what the diagram wrote the path relative to.
+    OpenPath {
+        project: PathBuf,
+        target: PathBuf,
+    },
 }
 
 impl ArchitectView {
@@ -175,13 +201,34 @@ impl ArchitectView {
             canvas: None,
             nothing: Some(("Reading the project's artifacts".to_owned(), None)),
             choosing: None,
+            trail: Vec::new(),
+            insides: Vec::new(),
+            project: PathBuf::new(),
         }
     }
 
     pub fn absorb(&mut self, answer: ArtifactsAnswer) {
         match answer {
-            ArtifactsAnswer::Found(artifacts) => {
+            ArtifactsAnswer::Found { artifacts, project } => {
                 self.catalog = Catalog::of(artifacts);
+                self.insides = self
+                    .catalog
+                    .artifacts()
+                    .iter()
+                    // Only a C4 view is the inside of something: levels are
+                    // that model's idea, and a flowchart's subgraph sharing
+                    // a name with a container is a coincidence, not a zoom.
+                    .map(|artifact| match mermaid::parse(artifact.diagram()) {
+                        Ok(Diagram::Graph(graph)) if artifact.kind == catalog::Kind::C4 => graph
+                            .clusters
+                            .into_iter()
+                            .map(|cluster| cluster.id)
+                            .filter(|id| !id.is_empty())
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                    .collect();
+                self.project = project;
                 self.nothing = None;
                 self.open(0);
             }
@@ -221,7 +268,14 @@ impl ArchitectView {
         self.choosing = Some(areas[next]);
     }
 
+    /// Shows an artifact chosen from the menu: a fresh start, so whatever
+    /// was entered to reach the last one is no longer the way here.
     fn open(&mut self, artifact: usize) {
+        self.trail.clear();
+        self.show_artifact(artifact);
+    }
+
+    fn show_artifact(&mut self, artifact: usize) {
         self.choosing = None;
         let count = self.catalog.artifacts().len().max(1);
         self.selected = artifact % count;
@@ -244,7 +298,12 @@ impl ArchitectView {
             Showing::Unicode | Showing::Source => Glyphs::Unicode,
         };
         self.canvas = match &self.drawing {
-            Drawing::Graph(scene) => Some(paint::paint(scene, glyphs, self.picked)),
+            Drawing::Graph(scene) => {
+                let leads: Vec<Leads> = (0..scene.graph.nodes.len())
+                    .map(|node| self.leads(scene, node))
+                    .collect();
+                Some(paint::paint(scene, glyphs, self.picked, &leads))
+            }
             Drawing::Sequence(sequence) => Some(sequence::paint(sequence, glyphs)),
             Drawing::Unreadable(_) => None,
         };
@@ -327,22 +386,157 @@ impl ArchitectView {
 
     /// A click, given as the screen cell it landed on. The map answers
     /// first: it is drawn over the board.
-    fn click(&mut self, x: i32, y: i32, space: Size) {
+    fn click(&mut self, x: i32, y: i32, space: Size) -> ArchitectOutcome {
         if let Some(target) = self.minimap(space).and_then(|map| map.board_cell_at(x, y)) {
             let half = (i32::from(space.width) / 2, i32::from(space.height) / 2);
             self.corner = Some((target.0 - half.0, target.1 - half.1));
             self.corner = Some(self.corner(space));
-            return;
+            return ArchitectOutcome::Stay;
         }
+        let Drawing::Graph(scene) = &self.drawing else {
+            return ArchitectOutcome::Stay;
+        };
+        let corner = self.corner(space);
+        let at = (x + corner.0, y + corner.1);
+        let node = scene.placement.node_at(at.0, at.1);
+        // A box that leads somewhere is followed by a click on its mark,
+        // or by a second click on the box — which is what a double click
+        // is. One that leads nowhere is let go of by that second click,
+        // so the diagram can be read whole again without a key.
+        let follows = node.is_some_and(|node| {
+            let leads = self.leads(scene, node) != Leads::Nowhere;
+            let on_mark = paint::mark_cells(scene.placement.nodes[node]).contains(at.0, at.1);
+            leads && (on_mark || self.picked == Some(node))
+        });
+        if follows {
+            self.picked = node;
+            return self.enter();
+        }
+        self.picked = if node == self.picked { None } else { node };
+        self.repaint();
+        ArchitectOutcome::Stay
+    }
+
+    fn leads(&self, scene: &Scene, node: usize) -> Leads {
+        let node = &scene.graph.nodes[node];
+        if self.inside_of(&node.id).is_some() {
+            Leads::Inside
+        } else if node.link.is_some() {
+            Leads::ToCode
+        } else {
+            Leads::Nowhere
+        }
+    }
+
+    /// The artifact that draws the inside of the box `alias` names.
+    fn inside_of(&self, alias: &str) -> Option<usize> {
+        self.insides
+            .iter()
+            .enumerate()
+            .find(|(artifact, insides)| {
+                *artifact != self.selected && insides.iter().any(|inside| inside == alias)
+            })
+            .map(|(artifact, _)| artifact)
+    }
+
+    /// Follows the picked box: into the level below it, or out to the
+    /// code it names.
+    fn enter(&mut self) -> ArchitectOutcome {
+        let (Drawing::Graph(scene), Some(picked)) = (&self.drawing, self.picked) else {
+            return ArchitectOutcome::Stay;
+        };
+        let node = &scene.graph.nodes[picked];
+        if let Some(below) = self.inside_of(&node.id) {
+            self.trail.push((self.selected, node.id.clone()));
+            self.show_artifact(below);
+            return ArchitectOutcome::Stay;
+        }
+        match &node.link {
+            Some(link) => ArchitectOutcome::OpenPath {
+                project: self.project.clone(),
+                target: self.project.join(link),
+            },
+            None => ArchitectOutcome::Stay,
+        }
+    }
+
+    /// Back to the level `depth` steps in, with the box that was entered
+    /// picked and in the middle of the screen — where the viewer stood.
+    fn back_to(&mut self, depth: usize, space: Size) {
+        let Some((artifact, through)) = self.trail.get(depth).cloned() else {
+            return;
+        };
+        self.trail.truncate(depth);
+        self.show_artifact(artifact);
+        let Drawing::Graph(scene) = &self.drawing else {
+            return;
+        };
+        if let Some(node) = scene.graph.nodes.iter().position(|node| node.id == through) {
+            self.picked = Some(node);
+            self.bring_into_view(node, space, true);
+            self.repaint();
+        }
+    }
+
+    fn bring_into_view(&mut self, node: usize, space: Size, always: bool) {
+        let Drawing::Graph(scene) = &self.drawing else {
+            return;
+        };
+        let frame = scene.placement.nodes[node];
+        let corner = self.corner(space);
+        let screen = (i32::from(space.width), i32::from(space.height));
+        let visible = frame.x >= corner.0
+            && frame.y >= corner.1
+            && frame.x + frame.w <= corner.0 + screen.0
+            && frame.y + frame.h <= corner.1 + screen.1;
+        if always || !visible {
+            let centre = frame.center();
+            self.corner = Some((centre.0 - screen.0 / 2, centre.1 - screen.1 / 2));
+            self.corner = Some(self.corner(space));
+        }
+    }
+
+    /// Picks the box that lies `direction` of the picked one — or, with
+    /// nothing picked, the one nearest the middle of the screen. A row of
+    /// cells is twice as tall as a column is wide, so a step down counts
+    /// double: "nearest" has to mean what it looks like.
+    fn pick_toward(&mut self, direction: PanDirection, space: Size) {
         let Drawing::Graph(scene) = &self.drawing else {
             return;
         };
         let corner = self.corner(space);
-        let node = scene.placement.node_at(x + corner.0, y + corner.1);
-        // Clicking what is already picked lets go of it, so the diagram
-        // can be read whole again without reaching for a key.
-        self.picked = if node == self.picked { None } else { node };
-        self.repaint();
+        let from = match self.picked {
+            Some(picked) => scene.placement.nodes[picked].center(),
+            None => (
+                corner.0 + i32::from(space.width) / 2,
+                corner.1 + i32::from(space.height) / 2,
+            ),
+        };
+        let nearest = scene
+            .placement
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(node, _)| Some(*node) != self.picked)
+            .filter_map(|(node, frame)| {
+                let centre = frame.center();
+                let (dx, dy) = (centre.0 - from.0, (centre.1 - from.1) * 2);
+                let (along, across) = match direction {
+                    PanDirection::Left => (-dx, dy),
+                    PanDirection::Right => (dx, dy),
+                    PanDirection::Up => (-dy, dx),
+                    PanDirection::Down => (dy, dx),
+                };
+                let ahead = self.picked.is_none() || along > 0;
+                ahead.then(|| (along.abs() + across.abs() * 2, node))
+            })
+            .min()
+            .map(|(_, node)| node);
+        if let Some(node) = nearest {
+            self.picked = Some(node);
+            self.bring_into_view(node, space, false);
+            self.repaint();
+        }
     }
 
     fn heading(&self) -> String {
@@ -378,6 +572,19 @@ impl ArchitectView {
     /// the second half is what somebody needs to go and change it.
     fn caption(&self) -> String {
         let origin = self.catalog.get(self.selected).map(|a| a.origin.as_str());
+        if let (Drawing::Graph(scene), Some(picked)) = (&self.drawing, self.picked) {
+            let said = match self.leads(scene, picked) {
+                Leads::Inside => Some("enter goes inside".to_owned()),
+                Leads::ToCode => scene.graph.nodes[picked]
+                    .link
+                    .as_ref()
+                    .map(|link| format!("enter opens {link}")),
+                Leads::Nowhere => None,
+            };
+            if let Some(said) = said {
+                return format!("{} · {said}", self.heading());
+            }
+        }
         match (self.heading(), origin) {
             (heading, Some(origin)) if heading.is_empty() => origin.to_owned(),
             (heading, Some(origin)) => format!("{heading} · {origin}"),
@@ -473,6 +680,17 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             })
             .collect(),
         layout: Layout::Board,
+        trail: match state.trail.is_empty() {
+            true => Vec::new(),
+            false => state
+                .trail
+                .iter()
+                .map(|(artifact, _)| *artifact)
+                .chain(std::iter::once(state.selected))
+                .filter_map(|artifact| state.catalog.get(artifact))
+                .map(|artifact| artifact.name.clone())
+                .collect(),
+        },
     }
 }
 
@@ -558,6 +776,9 @@ pub fn handle_command(
     match command {
         Command::Close => return ArchitectOutcome::Close,
         Command::ChooseGroup => state.choosing = state.area(),
+        Command::SelectToward(direction) => state.pick_toward(direction, space),
+        Command::Activate => return state.enter(),
+        Command::Back => state.back_to(state.trail.len().saturating_sub(1), space),
         Command::NextView => state.open(state.selected + 1),
         Command::PreviousView => state.open(state.selected + count - 1),
         Command::Pan(PanDirection::Left) => state.move_by(-PAN_COLUMNS, 0, space),
@@ -598,8 +819,9 @@ pub fn handle_mouse(
             }
         }
         Some(ViewHit::PlaceCaret { line, cell }) if state.showing != Showing::Source => {
-            state.click(cell as i32, line as i32, space);
+            return state.click(cell as i32, line as i32, space);
         }
+        Some(ViewHit::SelectTrail(depth)) => state.back_to(depth, space),
         _ => {}
     }
     ArchitectOutcome::Stay

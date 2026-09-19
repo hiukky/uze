@@ -7,7 +7,9 @@
 use crate::view::Role;
 
 use super::{
-    canvas::{Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width},
+    canvas::{
+        self, Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width,
+    },
     layout::{self, Placement, TextKind},
     model::{Graph, Node, Shape, Stroke},
     route::{self, Route, Routes},
@@ -50,7 +52,29 @@ impl Lines {
     }
 }
 
-pub fn paint(scene: &Scene, glyphs: Glyphs, selected: Option<usize>) -> Canvas {
+/// Where a box leads, if anywhere.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Leads {
+    #[default]
+    Nowhere,
+    /// To the level below: another diagram draws its inside.
+    Inside,
+    /// To the code it stands for.
+    ToCode,
+}
+
+/// The cells of a box's border that carry its mark, which are also what
+/// a click means "follow this" on.
+pub fn mark_cells(frame: Frame) -> Frame {
+    Frame {
+        x: frame.x + frame.w - 5,
+        y: frame.y + frame.h - 1,
+        w: 4,
+        h: 1,
+    }
+}
+
+pub fn paint(scene: &Scene, glyphs: Glyphs, selected: Option<usize>, leads: &[Leads]) -> Canvas {
     let Placement { width, height, .. } = scene.placement;
     let mut canvas = Canvas::new(width, height, glyphs);
     let size = (width * height) as usize;
@@ -136,6 +160,12 @@ pub fn paint(scene: &Scene, glyphs: Glyphs, selected: Option<usize>) -> Canvas {
             scene.placement.nodes[index],
             selected == Some(index),
         );
+        let leads = leads.get(index).copied().unwrap_or_default();
+        if leads != Leads::Nowhere {
+            let cells = mark_cells(scene.placement.nodes[index]);
+            let glyph = canvas::leads_glyph(leads == Leads::ToCode, glyphs);
+            canvas.text(cells.x, cells.y, &format!(" {glyph} "), Role::Accent, true);
+        }
     }
     for route in &scene.routes.routes {
         if let Some(label) = scene.graph.edges[route.edge].label.as_deref() {

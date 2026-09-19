@@ -40,8 +40,14 @@ fn flowchart<'a>(header: &str, lines: impl Iterator<Item = &'a str>) -> Result<G
         let keyword = line.split_whitespace().next().unwrap_or_default();
         match keyword {
             "subgraph" => {
+                let declared = line["subgraph".len()..].trim();
                 graph.clusters.push(Cluster {
-                    title: subgraph_title(line["subgraph".len()..].trim()),
+                    id: declared
+                        .split(|c: char| c == '[' || c.is_whitespace())
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    title: subgraph_title(declared),
                     parent: open.last().copied(),
                 });
                 open.push(graph.clusters.len() - 1);
@@ -49,11 +55,31 @@ fn flowchart<'a>(header: &str, lines: impl Iterator<Item = &'a str>) -> Result<G
             "end" => {
                 open.pop();
             }
-            "classDef" | "class" | "style" | "linkStyle" | "click" | "direction" => {}
+            "click" => link_clicked(&mut graph, line),
+            "classDef" | "class" | "style" | "linkStyle" | "direction" => {}
             _ => Statement::new(line).read_into(&mut graph, open.last().copied())?,
         }
     }
     Ok(graph)
+}
+
+/// `click id href "path"`, or the older `click id "path"`: the one
+/// flowchart statement that says where a node leads.
+fn link_clicked(graph: &mut Graph, line: &str) {
+    let mut words = line.split_whitespace().skip(1);
+    let Some(id) = words.next() else {
+        return;
+    };
+    let target = line
+        .split_once('"')
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(target, _)| target.trim());
+    if let (Some(target), Some(node)) = (
+        target.filter(|target| !target.is_empty()),
+        graph.nodes.iter_mut().find(|node| node.id == id),
+    ) {
+        node.link = Some(target.to_owned());
+    }
 }
 
 fn subgraph_title(rest: &str) -> String {
@@ -264,15 +290,27 @@ fn c4<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Graph, String> {
             continue;
         };
         let name = name.trim();
-        let arguments = arguments(rest.rsplit_once(')').map_or(rest, |(inside, _)| inside));
+        let inside = rest.rsplit_once(')').map_or(rest, |(inside, _)| inside);
+        let link = named_argument(inside, "$link");
+        let mut arguments = arguments(inside);
+        // A dynamic view numbers its relations: `RelIndex(1, a, b, …)`.
+        // The number is part of what the edge says, not one of its ends.
+        let step = name
+            .starts_with("RelIndex")
+            .then(|| (!arguments.is_empty()).then(|| arguments.remove(0)))
+            .flatten();
         let argument = |index: usize| arguments.get(index).cloned().filter(|a| !a.is_empty());
-        if name.ends_with("Boundary") {
+        // A deployment node holds things the way a boundary does, and is
+        // drawn the same: what it is goes in the brackets.
+        let is_node = name == "Node" || name.starts_with("Node_") || name == "Deployment_Node";
+        if name.ends_with("Boundary") || is_node {
             let kind = argument(2).or_else(|| {
                 name.strip_suffix("_Boundary")
                     .map(|prefix| prefix.replace('_', " "))
             });
             let label = argument(1).or_else(|| argument(0)).unwrap_or_default();
             graph.clusters.push(Cluster {
+                id: argument(0).unwrap_or_default(),
                 title: match kind {
                     Some(kind) => format!("{label} [{kind}]"),
                     None => label,
@@ -289,9 +327,12 @@ fn c4<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Graph, String> {
             graph.edges.push(Edge {
                 from,
                 to,
-                label: match (argument(2), argument(3)) {
-                    (Some(label), Some(technology)) => Some(format!("{label} [{technology}]")),
-                    (label, _) => label,
+                label: match (step, argument(2), argument(3)) {
+                    (Some(step), Some(label), _) => Some(format!("{step}. {label}")),
+                    (None, Some(label), Some(technology)) => {
+                        Some(format!("{label} [{technology}]"))
+                    }
+                    (_, label, _) => label,
                 },
                 stroke: Stroke::Solid,
                 arrow: true,
@@ -313,6 +354,7 @@ fn c4<'a>(lines: impl Iterator<Item = &'a str>) -> Result<Graph, String> {
             node.shape = element.shape;
             node.external = name.ends_with("_Ext");
             node.cluster = open.last().copied();
+            node.link = link;
         }
     }
     Ok(graph)
@@ -351,6 +393,18 @@ impl C4Element {
             has_technology,
         })
     }
+}
+
+/// One `$key="value"` argument, which the positional ones leave out.
+fn named_argument(inside: &str, key: &str) -> Option<String> {
+    let (_, rest) = inside.split_once(key)?;
+    let value = rest.trim_start().strip_prefix('=')?.trim_start();
+    let value = match value.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"').map_or(quoted, |(value, _)| value),
+        None => value.split(',').next().unwrap_or_default(),
+    };
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// A macro's arguments: comma-separated, quotes optional, and a comma
@@ -511,7 +565,44 @@ mod tests {
         assert_eq!(graph.nodes[1].cluster, Some(0));
         assert!(graph.nodes[2].external);
         assert_eq!(graph.clusters[0].title, "uze [System]");
+        assert_eq!(graph.clusters[0].id, "uze");
         assert_eq!(graph.edges[0].label.as_deref(), Some("Installs [CLI]"));
+    }
+
+    #[test]
+    fn a_dynamic_view_numbers_its_relations_without_losing_their_ends() {
+        let graph = graph(
+            "C4Dynamic\n  Container(a, \"A\")\n  Container(b, \"B\")\n  RelIndex(1, a, b, \"Asks\")",
+        );
+        assert_eq!((graph.edges[0].from, graph.edges[0].to), (0, 1));
+        assert_eq!(graph.edges[0].label.as_deref(), Some("1. Asks"));
+        assert_eq!(graph.nodes.len(), 2, "the index did not become a box");
+    }
+
+    #[test]
+    fn a_deployment_node_holds_what_is_declared_inside_it() {
+        let graph = graph(
+            "C4Deployment\n  Deployment_Node(host, \"Laptop\", \"Linux\") {\n    \
+             Container(cli, \"CLI\", \"Rust\")\n  }",
+        );
+        assert_eq!(graph.clusters[0].title, "Laptop [Linux]");
+        assert_eq!(graph.nodes[0].cluster, Some(0));
+    }
+
+    #[test]
+    fn a_box_says_where_in_the_project_it_is() {
+        let c4 = graph(
+            "C4Component\n  Component(store, \"store\", \"Rust\", \"Owns bytes\", \
+             $link=\"crates/uze-core/src/package/store.rs\")",
+        );
+        assert_eq!(
+            c4.nodes[0].link.as_deref(),
+            Some("crates/uze-core/src/package/store.rs")
+        );
+        assert_eq!(c4.nodes[0].description.as_deref(), Some("Owns bytes"));
+
+        let flow = graph("flowchart TD\n  a[Alpha] --> b\n  click a href \"src/alpha.rs\"");
+        assert_eq!(flow.nodes[0].link.as_deref(), Some("src/alpha.rs"));
     }
 
     #[test]

@@ -174,6 +174,18 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::ChooseArea,
         Control("the area selector at the head of the board's menu"),
     );
+    for select in [
+        Action::SelectBoxLeft,
+        Action::SelectBoxRight,
+        Action::SelectBoxUp,
+        Action::SelectBoxDown,
+    ] {
+        put(select, Control("clicking the box"));
+    }
+    put(
+        Action::LevelUp,
+        Control("clicking an earlier step of the board's trail"),
+    );
 
     // --- The code surface, and typing into a file -----------------------
     put(

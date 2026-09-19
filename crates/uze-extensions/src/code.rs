@@ -192,6 +192,29 @@ pub struct CodePlace {
     scroll: u16,
 }
 
+impl CodePlace {
+    /// The place `target` is, for a surface rooted at `root` — somewhere
+    /// the viewer was *sent* rather than somewhere they had been. Every
+    /// directory on the way is opened, so the tree shows where the file
+    /// sits; a directory is opened too, and nothing in it is selected.
+    pub fn at(root: &Path, target: &Path, is_directory: bool) -> Self {
+        let mut expanded: BTreeSet<PathBuf> = target
+            .ancestors()
+            .skip(1)
+            .take_while(|ancestor| ancestor.starts_with(root))
+            .map(Path::to_path_buf)
+            .collect();
+        if is_directory {
+            expanded.insert(target.to_path_buf());
+        }
+        Self {
+            selected: (!is_directory).then(|| target.to_path_buf()),
+            expanded,
+            ..Self::default()
+        }
+    }
+}
+
 /// What a viewer did inside an open [`CodeView`] that a re-read of the
 /// changes must not undo.
 ///

@@ -896,9 +896,11 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
                     uze_application::ProjectArtifacts::Declared {
                         directory,
                         declared,
+                        project,
                     } => architect::ArtifactSource::Directory {
                         path: directory,
                         declared: declared.display().to_string(),
+                        project,
                     },
                 };
                 architect::read_artifacts(&WorkspaceHost, source)
@@ -4373,6 +4375,26 @@ fn open_architect(model: &mut WorkspaceModel) {
     model.architect_root = Some(root);
     model.architect_asked = false;
     model.architect = Some(architect::ArchitectView::opening());
+    model.code_tree_scroll = extension_view::NavigatorScroll::default();
+    model.dirty = true;
+}
+
+/// The code surface, opened on a path a diagram pointed at: the last
+/// step down from an architecture is the file, and this is that step.
+///
+/// Rooted at the project rather than at the tab's directory, because the
+/// path was written relative to the project and may sit outside a tab
+/// that is somewhere below it.
+fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
+    let display_root = crate::ui::display_project_path(project);
+    let place = code::CodePlace::at(project, target, target.is_dir());
+    let view = code::CodeView::opening(
+        project.to_path_buf(),
+        display_root,
+        code::ContentMode::Contents,
+    );
+    model.architect = None;
+    model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }

@@ -9,7 +9,7 @@ const SPACE: Size = Size {
 /// what is checked here is also that the project's real artifacts draw.
 fn opened() -> ArchitectView {
     let mut state = ArchitectView::opening();
-    state.absorb(ArtifactsAnswer::Found(vec![
+    let artifacts = vec![
         Artifact::read(
             "containers.mmd",
             include_str!("../../../../docs/architecture/diagrams/containers.mmd"),
@@ -30,7 +30,15 @@ fn opened() -> ArchitectView {
             "install-pipeline.mmd",
             include_str!("../../../../docs/architecture/diagrams/install-pipeline.mmd"),
         ),
-    ]));
+        Artifact::read(
+            "core-components.mmd",
+            include_str!("../../../../docs/architecture/diagrams/core-components.mmd"),
+        ),
+    ];
+    state.absorb(ArtifactsAnswer::Found {
+        artifacts,
+        project: PathBuf::from("/project"),
+    });
     state
 }
 
@@ -227,6 +235,7 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
     let empty = ArtifactSource::Directory {
         path: PathBuf::from("/project/docs/diagrams"),
         declared: "docs/diagrams".to_owned(),
+        project: PathBuf::from("/project"),
     };
     state.absorb(read_artifacts(&Bare, empty));
     let Content::Message { text, .. } = view(&state, SPACE).content else {
@@ -263,5 +272,131 @@ fn leaving_the_list_of_areas_leaves_the_surface_open() {
         (state.selected, state.choosing),
         (before, None),
         "a click off the list shuts it and does nothing else"
+    );
+}
+
+fn pick(state: &mut ArchitectView, alias: &str) {
+    let Drawing::Graph(scene) = &state.drawing else {
+        panic!("a graph is on show");
+    };
+    state.picked = scene.graph.nodes.iter().position(|node| node.id == alias);
+    assert!(state.picked.is_some(), "`{alias}` is drawn here");
+}
+
+fn trail(state: &ArchitectView) -> Vec<String> {
+    view(state, SPACE).trail
+}
+
+#[test]
+fn the_levels_are_joined_by_alias_from_the_context_down_to_the_code() {
+    let mut state = showing("System context");
+    assert!(trail(&state).is_empty(), "nothing has been entered yet");
+
+    pick(&mut state, "uze");
+    assert_eq!(
+        handle_command(&mut state, Command::Activate, SPACE),
+        ArchitectOutcome::Stay
+    );
+    assert_eq!(trail(&state), ["System context", "Containers"]);
+
+    pick(&mut state, "core");
+    handle_command(&mut state, Command::Activate, SPACE);
+    assert_eq!(
+        trail(&state),
+        ["System context", "Containers", "Core components"]
+    );
+
+    pick(&mut state, "package");
+    assert_eq!(
+        handle_command(&mut state, Command::Activate, SPACE),
+        ArchitectOutcome::OpenPath {
+            project: PathBuf::from("/project"),
+            target: PathBuf::from("/project/crates/uze-core/src/package"),
+        },
+        "the last level down is the code itself"
+    );
+}
+
+#[test]
+fn coming_back_puts_the_viewer_where_they_were_standing() {
+    let mut state = showing("System context");
+    pick(&mut state, "uze");
+    handle_command(&mut state, Command::Activate, SPACE);
+    pick(&mut state, "core");
+    handle_command(&mut state, Command::Activate, SPACE);
+
+    handle_command(&mut state, Command::Back, SPACE);
+    assert_eq!(trail(&state), ["System context", "Containers"]);
+    let Drawing::Graph(scene) = &state.drawing else {
+        panic!("containers is a graph");
+    };
+    let core = scene.graph.nodes.iter().position(|n| n.id == "core");
+    assert_eq!(
+        state.picked, core,
+        "the box that was entered is picked again"
+    );
+
+    handle_mouse(&mut state, Some(ViewHit::SelectTrail(0)), SPACE);
+    assert!(
+        trail(&state).is_empty(),
+        "back at the top, nothing is entered"
+    );
+    assert_eq!(
+        state.catalog.get(state.selected).unwrap().name,
+        "System context"
+    );
+}
+
+#[test]
+fn choosing_from_the_menu_forgets_the_way_in() {
+    let mut state = showing("System context");
+    pick(&mut state, "uze");
+    handle_command(&mut state, Command::Activate, SPACE);
+    handle_command(&mut state, Command::NextView, SPACE);
+    assert!(trail(&state).is_empty());
+}
+
+#[test]
+fn a_second_click_on_a_box_that_leads_somewhere_follows_it() {
+    let mut state = showing("System context");
+    let Drawing::Graph(scene) = &state.drawing else {
+        panic!("the context is a graph");
+    };
+    let uze = scene
+        .graph
+        .nodes
+        .iter()
+        .position(|n| n.id == "uze")
+        .unwrap();
+    let frame = scene.placement.nodes[uze];
+    let corner = state.corner(SPACE);
+    let hit = ViewHit::PlaceCaret {
+        line: (frame.y + 1 - corner.1) as usize,
+        cell: (frame.x + 1 - corner.0) as usize,
+    };
+    handle_mouse(&mut state, Some(hit), SPACE);
+    assert_eq!(state.picked, Some(uze));
+    assert!(trail(&state).is_empty(), "one click only picks");
+    handle_mouse(&mut state, Some(hit), SPACE);
+    assert_eq!(trail(&state), ["System context", "Containers"]);
+}
+
+#[test]
+fn the_keys_walk_from_box_to_box() {
+    let mut state = showing("System context");
+    handle_command(&mut state, Command::SelectToward(PanDirection::Down), SPACE);
+    let first = state
+        .picked
+        .expect("with nothing picked, the nearest box is");
+    handle_command(&mut state, Command::SelectToward(PanDirection::Down), SPACE);
+    let second = state.picked.unwrap();
+    assert_ne!(first, second);
+    let Drawing::Graph(scene) = &state.drawing else {
+        panic!("the context is a graph");
+    };
+    let frames = &scene.placement.nodes;
+    assert!(
+        frames[second].center().1 > frames[first].center().1,
+        "down is down"
     );
 }
