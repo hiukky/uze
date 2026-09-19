@@ -229,16 +229,26 @@ pub fn store_path(home: &UzeHome, project_root: &Path, agent: &AgentId) -> PathB
 
 /// What was recorded for `agent`, or an empty record. Never fails: see the
 /// module's note on why continuity state is advisory.
+/// Best-effort: a conversation nobody can read costs a resumed session,
+/// never work, so this answers with an empty record rather than refusing.
+///
+/// What it must not do — and used to — is discard a record of a shape this
+/// build *knows*, in silence. A shape with a rung is carried across; only
+/// what has none falls back to empty.
 pub fn load(home: &UzeHome, project_root: &Path, agent: &AgentId) -> ConversationRecord {
     let path = store_path(home, project_root, agent);
-    let empty = || ConversationRecord::new(agent.clone());
-    let Ok(bytes) = fs::read(&path) else {
-        return empty();
-    };
-    match serde_json::from_slice::<ConversationRecord>(&bytes) {
-        Ok(record) if record.schema_version == SCHEMA_VERSION => record,
-        _ => empty(),
-    }
+    uze_document::read::<ConversationRecord>(&path)
+        .ok()
+        .and_then(uze_document::Carried::record)
+        .unwrap_or_else(|| ConversationRecord::new(agent.clone()))
+}
+
+/// A record: which harness session this agent was last carrying. The
+/// harness has its own sessions, but which one belonged to which agent is
+/// only ever here.
+impl uze_document::Shaped for ConversationRecord {
+    const SHAPE: u32 = SCHEMA_VERSION;
+    const KIND: &'static str = "conversation";
 }
 
 /// Replaces the document atomically.

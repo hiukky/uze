@@ -468,6 +468,58 @@ mod tests {
         );
     }
 
+    /// The direction rule's whole reason, played out: `target/debug/uze`
+    /// beside `~/.cargo/bin/uze` is the ordinary state of this repository,
+    /// and a rule without a direction has them taking turns destroying
+    /// each other's records, each saying it had recovered.
+    #[test]
+    fn two_builds_run_alternately_never_destroy_each_others_records() {
+        /// The older build: one shape behind, and it knows no rung, so
+        /// every recovery it is allowed is the widest it could take.
+        #[derive(Debug, Deserialize)]
+        struct Older {
+            #[allow(dead_code)]
+            schema_version: u32,
+        }
+        impl Shaped for Older {
+            const SHAPE: u32 = 2;
+            const KIND: &'static str = "sample";
+        }
+
+        let directory = scratch("two-builds");
+        // What the newer build left behind.
+        let path = write(
+            &directory,
+            r#"{"schema_version": 3, "label": "a", "target": "main"}"#,
+        );
+        let written = fs::read(&path).unwrap();
+
+        for round in 0..3 {
+            let refusal = read::<Older>(&path).unwrap_err();
+            assert!(
+                !may_be_set_aside(&refusal),
+                "round {round}: the older build must never take the newer one's record"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                written,
+                "round {round}: and the bytes are untouched by having been read"
+            );
+
+            // The newer build runs, reads its own record and rewrites it.
+            let carried: Carried<Sample> = read(&path).unwrap();
+            assert!(
+                !carried.climbed(),
+                "round {round}: its own shape, read as it stands"
+            );
+            let record = carried.record().unwrap();
+            assert_eq!(
+                record.label, "a",
+                "round {round}: nothing was lost in between"
+            );
+        }
+    }
+
     #[test]
     fn bytes_that_are_not_a_record_may_be_set_aside_and_are_kept() {
         let directory = scratch("garbage");

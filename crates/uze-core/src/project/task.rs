@@ -478,121 +478,56 @@ pub fn load(home: &UzeHome, project_root: &Path) -> Result<TaskStore> {
     Ok(read_document(&store_path(home, project_root))?.unwrap_or_default())
 }
 
-/// The one shape every version of the document shares, read before the
-/// document itself.
+/// The document at `path`, or `None` when nothing was ever recorded
+/// there. A shape this build knows is carried across; an error says this
+/// build cannot read what is there.
 ///
-/// Every field of a [`Task`] is required, so a document written under an
-/// older schema fails to deserialize — `missing field ...` — long before
-/// the version guard below could look at it: the guard was dead for
-/// exactly the case it exists for, and what the operator saw instead was
-/// a parse error about a file they never wrote.
-#[derive(Deserialize)]
-struct DeclaredSchema {
-    schema_version: u32,
+/// The shape is read before the document, and a document with no shape at
+/// all is shape 1 — both of which `uze-document` now holds for every
+/// record, having first been learnt here: every field of an [`Agent`] is
+/// required, so a document written under an older schema failed to
+/// deserialize — `missing field ...` — long before a guard comparing
+/// versions could look at it. The guard was dead for exactly the case it
+/// exists for, and what the operator saw was a parse error about a file
+/// they never wrote.
+fn read_document(path: &Path) -> Result<Option<TaskStore>> {
+    Ok(uze_document::read::<TaskStore>(path)?.record())
 }
 
-/// The document at `path`, or `None` when nothing was ever recorded
-/// there. An error says this build cannot read what is there: the schema
-/// it declares is not this one, or the bytes are not the document at all.
-fn read_document(path: &Path) -> Result<Option<TaskStore>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(|source| UzeError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let declared: DeclaredSchema =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    if declared.schema_version != SCHEMA_VERSION {
-        return Err(UzeError::UnsupportedStateSchema {
-            path: path.to_path_buf(),
-            found: declared.schema_version,
-            expected: SCHEMA_VERSION,
-        });
-    }
-    let store: TaskStore = serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(Some(store))
+/// A record: which agent worked where, on what branch, under what label.
+/// Git still has the branches and the checkouts — which is what makes the
+/// floor beneath the ladder worth having — but the labels, the publication
+/// and the base a branch was cut from are only ever here.
+impl uze_document::Shaped for TaskStore {
+    const SHAPE: u32 = SCHEMA_VERSION;
+    const KIND: &'static str = "agents";
 }
 
 /// What reading the document had to do before it could answer.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Recovery {
-    /// The document this build could not read, moved out of the way with
-    /// the reason it could not be read.
+    /// The document this build could not carry across, moved out of the
+    /// way with the reason it could not be read.
     pub set_aside: Option<SetAside>,
 }
 
 /// A document UZE could not read, kept rather than overwritten.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SetAside {
-    /// Where the bytes are now. Nothing reads them again; they are kept
-    /// because a document UZE cannot understand is still not one it may
-    /// throw away. The name deliberately stops being a `.json` in this
-    /// directory: what is set aside must not read as a second task
-    /// document to anything that lists the directory.
-    pub path: PathBuf,
-    pub reason: String,
-}
-
-/// Whether a document this build cannot read is one it may set aside.
-///
-/// Bytes that are not the document at all, and a document from a schema
-/// this build is *ahead* of: what is lost there is bookkeeping this build
-/// would rewrite anyway.
-///
-/// Never a document from a schema ahead of this one. Setting that aside
-/// takes a newer UZE's record away from it, and two builds on one machine
-/// — the ordinary state of this repository, `target/debug/uze` beside
-/// `~/.cargo/bin/uze` — would then take turns destroying each other's
-/// records, one adoption at a time. The older build reports and leaves it
-/// where it is.
-fn may_be_set_aside(reason: &UzeError) -> bool {
-    match reason {
-        UzeError::Json { .. } => true,
-        UzeError::UnsupportedStateSchema {
-            found, expected, ..
-        } => found < expected,
-        _ => false,
-    }
-}
+pub type SetAside = uze_document::SetAside;
 
 /// Moves the document aside so the project can be recorded again, and
 /// says what was moved.
 ///
-/// Only ever reached under the mutation lock: with the lock held no other
-/// pass is publishing the file, so bytes that do not read are genuinely
-/// unreadable rather than a write caught halfway. What the project loses
-/// is UZE's own labels and publication records — `checkout::reconcile`
-/// adopts every checkout Git still registers on the same pass, and the
-/// work itself was never in this file to begin with.
-fn set_aside(path: &Path, reason: &UzeError) -> Result<Recovery> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("tasks.json");
-    let moved = path.with_file_name(format!("{name}.unreadable-{}", now_unix()));
-    fs::rename(path, &moved).map_err(|source| UzeError::Write {
-        path: moved.clone(),
-        source,
-    })?;
-    tracing::warn!(
-        document = %path.display(),
-        set_aside = %moved.display(),
-        reason = %reason,
-        "the project's task document could not be read and was set aside"
-    );
+/// The floor beneath the ladder, reached only by a shape with no rung.
+/// Only ever under the mutation lock: with the lock held no other pass is
+/// publishing the file, so bytes that do not read are genuinely unreadable
+/// rather than a write caught halfway. What the project loses is UZE's own
+/// labels and publication records — `checkout::reconcile` adopts every
+/// checkout Git still registers on the same pass, and the work itself was
+/// never in this file to begin with.
+fn set_aside(path: &Path, reason: &uze_document::DocumentError) -> Result<Recovery> {
+    let moved = uze_document::set_aside(path, <TaskStore as uze_document::Shaped>::KIND, reason)?;
     Ok(Recovery {
-        set_aside: Some(SetAside {
-            path: moved,
-            reason: reason.to_string(),
-        }),
+        set_aside: Some(moved),
     })
 }
 
@@ -664,12 +599,16 @@ pub fn locked_reporting<T>(
 ) -> Result<(T, Recovery)> {
     let path = store_path(home, project_root);
     let _held = MutationGuard::acquire(&path)?;
-    let (mut store, recovery) = match read_document(&path) {
-        Ok(document) => (document.unwrap_or_default(), Recovery::default()),
-        Err(reason) if may_be_set_aside(&reason) => {
+    // Read in the document crate's own vocabulary rather than through
+    // `read_document`, so the direction rule — which shape may be set
+    // aside and which may never be — is asked of the one place that holds
+    // it instead of being restated here.
+    let (mut store, recovery) = match uze_document::read::<TaskStore>(&path) {
+        Ok(carried) => (carried.or_default(), Recovery::default()),
+        Err(reason) if uze_document::may_be_set_aside(&reason) => {
             (TaskStore::default(), set_aside(&path, &reason)?)
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let outcome = mutate(&mut store)?;
     save(home, project_root, &store)?;

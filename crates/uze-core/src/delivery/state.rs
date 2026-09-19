@@ -2,11 +2,10 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Result, UzeError},
@@ -15,21 +14,43 @@ use crate::{
     provisioning::{ProvisionAction, ProvisionStatus, ProvisioningResult},
 };
 
-/// Reads a JSON ledger, treating an absent file as an empty one. A file
-/// that exists but does not parse is an error: reading it as empty would
-/// invite the next write to overwrite it.
-fn read_json_or_default<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    if !path.exists() {
-        return Ok(T::default());
+/// Reads one of this module's ledgers, treating an absent file as an empty
+/// one. A file that exists but does not read is an error: reading it as
+/// empty would invite the next write to overwrite it.
+///
+/// Everything here is a **record** — ownership and what the operator
+/// registered, which nothing else on the machine knows — so it goes
+/// through the one rule for reading a record another build wrote. Each
+/// ledger names its shape below; a document carrying no shape at all is
+/// shape 1, which is what every one of these is today.
+fn read_json_or_default<T: uze_document::Shaped + Default>(path: &Path) -> Result<T> {
+    Ok(uze_document::read::<T>(path)?.or_default())
+}
+
+/// The shapes this module's ledgers are in.
+///
+/// All shape 1: none has changed since it was first written, and a
+/// document with no `schema_version` at all *is* shape 1 — so nothing on
+/// any machine has to be touched for these to start obeying the rule. The
+/// field appears in the bytes on the release that first needs a rung.
+mod shapes {
+    use super::{AttachmentLedger, IntegrationRegistry, MarketplaceRegistry, ProvisioningRegistry};
+
+    macro_rules! first_shape {
+        ($($record:ty => $kind:literal),* $(,)?) => {
+            $(impl uze_document::Shaped for $record {
+                const SHAPE: u32 = uze_document::FIRST_SHAPE;
+                const KIND: &'static str = $kind;
+            })*
+        };
     }
-    let bytes = fs::read(path).map_err(|source| UzeError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-        path: path.to_path_buf(),
-        source,
-    })
+
+    first_shape! {
+        AttachmentLedger => "attachments",
+        IntegrationRegistry => "integrations",
+        ProvisioningRegistry => "provisioning",
+        MarketplaceRegistry => "marketplaces",
+    }
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -244,6 +265,8 @@ pub fn marketplace_get(home: &UzeHome, name: &str) -> Result<Option<MarketplaceR
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::integration::{AttachmentReceipt, ManagedArtifact};
     use std::path::PathBuf;

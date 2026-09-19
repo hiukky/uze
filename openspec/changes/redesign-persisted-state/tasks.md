@@ -43,17 +43,17 @@
       it.
 - [x] 4.4 Write the step this change exists for: workspace v1→v2 drops the
       per-space `kind`.
-- [ ] 4.5 Apply the direction rule everywhere a version is compared.
-- [ ] 4.6 Keep the floor: a record that cannot be carried across is set
+- [x] 4.5 Apply the direction rule everywhere a version is compared.
+- [x] 4.6 Keep the floor: a record that cannot be carried across is set
       aside, reconstructed from what the world knows, and reported —
       `task.rs`'s adoption from the checkouts on disk is the model.
-- [ ] 4.7 Make the irreplaceable ones refuse rather than default, where
+- [x] 4.7 Make the irreplaceable ones refuse rather than default, where
       they default today.
-- [ ] 4.8 Make `cache/` and `runtime/` carry no shape: unreadable is
+- [x] 4.8 Make `cache/` and `runtime/` carry no shape: unreadable is
       discarded and produced or observed again, silently.
-- [ ] 4.9 Remove the four hand-written policies from `task.rs`,
+- [x] 4.9 Remove the four hand-written policies from `task.rs`,
       `runtime.rs`, `conversation.rs` and the theme loader.
-- [ ] 4.10 Test each arm, including two builds run alternately proving the
+- [x] 4.10 Test each arm, including two builds run alternately proving the
       newer one's records survive every run of the older one.
 
 ## 5. The tiers, drawn on disk
