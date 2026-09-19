@@ -80,6 +80,35 @@ When the change is in `src/ui/`, chrome comes from `src/ui/widget/` and
 colour from `theme` — neither is assembled at the call site. Both are
 enforced; see the two entries in Workspace layout.
 
+## What UZE persists
+
+Everything under `$UZE_HOME` belongs to exactly one tier, and the tier is
+decided by **what deleting it costs** — never by which module wrote it:
+
+| tier | where | deleting it costs |
+|---|---|---|
+| bytes | `store/` | the packages, until they are acquired again |
+| record | `state/` | the operator: nothing else knows it |
+| generated | `runtime/`, `shims/` | nothing — it is produced again |
+| remembered | `cache/` | nothing — it is observed again |
+
+A thing must not sit in a tier that claims a different cost than it has.
+Generated harness content lived at `state/attachments/` for exactly one
+letter's distance from `attachments.json`, the ledger that says who owns
+what inside it — authoritative-looking, entirely reproducible, and the
+answer to "can I delete this" opposite for each.
+
+**Only records declare a shape.** Generated and remembered things are
+produced or observed again when they cannot be read; there is nothing in
+them to carry. A new document therefore declares its tier by where
+`UzeHome` puts it and, if it is a record, its shape and ladder by
+implementing `uze_document::Shaped`. Nothing else is needed and nothing
+else is allowed: **every path UZE owns is named in `UzeHome`**, and
+`every_path_uze_owns_is_named_in_the_map` in
+`tests/architecture/layering.rs` fails the build over a path composed
+anywhere else. `uze-terminal` is the one sanctioned exception, for the
+dependency reason above.
+
 ## Dependencies
 
 The dependency surface is small on purpose: ~22 direct external crates
@@ -180,9 +209,29 @@ need to).
   reported rather than classified (a non-zero exit is an answer for
   `diff`, `rebase` and `rev-parse --verify`, and a failure elsewhere —
   only the caller knows which). Carries no domain.
+- `crates/uze-document` — the one rule for reading a record another build
+  wrote: the shape a record declares, the ladder that carries it across,
+  and the floor beneath that. A leaf crate naming no domain, no path and
+  no harness, because the terminal runtime holds the workspace and reaches
+  nothing of UZE's — and a durability rule written in two places is the
+  failure it exists to end.
+  **A record written in a shape this build knows is carried across, and
+  nothing is said about it**: carrying a record across is the product
+  working, not an event. Setting one aside is the *floor* — only a shape
+  with no rung reaches it — and then what the world still knows is
+  reconstructed and only the residue reported. Recovery has a direction: a
+  record from a *newer* build is never taken, because two builds on one
+  machine is the daily state of this repository. The shape is read before
+  the record, and a record with no shape at all is shape 1.
+  A ladder step is deletable once no machine can be below it; that is what
+  makes this the opposite of scattered compatibility, which this project
+  refuses — the current struct stays clean *because* the old shapes live
+  in the ladder.
 - `crates/uze-terminal` — the local terminal runtime: a server owning the
   pseudoterminals and a versioned client protocol, so a pane survives a
-  client leaving. Depends on nothing else in the workspace.
+  client leaving. Depends on nothing in the workspace but `uze-document`,
+  whose rule it obeys like everything else that persists — the path to its
+  own workspace is the only thing it computes for itself.
 - `crates/uze-theme` — the design vocabulary: colour `Token`s, named
   `Symbol`s, the theme file schema, and the resolver that completes a
   partial theme from the built-in default. A leaf crate — it resolves no
