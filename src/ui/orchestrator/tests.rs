@@ -35,13 +35,13 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         Attach, CommitDetailPopup, CommitDetailResolution, CompletionBehavior, DeliveryResolution,
-        DraggingTab, ExtensionHit, Flow, GitAnswer, GitBadge, GitResolution, NOTICE_TTL,
-        PendingDrop, PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection,
-        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
-        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
-        answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
-        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_code, open_commit_detail, pane_relative, pending_tab_drop,
+        DraggingTab, ExtensionHit, Flow, GitAnswer, GitBadge, GitResolution, PendingDrop,
+        PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup,
+        TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel,
+        adopt_agent_labels, agent_activity_frame, agent_identity_for_tab, answered_or, blank_pane,
+        can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key, forward_paste,
+        forward_scroll, next_agent_label, next_shell_label, open_code, open_commit_detail,
+        pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -1481,13 +1481,7 @@ mod workspace_tests {
             "the second confirmation starts no second removal"
         );
         assert!(
-            driven
-                .attach
-                .model
-                .remembered
-                .notice
-                .as_ref()
-                .is_some_and(|notice| notice.busy),
+            driven.attach.model.remembered.notice.is_some(),
             "and the operator is told something is running"
         );
 
@@ -1511,17 +1505,14 @@ mod workspace_tests {
             std::thread::sleep(Duration::from_millis(10));
             driven.pump();
         }
-        let notice = driven
-            .attach
-            .model
-            .remembered
-            .notice
-            .as_ref()
-            .expect("an ending");
+        let said = format!("{:?}", driven.attach.model.toast_stack());
         assert!(
-            notice.text.contains("t2") || notice.text.contains("yesterday"),
-            "the ending names the task it was about: {}",
-            notice.text
+            said.contains("t2") || said.contains("yesterday"),
+            "the ending names the task it was about: {said}"
+        );
+        assert!(
+            driven.attach.model.remembered.notice.is_none(),
+            "and the header let go of the work that ended"
         );
     }
 
@@ -1571,14 +1562,8 @@ mod workspace_tests {
             ),
             "the client leaves rather than spinning against a dead socket"
         );
-        let notice = driven
-            .attach
-            .model
-            .remembered
-            .notice
-            .as_ref()
-            .expect("it says why it left");
-        assert!(notice.text.contains("disconnected"), "{}", notice.text);
+        let said = format!("{:?}", driven.attach.model.toast_stack());
+        assert!(said.contains("disconnected"), "it says why it left: {said}");
     }
 
     /// The press is answered where the state lives, and nowhere else. The
@@ -2823,45 +2808,6 @@ mod workspace_tests {
         );
     }
 
-    /// Every message the workspace makes is drawn beside the header's own
-    /// controls, and nowhere else. A line pinned over the bottom of the
-    /// pane was a second place to look for something that is usually two
-    /// words, and it sat on top of the agent's own output while it did.
-    #[test]
-    fn a_notice_is_drawn_beside_the_controls_and_never_over_the_pane() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
-        model.set_notice("nothing ready".to_owned());
-        let rows = frame_rows(&mut model);
-        let layout = compute_layout(Rect::new(0, 0, 80, 24), model.sidebar_width);
-        assert!(
-            rows[layout.tab_strip.y as usize].contains("nothing ready"),
-            "{:?}",
-            rows[layout.tab_strip.y as usize]
-        );
-        assert!(
-            !rows[layout.pane.bottom() as usize - 1].contains("nothing ready"),
-            "{:?}",
-            rows[layout.pane.bottom() as usize - 1]
-        );
-    }
-
-    /// A notice about the selected tab's own task needs no label — the tab
-    /// already says whose agent this is — and stands left of the actions
-    /// behind the zone divider, not in place of any of them.
-    #[test]
-    fn a_notice_about_the_task_on_screen_needs_no_label() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
-        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
-        let (rows, hits) = tab_strip(&model);
-        assert!(rows[0].contains("merged → main │"), "{rows:?}");
-        assert!(!rows[0].contains("fix-auth-redirect"), "{rows:?}");
-        assert!(
-            hits.iter()
-                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
-            "its own button is still there to press"
-        );
-    }
-
     /// The header is two zones, and the message is never allowed into the
     /// other one: whatever the workspace has to say, every action keeps
     /// the exact rect it had — including one about the very task the
@@ -2900,25 +2846,15 @@ mod workspace_tests {
         }
     }
 
-    /// One about a task that is *not* on screen carries the label, and
-    /// leaves the selected task's own button alone: it is not about it.
+    /// The header carries work in flight and nothing else. It says so by
+    /// moving: a spinner rides in front of the words, which is what buys
+    /// the message the right to be two of them.
+    ///
+    /// What ended is a toast, so the hint goes when the work does rather
+    /// than when something is said about it — an operation that finishes
+    /// with nothing to report still finishes.
     #[test]
-    fn a_notice_about_another_task_carries_its_label_and_keeps_the_button() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
-        model.set_task_notice("t2", "other", "back to its agent".to_owned());
-        let (rows, hits) = tab_strip(&model);
-        assert!(rows[0].contains("other: back to its agent"), "{rows:?}");
-        assert!(rows[0].contains("3 merge → main"), "{rows:?}");
-        assert!(
-            hits.iter()
-                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
-        );
-    }
-
-    /// Work still running says so by moving: a spinner rides in front of
-    /// it, which is what buys the message the right to be two words.
-    #[test]
-    fn running_work_carries_a_spinner() {
+    fn the_header_carries_work_in_flight_and_lets_go_when_it_ends() {
         let mut model = agent_with_task(TaskStateView::Ready, 3);
         model.set_busy_notice("delivering all".to_owned());
         model.tick = 3;
@@ -2927,55 +2863,39 @@ mod workspace_tests {
             rows[0].contains(&format!("{} delivering all", agent_activity_frame(3))),
             "{rows:?}"
         );
-        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
+
+        model.clear_busy_notice();
         let (settled, _) = tab_strip(&model);
         assert!(
+            !settled[0].contains("delivering all"),
+            "the hint goes with the work: {settled:?}"
+        );
+        assert!(
             !settled[0].contains(&agent_activity_frame(3)),
-            "an ending does not spin: {settled:?}"
+            "and so does the spinner: {settled:?}"
         );
     }
 
-    /// A message about work in flight outlives the notice clock — the
-    /// alternative is silence while the thing it announced is still
-    /// running — and is retired by the outcome that replaces it.
+    /// Outcomes are never drawn in the strip. The header is two words
+    /// about what is happening now; a message about what happened is a
+    /// toast, which arrives whether or not the reader is looking here and
+    /// does not have to be chosen over the next one.
     #[test]
-    fn a_running_notice_outlives_the_deadline_a_finished_one_keeps() {
-        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-notice-ttl"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
-        let aged = Instant::now() - NOTICE_TTL - Duration::from_secs(1);
-
-        driven
-            .attach
-            .model
-            .set_busy_notice("delivering all".to_owned());
-        driven
-            .attach
-            .model
-            .remembered
-            .notice
-            .as_mut()
-            .unwrap()
-            .since = aged;
-        driven.pump();
-        assert!(
-            driven.attach.model.remembered.notice.is_some(),
-            "work still in flight is not swept"
+    fn an_outcome_is_never_drawn_in_the_header() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.raise_toast(
+            crate::ui::widget::ToastKind::Done,
+            "merged → main",
+            "fix-auth-redirect",
+            None,
         );
 
-        driven.attach.model.set_notice("nothing ready".to_owned());
-        driven
-            .attach
-            .model
-            .remembered
-            .notice
-            .as_mut()
-            .unwrap()
-            .since = aged;
-        driven.pump();
+        let (rows, _) = tab_strip(&model);
         assert!(
-            driven.attach.model.remembered.notice.is_none(),
-            "an ending ages out"
+            !rows.iter().any(|row| row.contains("merged")),
+            "the strip says nothing about it: {rows:?}"
         );
+        assert_eq!(model.toast_stack().len(), 1, "the toast has it");
     }
 
     #[test]
@@ -7495,17 +7415,10 @@ mod workspace_tests {
             placement: Err("could not place the agent: no commit to branch from".to_owned()),
             replacing: None,
         });
-        let notice = driven
-            .attach
-            .model
-            .remembered
-            .notice
-            .as_ref()
-            .expect("the refusal is said");
+        let said = format!("{:?}", driven.attach.model.toast_stack());
         assert!(
-            notice.text.contains("agent 2") && notice.text.contains("no commit to branch from"),
-            "{}",
-            notice.text
+            said.contains("agent 2") && said.contains("no commit to branch from"),
+            "the refusal is said: {said}"
         );
         assert!(
             !driven
@@ -7954,4 +7867,86 @@ fn the_agent_picker_draws_every_option_it_sized_itself_for() {
     for name in ["Claude Code", "Codex", "OpenCode"] {
         assert!(three.contains(name), "{name} is drawn:\n{three}");
     }
+}
+
+/// Two things finishing at once is the ordinary case, and the notice's
+/// single slot loses one of them. The stack keeps both, newest on top.
+#[test]
+fn outcomes_stack_newest_first_and_the_oldest_goes_when_it_is_full() {
+    use crate::ui::widget::ToastKind;
+
+    let mut model = WorkspaceModel::default();
+    for n in 0..super::MAX_TOASTS + 2 {
+        model.raise_toast(ToastKind::Told, format!("message {n}"), "detail", None);
+    }
+
+    let stack = model.toast_stack();
+    assert_eq!(stack.len(), super::MAX_TOASTS, "the stack is capped");
+    let drawn = format!("{stack:?}");
+    assert!(
+        drawn.contains(&format!("message {}", super::MAX_TOASTS + 1)),
+        "the newest is kept"
+    );
+    assert!(
+        !drawn.contains("message 0"),
+        "the oldest went, because the reader is looking at the newest"
+    );
+}
+
+/// An outcome with something to answer stays until it is answered: a
+/// message with a button that vanished while the reader reached for it is
+/// worse than no button.
+#[test]
+fn an_outcome_with_an_offer_has_no_clock_and_the_rest_do() {
+    use crate::ui::widget::ToastKind;
+
+    let mut model = WorkspaceModel::default();
+    model.raise_toast(ToastKind::Done, "synced", "to main", None);
+    model.raise_toast(
+        ToastKind::Failed,
+        "rejected",
+        "the remote said no",
+        Some(("retry".to_owned(), WorkspaceHit::OpenChanges)),
+    );
+
+    // Age both past the deadline.
+    for toast in &mut model.remembered.toasts {
+        toast.raised = Instant::now() - super::TOAST_TTL - Duration::from_secs(1);
+    }
+    assert!(model.retire_toasts(), "something left");
+
+    let stack = model.toast_stack();
+    assert_eq!(stack.len(), 1, "only the one with nothing to answer went");
+    assert_eq!(
+        model.toast_offer(0),
+        Some(WorkspaceHit::OpenChanges),
+        "and the one that stayed still carries what answering means"
+    );
+}
+
+/// Putting one away takes that one, by where it sits on screen.
+#[test]
+fn dismissing_takes_the_one_that_was_clicked() {
+    use crate::ui::widget::ToastKind;
+
+    let mut model = WorkspaceModel::default();
+    model.raise_toast(ToastKind::Told, "first", "one", None);
+    model.raise_toast(ToastKind::Told, "second", "two", None);
+
+    // Index 0 is the top of the stack, which is the newest.
+    model.dismiss_toast(0);
+
+    let stack = model.toast_stack();
+    assert_eq!(stack.len(), 1);
+    assert!(
+        format!("{stack:?}").contains("first"),
+        "the other one stays"
+    );
+
+    model.dismiss_toast(7);
+    assert_eq!(
+        model.toast_stack().len(),
+        1,
+        "an index nobody drew is a no-op"
+    );
 }

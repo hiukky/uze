@@ -63,6 +63,7 @@
     "mark.unsupported": "—",
     "mark.attention": "!",
     "mark.close": "✕",
+    "mark.failed": "✕",
     "mark.dot": "•",
     "mark.cross": "×",
     "mark.done": "✓",

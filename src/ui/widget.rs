@@ -96,6 +96,7 @@ pub(crate) mod scrim;
 pub(crate) mod scrollbar;
 pub(crate) mod surface;
 pub(crate) mod text;
+pub(crate) mod toast;
 
 pub(crate) use button::{Align, Button, button_row};
 pub(crate) use chip::{Chip, ChipState};
@@ -104,6 +105,7 @@ pub(crate) use row::RowState;
 pub(crate) use rule::{Edge, Rule};
 pub(crate) use scrollbar::Scrollbar;
 pub(crate) use surface::{Surface, fill, root};
+pub(crate) use toast::{Toast, ToastKind};
 
 #[cfg(test)]
 mod tests;

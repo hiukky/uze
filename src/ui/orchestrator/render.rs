@@ -211,6 +211,10 @@ pub(super) fn render(
     ));
     render_tab_strip(frame, layout.tab_strip, model, identities, hits);
     render_pane(frame, layout.pane, model);
+    // Over the pane, under the modals: an outcome is worth covering some
+    // output for, and worth nothing at all if it draws over the dialog the
+    // reader is answering.
+    render_toasts(frame, layout.pane, model, hits);
     // Drawn last so it sits on top of the pane — same ordering the
     // management modal's dialogs use in its own `render`. Anchored to
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
@@ -2840,6 +2844,23 @@ pub(super) fn render_tab_strip(
         hits.push((rect, WorkspaceHit::OpenChanges));
         trailing_right = rect.x.saturating_sub(1);
     }
+    // A control for looking at the toasts, which only exists where
+    // somebody asked for it: this is a way to see the four kinds side by
+    // side, not a feature of the product. Behind an environment variable
+    // rather than a build flag so it can be turned on against the binary
+    // already installed.
+    if std::env::var_os("UZE_TOAST_DEMO").is_some() {
+        let label = theme::glyph(Symbol::MarkAttention);
+        let chip = Chip::new(
+            &label,
+            theme::color(Token::StateWarning),
+            chip_state(model, Some(WorkspaceHit::DemoToasts)),
+        );
+        let rect = chip.rect_ending_at(trailing_right, inner.y);
+        chip.render(frame, rect);
+        hits.push((rect, WorkspaceHit::DemoToasts));
+        trailing_right = rect.x.saturating_sub(1);
+    }
     {
         let label = theme::glyph(Symbol::Code);
         let chip = Chip::new(
@@ -2997,4 +3018,46 @@ pub(super) fn color(color: TerminalColor) -> Color {
             None => Color::Indexed(index),
         },
     }
+}
+
+/// The stack of outcomes, against the top-right of the pane.
+///
+/// Inset from the pane's right edge so the boxes do not touch the frame,
+/// and a row from its top so they read as sitting over the pane rather
+/// than hanging off the strip above it.
+fn render_toasts(
+    frame: &mut ratatui::Frame<'_>,
+    pane: Rect,
+    model: &WorkspaceModel,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let stack = model.toast_stack();
+    if stack.is_empty() || pane.width < 16 || pane.height < 5 {
+        return;
+    }
+    let area = Rect::new(
+        pane.x,
+        pane.y + 1,
+        pane.width.saturating_sub(1),
+        pane.height.saturating_sub(1),
+    );
+    let mut targets = Vec::new();
+    for (index, placed) in widget::toast::stack(frame, area, &stack)
+        .into_iter()
+        .enumerate()
+    {
+        // The offer first: it sits inside the box, and the box answers
+        // everything else by putting the message away.
+        if let Some(action) = placed.action {
+            targets.push((action, WorkspaceHit::ToastAction(index)));
+        }
+        // The mark first, then the row behind it: both put the message
+        // away, and asking the row first would make the mark unreachable
+        // rather than merely redundant.
+        targets.push((placed.close, WorkspaceHit::DismissToast(index)));
+        targets.push((placed.box_rect, WorkspaceHit::DismissToast(index)));
+    }
+    // Prepended: the pane underneath answers a click anywhere, so a toast
+    // asked after it would never be the answer.
+    hits.splice(0..0, targets);
 }

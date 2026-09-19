@@ -27,6 +27,7 @@
 
 use super::*;
 
+use crate::ui::widget::ToastKind;
 use uze_extensions::view::Command;
 use uze_keys::{Action, Resolution, Scope};
 
@@ -893,7 +894,8 @@ impl Attach<'_> {
                     // the agent being started rather than about the
                     // placement it is being started into.
                     if let Some(gap) = &option.continuity_gap {
-                        self.model.set_notice(format!("{label}: {gap}"));
+                        self.model
+                            .raise_toast(ToastKind::Warned, gap, label.clone(), None);
                     }
                     self.launch_agent(
                         label,
@@ -2189,6 +2191,17 @@ impl Attach<'_> {
         } = *viewport;
         match hit {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
+            WorkspaceHit::DismissToast(index) => self.model.dismiss_toast(index),
+            // The offer is answered and the message goes: leaving it up
+            // would say the thing is still waiting on the reader.
+            WorkspaceHit::ToastAction(index) => {
+                let answer = self.model.toast_offer(index);
+                self.model.dismiss_toast(index);
+                if let Some(answer) = answer {
+                    return self.click(answer, hit_rect, mouse, viewport);
+                }
+            }
+            WorkspaceHit::DemoToasts => self.model.raise_demo_toasts(),
             WorkspaceHit::OpenReleaseNotes => {
                 if let Some(notice) = &self.model.release {
                     let url = notice.notes();
@@ -2576,6 +2589,7 @@ impl Attach<'_> {
     /// Opens the tab a placement was acquired for.
     fn absorb_placement(&mut self, resolution: PlacementResolution) {
         self.model.placement_pending = false;
+        self.model.clear_busy_notice();
         self.model.occupancy_stale = true;
         let PlacementResolution {
             label,
@@ -2588,7 +2602,8 @@ impl Attach<'_> {
         let placement = match placement {
             Ok(placement) => placement,
             Err(reason) => {
-                self.model.set_notice(format!("{label}: {reason}"));
+                self.model
+                    .raise_toast(ToastKind::Failed, reason, label.clone(), None);
                 return;
             }
         };
@@ -2596,7 +2611,9 @@ impl Attach<'_> {
         // opens either way. A placement that could not do what was asked
         // never reaches here: it answered `Err` above and opened nothing.
         match placement.warnings.first().cloned() {
-            Some(text) => self.model.set_notice(format!("{label}: {text}")),
+            Some(text) => self
+                .model
+                .raise_toast(ToastKind::Warned, text, label.clone(), None),
             None => {
                 self.model.remembered.notice = None;
                 self.model.dirty = true;
@@ -2631,8 +2648,12 @@ impl Attach<'_> {
         self.model.occupancy_pending = false;
         let OccupancyResolution { reconciliation } = resolution;
         if let Some(parked) = reconciliation.released.iter().find(|task| task.parked) {
-            self.model
-                .set_notice(format!("{}: parked (alt+p)", parked.label));
+            self.model.raise_toast(
+                ToastKind::Told,
+                "parked",
+                format!("{} — reopen with alt+p", parked.label),
+                None,
+            );
         }
         for cwd in reconciliation.changed {
             self.model
@@ -2671,8 +2692,12 @@ impl Attach<'_> {
                 // what a `while let Ok(..)` does, is how that became a
                 // hang with no message and no way out but quitting.
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.model
-                        .set_notice("terminal runtime disconnected".to_owned());
+                    self.model.raise_toast(
+                        ToastKind::Failed,
+                        "terminal runtime disconnected",
+                        "the client is leaving rather than waiting on a dead socket",
+                        None,
+                    );
                     self.model.dirty = true;
                     return Flow::Exit(WorkspaceExit::Disconnected);
                 }
@@ -2766,7 +2791,7 @@ impl Attach<'_> {
             // said instead.
             if let Some(reason) = evaluation.unreadable {
                 self.model
-                    .set_notice(format!("tasks unreadable — {reason}"));
+                    .raise_toast(ToastKind::Failed, "tasks unreadable", reason, None);
                 continue;
             }
             // Said before the tasks are taken, because it is what those
@@ -2774,7 +2799,12 @@ impl Attach<'_> {
             // the labels and publication UZE had recorded left behind in
             // a document it could not read.
             if let Some(recovered) = evaluation.recovered {
-                self.model.set_notice(recovered);
+                self.model.raise_toast(
+                    ToastKind::Warned,
+                    "recovered what the record still had",
+                    recovered,
+                    None,
+                );
             }
             self.model
                 .remembered
@@ -2798,16 +2828,29 @@ impl Attach<'_> {
             // drawn as "delivering" with no way back.
             if let Some(reserved) = &resolution.reserved {
                 self.model.remembered.delivery_pending.remove(reserved);
+                self.model.clear_busy_notice();
             }
             for report in &resolution.reports {
                 self.model
                     .remembered
                     .delivery_pending
                     .remove(&report.task.id);
-                self.model.set_task_notice(
-                    &report.task.id,
-                    &report.task.label,
+                // A delivery that failed is worth an offer: the branch is
+                // where it was, and trying again is the one thing the
+                // reader would go looking for.
+                let kind = match &report.outcome {
+                    // Refused is the gate saying no, and returned is the
+                    // work coming back for the agent to answer: neither is
+                    // a delivery, and both need the reader.
+                    DeliveryOutcome::Refused { .. } => ToastKind::Failed,
+                    DeliveryOutcome::ReturnedToAgent(_) => ToastKind::Warned,
+                    _ => ToastKind::Done,
+                };
+                self.model.raise_toast(
+                    kind,
                     describe_delivery(report),
+                    report.task.label.clone(),
+                    None,
                 );
                 // Two endings are the owning agent's to act on — a
                 // delivery that came back to it, and a published branch
@@ -2829,10 +2872,20 @@ impl Attach<'_> {
                 // the record is gone, or the document holding it could not
                 // be read — and said as "nothing ready" it told the
                 // operator the task in front of them is not there.
-                self.model.set_notice(match &resolution.reserved {
-                    Some(_) => "the task could not be delivered".to_owned(),
-                    None => "nothing ready".to_owned(),
-                });
+                match &resolution.reserved {
+                    Some(_) => self.model.raise_toast(
+                        ToastKind::Failed,
+                        "the task could not be delivered",
+                        "its record is gone, or the document holding it could not be read",
+                        None,
+                    ),
+                    None => self.model.raise_toast(
+                        ToastKind::Told,
+                        "nothing ready",
+                        "no task has commits the target lacks",
+                        None,
+                    ),
+                }
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
@@ -2843,14 +2896,23 @@ impl Attach<'_> {
                 .remembered
                 .task_mutation_pending
                 .remove(&resolution.task);
+            self.model.clear_busy_notice();
             // Both endings are said. A finish whose store write failed
             // used to say nothing at all, and the re-evaluation right
             // behind it simply redrew the task unchanged — which reads as
             // the key not working.
-            self.model.set_notice(match resolution.outcome {
-                Ok(()) => format!("{}: {}", resolution.label, resolution.mutation.done()),
-                Err(error) => error,
-            });
+            match resolution.outcome {
+                Ok(()) => self.model.raise_toast(
+                    ToastKind::Done,
+                    resolution.mutation.done(),
+                    resolution.label.clone(),
+                    None,
+                ),
+                Err(error) => {
+                    self.model
+                        .raise_toast(ToastKind::Failed, error, resolution.label.clone(), None)
+                }
+            }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
             self.model.dirty = true;
@@ -2903,17 +2965,10 @@ impl Attach<'_> {
             // a relaunch needs the answer.
             spawn_conversation_refresh(self.home, agent_contexts(&self.model, &self.identities));
         }
-        // Work still in flight has no deadline: it is retired by the
-        // outcome that replaces it, never by a clock that would leave the
-        // operator watching nothing while it ran.
-        if self
-            .model
-            .remembered
-            .notice
-            .as_ref()
-            .is_some_and(|notice| !notice.busy && notice.since.elapsed() >= NOTICE_TTL)
-        {
-            self.model.remembered.notice = None;
+        // Outcomes leave on their own clock, and the clock is drawn, so
+        // this pass has to run while any of them is counting — not only
+        // when one expires.
+        if self.model.retire_toasts() || self.model.toasts_are_counting() {
             self.model.dirty = true;
         }
         // Contextual resolution: whatever the selection currently is, that

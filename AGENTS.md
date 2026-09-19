@@ -199,12 +199,14 @@ need to).
   `theme::content`.
 - `src/ui/widget/` — the chrome vocabulary: `Surface` (a bordered box),
   `Rule` (an edge hairline), `Button`/`button_row`, `Chip` (a filled
-  label standing where a control stands), `row` (a list line's ground,
-  its trailing caption, its title), `text` (fitting text to the room
-  there is, and the small-caps forms), `mark` (the caret and the
-  disclosure chevron), `hint` (the keys that act here), `screen_header`,
-  `action_index`, `Scrollbar`, `scrim`, the `fill`/`root` grounds, and the
-  `POPUP_H_PAD`/`POPUP_V_PAD`/`TRAILING_PAD` spacing. Nothing in it names
+  label standing where a control stands), `Field` (a text input, and the
+  caret that is the only thing saying an empty one can be typed into),
+  `Toast` (an outcome, stacked top-right and gone on its own clock),
+  `row` (a list line's ground, its trailing caption, its title), `text`
+  (fitting text to the room there is, and the small-caps forms), `mark`
+  (the disclosure chevron), `hint` (the keys that act here),
+  `screen_header`, `action_index`, `Scrollbar`, `scrim`, the `fill`/`root`
+  grounds, and the `POPUP_H_PAD`/`POPUP_V_PAD`/`TRAILING_PAD` spacing. Nothing in it names
   anything but `theme` and its own siblings. Where `theme` settles what a drawn thing may
   *look* like, this settles what it is *made of*. **Nothing outside
   `src/ui/widget/` may build chrome from ratatui's primitives** —
@@ -469,6 +471,20 @@ properties):
   is `uze plugin remove` — and leaves the project context reconciled, so
   declaring an environment and projecting it are one command rather than
   two.
+- **The header says what is happening; a toast says what happened.** The
+  workspace client's header carries one line, only ever about work in
+  flight, with a spinner and no clock — it goes when the work ends, which
+  is where the operation's own pending flag is cleared rather than where
+  anything is said about it, since an operation that finishes with nothing
+  to report still finishes. Outcomes are toasts, stacked top-right over
+  the pane: a title and a detail — both required, since a message worth
+  interrupting for is worth saying what it is *about*, and one row of
+  words over an empty one reads as a rendering fault. The hue is on the
+  mark alone and the ground is neutral, because four tinted boxes stacked
+  make the reader parse the surface before the words. They carry the
+  seconds they have left; the one that needs answering carries none and
+  stays until it is. A header that said both had to choose between them,
+  and what it dropped was whichever arrived second.
 - **`uze agent …` is an audience, not a category**: its reader is an agent
   UZE launched, not a person, so it is hidden from `uze --help` and
   documented in the region UZE projects into `AGENTS.md` — each audience
@@ -477,8 +493,8 @@ properties):
   vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
   Work that reaches its first commit still unnamed is named from that
   commit's subject, judged against the same vocabulary — a Git fact read on
-  the evaluation pass, never a harness feature. A name anybody chose is
-  never replaced.
+  the evaluation pass, never a harness feature. That derivation fires once
+  and never again; asking by name renames, however often it is asked.
 - **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
   what the project declared (marketplaces, plugins, the `worktrees:` policy);
   the lock holds only what resolving it produced — a commit per marketplace and

@@ -6,8 +6,8 @@ use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use uze_theme::Token;
 
 use super::{
-    Align, Button, Chip, ChipState, Edge, Field, RowState, Rule, Surface, action_index, button_row,
-    field, mark, row, surface::fill, text,
+    Align, Button, Chip, ChipState, Edge, Field, RowState, Rule, Surface, Toast, ToastKind,
+    action_index, button_row, field, mark, row, surface::fill, text, toast,
 };
 use crate::ui::theme;
 
@@ -629,4 +629,340 @@ fn the_window_follows_the_selection_past_the_cap() {
         !deep.iter().any(|(_, position)| *position == 0),
         "and the window actually moved"
     );
+}
+
+/// Four kinds, four hues, four marks. The mark carries the class as well
+/// as the hue, because a terminal is the one surface where the palette may
+/// be the reader's own rather than this design's.
+#[test]
+fn each_kind_of_outcome_is_told_apart_by_more_than_its_colour() {
+    let area = Rect::new(0, 0, 60, 12);
+    let marks: Vec<String> = [
+        ToastKind::Done,
+        ToastKind::Failed,
+        ToastKind::Warned,
+        ToastKind::Told,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let buffer = drawn(60, 12, |frame| {
+            toast::stack(
+                frame,
+                area,
+                &[Toast::new(kind, "something happened", "about it")],
+            );
+        });
+        (0..12)
+            .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("")
+    })
+    .collect();
+
+    for (kind, drawn_text) in [
+        (theme::Symbol::MarkOk, &marks[0]),
+        (theme::Symbol::MarkFailed, &marks[1]),
+        (theme::Symbol::MarkAttention, &marks[2]),
+        (theme::Symbol::ChevronRight, &marks[3]),
+    ] {
+        assert!(
+            drawn_text.contains(&theme::glyph(kind)),
+            "{kind:?} is the mark its kind carries"
+        );
+    }
+}
+
+/// The clock is drawn. A box that vanishes on a clock nobody can see reads
+/// as a glitch; one that says `4s` is one the reader can decide to ignore.
+/// One that stays draws no clock — the `✕` already says it can be ended.
+#[test]
+fn a_toast_says_how_long_it_has_left_or_draws_no_clock_at_all() {
+    let area = Rect::new(0, 0, 60, 12);
+    let text_of = |toast: Toast| {
+        let buffer = drawn(60, 12, |frame| {
+            toast::stack(frame, area, &[toast]);
+        });
+        (0..12)
+            .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let counting = text_of(Toast::new(ToastKind::Done, "synced", "about it").remaining(Some(4)));
+    assert!(counting.contains("4s"), "the seconds left are drawn");
+
+    let staying = text_of(Toast::new(ToastKind::Failed, "rejected", "about it"));
+    assert!(!staying.contains("0s"), "one that stays draws no clock");
+    assert!(
+        staying.contains(&theme::glyph(theme::Symbol::MarkClose)),
+        "the close mark is what says it can be ended"
+    );
+}
+
+/// The stack grows down from where it starts, so a toast arriving does not
+/// move the ones already being read.
+#[test]
+fn an_arriving_toast_does_not_move_the_ones_already_being_read() {
+    let area = Rect::new(0, 0, 60, 20);
+    let first = Toast::new(ToastKind::Done, "one", "about it");
+    let second = Toast::new(ToastKind::Told, "two", "about it");
+
+    let alone = drawn(60, 20, |frame| {
+        let placed = toast::stack(frame, area, std::slice::from_ref(&first));
+        assert_eq!(placed[0].box_rect.y, area.y);
+    });
+    let _ = alone;
+
+    drawn(60, 20, |frame| {
+        let placed = toast::stack(frame, area, &[first.clone(), second]);
+        assert_eq!(placed[0].box_rect.y, area.y, "the first one did not move");
+        assert!(
+            placed[1].box_rect.y > placed[0].box_rect.y,
+            "the new one is below"
+        );
+        assert_eq!(
+            placed[0].box_rect.right(),
+            placed[1].box_rect.right(),
+            "right-aligned, so the column reads as one"
+        );
+    });
+}
+
+/// An offer is a rect the caller registers; a toast without one answers
+/// only by being put away.
+#[test]
+fn only_a_toast_that_offers_something_answers_with_a_rect_for_it() {
+    let area = Rect::new(0, 0, 60, 12);
+
+    drawn(60, 12, |frame| {
+        let placed = toast::stack(
+            frame,
+            area,
+            &[Toast::new(ToastKind::Done, "synced", "about it")],
+        );
+        assert!(placed[0].action.is_none());
+    });
+    drawn(60, 12, |frame| {
+        let placed = toast::stack(
+            frame,
+            area,
+            &[Toast::new(ToastKind::Failed, "rejected", "about it").action("tentar de novo")],
+        );
+        let action = placed[0].action.expect("the offer has a rect");
+        assert!(
+            placed[0].box_rect.union(action) == placed[0].box_rect,
+            "the offer sits inside its own box"
+        );
+    });
+}
+
+/// Only what fits is drawn, and the answer is as long as what was drawn —
+/// so an index into it is an index into what is on screen, which is what
+/// makes "dismiss the third one" mean anything.
+#[test]
+fn a_stack_taller_than_its_room_draws_what_fits_and_says_how_many() {
+    let four: Vec<Toast> = (0..4)
+        .map(|n| Toast::new(ToastKind::Told, format!("message {n}"), "about it"))
+        .collect();
+
+    drawn(60, 20, |frame| {
+        let placed = toast::stack(frame, Rect::new(0, 0, 60, 20), &four);
+        assert_eq!(placed.len(), 4);
+    });
+    drawn(60, 5, |frame| {
+        let placed = toast::stack(frame, Rect::new(0, 0, 60, 5), &four);
+        assert_eq!(placed.len(), 2, "two rows each, one row apart");
+        for one in &placed {
+            assert!(one.box_rect.bottom() <= 5, "nothing is drawn past the edge");
+        }
+    });
+}
+
+/// The ground is the same whatever the toast is saying; the hue is on the
+/// mark and nowhere else.
+///
+/// Four tinted grounds stacked read as a wall of colour and make the
+/// reader parse the surface before the words — and a message is not more
+/// urgent for being wider. One surface, four marks.
+#[test]
+fn a_toast_is_neutral_and_says_what_kind_it_is_with_its_mark_alone() {
+    let area = Rect::new(0, 0, 60, 8);
+    let ground_of = |kind: ToastKind| {
+        let buffer = drawn(60, 8, |frame| {
+            toast::stack(
+                frame,
+                area,
+                &[Toast::new(kind, "something happened", "about it")],
+            );
+        });
+        // A cell in the middle of the message, past the mark.
+        let row = &[(40, 0), (40, 1)];
+        row.map(|(x, y)| buffer[(x, y)].bg)
+    };
+
+    let done = ground_of(ToastKind::Done);
+    assert_eq!(
+        done[0],
+        theme::color(Token::SurfaceRaised),
+        "one neutral surface"
+    );
+    assert_eq!(done[1], done[0], "and both its rows carry it");
+    for kind in [ToastKind::Failed, ToastKind::Warned, ToastKind::Told] {
+        assert_eq!(ground_of(kind), done, "whatever it is saying");
+    }
+}
+
+/// The message takes the first row almost whole; what is *about* it — the
+/// offer and the clock — sits under it on the right. On one row the two
+/// competed for the same columns and the message was the one that lost.
+#[test]
+fn the_message_owns_its_row_and_what_is_about_it_sits_under() {
+    let area = Rect::new(0, 0, 60, 8);
+    let toast = Toast::new(ToastKind::Failed, "could not sync", "about it")
+        .action("try again")
+        .remaining(None);
+
+    drawn(60, 8, |frame| {
+        let placed = toast::stack(frame, area, std::slice::from_ref(&toast));
+        let one = placed[0];
+        assert_eq!(one.box_rect.height, 2);
+        assert_eq!(
+            one.close.y, one.box_rect.y,
+            "the close mark is on the message"
+        );
+        let action = one.action.expect("the offer has a rect");
+        assert_eq!(action.y, one.box_rect.y + 1, "the offer is under it");
+        assert!(
+            action.right() < one.box_rect.right(),
+            "and inset from the edge"
+        );
+    });
+}
+
+/// Title on the first row with the toast's own controls; detail on the
+/// second, hanging under the title rather than under the mark.
+///
+/// The two rows answer different questions — what happened, and what the
+/// title left out — so nothing on one competes for the other's columns.
+#[test]
+fn a_toast_reads_as_a_title_with_a_line_under_it() {
+    let area = Rect::new(0, 0, 60, 8);
+    let toast = Toast::new(
+        ToastKind::Done,
+        "request #412 synced",
+        "3 commits reached main",
+    )
+    .remaining(Some(4));
+
+    let buffer = drawn(60, 8, |frame| {
+        let placed = toast::stack(frame, area, std::slice::from_ref(&toast));
+        let one = placed[0];
+        assert_eq!(
+            one.close.y, one.box_rect.y,
+            "the close mark rides the title"
+        );
+    });
+    let row = |y: u16| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+
+    let title = row(0);
+    let detail = row(1);
+    assert!(title.contains("request #412 synced"), "{title}");
+    assert!(title.contains("4s"), "the clock rides the title: {title}");
+    assert!(
+        detail.contains("3 commits reached main"),
+        "the detail is under it: {detail}"
+    );
+    assert!(
+        !detail.contains("request #412"),
+        "and the title is not repeated: {detail}"
+    );
+
+    // The detail hangs under the title: same column, so the mark's own
+    // column stays empty on the second row.
+    // Columns, not byte offsets: the mark is three bytes and the detail's
+    // first character is one, so `str::find` on the two rows compares
+    // positions that are not the same unit.
+    let column_of = |y: u16, wanted: &str| (0..60).find(|&x| buffer[(x, y)].symbol() == wanted);
+    let mark_at = column_of(0, &theme::glyph(theme::Symbol::MarkOk)).unwrap();
+    let title_at = column_of(0, "r").unwrap();
+    let detail_at = column_of(1, "3").unwrap();
+    assert!(mark_at < title_at);
+    assert_eq!(detail_at, title_at, "indented to the title, not the mark");
+}
+
+/// A toast with nothing more to say still draws its two rows, so a stack
+/// of them keeps one rhythm rather than shuffling as each arrives.
+#[test]
+fn a_toast_with_no_detail_still_keeps_its_shape() {
+    let area = Rect::new(0, 0, 60, 8);
+
+    drawn(60, 8, |frame| {
+        let placed = toast::stack(
+            frame,
+            area,
+            &[Toast::new(ToastKind::Told, "nothing ready", "about it").remaining(Some(2))],
+        );
+        assert_eq!(placed[0].box_rect.height, 2);
+    });
+}
+
+/// A toast is capped however long its words are, and both its lines are
+/// elided to fit rather than one of them widening the box.
+///
+/// The cap is what keeps it a message: a box wide enough to read a
+/// paragraph comfortably is a box that has taken the pane, and the pane is
+/// why anybody is here. What the summary leaves out is reachable where it
+/// is kept — the toast is gone in seconds either way.
+#[test]
+fn a_toast_is_capped_however_long_its_words_are() {
+    let area = Rect::new(0, 0, 200, 8);
+    let long = "a".repeat(300);
+    let toast = Toast::new(ToastKind::Failed, long.clone(), long).remaining(Some(4));
+
+    drawn(200, 8, |frame| {
+        let placed = toast::stack(frame, area, std::slice::from_ref(&toast));
+        let width = placed[0].box_rect.width;
+        assert!(
+            width <= 54,
+            "capped whatever it was asked to say: {width} columns"
+        );
+        assert_eq!(
+            placed[0].box_rect.right(),
+            area.right(),
+            "and still meets the right edge"
+        );
+    });
+
+    let buffer = drawn(200, 8, |frame| {
+        toast::stack(frame, area, std::slice::from_ref(&toast));
+    });
+    let rows: Vec<String> = (0..2)
+        .map(|y| (0..200).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let ellipsis = theme::glyph(theme::Symbol::Ellipsis);
+    assert!(rows[0].contains(&ellipsis), "the title says it was cut");
+    assert!(rows[1].contains(&ellipsis), "and so does the detail");
+}
+
+/// A narrow pane is not a reason to draw a toast that runs off it.
+#[test]
+fn a_toast_never_draws_wider_than_the_room_it_was_given() {
+    let toast = Toast::new(
+        ToastKind::Told,
+        "a title with several words in it",
+        "and a detail with several more",
+    );
+
+    for width in [12_u16, 20, 30] {
+        drawn(width, 8, |frame| {
+            let placed = toast::stack(
+                frame,
+                Rect::new(0, 0, width, 8),
+                std::slice::from_ref(&toast),
+            );
+            let box_rect = placed[0].box_rect;
+            assert!(box_rect.right() <= width, "{width}: {box_rect:?}");
+            assert!(box_rect.x < box_rect.right(), "{width}: {box_rect:?}");
+        });
+    }
 }
