@@ -80,6 +80,11 @@ in one document under the user's UZE state.
 - **WHEN** a user starts `uze` in one directory and then in another
 - **THEN** both clients are attached to the same server and see the same spaces
 
+#### Scenario: A launch after the binary was replaced keeps the running panes
+- **WHEN** the `uze` binary is replaced while a server is running agents, and a user starts `uze` again
+- **THEN** the new client attaches to the running server whenever it answers this build's handshake, and every pane keeps its process
+- **AND THEN** a server that cannot answer it is ended instead, and the spaces, tabs and panes it held are restored by the server that replaces it
+
 ### Requirement: A space has a root
 The system SHALL give every space a root directory, chosen when the space
 is created, and SHALL derive the space's behaviour from that root: an agent

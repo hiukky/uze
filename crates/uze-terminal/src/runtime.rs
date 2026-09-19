@@ -78,11 +78,99 @@ pub fn attach(seat: &SpaceSeat) -> Result<UnixStream, RuntimeError> {
                 None => return Err(unreachable(&socket, Some(cause))),
             },
         },
+        // Another image is not another protocol. A `make install` over a
+        // running server is the ordinary state of this repository's own
+        // development, and it leaves every later `uze` looking at a server
+        // whose binary is no longer the one on disk — while that server is
+        // running somebody's agents, whose processes end with it. So it is
+        // asked rather than assumed: a server that answers this build's
+        // handshake can serve this build, whatever it was built from, and
+        // only one that cannot is retired.
+        Arrival::Ask(pid) => {
+            // A server that answered a moment ago and cannot be reached
+            // now is one that has just gone: taken as an unanswered
+            // question rather than as an error, since the answer to that
+            // is the same server started fresh.
+            if serves_this_build(&socket)
+                && let Ok(stream) = connect_waiting(&socket)
+            {
+                return Ok(stream);
+            }
+            tracing::warn!(
+                pid,
+                socket = %socket.display(),
+                "the server here does not answer this build's handshake; retiring it"
+            );
+            retire(pid, &socket);
+        }
         Arrival::Replace(pid) => retire(pid, &socket),
         Arrival::Start => {}
     }
     start_server(seat)?;
     connect_waiting(&socket)
+}
+
+/// How long the server at the endpoint has to answer whether it can serve
+/// this client. Bounded because the alternative to an answer is retiring
+/// it, and a server that says nothing in two seconds is a server no
+/// attach can wait on.
+const ANSWERS_WITHIN: Duration = Duration::from_secs(2);
+
+/// Whether the server at `socket` can serve this build, asked the one way
+/// that can answer it: by handshaking with it.
+///
+/// Its image says which binary it was started from and nothing about what
+/// it speaks — [`PROTOCOL_VERSION`] is what says that, and a server
+/// carrying this one is a server this client can talk to however its
+/// binary was built. A snapshot in answer is the proof: the server read
+/// this build's `Attach`, accepted its version and described the workspace
+/// in a shape this build could read back. An error, a hang-up, silence,
+/// or bytes this build cannot read are each the opposite — and are what a
+/// server built to another framing answers, which is the state this
+/// question exists to find.
+///
+/// Attaches for the answer and leaves, the way [`open_space`] does: no
+/// size, so no pane anybody is looking at is resized, and `Detach` before
+/// the caller's own connection is made.
+fn serves_this_build(socket: &Path) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return false;
+    };
+    // Both directions: an attach must not be able to hang on a server that
+    // accepted the connection and then stopped reading it, which is the
+    // same failure as one that never answers.
+    if stream.set_read_timeout(Some(ANSWERS_WITHIN)).is_err()
+        || stream.set_write_timeout(Some(ANSWERS_WITHIN)).is_err()
+    {
+        return false;
+    }
+    let asked = send_request(
+        &mut stream,
+        &ClientRequest::Attach {
+            version: PROTOCOL_VERSION,
+            columns: 0,
+            rows: 0,
+            seating: Seating::WhereItLeftOff,
+        },
+    );
+    if asked.is_err() {
+        return false;
+    }
+    // A read timeout is per read, so a server dribbling events would renew
+    // it forever: the whole question is bounded, not each answer to it.
+    let deadline = Instant::now() + ANSWERS_WITHIN;
+    let served = loop {
+        match read_event(&mut stream) {
+            Ok(Some(ClientEvent::Snapshot { .. })) => break true,
+            Ok(Some(ClientEvent::Error { .. })) | Ok(None) | Err(_) => break false,
+            // Anything else is a server talking, which is neither answer
+            // yet — a repaint can reach a client before its snapshot does.
+            Ok(Some(_)) if Instant::now() < deadline => {}
+            Ok(Some(_)) => break false,
+        }
+    };
+    let _ = send_request(&mut stream, &ClientRequest::Detach);
+    served
 }
 
 /// Says what a failed connect to a claimed workspace actually means,
@@ -109,6 +197,9 @@ fn unreachable(socket: &Path, cause: Option<RuntimeError>) -> RuntimeError {
 enum Arrival {
     Connect,
     Start,
+    /// Connect to the server at this pid if it can serve this build, and
+    /// only otherwise end it and start one.
+    Ask(u32),
     /// End the server at this pid, then start one.
     Replace(u32),
 }
@@ -119,10 +210,16 @@ enum Arrival {
 /// Nothing here unlinks an endpoint — only a server holding the claim does
 /// (see [`serve`]) — so a listener nobody can vouch for is connected to
 /// rather than taken down: a platform that cannot read the process table
-/// must never cost a live session its socket.
+/// must never cost a live session its socket. Nothing here ends a live
+/// server of this workspace either: that is [`serves_this_build`]'s
+/// answer to give, and only after the server has failed to give it.
 fn arrival(claimed: bool, listener: Listener) -> Arrival {
     match (claimed, listener) {
-        (true, Listener::AnotherBuild(pid)) => Arrival::Replace(pid),
+        // Alive, serving this workspace, and built from another image.
+        // Which of those matters is settled by asking it, never by the
+        // image: retiring a live server costs every agent it runs its
+        // process, and the image is no evidence that it had to be paid.
+        (true, Listener::AnotherBuild(pid)) => Arrival::Ask(pid),
         (true, _) => Arrival::Connect,
         // A server claims the workspace before it binds, so a `uze`
         // listening with the claim free is serving a workspace deleted
@@ -139,10 +236,10 @@ enum Listener {
     Nobody,
     /// This very executable, and so compiled with this `PROTOCOL_VERSION`.
     ThisBuild(u32),
-    /// A `uze` running another image: `PROTOCOL_VERSION` is bumped by hand,
-    /// so two builds can carry one number and still disagree about a
-    /// request's shape — a `make install` over a running server is exactly
-    /// that.
+    /// A `uze` running another image — a `make install` over a running
+    /// server, which also leaves the image it was started from reading as
+    /// deleted. Which protocol it speaks is a separate question, and the
+    /// only one that decides anything: see [`serves_this_build`].
     AnotherBuild(u32),
     /// A process the process table cannot vouch for as `uze`: another
     /// program, or a platform that cannot say.
@@ -2609,12 +2706,12 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH, PaneRuntime,
-        PersistedWorkspace, ReplySink, RuntimeError, Selection, Server, WorkspaceLock, arrival,
-        bind_endpoint, held_by_a_server, identify, identity_of, listener_at, persisted_state_path,
-        read_event, read_message, relaunch_command_for_process, retire, send_request, signalable,
-        snapshot, socket_path, view_for, workspace_is_claimed, workspace_lock_path,
-        write_atomically, write_message,
+        ANSWERS_WITHIN, Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
+        PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server, WorkspaceLock,
+        arrival, bind_endpoint, held_by_a_server, identify, identity_of, listener_at,
+        persisted_state_path, read_event, read_message, relaunch_command_for_process, retire,
+        send_request, serves_this_build, signalable, snapshot, socket_path, view_for,
+        workspace_is_claimed, workspace_lock_path, write_atomically, write_message,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -4881,6 +4978,10 @@ mod tests {
     const CLAIM_HOLDER: &str = "UZE_TERMINAL_TEST_HOLDS_CLAIM";
     /// What that process says once the claim is its.
     const CLAIM_HELD: &str = "workspace claim held";
+    /// Set, to a project root, on the holder that is to be a whole server —
+    /// endpoint bound and handshakes answered — rather than a claim and
+    /// nothing else.
+    const SERVING_HOLDER: &str = "UZE_TERMINAL_TEST_SERVES";
 
     /// The other server in the two claim tests: a process of its own that
     /// takes the workspace claim under the `UZE_HOME` it is given, says so,
@@ -4901,7 +5002,28 @@ mod tests {
         if std::env::var_os(CLAIM_HOLDER).is_none() {
             return;
         }
-        let _held = WorkspaceLock::acquire().expect("the holder's claim is granted");
+        // Asked to be a whole server: `Server::new` takes the claim, the
+        // endpoint is bound, and clients are answered — everything a
+        // running server of another build is, since what an attach does
+        // about one is decided by what it answers.
+        let _held = match std::env::var_os(SERVING_HOLDER) {
+            Some(root) => {
+                let socket = socket_path().expect("the holder's endpoint");
+                let (server, _damage) =
+                    Server::new(worktree_seat(Path::new(&root)), socket.clone())
+                        .expect("the holder serves");
+                let server = Arc::new(server);
+                let listener = bind_endpoint(&socket).expect("the holder binds its endpoint");
+                std::thread::spawn(move || {
+                    for stream in listener.incoming().flatten() {
+                        let server = Arc::clone(&server);
+                        std::thread::spawn(move || server.handle_client(stream));
+                    }
+                });
+                None
+            }
+            None => Some(WorkspaceLock::acquire().expect("the holder's claim is granted")),
+        };
         println!("{CLAIM_HELD}");
         let mut until_eof = String::new();
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut until_eof);
@@ -4925,7 +5047,22 @@ mod tests {
         /// The same holder, run from `executable` — a copy of this test
         /// binary, for a server of another build.
         fn spawn_as(executable: &Path, uze_home: &Path) -> Self {
-            let mut process = std::process::Command::new(executable)
+            Self::spawn_with(executable, uze_home, None)
+        }
+
+        /// A holder that is a whole server: it binds this `UZE_HOME`'s
+        /// endpoint over `project` and answers handshakes, which is what an
+        /// attach asks of a server before it decides anything about it.
+        fn spawn_serving(executable: &Path, uze_home: &Path, project: &Path) -> Self {
+            Self::spawn_with(executable, uze_home, Some(project))
+        }
+
+        fn spawn_with(executable: &Path, uze_home: &Path, serving: Option<&Path>) -> Self {
+            let mut command = std::process::Command::new(executable);
+            if let Some(project) = serving {
+                command.env(SERVING_HOLDER, project);
+            }
+            let mut process = command
                 .args([
                     "--ignored",
                     "--exact",
@@ -5336,7 +5473,9 @@ mod tests {
             (true, Listener::ThisBuild(pid), Arrival::Connect),
             (true, Listener::Unrecognized, Arrival::Connect),
             (true, Listener::Nobody, Arrival::Connect),
-            (true, Listener::AnotherBuild(pid), Arrival::Replace(pid)),
+            // Alive and serving this workspace: asked, never ended on the
+            // strength of the image it was started from.
+            (true, Listener::AnotherBuild(pid), Arrival::Ask(pid)),
             (false, Listener::ThisBuild(pid), Arrival::Replace(pid)),
             (false, Listener::AnotherBuild(pid), Arrival::Replace(pid)),
             (false, Listener::Unrecognized, Arrival::Start),
@@ -5348,6 +5487,163 @@ mod tests {
                 "claimed: {claimed}, listener: {listener:?}"
             );
         }
+    }
+
+    /// A `make install` over a running server leaves every later `uze`
+    /// looking at a server built from another image — and ending one costs
+    /// every agent it runs its process, mid-conversation, whether or not
+    /// the two builds could have talked. They usually could: the image
+    /// says which binary a server came from, and `PROTOCOL_VERSION` says
+    /// what it speaks. A server that answers this build's handshake is
+    /// attached to, and the panes it is running go on running.
+    #[test]
+    fn a_server_that_answers_this_builds_handshake_serves_it() {
+        let scratch = uze_testkit::temp::socket_scratch("serves-answered");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        for directory in [&uze_home, &project] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+        let socket = scratch.join("test.sock");
+        let (server, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
+        let server = Arc::new(server);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let serving = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            server.handle_client(stream);
+        });
+
+        assert!(
+            serves_this_build(&socket),
+            "a server that reads this build's attach and describes the workspace can serve it"
+        );
+
+        let _ = serving.join();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The state the question exists to find: something is listening at the
+    /// endpoint of a claimed workspace and cannot be talked to — a server
+    /// built to another framing, one that refuses this build's version, one
+    /// that hung up, one that has stopped answering at all. Each is a "no",
+    /// and the silent one is a "no" within a bound rather than an attach
+    /// that waits on it forever.
+    #[test]
+    fn a_server_that_cannot_answer_is_never_taken_for_one_that_can() {
+        let scratch = uze_testkit::temp::socket_scratch("serves-refused");
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let refusing = scratch.join("refusing.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&refusing).unwrap();
+        let answering = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = write_message(
+                &mut stream,
+                &crate::ClientEvent::Error {
+                    message: "incompatible terminal runtime protocol".into(),
+                },
+            );
+        });
+        assert!(
+            !serves_this_build(&refusing),
+            "a server that refuses this build's version cannot serve it"
+        );
+        let _ = answering.join();
+
+        let hanging_up = scratch.join("hanging-up.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&hanging_up).unwrap();
+        let dropping = std::thread::spawn(move || drop(listener.accept().unwrap()));
+        assert!(
+            !serves_this_build(&hanging_up),
+            "and neither can one that hangs up on the handshake"
+        );
+        let _ = dropping.join();
+
+        let silent = scratch.join("silent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&silent).unwrap();
+        let (answered, asked) = std::sync::mpsc::channel::<()>();
+        let holding = std::thread::spawn(move || {
+            let held = listener.accept().unwrap();
+            let _ = asked.recv();
+            drop(held);
+        });
+        let began = std::time::Instant::now();
+        assert!(!serves_this_build(&silent), "nor one that says nothing");
+        assert!(
+            began.elapsed() < ANSWERS_WITHIN * 2,
+            "and the silence is bounded: an attach cannot wait on it"
+        );
+        drop(answered);
+        let _ = holding.join();
+
+        assert!(
+            !serves_this_build(&scratch.join("nobody.sock")),
+            "an endpoint nothing is behind answers nothing either"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// What all of this is for, end to end: a second terminal opened while
+    /// agents are running in the first attaches to the server already
+    /// serving them, even though a `make install` has made that server
+    /// "another build" in the meantime. It used to be retired on sight —
+    /// every pane it held killed with it, mid-conversation, because a
+    /// binary had been replaced on disk.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_second_client_attaches_to_a_live_server_of_another_build() {
+        let scratch = uze_testkit::temp::socket_scratch("attach-another-build");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        for directory in [&uze_home, &project] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+        let serving = ClaimHolder::spawn_serving(
+            &another_build_of_this_binary(&scratch),
+            &uze_home,
+            &project,
+        );
+        let socket = socket_path().unwrap();
+        assert_eq!(
+            listener_at(&socket),
+            Listener::AnotherBuild(serving.pid()),
+            "the server at the endpoint was started from another image"
+        );
+
+        let mut stream = super::attach(&worktree_seat(&project)).expect("the client attaches");
+
+        assert_eq!(
+            super::claim_holder(),
+            Some(serving.pid()),
+            "to the server that was already there, which still holds the workspace"
+        );
+        send_request(
+            &mut stream,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                columns: 80,
+                rows: 24,
+                seating: crate::Seating::WhereItLeftOff,
+            },
+        )
+        .unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let described = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .find_map(|event| match event {
+                crate::ClientEvent::Snapshot { session } => Some(session),
+                _ => None,
+            })
+            .expect("and it serves this client");
+        assert!(!described.workspace.spaces.is_empty());
+
+        let _ = send_request(&mut stream, &crate::ClientRequest::Detach);
+        serving.release();
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// `SO_RCVTIMEO` restarts on every successful read, so a deadline

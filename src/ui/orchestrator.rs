@@ -1066,6 +1066,7 @@ pub(crate) fn attach_workspace(
         steps_taken: layout.first_steps.taken.clone(),
         timeline_collapsed: layout.workspace.timeline_collapsed,
         timeline_rows: layout.workspace.timeline_rows,
+        collapsed_space_roots: layout.workspace.collapsed_space_roots.clone(),
         prompt_recorder: Some(prompt_recorder),
         layout_recorder: Some(layout_recorder),
         management_layout: layout.management.clone(),
@@ -2097,10 +2098,6 @@ struct Remembered {
     /// length. Remembered across attaches like any other sidebar
     /// resolution, so an attach does not flip it back.
     roots_shown: BTreeSet<SpaceId>,
-    /// The spaces minimized to their header row, flipped by the fold in
-    /// front of the name. A view of the column, not of the work: the
-    /// space's agents keep running and the chords still reach them.
-    collapsed_spaces: BTreeSet<SpaceId>,
     /// Which tab each agent was last left on: the agent's own tab, or one
     /// of the shells opened beside it in its strip.
     ///
@@ -2155,6 +2152,15 @@ struct WorkspaceModel {
     /// What the sidebar's foot says about releases, as of `release_revision`.
     release: Option<crate::self_update::Notice>,
     release_revision: u64,
+    /// The spaces minimized to their header row, by root, flipped by the
+    /// fold in front of the name. A view of the column, not of the work:
+    /// the space's agents keep running and the chords still reach them.
+    /// A preference rather than a resolution, so it is kept in the shared
+    /// `uze_application::ClientLayout` — the sidebar's width and the
+    /// timeline's fold are the same kind of thing, and a fold the
+    /// operator has to make again on every launch is not remembered at
+    /// all.
+    collapsed_space_roots: BTreeSet<PathBuf>,
     /// Whether the sidebar's first-steps section is folded to its header.
     first_steps_collapsed: bool,
     /// Whether it has been put away for good, which is offered only once
@@ -2662,6 +2668,21 @@ impl WorkspaceModel {
             .as_ref()
             .map(|session| session.selected_tab().id)
     }
+    /// Whether a space is minimized to its header row. Asked by root,
+    /// which is what the fold is kept by (see `collapsed_space_roots`).
+    pub(super) fn space_folded(&self, space: &Space) -> bool {
+        self.collapsed_space_roots.contains(&space.root)
+    }
+
+    /// The root a space is over — the name its fold is kept under.
+    fn space_root(&self, space: SpaceId) -> Option<PathBuf> {
+        self.session
+            .iter()
+            .flat_map(|session| &session.workspace.spaces)
+            .find(|candidate| candidate.id == space)
+            .map(|space| space.root.clone())
+    }
+
     /// Every tab of every space, in the order the session lists them.
     pub(super) fn tabs(&self) -> impl Iterator<Item = &Tab> {
         self.session
@@ -2801,6 +2822,7 @@ impl WorkspaceModel {
             workspace: uze_application::WorkspaceLayout {
                 timeline_collapsed: self.timeline_collapsed,
                 timeline_rows: self.timeline_rows,
+                collapsed_space_roots: self.collapsed_space_roots.clone(),
             },
             first_steps: uze_application::FirstStepsLayout {
                 collapsed: self.first_steps_collapsed,
@@ -4116,12 +4138,16 @@ fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
     Some(tab.pane.cwd.clone())
 }
 
-/// Minimizes one space to its header, or opens it again. Local state, like
-/// [`toggle_space_root`].
+/// Minimizes one space to its header, or opens it again — and keeps it
+/// that way for the next run, the way the timeline's own fold is kept.
 fn toggle_space_collapsed(model: &mut WorkspaceModel, space: SpaceId) {
-    if !model.remembered.collapsed_spaces.remove(&space) {
-        model.remembered.collapsed_spaces.insert(space);
+    let Some(root) = model.space_root(space) else {
+        return;
+    };
+    if !model.collapsed_space_roots.remove(&root) {
+        model.collapsed_space_roots.insert(root);
     }
+    model.remember_sidebar();
     model.dirty = true;
 }
 

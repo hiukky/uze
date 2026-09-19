@@ -21,6 +21,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +75,7 @@ pub struct SidebarLayout {
 
 /// What the workspace client — the terminal side, with its spaces and
 /// agent tabs — keeps of its own arrangement.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct WorkspaceLayout {
     /// Whether the sidebar's commit timeline shows only its header.
@@ -82,6 +83,17 @@ pub struct WorkspaceLayout {
     /// The commit rows the timeline was dragged to; `None` leaves the
     /// height to the client's own default.
     pub timeline_rows: Option<u16>,
+    /// The spaces minimized to their header row, by root.
+    ///
+    /// By root, because a space's identifier is minted by the server and
+    /// minted again whenever it restores the workspace, while the root is
+    /// what the space is *of*: a fold keyed by the identifier would come
+    /// back on whichever space inherited the number. Two spaces over one
+    /// root therefore fold together — the one case this cannot tell apart,
+    /// and the one where folding both surprises nobody. A root no space
+    /// has any more is simply a fold nothing is drawn for, so nothing has
+    /// to be cleaned up when a space is closed.
+    pub collapsed_space_roots: BTreeSet<PathBuf>,
 }
 
 impl Default for WorkspaceLayout {
@@ -92,6 +104,7 @@ impl Default for WorkspaceLayout {
         Self {
             timeline_collapsed: true,
             timeline_rows: None,
+            collapsed_space_roots: BTreeSet::new(),
         }
     }
 }
@@ -135,6 +148,7 @@ pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     use super::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout, load,
@@ -170,6 +184,7 @@ mod tests {
             workspace: WorkspaceLayout {
                 timeline_collapsed: false,
                 timeline_rows: Some(6),
+                collapsed_space_roots: BTreeSet::from([PathBuf::from("/home/someone/work")]),
             },
             management: ManagementLayout {
                 route: Some("plugins".to_owned()),

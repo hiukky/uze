@@ -703,7 +703,7 @@ pub(super) fn render_sidebar(
         // Minimized — or open with nothing in it — a space keeps the two-row
         // shape of every item: its header over where its work is. Open over
         // agents, they are that context, so the header stands alone.
-        let folded = model.remembered.collapsed_spaces.contains(&space.id);
+        let folded = model.space_folded(space);
         if folded || agent_tabs_of(space, identities).is_empty() {
             render_space_caption(frame, &mut rows, hits, model, session, space, identities);
         }
@@ -813,7 +813,7 @@ fn tree_rows(model: &WorkspaceModel, session: &Session, identities: &[AgentIdent
         .iter()
         .map(|space| {
             let agents = agent_tabs_of(space, identities).len() as u16;
-            let body = if model.remembered.collapsed_spaces.contains(&space.id) || agents == 0 {
+            let body = if model.space_folded(space) || agents == 0 {
                 1
             } else {
                 agent_rows(agents)
@@ -1037,12 +1037,7 @@ fn render_space_caption(
     // as a caption to it rather than as another row of the tree. Lit along
     // with its header.
     let mut spans = vec![space_gutter(
-        header_is_current(
-            space,
-            session,
-            identities,
-            model.remembered.collapsed_spaces.contains(&space.id),
-        ),
+        header_is_current(space, session, identities, model.space_folded(space)),
         space.kind,
     )];
     let hue = theme::color(Token::TextDim);
@@ -1537,7 +1532,7 @@ pub(super) fn render_space_header(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let selected = space.id == session.workspace.selected_space;
-    let collapsed = model.remembered.collapsed_spaces.contains(&space.id);
+    let collapsed = model.space_folded(space);
     // The header is a target of its own: clicking it lands on the space's
     // own shells, a context no agent row below speaks for. While that is
     // where the operator is — or the space is minimized, so its header is
