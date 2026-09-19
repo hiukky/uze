@@ -2761,17 +2761,18 @@ fn the_catalog_counts_the_harnesses_that_are_actually_installed() {
     );
 }
 
-/// A drawer whose one action cannot run says why, where the button would
-/// have been. UZE sets up a harness it can find; for one that is not on
-/// the machine there is nothing to run, and a row that simply goes empty
-/// under "Not configured" reads as a button that failed to draw.
+/// Setting a harness up is offered for every card in the catalog, and it
+/// is the same gesture wherever it starts from: UZE provisions through the
+/// vendor's own official route, which installs what is not on the machine
+/// and updates what is. The drawer used to offer the action only where it
+/// had already been done, and nothing at all on the one card with
+/// something to do.
 #[test]
-fn a_harness_that_cannot_be_set_up_says_so_where_its_button_would_be() {
+fn every_harness_in_the_catalog_can_be_set_up() {
     let mut model = model_with_data();
     model.set_route(Route::Harnesses);
     model.focus = Focus::Content;
-    // The fixture's second harness is detected and unconfigured: the one
-    // case where setting it up is exactly what to do.
+    // The fixture's second harness is detected and unconfigured.
     model.remembered.harness_screen.selected = 1;
     let drawn = |model: &TuiModel| {
         let mut terminal = Terminal::new(TestBackend::new(150, 40)).unwrap();
@@ -2779,15 +2780,14 @@ fn a_harness_that_cannot_be_set_up_says_so_where_its_button_would_be() {
         terminal
             .draw(|frame| render(frame, frame.area(), model, &mut hits))
             .unwrap();
-        (buffer_rows(&terminal).join("\n"), hits)
+        let offered = hits
+            .iter()
+            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::SetupHarness));
+        (offered, buffer_rows(&terminal).join("\n"))
     };
 
-    let (rows, hits) = drawn(&model);
-    assert!(
-        hits.iter()
-            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::SetupHarness)),
-        "an installed harness offers the button: {rows}"
-    );
+    let (offered, rows) = drawn(&model);
+    assert!(offered, "a harness that is here can be set up: {rows}");
 
     model
         .remembered
@@ -2798,16 +2798,14 @@ fn a_harness_that_cannot_be_set_up_says_so_where_its_button_would_be() {
         .detection
         .present = false;
 
-    let (rows, hits) = drawn(&model);
+    let (offered, rows) = drawn(&model);
     assert!(
-        !hits
-            .iter()
-            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::SetupHarness)),
-        "one that is not on the machine cannot be set up: {rows}"
+        offered,
+        "and so can one that is not — setting it up is what installs it: {rows}"
     );
     assert!(
-        rows.contains("not installed on this machine"),
-        "and the row the button was on carries the reason: {rows}"
+        rows.contains("setting it up installs it"),
+        "which is what the drawer says it will do: {rows}"
     );
 }
 

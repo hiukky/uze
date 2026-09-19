@@ -201,7 +201,7 @@ fn render_extension_drawer(
 ) {
     let inner = super::drawer(frame, content, ResizablePanel::ExtensionDrawer, model, hits);
     let offers = uze_application::application::offers::extension_offers();
-    let (body, status) = super::drawer_body_and_footer(inner, &offers, None);
+    let (body, status) = super::drawer_body_and_footer(inner, &offers);
 
     let lines = vec![
         Line::from(Span::styled("EXTENSION", theme::fg_bold(Token::TextMuted))),
@@ -241,7 +241,6 @@ fn render_extension_drawer(
             color: theme::color(Token::Accent),
             headline: "Bundled",
             subtitle: "Ships with uze — always available",
-            nothing_to_do: None,
         },
         &offers,
         model.hovered_offer,

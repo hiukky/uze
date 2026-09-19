@@ -428,7 +428,7 @@ fn render_plugin_drawer(
         hits,
     );
     let offers = plugin.offers();
-    let (body, status_area) = super::drawer_body_and_footer(inner, &offers, None);
+    let (body, status_area) = super::drawer_body_and_footer(inner, &offers);
 
     let room = body.width as usize;
     let mut lines = vec![Line::from(Span::styled(
@@ -583,14 +583,12 @@ fn render_plugin_drawer(
                 color: theme::color(Token::Accent),
                 headline: "Updated",
                 subtitle: "Brought up to date automatically when uze started",
-                nothing_to_do: None,
             }
         } else if plugin.update_available == Some(true) {
             DrawerStatus {
                 color: theme::color(Token::StateWarning),
                 headline: "Update available",
                 subtitle: "Needs your confirmation to apply",
-                nothing_to_do: None,
             }
         } else {
             DrawerStatus {
@@ -602,7 +600,6 @@ fn render_plugin_drawer(
                     "needs attention" => "Managed state needs attention",
                     _ => "Health unknown",
                 },
-                nothing_to_do: None,
             }
         }
     } else {
@@ -610,7 +607,6 @@ fn render_plugin_drawer(
             color: theme::color(Token::TextMuted),
             headline: "Not installed",
             subtitle: "Available from this marketplace",
-            nothing_to_do: None,
         }
     };
     render_drawer_footer(

@@ -336,7 +336,6 @@ fn render_drawer(
     let (inner, footer) = super::drawer_body_and_footer(
         super::drawer(frame, content, ResizablePanel::KeysDrawer, model, hits),
         &offers,
-        None,
     );
     let shipped = match row.default_chord {
         Some(chord) => format!("uze ships with {chord}"),
@@ -356,21 +355,18 @@ fn render_drawer(
             color: theme::color(Token::StateWarning),
             headline: "Waiting for a key",
             subtitle: &waiting,
-            nothing_to_do: None,
         }
     } else if row.custom() {
         DrawerStatus {
             color: theme::color(Token::StateInfo),
             headline: "Changed",
             subtitle: &shipped,
-            nothing_to_do: None,
         }
     } else {
         DrawerStatus {
             color: theme::color(Token::TextMuted),
             headline: "Default",
             subtitle: "The key uze ships with",
-            nothing_to_do: None,
         }
     };
     render_drawer_footer(

@@ -81,12 +81,8 @@ pub(crate) fn drawer(
 
 /// A drawer's content split into its body and the footer
 /// [`render_drawer_footer`] draws beneath it.
-pub(crate) fn drawer_body_and_footer(
-    inner: Rect,
-    offers: &[ActionOffer],
-    nothing_to_do: Option<&str>,
-) -> (Rect, Rect) {
-    let footer_height = drawer_footer_height(offers, nothing_to_do);
+pub(crate) fn drawer_body_and_footer(inner: Rect, offers: &[ActionOffer]) -> (Rect, Rect) {
+    let footer_height = drawer_footer_height(offers);
     let body = Rect {
         height: inner.height.saturating_sub(footer_height),
         ..inner
@@ -134,28 +130,17 @@ pub(crate) fn filter_box(
 }
 
 /// Where a detail drawer's selected thing stands, in the words its footer
-/// prints: a coloured headline, a muted note beneath it, and — when
-/// nothing can be done now — what to put on the row the buttons would
-/// have been on.
+/// prints: a coloured headline and a muted note beneath it.
 pub(crate) struct DrawerStatus<'a> {
     pub color: Color,
     pub headline: &'a str,
     pub subtitle: &'a str,
-    /// A row that simply goes empty reads as a button that failed to draw
-    /// rather than as an answer, and the person went looking there. Said
-    /// by the caller, never derived here: only the caller knows whether
-    /// its actions being unavailable is news (a harness that cannot be
-    /// set up because it is not on the machine) or the ordinary state of
-    /// a healthy row (a plugin installed and up to date).
-    pub nothing_to_do: Option<&'a str>,
 }
 
 /// Rows [`render_drawer_footer`] needs: the divider and the two status
-/// lines, plus a gap and one row more when there is something to put on
-/// it — the buttons for what can be done now, or the sentence saying why
-/// there are none.
-pub(crate) fn drawer_footer_height(offers: &[ActionOffer], nothing_to_do: Option<&str>) -> u16 {
-    if drawer_buttons(offers).is_empty() && nothing_to_do.is_none() {
+/// lines, plus a gap and a row of buttons when anything can be done now.
+pub(crate) fn drawer_footer_height(offers: &[ActionOffer]) -> u16 {
+    if drawer_buttons(offers).is_empty() {
         3
     } else {
         5
@@ -242,18 +227,8 @@ pub(crate) fn render_drawer_footer(
     if row_y >= area.bottom() {
         return;
     }
-    let buttons = drawer_buttons(offers);
-    if buttons.is_empty() {
-        if let Some(note) = status.nothing_to_do {
-            frame.render_widget(
-                Paragraph::new(Span::styled(note.to_owned(), theme::fg(Token::TextMuted))),
-                Rect::new(inner.x, row_y, inner.width, 1),
-            );
-        }
-        return;
-    }
     let mut x = inner.x;
-    for (index, action) in buttons.into_iter().enumerate() {
+    for (index, action) in drawer_buttons(offers).into_iter().enumerate() {
         let label = format!("  {}  ", action.label());
         let width = label.chars().count() as u16;
         if x + width > inner.right() {

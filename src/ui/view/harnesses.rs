@@ -94,7 +94,10 @@ impl HarnessStatus {
 /// already here is set up.
 fn status_note(harness: &HarnessHealth) -> &'static str {
     if !harness.detection.present {
-        "Not found on this machine"
+        // Setting one up is the same gesture wherever it starts from:
+        // UZE provisions through the vendor's own official route, which
+        // installs what is missing and updates what is not.
+        "Not on this machine — setting it up installs it"
     } else if HarnessStatus::from(harness) == HarnessStatus::Configured {
         "Ready to receive plugins"
     } else {
@@ -344,19 +347,9 @@ fn render_harness_drawer(
 ) {
     let status = HarnessStatus::from(harness);
     let offers = harness.offers();
-    // The one action this drawer has is `Set up`, and UZE can only run it
-    // against a harness that is on the machine. Where it cannot, the row
-    // the button would be on says so instead: an empty row under "Not
-    // configured" reads as a button that failed to draw.
-    let blocked = offers.iter().find_map(|offer| {
-        offer
-            .reason()
-            .map(|reason| format!("{} — {reason}", offer.action.label()))
-    });
     let (inner, footer) = super::drawer_body_and_footer(
         super::drawer(frame, content, ResizablePanel::HarnessDrawer, model, hits),
         &offers,
-        blocked.as_deref(),
     );
     render_drawer_footer(
         frame,
@@ -365,7 +358,6 @@ fn render_harness_drawer(
             color: status.color(),
             headline: status.label(),
             subtitle: status_note(harness),
-            nothing_to_do: blocked.as_deref(),
         },
         &offers,
         model.hovered_offer,
@@ -614,7 +606,10 @@ mod tests {
             assert_eq!(status.color(), theme::color(Token::TextMuted));
         }
 
-        assert_eq!(status_note(&absent), "Not found on this machine");
+        assert_eq!(
+            status_note(&absent),
+            "Not on this machine — setting it up installs it"
+        );
         assert_eq!(
             status_note(&theirs),
             "Installed — set it up to receive plugins",
