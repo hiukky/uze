@@ -2,7 +2,7 @@
 //!
 //! # Bound to the agent, never to the directory
 //!
-//! A slot is reused, and a space's root is shared by every tenant in it:
+//! A slot is reused, and a space's root is shared by every agent in it:
 //! the directory an agent stands in was somebody else's yesterday, or is
 //! somebody else's right now. A conversation keyed on the directory would
 //! therefore hand one agent another's history. Keyed on the agent's
@@ -527,22 +527,22 @@ mod tests {
                 cwd: &slot,
             },
         )
-        .expect("the earlier tenant of the slot still resolves by its own id");
+        .expect("the slot's earlier agent still resolves by its own id");
         assert_eq!(previous_owner.agent, previous_id);
     }
 
     #[test]
-    fn a_tenants_claim_resolves_inside_its_root_and_says_it_is_a_tenant() {
-        let home = home("conversation-tenant-owner");
-        let root = project("conversation-tenant-owner-project")
+    fn a_claim_in_the_root_resolves_there_and_says_it_is_not_isolated() {
+        let home = home("conversation-in-the-root-owner");
+        let root = project("conversation-in-the-root-owner-project")
             .canonicalize()
             .unwrap();
         let nested = root.join("src");
         fs::create_dir_all(&nested).unwrap();
-        let tenant = Agent::in_the_root("claude-code");
-        let id = tenant.id.clone();
+        let agent = Agent::in_the_root("claude-code");
+        let id = agent.id.clone();
         let mut store = TaskStore::default();
-        store.upsert(tenant);
+        store.upsert(agent);
         task::save(&home, &root, &store).unwrap();
 
         let owner = owner_of(
@@ -552,7 +552,7 @@ mod tests {
                 cwd: &nested,
             },
         )
-        .expect("a tenant's claim is backed by its record");
+        .expect("the claim is backed by its record");
         assert_eq!(owner.agent, id);
         assert!(!owner.isolated);
         assert_eq!(owner.project_root, root);

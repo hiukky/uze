@@ -11,7 +11,7 @@ use crate::{PaneId, Session, SpaceId, TabId};
 /// [`crate::attach`] replaces a server of another build before connecting;
 /// this is what a client that connects without it — a `uze` nested in a
 /// pane, a test — still meets.
-pub const PROTOCOL_VERSION: u16 = 15;
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
 /// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
@@ -338,7 +338,6 @@ mod tests {
             rows: 24,
             seating: Seating::Open(crate::SpaceSeat {
                 root: std::path::PathBuf::from("/tmp/w"),
-                kind: crate::SpaceKind::Worktree,
             }),
         };
         assert_eq!(
@@ -368,7 +367,6 @@ mod tests {
                 label: Some("frontend".into()),
                 seat: crate::SpaceSeat {
                     root: std::path::PathBuf::from("/tmp/frontend"),
-                    kind: crate::SpaceKind::Workspace,
                 },
                 columns: 80,
                 rows: 24,
@@ -378,7 +376,6 @@ mod tests {
                 space: SpaceId(1),
                 replacement: crate::SpaceSeat {
                     root: std::path::PathBuf::from("/home/someone"),
-                    kind: crate::SpaceKind::Workspace,
                 },
                 columns: 80,
                 rows: 24,

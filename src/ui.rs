@@ -128,8 +128,7 @@ pub fn run(home: UzeHome) -> Result<()> {
     let outcome = loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let launch = uze_terminal::SpaceSeat {
-            kind: space_kind_for(&uze_application::space_root(&root)),
-            root,
+            root: uze_application::space_root(&root),
         };
         match orchestrator::attach_workspace(
             &mut terminal,
@@ -268,21 +267,6 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
     uze_application::UzeError::Write {
         path: PathBuf::from("terminal"),
         source,
-    }
-}
-
-/// The kind a space over `root` is created as when nobody chose.
-pub fn space_kind_for(root: &std::path::Path) -> uze_terminal::SpaceKind {
-    default_space_kind(uze_application::root_profile(root))
-}
-
-/// The kind a root with `profile` lands on: a worktree space where slots
-/// are possible, a workspace space anywhere else.
-pub(crate) fn default_space_kind(profile: uze_application::RootProfile) -> uze_terminal::SpaceKind {
-    if profile.slots_possible {
-        uze_terminal::SpaceKind::Worktree
-    } else {
-        uze_terminal::SpaceKind::Workspace
     }
 }
 

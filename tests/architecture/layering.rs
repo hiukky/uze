@@ -109,22 +109,6 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
-        name: "the terminal runtime keeps a space's kind and never reads it",
-        scope: "crates/uze-terminal/src",
-        forbidden: "SpaceKind::",
-        reason: "what a space's kind means — how its agents are placed, how it is \
-                 drawn — is the client's business at placement and at drawing. The \
-                 server persists and reports the kind the way it does a label; a \
-                 server that branched on it would be a second owner of the meaning, \
-                 and the runtime would stop being the domain-free thing a pane's \
-                 survival rests on.",
-        remedy: "carry `SpaceKind` through as data; the type defines its own \
-                 spellings with `Self::`. Naming a variant anywhere else in the \
-                 runtime is the tell that a decision moved into the server.",
-        sanctioned: &[],
-        budget: &[],
-    },
-    Rule {
         name: "only the two declared owners spawn Git",
         scope: "crates",
         forbidden: "Command::new(\"git\")",

@@ -55,7 +55,7 @@ fn the_project_the_operator_is_standing_in_is_the_row_the_prompt_opens_on() {
         "everywhere they could go is listed"
     );
     assert_eq!(
-        picker.chosen().map(|(root, _)| root),
+        picker.chosen(),
         Some(here.clone()),
         "and the prompt is on where they are"
     );
@@ -64,14 +64,13 @@ fn the_project_the_operator_is_standing_in_is_the_row_the_prompt_opens_on() {
     // A listing read again — which is what choosing a kind does — must
     // not move them off it.
     let mut picker = picker;
-    picker.choose_kind(SpaceKind::Workspace);
-    assert_eq!(picker.chosen().map(|(root, _)| root), Some(here));
+    assert_eq!(picker.chosen(), Some(here));
 
     // Typing is choosing, and it chooses among the rows rather than
     // returning to the mark.
     picker.typed('z');
     assert_eq!(
-        picker.chosen().map(|(root, _)| root),
+        picker.chosen(),
         Some(root.join("zeta")),
         "what was typed leads, not what was marked"
     );
@@ -90,7 +89,7 @@ fn a_project_outside_the_listing_marks_nothing() {
 
     assert_eq!(picker.selection(), None, "no row claimed");
     assert_eq!(
-        picker.chosen().map(|(root, _)| root),
+        picker.chosen(),
         Some(root.path().to_path_buf()),
         "so `Enter` still takes the directory being listed"
     );
@@ -102,10 +101,7 @@ fn a_project_outside_the_listing_marks_nothing() {
 fn an_untouched_prompt_lands_on_the_directory_it_opened_in() {
     let (root, mut picker) = picker_over("root-picker-untouched", &["alpha", "beta"]);
 
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.path().to_path_buf())
-    );
+    assert_eq!(picker.chosen(), Some(root.path().to_path_buf()));
 
     picker.move_selection(1);
 
@@ -114,10 +110,7 @@ fn an_untouched_prompt_lands_on_the_directory_it_opened_in() {
         Some(0),
         "the first move takes the row in front"
     );
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.join("alpha"))
-    );
+    assert_eq!(picker.chosen(), Some(root.join("alpha")));
 }
 
 #[test]
@@ -284,10 +277,7 @@ fn the_chosen_root_is_the_selected_directory() {
     picker.move_selection(1);
     picker.move_selection(1);
 
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.join("beta"))
-    );
+    assert_eq!(picker.chosen(), Some(root.join("beta")));
 }
 
 #[test]
@@ -295,16 +285,10 @@ fn the_selection_cannot_run_off_either_end_of_the_matches() {
     let (root, mut picker) = picker_over("root-picker-bounds", &["alpha", "beta"]);
 
     picker.move_selection(-1);
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.join("alpha"))
-    );
+    assert_eq!(picker.chosen(), Some(root.join("alpha")));
 
     picker.move_selection(9);
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.join("beta"))
-    );
+    assert_eq!(picker.chosen(), Some(root.join("beta")));
 }
 
 #[test]
@@ -313,10 +297,7 @@ fn an_empty_directory_still_offers_itself_as_the_root() {
     let picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
     assert_eq!(picker.match_count(), 0);
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.path().to_path_buf())
-    );
+    assert_eq!(picker.chosen(), Some(root.path().to_path_buf()));
 }
 
 #[test]
@@ -351,97 +332,69 @@ fn the_listed_directory_is_what_the_prompt_lands_on() {
     let picker = RootPicker::opened_in(&root.join("checkout").display().to_string(), None);
     assert_eq!(names(&picker), ["inner"]);
 
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(root.join("checkout"))
-    );
+    assert_eq!(picker.chosen(), Some(root.join("checkout")));
 }
 
-/// A worktree space is cut from a repository, so the listing offers
-/// repositories — and the folders that lead to one, which is where they
-/// actually are. Keeping only the rows that *were* repositories made a
-/// `projects` folder holding nothing but checkouts draw as empty,
-/// because `projects` is not one itself. The other kind stands anywhere,
-/// and offers everything.
+/// A space is a directory a person works in, and nothing about it says
+/// whether a repository is underneath: isolation is asked of one agent,
+/// later, in the space it is already running in. So the listing offers
+/// every directory, and the filter that once kept only repositories and
+/// the folders leading to one is gone with the kind that needed it —
+/// that filter is what drew a `projects` folder holding nothing but
+/// checkouts as empty.
 #[test]
-fn a_worktree_offers_repositories_and_the_folders_that_lead_to_them() {
+fn every_directory_is_offered_because_the_space_asks_nothing_of_the_tree() {
     let root = TempDir::new("root-picker-filter");
     std::fs::create_dir_all(root.join("projects/engine/.git")).unwrap();
     std::fs::create_dir_all(root.join("notes/drafts")).unwrap();
     let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
 
-    // A plain directory names the tenancy, which offers both rows.
-    assert_eq!(names(&picker), ["notes", "projects"]);
-
-    picker.choose_kind(SpaceKind::Worktree);
-
     assert_eq!(
         names(&picker),
-        ["projects"],
-        "what a slot can be cut from, and the way to it — never a folder \
-         with no repository under it at all"
+        ["notes", "projects"],
+        "a folder with no repository under it is a place to work too"
     );
     assert_eq!(
         picker.chosen(),
-        None,
-        "the way to one is not a root itself, which is what makes Enter walk in"
+        Some(root.path().to_path_buf()),
+        "the directory being listed is what the prompt lands on"
     );
 
     picker.select(0);
     picker.descend();
+    assert_eq!(names(&picker), ["drafts"]);
 
+    let mut picker = RootPicker::opened_in(&root.path().display().to_string(), None);
+    picker.select(1);
+    picker.descend();
     assert_eq!(names(&picker), ["engine"]);
     picker.select(0);
-    assert_eq!(
-        picker.chosen(),
-        Some((root.join("projects/engine"), SpaceKind::Worktree)),
-        "the repository under it is what a slot is cut from"
-    );
-
-    picker.choose_kind(SpaceKind::Workspace);
-    assert_eq!(
-        names(&picker),
-        ["engine"],
-        "and the other kind offers it too"
-    );
+    assert_eq!(picker.chosen(), Some(root.join("projects/engine")));
 }
 
-/// A worktree space is cut from a repository, so a directory inside one is
-/// that repository. A workspace space runs its agents where it stands, so
-/// there the directory chosen is the root — the two questions have two
-/// answers, and giving both the first put spaces where nobody picked them.
+/// A directory inside a repository is a space of its own, not the
+/// repository it sits in. The two kinds answered this differently — a
+/// worktree resolved up to the repository, a workspace stood where it was
+/// picked — and resolving up is what put spaces where nobody picked them.
 #[test]
-fn a_subdirectory_is_the_repository_for_a_worktree_and_itself_for_a_workspace() {
+fn a_subdirectory_of_a_repository_is_a_space_where_it_stands() {
     let root = TempDir::new("root-picker-subdirectory");
     let repository = root.join("project");
     std::fs::create_dir_all(repository.join(".git")).unwrap();
     std::fs::create_dir_all(repository.join("docs")).unwrap();
     let mut picker = RootPicker::opened_in(&repository.display().to_string(), None);
 
-    // Opened in a repository, the prompt is on the repository itself, and a
-    // worktree space is what it would create there.
     assert_eq!(
         picker.chosen(),
-        Some((repository.clone(), SpaceKind::Worktree)),
-        "a slot is cut from the repository"
+        Some(repository.clone()),
+        "the repository itself, until something in it is picked"
     );
-    assert!(
-        names(&picker).is_empty(),
-        "and a subdirectory is no place to cut one from, nor the way to one: {:?}",
-        names(&picker)
-    );
+    assert_eq!(names(&picker), ["docs"]);
 
-    picker.choose_kind(SpaceKind::Workspace);
-    picker.move_selection(0);
-
-    assert_eq!(
-        names(&picker),
-        ["docs"],
-        "the other kind can stand anywhere"
-    );
+    picker.select(0);
     assert_eq!(
         picker.chosen(),
-        Some((repository.join("docs"), SpaceKind::Workspace)),
+        Some(repository.join("docs")),
         "and it stands where it was picked"
     );
 }
@@ -460,10 +413,7 @@ fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
     assert_eq!(names(&picker), ["4j03rn"]);
 
     picker.move_selection(0);
-    assert_eq!(
-        picker.chosen().map(|(root, _)| root),
-        Some(repository.clone())
-    );
+    assert_eq!(picker.chosen(), Some(repository.clone()));
 
     // …and the same answer for a slot typed out rather than landed on:
     // an empty listing falls back to the typed directory itself.
@@ -472,5 +422,5 @@ fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
         None,
     );
     assert_eq!(typed.match_count(), 0);
-    assert_eq!(typed.chosen().map(|(root, _)| root), Some(repository));
+    assert_eq!(typed.chosen(), Some(repository));
 }

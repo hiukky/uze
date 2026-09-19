@@ -475,6 +475,12 @@ mod tests {
                 "install-project-environment",
                 "open-glossary",
                 "apply-profile",
+                // Isolating an agent is a decision taken once, on one
+                // agent, from the menu that already names that agent — a
+                // chord would fire on whichever row happened to be under
+                // the cursor.
+                "isolate-agent",
+                "isolate-agent-with-changes",
                 // The list of areas is one step left of the list of
                 // artifacts, which has the key: `o`, then the arrow. A
                 // letter of its own would be one of the four nobody could

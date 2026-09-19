@@ -7,9 +7,9 @@
 //! it keys the branch (`agent/<id>`), the checkout it runs in, and its
 //! persisted state. The label is derived from the prompt and names the
 //! tab. Keeping them apart is what makes a name free to change and a
-//! collision impossible. The identifier is an *agent's*, not a task's: a
-//! [`tenant`](crate::tenant) carries one too, and it is the one thing the
-//! two kinds of record share.
+//! collision impossible. The identifier is an *agent's*, not a task's:
+//! an agent that never left the project's own root carries one too, and
+//! it is what a reader holds before it knows which kind it has.
 //!
 //! # Storage
 //!
@@ -42,15 +42,15 @@ use crate::{
     persistence::write_atomic, worktree::BRANCH_PREFIX,
 };
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Long enough to read, short enough for a sidebar.
 const LABEL_MAX_CHARS: usize = 40;
 const IDENTIFIER_CHARS: usize = 6;
 
 /// A generated, immutable identifier for an agent UZE launched — what a
-/// launch carries, what a conversation is keyed by, and what a task and a
-/// tenant have in common.
+/// launch carries, what a conversation is keyed by, and what an agent
+/// keeps whether or not it is isolated.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct AgentId(String);
@@ -379,10 +379,10 @@ pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
     }
 }
 
-/// Every agent a project's launches recorded: the tasks in slots of their
-/// own, and the tenants of the project's own directory. One document, one
-/// lock, one sweep, because a launch of either kind is the same event and
-/// a reader handed an identifier does not know which kind it names.
+/// Every agent a project's launches recorded, isolated in a slot of its
+/// own or running in the project's own directory. One document, one lock,
+/// one sweep, because a launch is the same event either way and a reader
+/// handed an identifier does not know yet which it names.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskStore {
     pub schema_version: u32,
@@ -876,16 +876,68 @@ mod tests {
 
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            br#"{"schema_version": 99, "tasks": [], "tenants": []}"#,
-        )
-        .unwrap();
+        fs::write(&path, br#"{"schema_version": 99, "agents": []}"#).unwrap();
         let error = load(&home, &root).unwrap_err();
         assert!(
             matches!(error, UzeError::UnsupportedStateSchema { found: 99, .. }),
             "{error}"
         );
+    }
+
+    /// An agent working in the project's root has none of the vocabulary
+    /// that only means anything against a branch of its own. The first
+    /// round of this change kept a second record to make that true; the
+    /// type now says it, which is the whole reason the work is nested
+    /// inside the isolation rather than flattened beside a flag.
+    #[test]
+    fn an_agent_in_the_root_has_no_branch_no_readiness_and_no_delivery() {
+        let agent = Agent::in_the_root("claude");
+
+        assert!(!agent.is_isolated());
+        assert!(agent.isolation().is_none(), "nothing to be ready in");
+        assert!(!agent.is_named(), "no branch, so nothing to be named by");
+        assert!(agent.is_live());
+        assert_eq!(agent.harness, "claude");
+        assert_eq!(
+            agent.own_directory(Path::new("/repo")),
+            Some(PathBuf::from("/repo")),
+            "it stands in the project's own root"
+        );
+    }
+
+    /// The other half: an isolated agent stands in its slot, and every
+    /// question about a branch has somewhere to be asked.
+    #[test]
+    fn an_isolated_agent_stands_in_its_slot_and_carries_the_work() {
+        let mut agent = task("fix the redirect");
+        agent.isolation_mut().unwrap().checkout = Some(CheckoutId::adopted("slot-1"));
+
+        assert!(agent.is_isolated());
+        assert_eq!(
+            agent.own_directory(Path::new("/repo")),
+            Some(PathBuf::from("/repo/.worktrees/slot-1"))
+        );
+        assert_eq!(isolation(&agent).state, TaskState::Running);
+        assert!(isolation(&agent).branch.starts_with(BRANCH_PREFIX));
+
+        agent.take_name("fix/the-redirect".to_owned());
+        assert!(agent.is_named());
+        assert_eq!(
+            agent.label, "the redirect",
+            "the label is the branch's subject, which is what a reviewer reads"
+        );
+        assert_eq!(isolation(&agent).branch, "fix/the-redirect");
+    }
+
+    /// An agent whose checkout is gone stands nowhere of its own — the
+    /// one case where an isolated agent has no directory, and the reason
+    /// `own_directory` answers with an option at all.
+    #[test]
+    fn an_isolated_agent_without_its_checkout_stands_nowhere() {
+        let agent = task("lost");
+
+        assert!(agent.is_isolated());
+        assert_eq!(agent.own_directory(Path::new("/repo")), None);
     }
 
     /// A document from an older schema is named by its version, never by
@@ -900,8 +952,8 @@ mod tests {
         let root = uze_testkit::temp::scratch("tasks-older-schema-project");
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Schema 1's document: a task with the fields of the day, and no
-        // `tenants` at all.
+        // Schema 1's document: a task with the fields of the day, under
+        // the key it was written with.
         fs::write(
             &path,
             br#"{"schema_version": 1, "tasks": [{"id": "abc123", "label": "a", "pushed": false}]}"#,
@@ -966,7 +1018,7 @@ mod tests {
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let written = format!(
-            r#"{{"schema_version": {}, "tasks": [], "tenants": [], "futures": []}}"#,
+            r#"{{"schema_version": {}, "agents": [], "futures": []}}"#,
             SCHEMA_VERSION + 1
         );
         fs::write(&path, &written).unwrap();

@@ -505,6 +505,58 @@ fn end_without_checkout(primary: &Path, target: &str, isolation: &mut Isolation)
     }
 }
 
+/// Copies the changes `primary`'s working tree holds over its `HEAD`
+/// into `slot`, leaving `primary` exactly as it was.
+///
+/// Copied, never moved. UZE cannot say which uncommitted change belongs
+/// to which agent — the root's working tree is shared by the operator
+/// and every agent standing in it — so taking them would take the
+/// operator's own work out of their tree, which is the one thing
+/// `add-portable-worktree-policy`'s invariant forbids.
+///
+/// What travels is everything the repository would report as a change:
+/// the diff over `HEAD` for what it tracks, and a copy of each file it
+/// does not track but does not ignore. A new file is the commonest shape
+/// an agent's work has before its first commit, so leaving it behind
+/// would take the agent's own module out from under it. What the
+/// repository *ignores* stays where it is — a `target/` or a
+/// `node_modules/` is the slot's own to build, and `link`/`setup` is
+/// where a project says otherwise.
+pub fn carry_changes(primary: &Path, slot: &Path) -> Result<(), String> {
+    // Read rather than written, and taken *untrimmed*: a patch's final
+    // newline is part of it, and `git apply` refuses one that lost it.
+    let patch = uze_git::read(primary, &["diff", "HEAD"])
+        .map_err(|error| error.to_string())?
+        .successful()?;
+    if !patch.trim().is_empty() {
+        uze_git::write_with_stdin(slot, &["apply", "--"], &patch)
+            .map_err(|error| error.to_string())?
+            .successful()
+            .map_err(|error| {
+                format!("the changes could not be carried into the checkout: {error}")
+            })?;
+    }
+    for relative in uze_git::read(
+        primary,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .map_err(|error| error.to_string())?
+    .successful()?
+    .split('\0')
+    .filter(|entry| !entry.is_empty())
+    {
+        let from = primary.join(relative);
+        let to = slot.join(relative);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("the checkout could not take `{relative}`: {error}"))?;
+        }
+        std::fs::copy(&from, &to)
+            .map_err(|error| format!("`{relative}` could not be copied: {error}"))?;
+    }
+    Ok(())
+}
+
 /// What a collection removed, so a caller can say so.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Collected {

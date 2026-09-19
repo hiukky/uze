@@ -1263,8 +1263,8 @@ mod tests {
             let loaded = resolve_stack(&Identity::from_file(id, file), &[default_file(), file])
                 .unwrap_or_else(|error| panic!("the bundled `{id}` palette resolves: {error}"));
             assert_ne!(
-                loaded.theme.color(Token::SpaceWorktree),
-                loaded.theme.color(Token::SpaceWorkspace),
+                loaded.theme.color(Token::AgentIsolated),
+                loaded.theme.color(Token::AgentInPlace),
                 "`{id}` paints both kinds of space alike"
             );
         }

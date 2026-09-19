@@ -156,10 +156,6 @@ enum TerminalAction {
     Serve {
         #[arg(long)]
         root: PathBuf,
-        /// The kind of the bootstrap space over `root`, as the client that
-        /// started the server decided it.
-        #[arg(long, default_value = "worktree")]
-        kind: String,
     },
 }
 
@@ -677,11 +673,8 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         if std::env::var_os("UZE_PANE").is_some() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
-            let label = uze_terminal::open_space(uze_terminal::SpaceSeat {
-                kind: uze::ui::space_kind_for(&root),
-                root: root.clone(),
-            })
-            .map_err(terminal_error)?;
+            let label = uze_terminal::open_space(uze_terminal::SpaceSeat { root: root.clone() })
+                .map_err(terminal_error)?;
             println!(
                 "opened space `{label}` at {} in the running uze",
                 root.display()
@@ -711,10 +704,8 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         return match action {
             TerminalAction::Attach => uze::ui::run(home),
             TerminalAction::Stop => uze_terminal::stop().map_err(terminal_error),
-            TerminalAction::Serve { root, kind } => {
-                let kind = uze_terminal::SpaceKind::from_name(&kind)
-                    .ok_or_else(|| terminal_error(format!("`{kind}` is not a kind of space")))?;
-                uze_terminal::serve(uze_terminal::SpaceSeat { root, kind }).map_err(terminal_error)
+            TerminalAction::Serve { root } => {
+                uze_terminal::serve(uze_terminal::SpaceSeat { root }).map_err(terminal_error)
             }
         };
     }

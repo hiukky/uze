@@ -42,8 +42,8 @@ use uze_extensions::{
 use uze_keys::{Action, Chord, Key};
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
-    PaneSnapshot, RenderCell, Session, Space, SpaceId, SpaceKind, Tab, TabId, TerminalColor,
-    attach, read_event, send_request,
+    PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
+    read_event, send_request,
 };
 
 /// Input/redraw cadence. Unlike the pane content itself — which the server
@@ -676,15 +676,21 @@ struct PlacementResolution {
     replacing: Option<TabId>,
 }
 
-/// What a placement is asked for: a record for a brand-new agent — a slot
-/// for a task, or a tenancy of the space's directory, as the space's kind
-/// says — or the slot a preserved task lost, its branch checked out again
-/// as it stands.
+/// What a placement is asked for: a record for a brand-new agent, where
+/// the project says agents start; a checkout of its own for one already
+/// running; or the slot a preserved agent lost, its branch checked out
+/// again as it stands.
 enum PlacementRequest {
     New {
         from: PathBuf,
-        kind: SpaceKind,
         harness: String,
+    },
+    /// The agent this checkout is being cut for, and what the operator
+    /// answered about the changes their own tree holds.
+    Isolate {
+        from: PathBuf,
+        agent: String,
+        carry: uze_application::Carry,
     },
     Resume {
         primary: PathBuf,
@@ -721,22 +727,17 @@ fn spawn_agent_placement(
                 // answers with the reason and opens nothing: the operator
                 // chose the kind, and an agent landing anywhere else is
                 // the one outcome a notice could not undo.
-                PlacementRequest::New {
-                    from,
-                    kind,
-                    harness,
-                } => tui_application(home)
+                PlacementRequest::New { from, harness } => tui_application(home)
                     .and_then(|app| {
-                        // The one place the space's kind becomes a domain
-                        // request: the wire and placement each keep their
-                        // own vocabulary.
-                        let kind = match kind {
-                            SpaceKind::Worktree => uze_application::PlacementKind::Slot,
-                            SpaceKind::Workspace => uze_application::PlacementKind::Tenant,
-                        };
+                        // No kind travels: where an agent starts is the
+                        // project's to declare, and isolating one is an
+                        // action on it afterwards.
                         app.workspace()
-                            .place_new_agent(&from, kind, &harness, &occupied)
+                            .place_new_agent(&from, None, &harness, &occupied)
                     })
+                    .map_err(|error| error.to_string()),
+                PlacementRequest::Isolate { from, agent, carry } => tui_application(home)
+                    .and_then(|app| app.workspace().isolate(&from, &agent, carry, &occupied))
                     .map_err(|error| error.to_string()),
                 PlacementRequest::Resume { primary, task } => tui_application(home)
                     .and_then(|app| app.workspace().resume_task(&primary, &task, &occupied))
@@ -929,29 +930,6 @@ fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<MeasureResolution>) {
     });
 }
 
-/// What a root's profile answered, tagged with the root it was asked for.
-struct RootProfileResolution {
-    root: PathBuf,
-    profile: uze_application::RootProfile,
-}
-
-/// Profiles a root off the frame: whether slots are possible there is a
-/// Git question, and the picker that asks it runs on the render path.
-fn spawn_root_profile(root: PathBuf, sender: mpsc::Sender<RootProfileResolution>) {
-    let parent = tracing::Span::current();
-    thread::spawn(move || {
-        let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.root_profile").entered();
-        let profile = answered_or(
-            || uze_application::root_profile(&root),
-            uze_application::RootProfile {
-                slots_possible: false,
-            },
-        );
-        let _ = sender.send(RootProfileResolution { root, profile });
-    });
-}
-
 /// What starting `uze` in a directory asks of the workspace.
 ///
 /// A directory somebody chose is a request: `cd` into a project, start
@@ -1048,7 +1026,6 @@ pub(crate) fn attach_workspace(
     // than two.
     let seat = uze_terminal::SpaceSeat {
         root: uze_application::space_root(&launch.root),
-        kind: launch.kind,
     };
     let mut stream = attach(&seat).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
@@ -1316,8 +1293,6 @@ pub(super) enum WorkspaceHit {
     /// — same pattern [`WorkspaceHit::PickAgent`] uses for the agent
     /// picker.
     PickSpaceRoot(usize),
-    /// One of the two kind chips under the picker's directory line.
-    PickSpaceKind(SpaceKind),
     /// The tab strip's right-corner button — opens the Git extension's
     /// changes of the active tab's checkout — the code surface
     /// (`WorkspaceModel::code`), opened on its diff.
@@ -1398,8 +1373,11 @@ enum RenameTarget {
 /// began in — see `tab_drag_group`/`tab_drag_group_members`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TabDragGroup {
-    /// The agent rows of one space's sidebar list, by space id.
-    Agents(SpaceId),
+    /// The agent rows of one space's sidebar list, by space id and by
+    /// group: the column draws the agents in the space's own root above
+    /// the isolated ones, and a row dragged out of its group would have
+    /// to land somewhere the order it was dropped into does not exist.
+    Agents(SpaceId, AgentGroup),
     /// The tabs of one strip: shells opened alongside one agent tab, or —
     /// when `None` — a space's own shells with no agent selected. Matches
     /// `Tab::agent`'s own vocabulary.
@@ -1672,7 +1650,7 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 /// to do.
 struct AgentOption {
     display_name: String,
-    /// The integration the harness belongs to — what a tenant is recorded
+    /// The integration the harness belongs to — what an agent is recorded
     /// as running.
     integration: String,
     command: Vec<String>,
@@ -2072,7 +2050,6 @@ struct Channels {
     code_files: Answers<FileResolution>,
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
-    root_profiles: Answers<RootProfileResolution>,
     artifacts: Answers<ArtifactsResolution>,
     /// The code surface's map, measured once per checkout it is opened on.
     code_measures: Answers<MeasureResolution>,
@@ -2176,8 +2153,8 @@ struct Remembered {
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,
     /// The agents a tab still echoes. An agent that leaves this set lost
-    /// its last tab, which is what ends a tenant: it holds no checkout, so
-    /// nothing in `occupied_checkouts` would say so.
+    /// its last tab, which is what ends an agent in the root: it holds no
+    /// checkout, so nothing in `occupied_checkouts` would say so.
     echoed_agents: BTreeSet<String>,
     /// Panes whose checkout is gone from under them — removed outside UZE
     /// while the agent ran. The process is still there, standing in a
@@ -2373,8 +2350,6 @@ struct WorkspaceModel {
     /// What each root the picker landed on allows, once a worker answered:
     /// asked once per root and kept for the attach, so walking back over a
     /// directory never asks Git again.
-    root_profiles: BTreeMap<PathBuf, uze_application::RootProfile>,
-    root_profile_pending: BTreeSet<PathBuf>,
     /// Whether the pane set has moved since occupancy was last worked out.
     ///
     /// The loop runs at 60Hz and the pane set changes when a tab opens or
@@ -3715,7 +3690,10 @@ fn tab_drag_group(
             .spaces
             .iter()
             .find(|space| space.tabs.iter().any(|t| t.id == tab))?;
-        return Some(TabDragGroup::Agents(space.id));
+        return Some(TabDragGroup::Agents(
+            space.id,
+            render::agent_group(model, tab),
+        ));
     }
     if hit_rect.y >= layout.tab_strip.y && hit_rect.y < layout.tab_strip.bottom() {
         let space = session.selected_space();
@@ -3762,7 +3740,7 @@ fn tab_drag_group_members(
     let mut members: Vec<(Rect, TabId)> =
         union.into_iter().map(|(tab, rect)| (rect, tab)).collect();
     match group {
-        TabDragGroup::Agents(_) => members.sort_by_key(|(rect, _)| rect.y),
+        TabDragGroup::Agents(..) => members.sort_by_key(|(rect, _)| rect.y),
         TabDragGroup::Strip(..) => members.sort_by_key(|(rect, _)| rect.x),
     }
     members
@@ -3798,14 +3776,14 @@ fn pending_tab_drop(
     origin: u16,
 ) -> Option<PendingDrop> {
     let along = |rect: Rect| match group {
-        TabDragGroup::Agents(_) => (rect.y, rect.y + rect.height),
+        TabDragGroup::Agents(..) => (rect.y, rect.y + rect.height),
         TabDragGroup::Strip(..) => (rect.x, rect.x + rect.width),
     };
     // A little slack past either end: dragging just above the first row,
     // or just past the last tab, still means "put it there" rather than
     // needing to land exactly on a row/chip.
     let slack: u16 = match group {
-        TabDragGroup::Agents(_) => 2,
+        TabDragGroup::Agents(..) => 2,
         TabDragGroup::Strip(..) => 4,
     };
     let members: Vec<(u16, u16, TabId)> = members
@@ -4040,13 +4018,11 @@ fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit>
 }
 
 /// Where the workspace lands when its last space is closed: the person's
-/// home, as a workspace space. It is fixed rather than profiled because a
-/// home directory is somewhere to start, not a repository to branch agents
-/// from — and profiling it would put a Git probe on the input path.
+/// home. Somewhere to start rather than a repository to branch agents
+/// from, which is an agent's own question wherever it lands.
 fn home_seat() -> uze_terminal::SpaceSeat {
     uze_terminal::SpaceSeat {
         root: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
-        kind: uze_terminal::SpaceKind::Workspace,
     }
 }
 
@@ -4346,8 +4322,8 @@ fn sync_slot_occupancy(
         return;
     }
     // A repository is named by any path inside it: the checkout a pane just
-    // left, or every space's own root — for the sweep, and for a tenant,
-    // which is keyed by the root it works in.
+    // left, or every space's own root — for the sweep, and for an agent
+    // in the root, which is keyed by the root it works in.
     let mut look_in: Vec<PathBuf> = vanished;
     if sweeping || agent_left {
         look_in.extend(space_roots);
