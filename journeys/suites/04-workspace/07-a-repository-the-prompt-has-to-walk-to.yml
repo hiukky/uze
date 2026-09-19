@@ -6,12 +6,13 @@ about: |
   folder of projects, often grouped a level further down, and the folder
   holding them is not itself a repository.
 
-  The prompt has to be able to walk there. It used to offer, for a
-  worktree space, only the rows that were repositories — so the folder on
-  the way to them was not drawn at all, and a directory holding nothing
-  but repositories showed as empty. Typing the path instead did not work
-  either: a separator walked into whichever row was selected and cleared
-  the line, so the path never survived being typed.
+  The prompt has to be able to walk there. It used to filter the listing
+  down to repositories and the folders leading to one — a question a
+  space no longer asks, since isolation is asked of an agent, not of a
+  directory — and a folder that led nowhere was not drawn at all. Typing
+  the path instead did not work either: a separator walked into whichever
+  row was selected and cleared the line, so the path never survived being
+  typed.
 
   Read off the machine, the claim is one fact: a space was created at the
   repository two folders down, and the project uze started in is still

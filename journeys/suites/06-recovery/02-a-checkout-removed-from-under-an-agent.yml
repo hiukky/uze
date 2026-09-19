@@ -27,6 +27,7 @@ world:
   project: demo-app
   manifest: |
     worktrees:
+      default: isolated
       target: main
       completion: handoff
       slots: 3

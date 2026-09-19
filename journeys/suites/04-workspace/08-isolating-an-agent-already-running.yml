@@ -1,0 +1,117 @@
+journey: an agent already running is given a checkout of its own
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  Isolation is asked of one agent, after it is running. The operator
+  starts an agent beside them, works alongside it, and then decides that
+  this one should have a tree to itself — `Isolate`, on the agent's own
+  row. The agent keeps its identity and everything uze records against
+  it; only where it stands changes, and the operator's own tree is left
+  exactly as it was. What the *harness* does with its own conversation is
+  the harness's answer — Claude Code files one under the directory it ran
+  in, so a moved agent picks up with a new one, which this journey reads
+  off the invocation log rather than claiming otherwise.
+
+  Where the tree holds uncommitted changes the menu offers a second row
+  that carries a *copy* of them across. A copy is the whole claim: the
+  file has to be in the new checkout and still in the operator's tree,
+  because UZE cannot say whose change it was.
+
+  Every check reads the machine: what Git registers as a worktree and a
+  branch, what the two trees hold, the task store UZE writes, and the
+  harness's own invocation log.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 3
+
+scenes:
+  - scene: an agent starts beside the operator, who then edits the tree
+    when:
+      - shell: "{uze} setup"
+        say: the operator provisions their harnesses, which installs the launcher
+        check: false
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "+ │ ✦"
+        say: open the new-agent picker
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code, which starts where the project says
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 90
+        pause: 2.0
+      - shell: |
+          set -e
+          printf 'pub fn carried() {}\n' > {project}/src/carried.rs
+        say: the operator leaves an uncommitted change in their own tree
+    then:
+      - agents: { count: 1, live: 1, isolated: 0 }
+        about: one agent, holding no checkout
+      - git: { worktrees: 1 }
+        about: Git registers only the primary checkout
+      - git: { dirty: true }
+        about: and the operator's tree holds the change they just made
+
+  - scene: isolate carries a copy of the changes into a checkout of its own
+    when:
+      - rclick: agent 1
+        say: right-click the agent's row
+        in: sidebar
+        occurrence: last
+        expect: Isolate
+      - click: "Isolate with my changes"
+        in: sidebar
+        say: give it a tree of its own, carrying the operator's changes across
+        expect: Claude Code v
+        expect_timeout: 90
+        pause: 3.0
+    then:
+      - agents: { count: 1, live: 1, isolated: 1 }
+        about: |
+          the same one agent — the record was not replaced, which is what
+          keeps the tab, the identity and the conversation the agent's own
+      - tasks: { count: 1, checkouts: 1 }
+        about: and it now holds a task, because it holds a branch
+      - git: { worktrees: 2 }
+        about: Git registers the checkout that was cut for it
+      - git: { branches: "agent/*", count: 1 }
+        about: on a branch of its own
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: one slot on disk
+      - cmd:
+          run: test -f {project}/.worktrees/*/src/carried.rs
+        about: the operator's change was copied into it
+      - file: "{project}/src/carried.rs"
+        contains: "pub fn carried"
+        about: and is still in the operator's own tree — a copy, never a move
+      - git: { dirty: true }
+        about: whose working tree is exactly what they left
+      - process: { matching: claude, alive: true }
+        about: the harness is running again, in the checkout it was moved to
+      - cmd:
+          run: |
+            python3 -c "
+            import glob, json
+            [record] = glob.glob('{uze_home}/state/conversations/*/*.json')
+            print(json.load(open(record))['agent'])
+            print(record.rsplit('/', 1)[1])
+            "
+          stdout_contains: ".json"
+        about: |
+          one conversation record, still the same agent's — the identity
+          the isolation was written against, not a second agent standing
+          in for it

@@ -45,8 +45,15 @@ resumed as any agent's is. Several agents MAY share one root.
 The system SHALL offer, for a single agent, an action that gives it a
 checkout of its own: a slot is acquired as the project's policy says, the
 agent's record gains its isolation — the checkout, the branch and what the
-branch was cut from — and the agent is relaunched there continuing the
-conversation it was already in. The agent's identity SHALL NOT change.
+branch was cut from — and the agent is relaunched there. The agent's
+identity SHALL NOT change, and its conversation record SHALL stay that
+agent's.
+
+Whether the *harness's* conversation follows is the harness's answer, not
+UZE's: one that binds a conversation to the directory it ran in cannot
+resume it in the new checkout and starts a fresh one there. UZE SHALL
+resume where the harness can and start a new conversation where it
+cannot, never refusing the isolation over it.
 
 The action SHALL be offered only where it can be honoured: inside a Git
 working tree with a commit to branch from. Where a slot cannot be
@@ -56,7 +63,11 @@ stated.
 #### Scenario: An agent is isolated
 - **WHEN** the operator isolates an agent running in the space's root
 - **THEN** a checkout is created for it, its record carries that isolation, and it is relaunched there
-- **AND THEN** it is the same agent: the same identity, continuing the same conversation
+- **AND THEN** it is the same agent: the same identity, and the same conversation record
+
+#### Scenario: A harness that binds its conversation to a directory
+- **WHEN** an agent whose harness stores its conversation under the directory it ran in is isolated
+- **THEN** the agent is relaunched in the checkout with a conversation of its own, and the isolation is not refused
 
 #### Scenario: Isolation is not offered where it cannot be honoured
 - **WHEN** the space's root is not a Git working tree, or has no commit to branch from
@@ -66,15 +77,21 @@ stated.
 - **WHEN** isolating an agent and the checkout cap is reached, or Git refuses
 - **THEN** the agent keeps running where it was, and the operator is told why
 
+The operator SHALL choose, as part of the action, whether a copy of the
+root's uncommitted changes goes into the checkout. Both answers SHALL be
+offered wherever the action is, because whether the tree is dirty is a
+question only Git answers and the client SHALL NOT wait on one to draw;
+on a clean tree the two answers produce the same result.
+
 #### Scenario: The work follows the agent
-- **WHEN** an agent is isolated while the space's root has uncommitted changes
-- **THEN** the operator is asked whether to carry a copy of them into the checkout
+- **WHEN** an agent is isolated while the space's root has uncommitted changes, carrying them
+- **THEN** a copy of them is in the checkout — edits to tracked files and new files the repository does not ignore alike
 - **AND THEN** the root's own working tree is left exactly as it was, whichever answer is given
 - **AND THEN** nothing is discarded
 
-#### Scenario: A clean tree needs no question
+#### Scenario: A clean tree makes the two answers one
 - **WHEN** an agent is isolated while the space's root has no uncommitted changes
-- **THEN** the isolation happens with no question asked
+- **THEN** either answer isolates it, and neither tree gains or loses anything
 
 ### Requirement: An isolated agent is the subject of readiness and delivery
 The system SHALL treat an isolated agent exactly as a task is treated

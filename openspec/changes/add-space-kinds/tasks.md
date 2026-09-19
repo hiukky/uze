@@ -62,46 +62,46 @@
 - [x] 8.1 `Agent { id, harness, created_at_unix, ended_at_unix, isolation: Option<Isolation> }` in `uze-core`, with `Isolation { checkout, branch, base, base_commit, target, state, published_as, published_request, request_branch, request_asked_at_unix }`; `TaskStore.agents` replaces `tasks` and `tenants`; `SCHEMA_VERSION` bumps.
 - [x] 8.2 Delete `Tenant` and `AgentRecord` (undoes 2.2): one record answers for an identifier, so there is nothing to unify and nothing to match on.
 - [x] 8.3 Every reader of `store.tasks`/`store.tenants` reads one collection; readiness, delivery, naming and the sweep take an isolated agent and say so in their signatures.
-- [ ] 8.4 Core tests: an agent with no isolation has no branch, no readiness and no delivery; `Ready` cannot be expressed without an isolation; a document of the previous schema is set aside by the rule already in `locked_reporting`.
+- [x] 8.4 Core tests: an agent with no isolation has no branch, no readiness and no delivery; `Ready` cannot be expressed without an isolation; a document of the previous schema is set aside by the rule already in `locked_reporting`.
 
 ## 9. Isolation as an action
 
-- [ ] 9.1 `Workspace::isolate(agent, carry: Carry) -> Result<AgentPlacement>`: acquires the slot as the policy says, writes the isolation against the same identity under the document's lock, and answers the placement to relaunch from. Built from `place_in_slot` and `resume_task`; neither is duplicated.
-- [ ] 9.2 The branch is cut from the root's current `HEAD`; `Carry::{Nothing, CopyOfChanges}` decides whether the root's uncommitted changes are copied into the checkout. The root's working tree is never written to.
-- [ ] 9.3 Refusals leave the agent exactly where it is: no repository, no commit to branch from, cap reached, Git refusing, the record unwritable.
-- [ ] 9.4 Application tests: the identity survives; the conversation record survives; a refusal changes nothing; a dirty root is copied from, never moved from; the root's tree is byte-identical after either answer.
+- [x] 9.1 `Workspace::isolate(agent, carry: Carry) -> Result<AgentPlacement>`: acquires the slot as the policy says, writes the isolation against the same identity under the document's lock, and answers the placement to relaunch from. Built from `place_in_slot` and `resume_task`; neither is duplicated.
+- [x] 9.2 The branch is cut from the root's current `HEAD`; `Carry::{Nothing, CopyOfChanges}` decides whether the root's uncommitted changes are copied into the checkout. The root's working tree is never written to.
+- [x] 9.3 Refusals leave the agent exactly where it is: no repository, no commit to branch from, cap reached, Git refusing, the record unwritable.
+- [x] 9.4 Application tests: the identity survives; the conversation record survives; a refusal changes nothing; a dirty root is copied from, never moved from; the root's tree is byte-identical after either answer.
 
 ## 10. A space is a root
 
-- [ ] 10.1 Remove `SpaceKind` from `Space`, `SpaceSeed`, `PersistedSpace` and `CreateSpace` (undoes 3.1); `space_for(root)`; `PROTOCOL_VERSION` bumps. Delete the architecture rule from 3.2 with the vocabulary it guarded.
-- [ ] 10.2 The persisted workspace declares its version and is read by `upgrade-resilience`'s rule: a document that carries a kind per space is the previous version, set aside with the operator told what was done.
-- [ ] 10.3 Runtime tests: one root names one space; the space round-trips a restart; a persisted workspace of the previous version is recovered from and reported.
+- [x] 10.1 Remove `SpaceKind` from `Space`, `SpaceSeed`, `PersistedSpace` and `CreateSpace` (undoes 3.1); `space_for(root)`; `PROTOCOL_VERSION` bumps. Delete the architecture rule from 3.2 with the vocabulary it guarded.
+- [x] 10.2 The persisted workspace declares its version and is read by `upgrade-resilience`'s rule: a document that carries a kind per space is the previous version, set aside with the operator told what was done.
+- [x] 10.3 Runtime tests: one root names one space; the space round-trips a restart; a persisted workspace of the previous version is recovered from and reported.
 
 ## 11. The column
 
-- [ ] 11.1 Two groups per space: the root's agents, then the isolated ones, with a blank row between them only when both groups have an agent.
-- [ ] 11.2 A colour per group, from the two tokens the kinds wore; the selection tint reads the agent's group rather than the space's kind (undoes what the kind gave `kind_hue`).
-- [ ] 11.3 The isolated row keeps the tree connector; the root's row does not. Dragging to reorder is confined to a group.
-- [ ] 11.4 `Isolate` in the agent's context menu, offered only where it can be honoured; the prompt for a dirty root; the row moves between groups when it lands.
-- [ ] 11.5 TestBackend tests: both groups with their separator; one group with none; the row moving on isolation; the action absent outside a repository.
+- [x] 11.1 Two groups per space: the root's agents, then the isolated ones, with a blank row between them only when both groups have an agent.
+- [x] 11.2 A colour per group, from the two tokens the kinds wore; the selection tint reads the agent's group rather than the space's kind (undoes what the kind gave `kind_hue`).
+- [x] 11.3 The isolated row keeps the tree connector; the root's row does not. Dragging to reorder is confined to a group.
+- [x] 11.4 `Isolate` in the agent's context menu, offered only where it can be honoured; the prompt for a dirty root; the row moves between groups when it lands.
+- [x] 11.5 TestBackend tests: both groups with their separator; one group with none; the row moving on isolation; the action absent outside a repository.
 
 ## 12. The picker asks only where
 
-- [ ] 12.1 Remove the kind row, the kind `⇄`, `choose_kind`, `slots_available` and `RootProfile`; the `⇄` on a space header keeps its own job.
-- [ ] 12.2 Remove the repository-reach filter and its cache: with no kind, every directory can be a space and the listing hides nothing.
-- [ ] 12.3 Picker tests: every directory is offered; picking one creates a space; the prompt has one question.
+- [x] 12.1 Remove the kind row, the kind `⇄`, `choose_kind`, `slots_available` and `RootProfile`; the `⇄` on a space header keeps its own job.
+- [x] 12.2 Remove the repository-reach filter and its cache: with no kind, every directory can be a space and the listing hides nothing.
+- [x] 12.3 Picker tests: every directory is offered; picking one creates a space; the prompt has one question.
 
 ## 13. The project's default
 
-- [ ] 13.1 `worktrees.default: isolated | in-place` in `agents.yaml`, parsed with the rest of the policy and defaulting to in-place.
-- [ ] 13.2 The placement at launch reads it; an agent launched under `isolated` is placed in a slot and the action has nothing to offer.
-- [ ] 13.3 Manifest and application tests: declared, undeclared, and an unreadable value refused with the rest of the policy.
+- [x] 13.1 `worktrees.default: isolated | in-place` in `agents.yaml`, parsed with the rest of the policy and defaulting to in-place.
+- [x] 13.2 The placement at launch reads it; an agent launched under `isolated` is placed in a slot and the action has nothing to offer.
+- [x] 13.3 Manifest and application tests: declared, undeclared, and an unreadable value refused with the rest of the policy.
 
 ## 14. Docs, journeys and the gate
 
-- [ ] 14.1 `docs/architecture/invariants.md`: isolation is an agent's property; the operator's tree is never written to by an isolation; one root, one space.
-- [ ] 14.2 `web/content/docs/workspace.mdx` and the `worktree` Skill rewritten for one space and an action; `conformance/contract/isolation.py`'s copy of the projected text follows.
-- [ ] 14.3 Journey: an agent in the root is isolated — same identity, same conversation, checkout created, the operator's tree untouched, the row in the other group.
-- [ ] 14.4 Journey: a workspace persisted by the previous release is opened by this build.
-- [ ] 14.5 Retire the journeys and tests whose claim was the two kinds, replacing the claim rather than deleting the coverage.
-- [ ] 14.6 Gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `journey validate`, `openspec validate --all --strict`.
+- [x] 14.1 `docs/architecture/invariants.md`: isolation is an agent's property; the operator's tree is never written to by an isolation; one root, one space.
+- [x] 14.2 `web/content/docs/workspace.mdx` and the `worktree` Skill rewritten for one space and an action; `conformance/contract/isolation.py`'s copy of the projected text follows.
+- [x] 14.3 Journey: an agent in the root is isolated — same identity, same conversation, checkout created, the operator's tree untouched, the row in the other group.
+- [x] 14.4 Journey: a workspace persisted by the previous release is opened by this build.
+- [x] 14.5 Retire the journeys and tests whose claim was the two kinds, replacing the claim rather than deleting the coverage.
+- [x] 14.6 Gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `journey validate`, `openspec validate --all --strict`.
