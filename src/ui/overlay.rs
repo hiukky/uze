@@ -296,10 +296,11 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let keymap = uze_keys::active();
     let key = |action| keymap.chord_for(action, &scopes);
     let setup_note = match key(Action::SetupHarness) {
-        Some(chord) => {
-            format!("Detected, but UZE hasn't configured it — press {chord} to run setup.")
-        }
-        None => "Detected, but UZE hasn't configured it — set it up from its drawer.".to_owned(),
+        Some(chord) => format!(
+            "No mark: not on this machine, or on it and never handed to UZE — press {chord} to run setup."
+        ),
+        None => "No mark: not on this machine, or on it and never handed to UZE — set it up from its drawer."
+            .to_owned(),
     };
     let reconcile_keys: Vec<String> = [
         (Action::AnalyzeContext, "analyze"),
@@ -336,23 +337,19 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let lines = vec![
         heading("STATUS"),
         entry(
-            Symbol::MarkClose,
-            "Not installed",
-            theme::color(Token::TextMuted),
-            "The harness isn't on this machine at all.",
-        ),
-        entry(
-            Symbol::StatusSelected,
-            "Installed",
-            theme::color(Token::StateWarning),
-            &setup_note,
-        ),
-        entry(
             Symbol::MarkOk,
             "Configured",
             theme::color(Token::Accent),
             "UZE has set it up — ready to receive plugins.",
         ),
+        // The other state wears no mark, so it is described rather than
+        // listed: a legend entry with a glyph would name one the cards
+        // never draw. Which of its two shapes a harness is in — missing,
+        // or here and not set up — is in its own drawer.
+        Line::from(Span::styled(
+            format!("{:<20}{}", "Not configured", setup_note),
+            theme::fg(Token::TextMuted),
+        )),
         Line::from(""),
         heading("COMPATIBILITY (per capability, in the detail panel)"),
         entry(

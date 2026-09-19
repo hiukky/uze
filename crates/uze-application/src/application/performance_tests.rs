@@ -158,10 +158,7 @@ impl World {
             probes_before,
             "{label}: a warm run probed the harness"
         );
-        assert!(
-            best < BUDGET,
-            "{label}: best of {ATTEMPTS} warm runs took {best:?}, budget is {BUDGET:?}"
-        );
+        assert_within_budget(label, best, ATTEMPTS);
     }
 
     /// For a mutation, which cannot be repeated in one world: one timed run
@@ -184,12 +181,31 @@ impl World {
 
 /// Holds the best of several runs to the budget.
 fn assert_best_within_budget(label: &str, runs: &[Duration]) {
-    let best = runs.iter().min().expect("at least one run");
+    let best = *runs.iter().min().expect("at least one run");
     eprintln!("{label}: best of {} runs {best:?}", runs.len());
+    assert_within_budget(label, best, runs.len());
+}
+
+/// The budget, held wherever the clock is measuring this code.
+///
+/// It is not, under `cargo llvm-cov`: every binary is instrumented and the
+/// whole workspace runs at once, so the number describes the run rather
+/// than the path — the coverage job timed this same `doctor` at 117 ms
+/// where an ordinary run of it measures under two, instrumented included.
+/// The budget is a claim about a path, so it is asserted where the
+/// measurement is of one: both `Test` jobs run these tests uninstrumented,
+/// on Linux and on macOS, and `make test` does the same locally.
+///
+/// What actually catches a warm path going cold — that it took no live
+/// probe — is asserted by the caller either way, instrumented or not.
+fn assert_within_budget(label: &str, best: Duration, runs: usize) {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        eprintln!("{label}: instrumented for coverage, so the clock is not held to the budget");
+        return;
+    }
     assert!(
-        *best < BUDGET,
-        "{label}: best of {} runs took {best:?}, budget is {BUDGET:?}",
-        runs.len()
+        best < BUDGET,
+        "{label}: best of {runs} runs took {best:?}, budget is {BUDGET:?}"
     );
 }
 

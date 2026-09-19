@@ -22,77 +22,86 @@ use super::super::{content_area, render_screen_header};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
 
-/// A harness's state collapses onto exactly one of three buckets for this
-/// list — `HarnessHealth` itself tracks a finer distinction (whether the
-/// last explicit `uze setup` run specifically *verified* the binary, vs.
-/// configuration that only ever happened implicitly through `uze add`), but
-/// that's an audit-trail detail for the drawer, not something a glance at
-/// the list needs: either way the harness is equally ready to receive
-/// plugins. New states here should earn their place the same way — only
-/// when the list needs to tell the user to act differently, not because the
-/// underlying data happens to distinguish something.
+/// Two states, because there are two answers a person can act on: UZE has
+/// set this harness up, or it has not. A binary that is not on the machine
+/// and one the person installed themselves and never handed to UZE are the
+/// same answer to the only question the list asks — can it receive
+/// plugins? Which of the two it is, and what to do about it, is the
+/// drawer's to say (see [`status_note`]).
+///
+/// `HarnessHealth` tracks far more: whether an explicit `uze setup` run
+/// verified the binary rather than an `uze add` preparing it implicitly,
+/// and whether UZE's runtime shim is first on `PATH` for the harnesses
+/// that project project-context through it. Every one of those is drawer
+/// detail. The last of them used to be a state of its own here, and it
+/// put `PATH shadowed` across the card of a harness whose only real news
+/// was that nobody had set it up — a sentence about this machine's `PATH`
+/// where the person was looking for what to do next. A new state here
+/// earns its place only when the list needs them to act differently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HarnessStatus {
-    /// The binary isn't on this machine at all.
-    NotInstalled,
-    /// Detected, but UZE has never configured it (`uze setup` or an
-    /// implicit `uze add` preparation).
-    Installed,
     /// UZE has configured it — ready to receive plugins.
     Configured,
-    /// A real harness binary shadows UZE's runtime shim on PATH.
-    NeedsPath,
+    /// Not on this machine, or on it and never handed to UZE.
+    NotConfigured,
 }
 
 impl HarnessStatus {
     fn from(harness: &HarnessHealth) -> Self {
-        if !harness.detection.present {
-            Self::NotInstalled
-        } else if !harness.runtime_shim_active {
-            Self::NeedsPath
-        } else if harness.setup.contains("not configured") {
-            Self::Installed
-        } else {
+        if harness.detection.present && !harness.setup.contains("not configured") {
             Self::Configured
+        } else {
+            Self::NotConfigured
         }
     }
 
-    fn glyph(self) -> String {
+    /// The mark a card wears, which is nothing at all when a harness is
+    /// not configured: a card carrying no mark already says so, and a
+    /// second way of saying it is a warning on every harness the person
+    /// has not set up — most of them, on most machines, with nothing
+    /// wrong.
+    fn mark(self) -> Option<String> {
         match self {
-            Self::NotInstalled => theme::glyph(Symbol::MarkClose),
-            Self::Installed => theme::glyph(Symbol::StatusSelected),
-            Self::Configured => theme::glyph(Symbol::MarkOk),
-            Self::NeedsPath => theme::glyph(Symbol::MarkAttention),
+            Self::Configured => Some(theme::glyph(Symbol::MarkOk)),
+            Self::NotConfigured => None,
         }
+    }
+
+    /// The mark with the word for it, for a card wide enough to say it.
+    fn badge(self) -> Option<String> {
+        self.mark().map(|mark| format!("{mark} {}", self.label()))
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::NotInstalled => "Not installed",
-            Self::Installed => "Installed",
             Self::Configured => "Configured",
-            Self::NeedsPath => "PATH shadowed",
-        }
-    }
-
-    /// The drawer footer's note under the label: what the state means for
-    /// the person reading it.
-    fn note(self) -> &'static str {
-        match self {
-            Self::NotInstalled => "Not found on this machine",
-            Self::Installed => "Detected — set it up to receive plugins",
-            Self::Configured => "Ready to receive plugins",
-            Self::NeedsPath => "A real binary shadows uze's shim on PATH",
+            Self::NotConfigured => "Not configured",
         }
     }
 
     fn color(self) -> Color {
         match self {
-            Self::NotInstalled => theme::color(Token::TextMuted),
-            Self::Installed => theme::color(Token::StateWarning),
             Self::Configured => theme::color(Token::Accent),
-            Self::NeedsPath => theme::color(Token::StateWarning),
+            Self::NotConfigured => theme::color(Token::TextMuted),
         }
+    }
+}
+
+/// The drawer footer's note under the label: the state in the words the
+/// person acts on. The distinction the card deliberately does not draw
+/// lives here, because this is where doing something about it is — a
+/// harness that is not on the machine is installed first, one that is
+/// already here is set up.
+fn status_note(harness: &HarnessHealth) -> &'static str {
+    if !harness.detection.present {
+        // Setting one up is the same gesture wherever it starts from:
+        // UZE provisions through the vendor's own official route, which
+        // installs what is missing and updates what is not.
+        "Not on this machine — setting it up installs it"
+    } else if HarnessStatus::from(harness) == HarnessStatus::Configured {
+        "Ready to receive plugins"
+    } else {
+        "Installed — set it up to receive plugins"
     }
 }
 
@@ -110,11 +119,16 @@ pub(crate) fn render_harnesses(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let count = model
-        .remembered
-        .doctor
-        .as_ref()
-        .map_or(0, |d| d.harnesses.len());
+    // What is on the machine, not how many harnesses UZE knows about: the
+    // catalog draws a card for every one it supports, so counting cards
+    // said "4 installed" on a machine carrying three.
+    let count = model.remembered.doctor.as_ref().map_or(0, |doctor| {
+        doctor
+            .harnesses
+            .iter()
+            .filter(|harness| harness.detection.present)
+            .count()
+    });
     // The drawer overlays from the right rather than sharing a permanent
     // split, but the header/list still need to lay out *around* it when
     // it's open — otherwise their own right-aligned content runs straight
@@ -274,19 +288,36 @@ fn render_harness_card(
             })
             .add_modifier(Modifier::BOLD),
     );
-    let status_badge = Span::styled(
-        format!("{} {}", status.glyph(), status.label()),
-        Style::default().fg(status.color()),
-    );
-    let title_gap = inner
-        .width
-        .saturating_sub((name.width() + status_badge.width()) as u16);
+    // Right-aligned beside the name, and only what fits there with a gap
+    // between the two: a card the drawer has narrowed wears the mark
+    // alone, because a word clipped mid-way and glued to the name
+    // ("Claude Code✓ Configur") says less than the mark on its own does.
+    // No mark at all is a harness UZE has not configured.
+    let mut title = vec![name];
+    let fits = |text: &Option<String>| {
+        text.as_deref().is_some_and(|text| {
+            title[0].width() + 1 + Span::raw(text).width() <= inner.width as usize
+        })
+    };
+    let badge = status.badge();
+    let mark = status.mark();
+    let worn = if fits(&badge) {
+        badge
+    } else if fits(&mark) {
+        mark
+    } else {
+        None
+    };
+    if let Some(worn) = worn {
+        let worn = Span::styled(worn, Style::default().fg(status.color()));
+        let gap = inner
+            .width
+            .saturating_sub((title[0].width() + worn.width()) as u16);
+        title.push(Span::raw(" ".repeat(gap as usize)));
+        title.push(worn);
+    }
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            name,
-            Span::raw(" ".repeat(title_gap as usize)),
-            status_badge,
-        ])),
+        Paragraph::new(Line::from(title)),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     frame.render_widget(
@@ -326,7 +357,7 @@ fn render_harness_drawer(
         DrawerStatus {
             color: status.color(),
             headline: status.label(),
-            subtitle: status.note(),
+            subtitle: status_note(harness),
         },
         &offers,
         model.hovered_offer,
@@ -534,12 +565,56 @@ mod tests {
         }
     }
 
+    /// A shim that is not first on `PATH` is a fact about this machine's
+    /// environment, and it used to be the whole of what a card said —
+    /// `PATH shadowed`, in warning colour, over a harness that was set up
+    /// and working. The card answers what the person can act on; where the
+    /// shim actually matters is per resource, and the drawer's own
+    /// compatibility rows still say it (see
+    /// `a_shadowed_shim_reads_as_an_environment_warning`).
     #[test]
-    fn shadowed_runtime_shim_never_reads_as_configured() {
-        let status = HarnessStatus::from(&configured_harness(false));
-        assert_eq!(status, HarnessStatus::NeedsPath);
-        assert_eq!(status.label(), "PATH shadowed");
-        assert_eq!(status.color(), theme::color(Token::StateWarning));
+    fn a_shadowed_shim_is_drawer_detail_rather_than_the_cards_state() {
+        let harness = configured_harness(false);
+        let status = HarnessStatus::from(&harness);
+
+        assert_eq!(status, HarnessStatus::Configured);
+        assert_eq!(status.label(), "Configured");
+        assert_eq!(status_note(&harness), "Ready to receive plugins");
+        assert_eq!(
+            status.badge(),
+            Some(format!("{} Configured", theme::glyph(Symbol::MarkOk)))
+        );
+    }
+
+    /// One state, two shapes. A harness nobody installed and one the
+    /// person installed themselves and never handed to UZE are the same
+    /// answer to what the list asks, and neither wears a mark: a card
+    /// carrying nothing is already "not configured", and marking it too
+    /// would put a warning on most of the catalog with nothing wrong.
+    #[test]
+    fn nothing_uze_configured_carries_a_badge_and_both_shapes_are_said_in_the_drawer() {
+        let mut absent = configured_harness(true);
+        absent.detection.present = false;
+        let mut theirs = configured_harness(true);
+        theirs.setup = "not configured".to_owned();
+
+        for harness in [&absent, &theirs] {
+            let status = HarnessStatus::from(harness);
+            assert_eq!(status, HarnessStatus::NotConfigured);
+            assert_eq!(status.label(), "Not configured");
+            assert_eq!(status.badge(), None, "and the card wears nothing");
+            assert_eq!(status.color(), theme::color(Token::TextMuted));
+        }
+
+        assert_eq!(
+            status_note(&absent),
+            "Not on this machine — setting it up installs it"
+        );
+        assert_eq!(
+            status_note(&theirs),
+            "Installed — set it up to receive plugins",
+            "the drawer is where doing something about it is"
+        );
     }
 
     fn support(

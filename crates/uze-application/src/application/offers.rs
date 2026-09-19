@@ -98,12 +98,20 @@ impl MarketplacePluginSummary {
 }
 
 impl HarnessHealth {
+    /// One action, and it is always on offer, because setting a harness up
+    /// is what UZE does to *any* card in the catalog: `setup` provisions
+    /// through the vendor's own official route — installing what is not on
+    /// the machine, updating what is — and then configures it to receive
+    /// plugins.
+    ///
+    /// Refusing it for a harness that is absent read the state backwards.
+    /// The catalog then offered setup only where setup had already been
+    /// done, and offered nothing at all on the one card where there was
+    /// something to do; the CLI meanwhile listed exactly those absent
+    /// harnesses to pick from (`choose_harnesses`), which is the same
+    /// question answered two ways.
     pub fn offers(&self) -> Vec<ActionOffer> {
-        vec![if self.detection.present {
-            ActionOffer::available(Action::SetupHarness)
-        } else {
-            ActionOffer::unavailable(Action::SetupHarness, "not installed on this machine")
-        }]
+        vec![ActionOffer::available(Action::SetupHarness)]
     }
 }
 
