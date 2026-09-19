@@ -116,11 +116,16 @@ pub(crate) fn render_harnesses(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let count = model
-        .remembered
-        .doctor
-        .as_ref()
-        .map_or(0, |d| d.harnesses.len());
+    // What is on the machine, not how many harnesses UZE knows about: the
+    // catalog draws a card for every one it supports, so counting cards
+    // said "4 installed" on a machine carrying three.
+    let count = model.remembered.doctor.as_ref().map_or(0, |doctor| {
+        doctor
+            .harnesses
+            .iter()
+            .filter(|harness| harness.detection.present)
+            .count()
+    });
     // The drawer overlays from the right rather than sharing a permanent
     // split, but the header/list still need to lay out *around* it when
     // it's open — otherwise their own right-aligned content runs straight
@@ -339,9 +344,19 @@ fn render_harness_drawer(
 ) {
     let status = HarnessStatus::from(harness);
     let offers = harness.offers();
+    // The one action this drawer has is `Set up`, and UZE can only run it
+    // against a harness that is on the machine. Where it cannot, the row
+    // the button would be on says so instead: an empty row under "Not
+    // configured" reads as a button that failed to draw.
+    let blocked = offers.iter().find_map(|offer| {
+        offer
+            .reason()
+            .map(|reason| format!("{} — {reason}", offer.action.label()))
+    });
     let (inner, footer) = super::drawer_body_and_footer(
         super::drawer(frame, content, ResizablePanel::HarnessDrawer, model, hits),
         &offers,
+        blocked.as_deref(),
     );
     render_drawer_footer(
         frame,
@@ -350,6 +365,7 @@ fn render_harness_drawer(
             color: status.color(),
             headline: status.label(),
             subtitle: status_note(harness),
+            nothing_to_do: blocked.as_deref(),
         },
         &offers,
         model.hovered_offer,
