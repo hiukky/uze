@@ -6,10 +6,11 @@
 
 use crate::view::Role;
 
-use super::{
-    canvas::{Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width},
-    model::{Sequence, SequenceStep, Stroke},
+use crate::shared::canvas::{
+    Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width,
 };
+
+use super::model::{Sequence, SequenceStep, Stroke};
 
 const MARGIN: i32 = 2;
 const HEAD_HEIGHT: i32 = 3;

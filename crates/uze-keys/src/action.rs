@@ -255,6 +255,8 @@ actions! {
         "Box below", "Select the box below the selected one";
     LevelUp => "level-up", false,
         "Level up", "Go back to the diagram this one was entered from";
+    ToggleMap => "toggle-map", false,
+        "Map", "Show the checkout as a map of where its lines are, or leave it";
 
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,

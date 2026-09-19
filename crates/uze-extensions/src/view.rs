@@ -572,6 +572,9 @@ pub enum Command {
     SelectToward(PanDirection),
     /// Leave what was entered, for where it was entered from.
     Back,
+    /// Show the checkout as a map, or leave the map for whatever was on
+    /// show before it.
+    ToggleMap,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

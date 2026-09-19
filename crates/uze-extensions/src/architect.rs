@@ -3,9 +3,13 @@
 //! Mermaid source (flowcharts, C4, sequences) becomes a diagram a
 //! terminal can show *without* a graphics protocol, and owning the layout
 //! buys what an image cannot: every box is addressable, so a click
-//! selects it and lights what it connects to. The diagrams are the
-//! project's own files; beside them is the one artifact nobody writes,
-//! the checkout measured and drawn as a map ([`codemap`]).
+//! selects it and lights what it connects to.
+//!
+//! Everything here is a file somebody wrote. What a project *is* —
+//! where its lines are, which of them are hot — is measured rather than
+//! written, and is the code surface's map
+//! ([`crate::code`]): it looks like a diagram and is not one, and every
+//! tile on it is a path the code surface already answers about.
 //!
 //! It describes and the host draws, like every surface here — but as a
 //! [`Layout::Board`], because a drawing is not a document: it is larger
@@ -15,9 +19,7 @@
 //! whole drawing: this side decides which part, because it owns the
 //! position; the host only draws the cells it is handed.
 
-mod canvas;
 mod catalog;
-mod codemap;
 mod layout;
 mod mermaid;
 mod minimap;
@@ -25,7 +27,6 @@ mod model;
 mod paint;
 mod route;
 mod sequence;
-mod treemap;
 
 use std::path::PathBuf;
 
@@ -38,12 +39,10 @@ use crate::{
     },
 };
 
-use canvas::{Canvas, Frame, Glyphs};
+use crate::shared::canvas::{Canvas, Frame, Glyphs};
 use catalog::Catalog;
 
 pub use catalog::Artifact;
-pub use codemap::Measure as CodeMeasure;
-use codemap::{CodeMap, Followed};
 use minimap::Minimap;
 use model::Diagram;
 use paint::{Leads, Scene};
@@ -95,9 +94,6 @@ const MODES: [(Showing, &str); 3] = [
 enum Drawing {
     Graph(Box<Scene>),
     Sequence(model::Sequence),
-    /// The code map. It has no drawing to keep: it is laid out for the
-    /// space it is shown in, which only the moment of drawing knows.
-    Code,
     Unreadable(String),
 }
 
@@ -129,8 +125,6 @@ pub struct ArchitectView {
     /// the inside of the box `core`, wherever that box is drawn.
     insides: Vec<Vec<String>>,
     project: PathBuf,
-    /// The checkout, measured — once it has been.
-    code: Option<CodeMap>,
     /// What is the matter with the declared artifacts, kept to be said
     /// beside the code map when that is all there is to show.
     trouble: Option<String>,
@@ -203,13 +197,6 @@ pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswe
     }
 }
 
-/// Measures the checkout `within` sits in, for the code map. Unbounded
-/// like [`read_artifacts`], and asked apart from it so that neither waits
-/// for the other. `None` outside a repository: there is no map of that.
-pub fn measure_code(host: &dyn Host, within: &std::path::Path) -> Option<CodeMeasure> {
-    codemap::measure(host, within).ok()
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArchitectOutcome {
     Stay,
@@ -239,18 +226,13 @@ impl ArchitectView {
             trail: Vec::new(),
             insides: Vec::new(),
             project: PathBuf::new(),
-            code: None,
             trouble: None,
         }
     }
 
     pub fn absorb(&mut self, answer: ArtifactsAnswer) {
         match answer {
-            ArtifactsAnswer::Found {
-                mut artifacts,
-                project,
-            } => {
-                artifacts.extend(self.code_artifact());
+            ArtifactsAnswer::Found { artifacts, project } => {
                 self.catalog = Catalog::of(artifacts);
                 self.insides = self
                     .catalog
@@ -274,51 +256,11 @@ impl ArchitectView {
                 self.trouble = None;
                 self.open(0);
             }
-            // With a map to show, what is the matter with the declaration
-            // is said beside it: an empty surface is the worse answer.
-            ArtifactsAnswer::Nothing { text, .. } if self.code.is_some() => {
-                self.trouble = Some(text);
-            }
             ArtifactsAnswer::Nothing { text, hint } => {
                 self.catalog = Catalog::default();
                 self.nothing = Some((text, Some(hint)));
             }
         }
-    }
-
-    /// The measurement, whenever it arrives. It appends: what is on show
-    /// stays on show, unless nothing was.
-    pub fn absorb_code(&mut self, measure: CodeMeasure) {
-        let map = CodeMap::of(measure);
-        if map.is_empty() || self.code.is_some() {
-            return;
-        }
-        self.code = Some(map);
-        let mut artifacts = self.catalog.artifacts().to_vec();
-        artifacts.extend(self.code_artifact());
-        self.catalog = Catalog::of(artifacts);
-        self.insides.push(Vec::new());
-        if let Some((text, hint)) = self.nothing.take() {
-            // Still reading has no hint yet, and is not a trouble.
-            self.trouble = hint.map(|_| text);
-            self.open(0);
-        }
-    }
-
-    fn code_artifact(&self) -> Option<Artifact> {
-        let map = self.code.as_ref()?;
-        Some(Artifact::derived(
-            "Code map",
-            catalog::Kind::Code,
-            map.root().display().to_string(),
-            map.ranking(),
-        ))
-    }
-
-    /// Whether what is on show is laid out for the view rather than moved
-    /// under it.
-    fn fits_view(&self) -> bool {
-        matches!(self.drawing, Drawing::Code) && self.showing != Showing::Source
     }
 
     /// Every area, as the index of its first artifact.
@@ -405,9 +347,6 @@ impl ArchitectView {
 
     /// Whether something was selected, and now is not.
     fn let_go(&mut self) -> bool {
-        if let (Drawing::Code, Some(map)) = (&self.drawing, self.code.as_mut()) {
-            return map.let_go();
-        }
         if self.picked.take().is_some() {
             self.repaint();
             return true;
@@ -417,10 +356,7 @@ impl ArchitectView {
 
     /// How many levels were entered to reach what is on show.
     fn depth(&self) -> usize {
-        match (&self.drawing, &self.code) {
-            (Drawing::Code, Some(map)) => map.crumbs().len(),
-            _ => self.trail.len(),
-        }
+        self.trail.len()
     }
 
     /// Whether the area on show is a descent or a set.
@@ -430,9 +366,6 @@ impl ArchitectView {
     /// what nothing else declares. The code map is one by construction:
     /// its levels are the directories, and they are made by entering.
     fn offering(&self) -> Offering {
-        if matches!(self.drawing, Drawing::Code) {
-            return Offering::Ladder;
-        }
         let artifacts = self.catalog.artifacts();
         let mut levels: Vec<u8> = self
             .siblings()
@@ -454,20 +387,6 @@ impl ArchitectView {
         if self.offering() == Offering::Set {
             return Vec::new();
         }
-        if let (Drawing::Code, Some(map)) = (&self.drawing, &self.code) {
-            let crumbs = map.crumbs();
-            let here = self
-                .catalog
-                .get(self.selected)
-                .map(|artifact| artifact.name.clone())
-                .unwrap_or_default();
-            let depth = crumbs.len();
-            return std::iter::once(here)
-                .chain(crumbs)
-                .enumerate()
-                .map(|(step, name)| TrailStep::new(name, step == depth))
-                .collect();
-        }
         self.siblings()
             .into_iter()
             .filter_map(|artifact| Some((artifact, self.catalog.get(artifact)?)))
@@ -479,10 +398,6 @@ impl ArchitectView {
     /// back to, standing where the viewer stood; one the descent reaches
     /// but nobody entered is simply shown.
     fn go_to(&mut self, step: usize, space: Size) {
-        if matches!(self.drawing, Drawing::Code) {
-            self.back_to(step, space);
-            return;
-        }
         let Some(&target) = self.siblings().get(step) else {
             return;
         };
@@ -528,12 +443,6 @@ impl ArchitectView {
         self.corner = None;
         self.picked = None;
         self.drawing = match self.catalog.get(self.selected) {
-            Some(artifact) if artifact.kind == catalog::Kind::Code => {
-                if let Some(map) = self.code.as_mut() {
-                    map.reset();
-                }
-                Drawing::Code
-            }
             Some(artifact) => match mermaid::parse(artifact.diagram()) {
                 Ok(Diagram::Graph(graph)) => Drawing::Graph(Box::new(Scene::of(graph))),
                 Ok(Diagram::Sequence(sequence)) => Drawing::Sequence(sequence),
@@ -545,10 +454,7 @@ impl ArchitectView {
     }
 
     fn repaint(&mut self) {
-        let glyphs = match self.showing {
-            Showing::Ascii => Glyphs::Ascii,
-            Showing::Unicode | Showing::Source => Glyphs::Unicode,
-        };
+        let glyphs = self.glyphs();
         self.canvas = match &self.drawing {
             Drawing::Graph(scene) => {
                 let leads: Vec<Leads> = (0..scene.graph.nodes.len())
@@ -557,7 +463,7 @@ impl ArchitectView {
                 Some(paint::paint(scene, glyphs, self.picked, &leads))
             }
             Drawing::Sequence(sequence) => Some(sequence::paint(sequence, glyphs)),
-            Drawing::Code | Drawing::Unreadable(_) => None,
+            Drawing::Unreadable(_) => None,
         };
     }
 
@@ -621,9 +527,6 @@ impl ArchitectView {
     }
 
     fn corner(&self, space: Size) -> (i32, i32) {
-        if self.fits_view() {
-            return (0, 0);
-        }
         let (across, down) = self.reach(space);
         let corner = self.corner.unwrap_or_else(|| self.home(space));
         (
@@ -633,9 +536,6 @@ impl ArchitectView {
     }
 
     fn move_by(&mut self, columns: i32, rows: i32, space: Size) {
-        if self.fits_view() {
-            return;
-        }
         let corner = self.corner(space);
         self.corner = Some((corner.0 + columns, corner.1 + rows));
         self.corner = Some(self.corner(space));
@@ -645,26 +545,18 @@ impl ArchitectView {
         let screen = (i32::from(space.width), i32::from(space.height));
         match self.showing {
             Showing::Source => None,
-            _ if self.fits_view() => None,
             _ => Minimap::of(self.board_size(), screen),
         }
     }
 
-    /// A click, given as the screen cell it landed on. The map answers
-    /// first: it is drawn over the board.
+    /// A click, given as the screen cell it landed on. The minimap
+    /// answers first: it is drawn over the board.
     fn click(&mut self, x: i32, y: i32, space: Size) -> ArchitectOutcome {
         if let Some(target) = self.minimap(space).and_then(|map| map.board_cell_at(x, y)) {
             let half = (i32::from(space.width) / 2, i32::from(space.height) / 2);
             self.corner = Some((target.0 - half.0, target.1 - half.1));
             self.corner = Some(self.corner(space));
             return ArchitectOutcome::Stay;
-        }
-        if self.fits_view() {
-            let followed = match self.code.as_mut() {
-                Some(map) => map.click(x, y, cells(space)),
-                None => Followed::Nothing,
-            };
-            return self.followed(followed);
         }
         let Drawing::Graph(scene) = &self.drawing else {
             return ArchitectOutcome::Stay;
@@ -683,7 +575,7 @@ impl ArchitectView {
         });
         if follows {
             self.picked = node;
-            return self.enter(space);
+            return self.enter();
         }
         self.picked = if node == self.picked { None } else { node };
         self.repaint();
@@ -714,14 +606,7 @@ impl ArchitectView {
 
     /// Follows the picked box: into the level below it, or out to the
     /// code it names.
-    fn enter(&mut self, space: Size) -> ArchitectOutcome {
-        if self.fits_view() {
-            let followed = match self.code.as_mut() {
-                Some(map) => map.follow(cells(space)),
-                None => Followed::Nothing,
-            };
-            return self.followed(followed);
-        }
+    fn enter(&mut self) -> ArchitectOutcome {
         let (Drawing::Graph(scene), Some(picked)) = (&self.drawing, self.picked) else {
             return ArchitectOutcome::Stay;
         };
@@ -740,24 +625,9 @@ impl ArchitectView {
         }
     }
 
-    /// What following a tile of the code map came to.
-    fn followed(&self, followed: Followed) -> ArchitectOutcome {
-        match (followed, &self.code) {
-            (Followed::Open(path), Some(map)) => ArchitectOutcome::OpenPath {
-                project: map.root().to_path_buf(),
-                target: map.root().join(path),
-            },
-            _ => ArchitectOutcome::Stay,
-        }
-    }
-
     /// Back to the level `depth` steps in, with the box that was entered
     /// picked and in the middle of the screen — where the viewer stood.
     fn back_to(&mut self, depth: usize, space: Size) {
-        if let (Drawing::Code, Some(map)) = (&self.drawing, self.code.as_mut()) {
-            map.back_to(depth);
-            return;
-        }
         let Some((artifact, through)) = self.trail.get(depth).cloned() else {
             return;
         };
@@ -796,12 +666,6 @@ impl ArchitectView {
     /// cells is twice as tall as a column is wide, so a step down counts
     /// double: "nearest" has to mean what it looks like.
     fn pick_toward(&mut self, direction: PanDirection, space: Size) {
-        if self.fits_view() {
-            if let Some(map) = self.code.as_mut() {
-                map.pick_toward(direction, cells(space));
-            }
-            return;
-        }
         let Drawing::Graph(scene) = &self.drawing else {
             return;
         };
@@ -865,20 +729,13 @@ impl ArchitectView {
                 sequence.participants.len(),
                 sequence.steps.len()
             ),
-            Drawing::Code | Drawing::Unreadable(_) => String::new(),
+            Drawing::Unreadable(_) => String::new(),
         }
     }
 
     /// What the content says about itself, and which file it came from —
     /// the second half is what somebody needs to go and change it.
-    fn caption(&self, space: Size) -> String {
-        if let (Drawing::Code, Some(map)) = (&self.drawing, &self.code) {
-            let said = map.caption(cells(space));
-            return match &self.trouble {
-                Some(trouble) if !map.is_zoomed() => format!("{said} · {trouble}"),
-                _ => said,
-            };
-        }
+    fn caption(&self) -> String {
         let origin = self.catalog.get(self.selected).map(|a| a.origin.as_str());
         if let (Drawing::Graph(scene), Some(picked)) = (&self.drawing, self.picked) {
             let said = match self.leads(scene, picked) {
@@ -901,11 +758,8 @@ impl ArchitectView {
     }
 
     /// The part of the board the screen is over, as the screen's own
-    /// cells: the drawing, the grid behind it, the map over it.
+    /// cells: the drawing, the grid behind it, the minimap over it.
     fn screen(&self, space: Size) -> Option<Canvas> {
-        if let (Drawing::Code, Some(map)) = (&self.drawing, &self.code) {
-            return Some(map.paint(cells(space), self.glyphs()));
-        }
         let board = self.canvas.as_ref()?;
         let (columns, rows) = (i32::from(space.width), i32::from(space.height));
         let corner = self.corner(space);
@@ -941,10 +795,6 @@ impl ArchitectView {
         }
         Some(screen)
     }
-}
-
-fn cells(space: Size) -> (i32, i32) {
-    (i32::from(space.width), i32::from(space.height))
 }
 
 pub fn view(state: &ArchitectView, space: Size) -> View {
@@ -1015,7 +865,6 @@ fn title(state: &ArchitectView) -> Vec<Span> {
     let project = state
         .project
         .file_name()
-        .or_else(|| state.code.as_ref()?.root().file_name())
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut spans = vec![Span::new("architect", Role::Muted)];
@@ -1045,7 +894,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         Showing::Source => {
             let lines = source_lines(state.source());
             Content::Lines {
-                heading: state.caption(space),
+                heading: state.caption(),
                 scroll: state.corner(space).1.max(0) as u16,
                 total: lines.len(),
                 lines,
@@ -1058,7 +907,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         _ => {
             let lines = state.screen(space).map(|s| s.lines()).unwrap_or_default();
             Content::Lines {
-                heading: state.caption(space),
+                heading: state.caption(),
                 scroll: 0,
                 total: lines.len(),
                 lines,
@@ -1113,10 +962,9 @@ pub fn handle_command(
         Command::ChooseGroup => state.choose_area(),
         Command::ChooseItem => state.choose_artifact(),
         Command::SelectToward(direction) => state.pick_toward(direction, space),
-        Command::Activate => return state.enter(space),
+        Command::Activate => return state.enter(),
         Command::Back => state.back_to(state.depth().saturating_sub(1), space),
         // Nothing to move on a map that fits: the arrows walk its tiles.
-        Command::Pan(direction) if state.fits_view() => state.pick_toward(direction, space),
         Command::NextView => state.open(state.selected + 1),
         Command::PreviousView => state.open(state.selected + count - 1),
         Command::Pan(PanDirection::Left) => state.move_by(-PAN_COLUMNS, 0, space),

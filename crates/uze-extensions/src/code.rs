@@ -1,6 +1,6 @@
-//! The workspace TUI's code surface — one place for the three things a
+//! The workspace TUI's code surface — one place for the four things a
 //! person asks of the checkout a tab is standing in: what changed in it,
-//! what it contains, and what happened to it.
+//! what it contains, what happened to it, and what it is *made of*.
 //!
 //! # Why one extension and not two
 //!
@@ -32,6 +32,16 @@
 //! the changed files: an index cannot mean anything to a tree that lists
 //! directories on demand, and a path means the same thing to both — which
 //! is also what a person means by "this file".
+//!
+//! [`map`] is the fourth half and the newest, and it is here for the same
+//! reason rather than beside the diagrams it was first drawn with. A
+//! treemap of a checkout looks like an architecture diagram and is not
+//! one: nobody writes it, it says nothing about what the project was
+//! meant to be, and every tile on it is a path — the same path the tree
+//! and the diff answer about. Finding the file that carries the weight
+//! and then reading it is the same seam as finding it in the diff and
+//! then editing it, and a surface of its own would put a close and an
+//! open in the middle of it.
 //!
 //! # Scope
 //!
@@ -67,12 +77,15 @@ mod editor;
 mod files;
 mod highlight;
 mod history;
+mod map;
 mod markdown;
 mod render;
 mod request;
+mod treemap;
 
 pub use changes::{ChangeSummary, change_summary};
 pub use history::{Commit, CommitDetail, Timeline, commit_detail, timeline, timeline_section};
+pub use map::{Measure, measure};
 pub use render::view;
 pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 
@@ -81,6 +94,7 @@ use changes_tree::{FileTreeItem, file_tree_items};
 use diff::DiffLineKind;
 use editor::OpenFile;
 use files::Files;
+use map::{Followed, Map};
 
 /// This extension's registry entry — registered once in
 /// `ExtensionRegistry::builtin`; the management TUI's Extensions screen
@@ -88,9 +102,9 @@ use files::Files;
 pub const CATALOG: crate::registry::BuiltinExtension = crate::registry::BuiltinExtension {
     id: "code",
     name: "Code",
-    description: "Changes, contents and history of the active checkout.",
+    description: "Changes, contents, history and a map of the active checkout.",
     surface: "Workspace TUI",
-    usage: "The timeline sits in the sidebar; open the changes with Ctrl+G or the changes chip, and the files with Ctrl+E or the code chip.",
+    usage: "The timeline sits in the sidebar; open the changes with Ctrl+G or the changes chip, and the files with Ctrl+E or the code chip. `m`, or the Map chip, shows the checkout as a map of where its lines are.",
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
@@ -124,6 +138,36 @@ pub enum ContentMode {
     /// A markdown file as the document it describes, rather than as the
     /// markup that describes it. Offered only for a file that is one.
     Preview,
+    /// The checkout drawn as a map — where its lines are and which of
+    /// them are hot. The one mode that is not about the selection alone:
+    /// it is about where the selection *sits* among everything else,
+    /// which is why it takes the whole frame and is toggled rather than
+    /// entered by a door of its own.
+    Map,
+}
+
+/// One entry of the control that says how this surface is showing what
+/// it is showing — the selection's own ways of being read, then the
+/// checkout's. One axis, because the question is the same either way,
+/// and it is what makes the map reachable by pointing at it rather than
+/// only by a key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Showing {
+    /// What was on show before the map, or what is on show now: the
+    /// selection, read as the navigator's own half reads it.
+    Selection(ContentMode),
+    Measured(MapShowing),
+}
+
+/// How the measurement is drawn. One axis: the same numbers, rendered
+/// three ways.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum MapShowing {
+    #[default]
+    Unicode,
+    Ascii,
+    /// The table the map is a picture of: every file by lines.
+    Ranking,
 }
 
 /// Where the keyboard is. Rendered more strongly than mere selection.
@@ -151,6 +195,14 @@ pub struct CodeView {
     /// share, and the reason this is one extension.
     selected: Option<PathBuf>,
     content: ContentMode,
+    /// The mode the map was opened over, so leaving it returns rather
+    /// than guesses.
+    before_map: ContentMode,
+    /// The checkout measured and laid out as a treemap, once the
+    /// measurement has arrived. Absent until then, and the map is not
+    /// offered while it is.
+    map: Option<Map>,
+    map_showing: MapShowing,
     focus: Focus,
     scroll: u16,
     changes: Changes,
@@ -242,6 +294,9 @@ impl CodeView {
             branch: String::new(),
             selected: None,
             content: mode,
+            before_map: mode,
+            map: None,
+            map_showing: MapShowing::default(),
             focus: Focus::Navigator,
             scroll: 0,
             changes: Changes {
@@ -314,7 +369,7 @@ impl CodeView {
     fn navigator(&self) -> NavigatorMode {
         match self.content {
             ContentMode::Diff => NavigatorMode::Changes,
-            ContentMode::Contents | ContentMode::Preview => NavigatorMode::Files,
+            ContentMode::Contents | ContentMode::Preview | ContentMode::Map => NavigatorMode::Files,
         }
     }
 
@@ -536,7 +591,7 @@ impl CodeView {
     /// document's changes are still changes, and the navigator would have
     /// to change lists to show anything else.
     fn read_selection_as_what_it_is(&mut self) {
-        if self.content == ContentMode::Diff {
+        if matches!(self.content, ContentMode::Diff | ContentMode::Map) {
             return;
         }
         self.content = if self.selected_is_markdown() {
@@ -571,6 +626,110 @@ impl CodeView {
                     .and_then(|line| self.diff_row_of(line))
                     .unwrap_or(self.scroll);
             }
+            // Nothing to fetch: the map is already measured, and what it
+            // shows is the checkout rather than the selection.
+            ContentMode::Map => {}
+        }
+    }
+
+    /// The checkout, measured — whenever that arrives. It never changes
+    /// what is on show: the map is a mode somebody asks for, not an
+    /// answer that arrives and takes over.
+    pub fn absorb_measure(&mut self, measure: Measure) {
+        let map = Map::of(measure);
+        if !map.is_empty() {
+            self.map = Some(map);
+        }
+    }
+
+    /// Whether there is a map to show — what decides if it is offered.
+    pub fn has_map(&self) -> bool {
+        self.map.is_some()
+    }
+
+    /// The checkout as a person would name it — the last part of the
+    /// path they recognise it by, which is what a descent starts from.
+    pub(super) fn checkout_name(&self) -> String {
+        self.display_root
+            .rsplit('/')
+            .find(|part| !part.is_empty())
+            .unwrap_or(&self.display_root)
+            .to_owned()
+    }
+
+    pub(super) fn map_showing(&self) -> MapShowing {
+        self.map_showing
+    }
+
+    /// The ways this surface can show what it is showing, in the order
+    /// the control offers them — and the one list both the chips and the
+    /// click that picks one are read from, so an index can never mean
+    /// two different things.
+    pub(super) fn showings(&self) -> Vec<Showing> {
+        if self.content == ContentMode::Map {
+            return vec![
+                Showing::Selection(self.before_map),
+                Showing::Measured(MapShowing::Unicode),
+                Showing::Measured(MapShowing::Ascii),
+                Showing::Measured(MapShowing::Ranking),
+            ];
+        }
+        let mut showings = Vec::new();
+        if self.selected_is_markdown() && self.content != ContentMode::Diff {
+            showings.push(Showing::Selection(ContentMode::Preview));
+            showings.push(Showing::Selection(ContentMode::Contents));
+        } else if self.offers_the_map() {
+            showings.push(Showing::Selection(self.content));
+        }
+        if self.offers_the_map() {
+            showings.push(Showing::Measured(MapShowing::Unicode));
+        }
+        showings
+    }
+
+    /// Whether the map is on offer. It is another way of finding a file,
+    /// so it belongs beside the tree and not beside the diff: what
+    /// changed is a list of its own, and a map of the whole checkout
+    /// answers a question nobody reviewing a change is asking.
+    fn offers_the_map(&self) -> bool {
+        self.map.is_some() && self.navigator() == NavigatorMode::Files
+    }
+
+    /// One of them, picked.
+    pub(super) fn show_this_way(&mut self, showing: Showing) {
+        match showing {
+            Showing::Selection(mode) => {
+                self.before_map = mode;
+                self.show(mode);
+            }
+            Showing::Measured(map_showing) => {
+                self.map_showing = map_showing;
+                if self.content != ContentMode::Map {
+                    self.before_map = self.content;
+                    self.show(ContentMode::Map);
+                }
+            }
+        }
+    }
+
+    pub(super) fn map_view(&self) -> Option<&Map> {
+        self.map.as_ref()
+    }
+
+    /// Shows the map, or leaves it for wherever it was opened over. A
+    /// toggle rather than a door: it is the same checkout either way, and
+    /// "show me this as a map" is a question about what is already open.
+    fn toggle_map(&mut self) {
+        match self.content {
+            ContentMode::Map => self.show(self.before_map),
+            _ if self.offers_the_map() => {
+                self.before_map = self.content;
+                self.show(ContentMode::Map);
+            }
+            _ if self.navigator() != NavigatorMode::Files => {
+                self.notice = Some("the map is a way through the files".to_owned());
+            }
+            _ => self.notice = Some("the checkout has not been measured yet".to_owned()),
         }
     }
 
@@ -586,6 +745,8 @@ impl CodeView {
                 .diff
                 .get(self.scroll as usize)
                 .map(|cell| cell.line_no as usize),
+            // A map has tiles, not lines: nothing to carry across.
+            ContentMode::Map => None,
         }
     }
 
@@ -779,6 +940,67 @@ fn current_branch(host: &dyn Host, root: &Path) -> String {
     }
 }
 
+/// The map answers the keys the tree answers, about tiles rather than
+/// rows: the arrows walk it, activate goes in or opens, and the key that
+/// closes leaves the level before it leaves the surface. No new binding —
+/// the same gestures, asked of whichever half is on show.
+fn map_command(view: &mut CodeView, command: Command, space: Size) -> CodeOutcome {
+    let cells = (i32::from(space.width), i32::from(space.height));
+    let Some(map) = view.map.as_mut() else {
+        return match command {
+            Command::Close => CodeOutcome::Close,
+            _ => CodeOutcome::Stay,
+        };
+    };
+    let toward = |direction| Some(direction);
+    let direction = match command {
+        Command::SelectPrevious => toward(ScrollDirection::Up),
+        Command::SelectNext => toward(ScrollDirection::Down),
+        _ => None,
+    };
+    if let Some(direction) = direction {
+        map.pick_toward(
+            match direction {
+                ScrollDirection::Up => crate::view::PanDirection::Up,
+                ScrollDirection::Down => crate::view::PanDirection::Down,
+            },
+            cells,
+        );
+        return CodeOutcome::Stay;
+    }
+    match command {
+        Command::Collapse => map.pick_toward(crate::view::PanDirection::Left, cells),
+        Command::Expand => map.pick_toward(crate::view::PanDirection::Right, cells),
+        Command::Activate => {
+            if let Followed::Open(path) = map.follow(cells) {
+                let target = view.root.join(path);
+                view.select(target);
+                view.show(view.before_map);
+            }
+        }
+        // One step out at a time: the selected tile, then the level that
+        // was entered, and only with neither left does the map close.
+        Command::Close => {
+            if !map.let_go() {
+                match map.crumbs().len() {
+                    0 => view.show(view.before_map),
+                    depth => map.back_to(depth - 1),
+                }
+            }
+        }
+        Command::ToggleMap => view.toggle_map(),
+        Command::NextMode => {
+            view.map_showing = match view.map_showing {
+                MapShowing::Unicode => MapShowing::Ascii,
+                MapShowing::Ascii => MapShowing::Ranking,
+                MapShowing::Ranking => MapShowing::Unicode,
+            };
+        }
+        _ => {}
+    }
+    CodeOutcome::Stay
+}
+
 /// One command reaching an open [`CodeView`].
 ///
 /// A command, never a key: which chord reaches this is the host's, the
@@ -793,6 +1015,13 @@ pub fn handle_command(view: &mut CodeView, command: Command, space: Size) -> Cod
         let outcome = edit_command(view, command);
         view.follow_caret(space.height);
         return outcome;
+    }
+
+    // The map answers before the question about unsaved work below: it
+    // has no buffer, and its own `close` is a level rather than the
+    // surface.
+    if view.content == ContentMode::Map {
+        return map_command(view, command, space);
     }
 
     if let Some(path) = view.confirming_delete.clone() {
@@ -885,6 +1114,7 @@ pub fn handle_command(view: &mut CodeView, command: Command, space: Size) -> Cod
                 _ => ContentMode::Preview,
             });
         }
+        Command::ToggleMap => view.toggle_map(),
         Command::Delete => {
             match view.selected.clone().filter(|path| {
                 !view
@@ -980,7 +1210,10 @@ fn activate_selection(view: &mut CodeView) {
     }
 }
 
-pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>) -> CodeOutcome {
+pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> CodeOutcome {
+    if view.content == ContentMode::Map {
+        return map_mouse(view, hit, space);
+    }
     match hit {
         Some(ViewHit::SelectItem(index)) => match view.navigator() {
             NavigatorMode::Changes => {
@@ -1037,14 +1270,45 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>) -> CodeOutcome {
         // that knows it — which is why the hit carries an index rather
         // than a mode the host would have to name.
         Some(ViewHit::SelectMode(index)) => {
-            if let Some(mode) = [ContentMode::Preview, ContentMode::Contents]
-                .get(index)
-                .copied()
-            {
-                view.show(mode);
+            if let Some(showing) = view.showings().get(index).copied() {
+                view.show_this_way(showing);
             }
         }
         Some(ViewHit::Close) => return CodeOutcome::Close,
+        _ => {}
+    }
+    CodeOutcome::Stay
+}
+
+/// A click on the map: a tile is selected, the one already selected is
+/// followed, and a step of the breadcrumb goes back to that level.
+fn map_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> CodeOutcome {
+    let cells = (i32::from(space.width), i32::from(space.height));
+    match hit {
+        Some(ViewHit::Close) => return CodeOutcome::Close,
+        Some(ViewHit::SelectMode(index)) => {
+            if let Some(showing) = view.showings().get(index).copied() {
+                view.show_this_way(showing);
+            }
+        }
+        // The first step of the trail is the checkout itself, which the
+        // map is already at the top of; the rest are its own levels.
+        Some(ViewHit::SelectTrail(step)) => {
+            if let Some(map) = view.map.as_mut() {
+                map.back_to(step);
+            }
+        }
+        Some(ViewHit::PlaceCaret { line, cell }) => {
+            let followed = view
+                .map
+                .as_mut()
+                .map(|map| map.click(cell as i32, line as i32, cells));
+            if let Some(Followed::Open(path)) = followed {
+                let target = view.root.join(path);
+                view.select(target);
+                view.show(view.before_map);
+            }
+        }
         _ => {}
     }
     CodeOutcome::Stay

@@ -9,10 +9,9 @@
 
 use std::collections::BTreeSet;
 
-use super::{
-    canvas::{Frame, text_width, wrapped},
-    model::{Flow, Graph, Node, Shape},
-};
+use crate::shared::canvas::{Frame, text_width, wrapped};
+
+use super::model::{Flow, Graph, Node, Shape};
 
 /// Free cells around the whole diagram, so an edge that has to go around
 /// the outside has an outside to go around.

@@ -6,10 +6,11 @@
 
 use crate::view::Role;
 
+use crate::shared::canvas::{
+    self, Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width,
+};
+
 use super::{
-    canvas::{
-        self, Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, arrow_glyph, text_width,
-    },
     layout::{self, Placement, TextKind},
     model::{Graph, Node, Shape, Stroke},
     route::{self, Route, Routes},

@@ -9,7 +9,7 @@
 //! out as towers. And every edge is a running total rounded once, so the
 //! tiles two edges share can neither overlap nor leave a cell between them.
 
-use super::canvas::Frame;
+use crate::shared::canvas::Frame;
 
 /// How many columns a row is worth to the eye.
 const ROW: f64 = 2.0;

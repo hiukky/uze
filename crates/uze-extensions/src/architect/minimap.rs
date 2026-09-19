@@ -16,7 +16,7 @@
 
 use crate::view::Role;
 
-use super::canvas::{Canvas, Cell, Corners, Frame, Glyphs};
+use crate::shared::canvas::{Canvas, Cell, Corners, Frame, Glyphs};
 
 const CELLS: (i32, i32) = (28, 7);
 const DOTS: (i32, i32) = (CELLS.0 * 2, CELLS.1 * 4);

@@ -238,6 +238,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         );
     }
     put(
+        Action::ToggleMap,
+        Control("the Map chip, beside the code surface's other views"),
+    );
+    put(
         Action::DeliverTask,
         Control("the tab strip's deliver button"),
     );

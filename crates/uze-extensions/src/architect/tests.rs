@@ -97,7 +97,11 @@ fn the_screen_is_exactly_the_space_it_was_given() {
     };
     assert_eq!((lines.len(), scroll), (30, 0));
     for line in &lines {
-        let width: i32 = line.spans.iter().map(|s| canvas::text_width(&s.text)).sum();
+        let width: i32 = line
+            .spans
+            .iter()
+            .map(|s| crate::shared::canvas::text_width(&s.text))
+            .sum();
         assert!(width <= 100, "{width} columns would be cut");
     }
 }
@@ -454,39 +458,6 @@ fn the_keys_walk_from_box_to_box() {
     );
 }
 
-fn measured() -> CodeMeasure {
-    let file = |path: &str, lines: u32, commits: u32| codemap::FileMeasure {
-        path: path.to_owned(),
-        lines,
-        commits,
-        changed: false,
-    };
-    CodeMeasure {
-        root: PathBuf::from("/checkout"),
-        files: vec![
-            file("src/main.rs", 900, 12),
-            file("src/ui/render.rs", 700, 30),
-            file("src/ui/input.rs", 400, 3),
-            file("docs/guide.md", 300, 1),
-        ],
-    }
-}
-
-/// Selects the tile of `path` the way a viewer does — a click on it —
-/// rather than by walking the arrows to wherever the layout put it.
-fn click_tile(state: &mut ArchitectView, path: &str, space: Size) {
-    let cells = (i32::from(space.width), i32::from(space.height));
-    let map = state.code.as_mut().expect("measured");
-    let frame = map
-        .tiles(cells)
-        .into_iter()
-        .find(|tile| tile.path == path)
-        .unwrap_or_else(|| panic!("no tile for {path}"))
-        .frame;
-    let (x, y) = frame.center();
-    map.click(x, y, cells);
-}
-
 fn areas_listed(state: &ArchitectView) -> Vec<String> {
     view(state, SPACE)
         .navigator
@@ -500,177 +471,32 @@ fn areas_listed(state: &ArchitectView) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn the_code_map_is_listed_last_and_a_late_measurement_moves_nothing() {
-    let mut state = showing("Containers");
-    let before = state.selected;
-    state.absorb_code(measured());
-    assert_eq!(state.selected, before, "what was on show stays on show");
-    assert_eq!(
-        areas_listed(&state),
-        ["C4", "Sequence", "Flowchart", "Code"]
-    );
-    assert_eq!(
-        state.catalog.artifacts().last().map(|a| a.name.as_str()),
-        Some("Code map")
-    );
-    assert_eq!(state.insides.len(), state.catalog.artifacts().len());
-}
-
-#[test]
-fn a_project_that_declares_nothing_still_has_its_code_map() {
-    let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
-    assert!(
-        matches!(state.drawing, Drawing::Code),
-        "shown as soon as it is measured"
-    );
-    assert!(
-        !state.caption(SPACE).contains("declares"),
-        "nothing is the matter yet"
-    );
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: "This project declares no artifacts yet".to_owned(),
-        hint: "Add `artifacts:` to agents.yaml".to_owned(),
-    });
-    assert!(matches!(state.drawing, Drawing::Code));
-    let Content::Lines { heading, lines, .. } = view(&state, SPACE).content else {
-        panic!("the map is drawn");
-    };
-    assert!(heading.contains("declares no artifacts"), "{heading}");
-    assert!(heading.starts_with("4 files · 2,300 lines"), "{heading}");
-    assert_eq!(lines.len(), usize::from(SPACE.height), "it fills the space");
-
-    // The other way round: the declaration answered first.
-    let mut state = ArchitectView::opening();
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: "This project declares no artifacts yet".to_owned(),
-        hint: "Add `artifacts:` to agents.yaml".to_owned(),
-    });
-    state.absorb_code(measured());
-    assert!(matches!(state.drawing, Drawing::Code));
-    assert!(state.nothing.is_none());
-}
-
-#[test]
-fn the_map_is_entered_and_left_and_a_file_on_it_opens_the_code() {
-    let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: "declares nothing".to_owned(),
-        hint: String::new(),
-    });
-    click_tile(&mut state, "src", SPACE);
-    assert!(state.caption(SPACE).starts_with("src/ "));
-    assert_eq!(
-        handle_command(&mut state, Command::Activate, SPACE),
-        ArchitectOutcome::Stay
-    );
-    assert_eq!(trail(&state), ["Code map", "src"]);
-    assert_eq!(
-        state.corner(SPACE),
-        (0, 0),
-        "a map that fits is never moved"
-    );
-    assert!(state.minimap(SPACE).is_none());
-
-    click_tile(&mut state, "src/main.rs", SPACE);
-    assert!(state.caption(SPACE).starts_with("src/main.rs "));
-    assert_eq!(
-        handle_command(&mut state, Command::Activate, SPACE),
-        ArchitectOutcome::OpenPath {
-            project: PathBuf::from("/checkout"),
-            target: PathBuf::from("/checkout/src/main.rs"),
-        }
-    );
-
-    handle_command(&mut state, Command::Back, SPACE);
-    assert_eq!(trail(&state), ["Code map"]);
-    assert!(
-        state.caption(SPACE).starts_with("src/ "),
-        "back with the directory that was entered selected: {}",
-        state.caption(SPACE)
-    );
-}
-
-#[test]
-fn the_map_is_laid_out_again_for_a_narrower_space() {
-    let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: String::new(),
-        hint: String::new(),
-    });
-    let narrow = Size {
-        width: 60,
-        height: 18,
-    };
-    for space in [SPACE, narrow] {
-        let Content::Lines { lines, .. } = view(&state, space).content else {
-            panic!("the map is drawn");
-        };
-        assert_eq!(lines.len(), usize::from(space.height));
-        let widest = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|s| s.text.chars().count())
-                    .sum::<usize>()
-            })
-            .max()
-            .unwrap_or(0);
-        assert_eq!(
-            widest,
-            usize::from(space.width),
-            "filled edge to edge at {space:?}"
-        );
-    }
-}
-
 /// The key that closes peels one level at a time. Anything else makes a
 /// surface that can be entered but not looked around in: one press and
 /// the viewer is back where they started with three levels of work gone.
 #[test]
 fn the_key_that_closes_goes_up_a_level_until_there_is_none_left() {
-    let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: "declares nothing".to_owned(),
-        hint: String::new(),
-    });
-
-    click_tile(&mut state, "src", SPACE);
-    assert_eq!(
-        handle_command(&mut state, Command::Close, SPACE),
-        ArchitectOutcome::Stay,
-        "the selection is let go of first"
-    );
-    assert!(
-        state.caption(SPACE).starts_with("4 files"),
-        "nothing picked"
-    );
-
-    click_tile(&mut state, "src", SPACE);
+    let mut state = showing("System context");
+    pick(&mut state, "uze");
     handle_command(&mut state, Command::Activate, SPACE);
-    click_tile(&mut state, "src/ui", SPACE);
+    pick(&mut state, "core");
     handle_command(&mut state, Command::Activate, SPACE);
-    assert_eq!(trail(&state), ["Code map", "src", "ui"]);
+    assert_eq!(here(&state), "Core components");
 
-    for left in [["Code map", "src"].as_slice(), ["Code map"].as_slice()] {
+    for left in ["Containers", "System context"] {
         assert_eq!(
             handle_command(&mut state, Command::Close, SPACE),
             ArchitectOutcome::Stay
         );
-        // Coming back selects what was entered, which is a level of its
-        // own — the next press lets go of it, the one after goes up.
+        // Coming back selects the box that was entered, which is a level
+        // of its own — the next press lets go of it, the one after goes up.
         assert_eq!(
             handle_command(&mut state, Command::Close, SPACE),
             ArchitectOutcome::Stay
         );
-        assert_eq!(trail(&state), left);
+        assert_eq!(here(&state), left);
     }
-    assert_eq!(trail(&state), ["Code map"], "back at the top");
+    assert!(state.trail.is_empty(), "back at the top");
     assert_eq!(
         handle_command(&mut state, Command::Close, SPACE),
         ArchitectOutcome::Close,
@@ -681,26 +507,25 @@ fn the_key_that_closes_goes_up_a_level_until_there_is_none_left() {
 /// The way up is named in the footer only where there is one.
 #[test]
 fn the_footer_offers_the_way_up_only_once_something_has_been_entered() {
-    let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
-    state.absorb(ArtifactsAnswer::Nothing {
-        text: String::new(),
-        hint: String::new(),
-    });
+    let mut state = showing("System context");
     assert!(!view(&state, SPACE).footer.contains(&Command::Back));
 
-    click_tile(&mut state, "src", SPACE);
+    pick(&mut state, "uze");
     handle_command(&mut state, Command::Activate, SPACE);
     assert!(view(&state, SPACE).footer.contains(&Command::Back));
 }
 
-/// A selector that offers only what is on show is not opened at all, by
-/// the pointer or by the key — the host draws it without the mark that
-/// says it opens, and there is nothing behind it to draw.
 #[test]
 fn a_selector_with_nothing_to_choose_stays_shut() {
+    let lone = Artifact::read(
+        "install-sequence.mmd",
+        include_str!("../../../../docs/architecture/diagrams/install-sequence.mmd"),
+    );
     let mut state = ArchitectView::opening();
-    state.absorb_code(measured());
+    state.absorb(ArtifactsAnswer::Found {
+        artifacts: vec![lone],
+        project: PathBuf::from("/project"),
+    });
     handle_command(&mut state, Command::ChooseGroup, SPACE);
     assert_eq!(state.choosing, None, "one area");
     handle_command(&mut state, Command::ChooseItem, SPACE);

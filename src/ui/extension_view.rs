@@ -158,6 +158,21 @@ pub(crate) fn board_space(frame_area: Rect) -> Size {
 
 /// How much room the content column has, for an extension deciding how
 /// much to produce.
+/// The room the code surface has. Which of the two it is depends on what
+/// the surface is showing, and only the surface knows: the map is a
+/// picture of the whole checkout and takes the frame, while everything
+/// else is read in the column beside the tree.
+pub(crate) fn code_space(
+    frame_area: Rect,
+    navigator_width_override: Option<u16>,
+    code: Option<&uze_extensions::code::CodeView>,
+) -> Size {
+    match code.map(uze_extensions::code::CodeView::showing) {
+        Some(uze_extensions::code::ContentMode::Map) => board_space(frame_area),
+        _ => content_space(frame_area, navigator_width_override),
+    }
+}
+
 pub(crate) fn content_space(frame_area: Rect, navigator_width_override: Option<u16>) -> Size {
     let (_, content, _) = content_columns(frame_area, navigator_width_override);
     Size {
@@ -1472,7 +1487,7 @@ fn render_footer(
 /// is bound to. Kept here, beside the render that needs it, rather than in
 /// the extension, which knows nothing of either. Where two actions reach
 /// one command, the first row is the one a footer names.
-const COMMAND_ACTIONS: [(Command, uze_keys::Action); 36] = [
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 37] = [
     (Command::Close, uze_keys::Action::Dismiss),
     (Command::FocusNext, uze_keys::Action::FocusNext),
     (Command::FocusNext, uze_keys::Action::FocusPrevious),
@@ -1524,6 +1539,7 @@ const COMMAND_ACTIONS: [(Command, uze_keys::Action); 36] = [
         uze_keys::Action::SelectBoxDown,
     ),
     (Command::Back, uze_keys::Action::LevelUp),
+    (Command::ToggleMap, uze_keys::Action::ToggleMap),
 ];
 
 /// The action a command is named by. `None` for typing, which has no

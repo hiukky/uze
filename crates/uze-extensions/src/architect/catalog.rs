@@ -26,11 +26,6 @@ pub enum Kind {
     /// Mermaid this surface does not draw yet. Listed rather than hidden:
     /// a file that silently fails to appear looks like a lost file.
     Other,
-    /// What is measured rather than written. Last, and that is load-bearing:
-    /// a measurement arrives when it arrives, and one that sorts after
-    /// everything appends — no artifact already listed changes its index,
-    /// which is its identity.
-    Code,
 }
 
 impl Kind {
@@ -68,7 +63,6 @@ impl Kind {
             Self::Sequence => "Sequence",
             Self::Flowchart => "Flowchart",
             Self::Other => "Other",
-            Self::Code => "Code",
         }
     }
 }
@@ -107,18 +101,6 @@ impl Artifact {
             name,
             kind,
             depth: kind.depth(diagram),
-            origin,
-            source,
-        }
-    }
-
-    /// An artifact nobody wrote: `source` is what it has to show for
-    /// itself, and `origin` what it was derived from.
-    pub fn derived(name: &str, kind: Kind, origin: String, source: String) -> Self {
-        Self {
-            name: name.to_owned(),
-            kind,
-            depth: 0,
             origin,
             source,
         }

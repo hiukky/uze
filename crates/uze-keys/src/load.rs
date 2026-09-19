@@ -375,6 +375,7 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Architect, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "e", Action::EditFile),
         bind(Scope::Code, "p", Action::TogglePreview),
+        bind(Scope::Code, "m", Action::ToggleMap),
         bind(Scope::Code, "d", Action::DeleteFile),
         bind(Scope::Code, "y", Action::ConfirmDelete),
         // Typing has a scope of its own so nothing behind it answers a

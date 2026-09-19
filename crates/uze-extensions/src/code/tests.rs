@@ -242,7 +242,7 @@ fn folding_a_directory_hides_its_files_and_moves_nothing_else() {
         .position(|row| matches!(row, NavigatorRow::Group { name, .. } if name == "ui/"))
         .expect("the ui directory is a group");
 
-    handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)));
+    handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)), space());
 
     assert_eq!(item_names(&view), vec!["ui.rs", "README.md"]);
     assert_eq!(
@@ -261,7 +261,7 @@ fn folding_a_directory_hides_its_files_and_moves_nothing_else() {
         "nothing to keep on screen while the selection is folded away"
     );
 
-    handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)));
+    handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)), space());
     assert_eq!(item_names(&view), vec!["git_diff.rs", "ui.rs", "README.md"]);
     assert_eq!(navigator(&view).anchor, Some(2));
 }
@@ -767,7 +767,11 @@ fn a_click_lands_on_the_character_its_cells_reach() {
         ),
         (99, 3, "past the end is the end"),
     ] {
-        handle_mouse(&mut view, Some(ViewHit::PlaceCaret { line: 0, cell }));
+        handle_mouse(
+            &mut view,
+            Some(ViewHit::PlaceCaret { line: 0, cell }),
+            space(),
+        );
         assert_eq!(
             view.open.as_ref().expect("a file is open").caret.column,
             expected,
@@ -817,7 +821,7 @@ fn moving_to_another_file_in_the_tree_asks_for_its_diff() {
     assert!(view.diff_pending(), "the arrows moved to another file");
 
     view.changes.diff_pending = false;
-    handle_mouse(&mut view, Some(ViewHit::SelectItem(0)));
+    handle_mouse(&mut view, Some(ViewHit::SelectItem(0)), space());
     assert_eq!(view.selected.as_deref(), Some(Path::new("/w/a.txt")));
     assert!(view.diff_pending(), "and so did the click");
 }
@@ -1050,14 +1054,14 @@ fn a_document_offers_its_two_modes_and_a_click_picks_one() {
         "and opens as the document it is, not as the markup describing it"
     );
 
-    handle_mouse(&mut view, Some(ViewHit::SelectMode(1)));
+    handle_mouse(&mut view, Some(ViewHit::SelectMode(1)), space());
     assert_eq!(view.content, ContentMode::Contents);
     assert!(super::view(&view, space()).modes[1].active);
 
     // A file that is not a document has one way of being read. Picked by
     // pointing at it: the focus is on the content now, so an arrow would
     // scroll rather than move the selection.
-    handle_mouse(&mut view, Some(ViewHit::SelectItem(1)));
+    handle_mouse(&mut view, Some(ViewHit::SelectItem(1)), space());
     settle(&mut view, &machine);
     assert!(
         super::view(&view, space()).modes.is_empty(),
@@ -1316,4 +1320,163 @@ fn a_place_somebody_was_sent_to_opens_every_directory_on_the_way() {
     let directory = CodePlace::at(root, Path::new("/project/crates"), true);
     assert_eq!(directory.selected, None, "a directory is opened, not read");
     assert!(directory.expanded.contains(Path::new("/project/crates")));
+}
+
+/// A checkout measured into two directories and a file at the root.
+fn measured() -> map::Measure {
+    let file = |path: &str, lines: u32, commits: u32| map::FileMeasure {
+        path: path.to_owned(),
+        lines,
+        commits,
+        changed: false,
+    };
+    map::Measure {
+        root: PathBuf::from("/repo"),
+        files: vec![
+            file("src/ui/render.rs", 900, 12),
+            file("src/ui/input.rs", 700, 3),
+            file("src/main.rs", 600, 4),
+            file("docs/guide.md", 800, 1),
+        ],
+    }
+}
+
+/// The map is a fourth way of looking at the same checkout, and the
+/// selection is what survives the switch: a tile followed is the file
+/// selected, read by whichever half was on show before the map.
+#[test]
+fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
+    let mut view = surface(Path::new("/repo"), Vec::new(), 0);
+    view.show(ContentMode::Contents);
+    assert!(!view.has_map(), "nothing measured yet");
+    press(&mut view, Command::ToggleMap);
+    assert_ne!(view.showing(), ContentMode::Map, "and nothing to show");
+
+    view.absorb_measure(measured());
+    press(&mut view, Command::ToggleMap);
+    assert_eq!(view.showing(), ContentMode::Map);
+
+    let tile = |view: &CodeView, path: &str| {
+        view.map_view()
+            .expect("measured")
+            .tiles((80, 20))
+            .into_iter()
+            .find(|tile| tile.path == path)
+            .unwrap_or_else(|| panic!("no tile for {path}"))
+            .frame
+    };
+    // Into `src`, then onto the file: a click selects, a second follows.
+    for path in ["src", "src", "src/main.rs", "src/main.rs"] {
+        let (x, y) = tile(&view, path).center();
+        handle_mouse(
+            &mut view,
+            Some(ViewHit::PlaceCaret {
+                line: y as usize,
+                cell: x as usize,
+            }),
+            space(),
+        );
+    }
+    assert_eq!(
+        view.selected.as_deref(),
+        Some(Path::new("/repo/src/main.rs")),
+        "the tile is the selection every other half answers about"
+    );
+    assert_eq!(
+        view.showing(),
+        ContentMode::Contents,
+        "and the map hands back to whatever it was opened over"
+    );
+}
+
+/// The map takes the frame, and its levels are the breadcrumb: an either
+////or with the tree, not a column beside it.
+#[test]
+fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
+    let mut view = surface(Path::new("/repo"), Vec::new(), 0);
+    view.absorb_measure(measured());
+
+    // Not beside the diff: a map of the whole checkout answers a
+    // question nobody reviewing a change is asking.
+    assert!(
+        !render::view(&view, space())
+            .footer
+            .contains(&Command::ToggleMap),
+        "the changes half does not offer it"
+    );
+    press(&mut view, Command::ToggleMap);
+    assert_eq!(view.showing(), ContentMode::Diff, "nor does its key");
+
+    view.show(ContentMode::Contents);
+    press(&mut view, Command::ToggleMap);
+
+    let drawn = render::view(&view, space());
+    assert!(drawn.navigator.is_none(), "the map is the navigator");
+    assert_eq!(drawn.layout, crate::view::Layout::Board);
+    let steps: Vec<&str> = drawn.trail.iter().map(|step| step.name.as_str()).collect();
+    assert_eq!(steps, ["repo"], "the checkout, and nothing entered yet");
+    let chips: Vec<(&str, bool)> = drawn
+        .modes
+        .iter()
+        .map(|mode| (mode.label.as_str(), mode.active))
+        .collect();
+    assert_eq!(
+        chips,
+        [
+            // Named for the half it would go back to — the tree — so the
+            // way out is a chip somebody can point at, not only a key
+            // they have to know.
+            ("Files", false),
+            ("Map", true),
+            ("ASCII", false),
+            ("Ranking", false),
+        ]
+    );
+
+    // Down a level, and the key that closes comes back up before it
+    // leaves the map. Entered the way a viewer does: a click selects the
+    // tile, a second one goes in.
+    let frame = view
+        .map_view()
+        .expect("measured")
+        .tiles((80, 20))
+        .into_iter()
+        .find(|tile| tile.path == "src")
+        .expect("src is a tile")
+        .frame;
+    let (x, y) = frame.center();
+    for _ in 0..2 {
+        handle_mouse(
+            &mut view,
+            Some(ViewHit::PlaceCaret {
+                line: y as usize,
+                cell: x as usize,
+            }),
+            space(),
+        );
+    }
+    let steps: Vec<String> = render::view(&view, space())
+        .trail
+        .into_iter()
+        .map(|step| step.name)
+        .collect();
+    assert_eq!(steps, ["repo", "src"]);
+
+    press(&mut view, Command::Close);
+    let steps: Vec<String> = render::view(&view, space())
+        .trail
+        .into_iter()
+        .map(|step| step.name)
+        .collect();
+    assert_eq!(steps, ["repo"], "back up a level, not out of the map");
+    // Coming back selects the directory that was entered, which is a
+    // level of its own: the next press lets go of it.
+    press(&mut view, Command::Close);
+    assert_eq!(view.showing(), ContentMode::Map, "still on the map");
+    press(&mut view, Command::Close);
+    assert_eq!(
+        view.showing(),
+        ContentMode::Contents,
+        "and only then out of it"
+    );
 }

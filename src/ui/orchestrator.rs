@@ -869,15 +869,16 @@ fn spawn_changes_refresh(
 /// asked about.
 struct ArtifactsResolution {
     root: PathBuf,
-    answer: ArchitectAnswer,
+    answer: architect::ArtifactsAnswer,
 }
 
-/// The two things the architect surface asks for, each on a thread of its
-/// own so a large checkout's measurement never holds the diagrams back.
-enum ArchitectAnswer {
-    Artifacts(architect::ArtifactsAnswer),
-    /// `None` outside a repository, where there is no code map.
-    Code(Option<architect::CodeMeasure>),
+/// The checkout measured for the code surface's map, tagged with the
+/// checkout it was measured from — an answer landing after the viewer
+/// moved to another tab describes a repository nobody is looking at.
+struct MeasureResolution {
+    root: PathBuf,
+    /// `None` outside a repository, where there is nothing to measure.
+    measure: Option<code::Measure>,
 }
 
 /// Resolving the manifest, walking the declared directory and reading
@@ -915,21 +916,19 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
             },
             silence,
         );
-        let answer = ArchitectAnswer::Artifacts(answer);
         let _ = sender.send(ArtifactsResolution { root, answer });
     });
 }
 
-/// Measuring the checkout for the code map: a `git grep` over every file
-/// in it, which is as unbounded as a read gets.
-fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>) {
+/// Measuring the checkout for the code surface's map: a `git grep` over
+/// every file in it, which is as unbounded as a read gets.
+fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<MeasureResolution>) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.architect_code_measure").entered();
-        let measure = answered_or(|| architect::measure_code(&WorkspaceHost, &root), None);
-        let answer = ArchitectAnswer::Code(measure);
-        let _ = sender.send(ArtifactsResolution { root, answer });
+        let _span = tracing::info_span!("tui.code_measure").entered();
+        let measure = answered_or(|| code::measure(&WorkspaceHost, &root).ok(), None);
+        let _ = sender.send(MeasureResolution { root, measure });
     });
 }
 
@@ -2063,6 +2062,8 @@ struct Channels {
     placements: Answers<PlacementResolution>,
     root_profiles: Answers<RootProfileResolution>,
     artifacts: Answers<ArtifactsResolution>,
+    /// The code surface's map, measured once per checkout it is opened on.
+    code_measures: Answers<MeasureResolution>,
 }
 
 /// The half of [`WorkspaceModel`] that outlives one attach. Everything
@@ -2330,6 +2331,10 @@ struct WorkspaceModel {
     /// halves have two cadences and can be in flight at once.
     code_changes_pending: bool,
     code_request_pending: bool,
+    /// The checkout the map's measurement was asked about. Not a flag:
+    /// the answer outside a repository is nothing, and a flag cleared on
+    /// nothing would ask again every frame.
+    code_measure_asked: Option<PathBuf>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
@@ -3409,19 +3414,14 @@ impl WorkspaceModel {
         }
         if let Some(root) = self.architect_root.clone() {
             self.architect_asked = true;
-            spawn_artifacts_read(root.clone(), sender.clone());
-            spawn_code_measure(root, sender.clone());
+            spawn_artifacts_read(root, sender.clone());
         }
     }
 
     fn absorb_artifacts(&mut self, resolution: ArtifactsResolution) -> bool {
         match self.architect.as_mut() {
             Some(view) if self.architect_root.as_ref() == Some(&resolution.root) => {
-                match resolution.answer {
-                    ArchitectAnswer::Artifacts(answer) => view.absorb(answer),
-                    ArchitectAnswer::Code(Some(measure)) => view.absorb_code(measure),
-                    ArchitectAnswer::Code(None) => {}
-                }
+                view.absorb(resolution.answer);
                 true
             }
             _ => false,
@@ -3458,6 +3458,40 @@ impl WorkspaceModel {
         }
         self.code_changes_pending = true;
         spawn_changes_refresh(view.root().to_path_buf(), view.placement(), sender.clone());
+    }
+
+    /// Asks for the checkout's measurement, once per surface that has no
+    /// map yet. A `git grep` over every file is not a read to repeat, so
+    /// the root it was asked about is remembered rather than the request
+    /// being in flight: outside a repository the answer is nothing, and
+    /// nothing must not be asked for again.
+    fn schedule_code_measure(&mut self, sender: &mpsc::Sender<MeasureResolution>) {
+        let Some(view) = self.code.as_ref().filter(|view| !view.has_map()) else {
+            return;
+        };
+        let root = view.root().to_path_buf();
+        if self.code_measure_asked.as_deref() == Some(root.as_path()) {
+            return;
+        }
+        self.code_measure_asked = Some(root.clone());
+        spawn_code_measure(root, sender.clone());
+    }
+
+    /// Installs the measurement, if the surface is still open on the
+    /// checkout it was measured from.
+    fn absorb_measure(&mut self, resolution: MeasureResolution) -> bool {
+        let Some(measure) = resolution.measure else {
+            return false;
+        };
+        let Some(view) = self
+            .code
+            .as_mut()
+            .filter(|view| view.root() == resolution.root)
+        else {
+            return false;
+        };
+        view.absorb_measure(measure);
+        true
     }
 
     /// Installs a refreshed changes half, if the surface is still open on
@@ -4423,6 +4457,7 @@ fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
     model.architect = None;
     model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
+    model.code_measure_asked = None;
     model.dirty = true;
 }
 
@@ -4440,6 +4475,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
         Some(place) => view.resuming(place),
         None => view,
     });
+    model.code_measure_asked = None;
     // The scroll is not restored with the place: the first frame reveals
     // whatever is selected, which is where the viewer was looking anyway.
     model.code_tree_scroll = extension_view::NavigatorScroll::default();

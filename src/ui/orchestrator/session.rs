@@ -1135,6 +1135,17 @@ impl Attach<'_> {
         })
     }
 
+    /// How much room the code surface has, which depends on what it is
+    /// showing: the map takes the frame, everything else the column
+    /// beside the tree.
+    fn code_space(&self) -> uze_extensions::view::Size {
+        crate::ui::extension_view::code_space(
+            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
+            self.model.code_tree_width,
+            self.model.code.as_ref(),
+        )
+    }
+
     fn architect_space(&self) -> uze_extensions::view::Size {
         crate::ui::extension_view::board_space(Rect::new(
             0,
@@ -1272,10 +1283,7 @@ impl Attach<'_> {
 
     /// Hands one command down, and closes the surface if it says so.
     fn tell_the_code_surface(&mut self, command: Command) {
-        let space = crate::ui::extension_view::content_space(
-            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
-            self.model.code_tree_width,
-        );
+        let space = self.code_space();
         if let Some(view) = self.model.code.as_mut()
             && matches!(
                 code::handle_command(view, command, space),
@@ -1627,10 +1635,16 @@ impl Attach<'_> {
                 {
                     self.model.dragging_code_content = true;
                     self.scroll_code_content_to(mouse.row);
-                } else if let Some(view) = self.model.code.as_mut()
-                    && matches!(code::handle_mouse(view, view_hit), code::CodeOutcome::Close)
-                {
-                    self.model.close_code();
+                } else {
+                    let space = self.code_space();
+                    if let Some(view) = self.model.code.as_mut()
+                        && matches!(
+                            code::handle_mouse(view, view_hit, space),
+                            code::CodeOutcome::Close
+                        )
+                    {
+                        self.model.close_code();
+                    }
                 }
                 self.model.dirty = true;
             }
@@ -2920,6 +2934,9 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
+        while let Ok(resolution) = self.channels.code_measures.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_measure(resolution);
+        }
         while let Ok(resolution) = self.channels.artifacts.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_artifacts(resolution);
         }
@@ -2938,6 +2955,8 @@ impl Attach<'_> {
             .schedule_changes_refresh(&self.channels.code_changes.sender);
         self.model
             .schedule_file_request(&self.channels.code_files.sender);
+        self.model
+            .schedule_code_measure(&self.channels.code_measures.sender);
         self.model
             .schedule_artifacts_read(&self.channels.artifacts.sender);
         if self.model.expire_agent_activity(Instant::now()) {

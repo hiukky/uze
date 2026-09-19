@@ -31,11 +31,11 @@ use crate::{
     view::{PanDirection, Role},
 };
 
-use super::{
-    canvas::{self, Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, WEST, text_width},
-    model::Stroke,
-    treemap,
+use crate::shared::canvas::{
+    self, Canvas, Corners, EAST, Frame, Glyphs, NORTH, SOUTH, Stroke, WEST, text_width,
 };
+
+use super::treemap;
 
 /// The smallest tile that can carry a name: a border, a row, a border,
 /// and enough columns for a name rather than three letters and a cut.
@@ -315,15 +315,14 @@ pub enum Followed {
     Open(String),
 }
 
-pub struct CodeMap {
-    root: PathBuf,
+pub struct Map {
     whole: Entry,
     steps: Steps,
     zoom: Vec<Step>,
     picked: Option<String>,
 }
 
-impl CodeMap {
+impl Map {
     pub fn of(measure: Measure) -> Self {
         let steps = Steps::of(&measure.files);
         let mut top = Folder::default();
@@ -337,7 +336,6 @@ impl CodeMap {
             folder.files.push((name, file));
         }
         Self {
-            root: measure.root,
             whole: top.entry(String::new(), String::new(), steps),
             steps,
             zoom: Vec::new(),
@@ -345,18 +343,8 @@ impl CodeMap {
         }
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub fn is_empty(&self) -> bool {
         self.whole.children.is_empty()
-    }
-
-    /// As a fresh artifact is opened: the whole, nothing selected.
-    pub fn reset(&mut self) {
-        self.zoom.clear();
-        self.picked = None;
     }
 
     fn entry(&self, path: &str) -> Option<&Entry> {
@@ -497,10 +485,6 @@ impl CodeMap {
                 _ => format!("{}{FOLDED}", left.directory),
             });
         }
-    }
-
-    pub fn is_zoomed(&self) -> bool {
-        !self.zoom.is_empty()
     }
 
     /// Selects the tile that lies `direction` of the selected one, or the
@@ -906,8 +890,8 @@ mod tests {
         }
     }
 
-    fn map(files: Vec<FileMeasure>) -> CodeMap {
-        CodeMap::of(Measure {
+    fn map(files: Vec<FileMeasure>) -> Map {
+        Map::of(Measure {
             root: PathBuf::from("/project"),
             files,
         })
@@ -1094,7 +1078,7 @@ mod tests {
         assert!(matches!(map.follow(SPACE), Followed::Open(path) if path == "src/main.rs"));
 
         map.back_to(0);
-        assert!(!map.is_zoomed());
+        assert!(map.crumbs().is_empty(), "back at the top");
         assert_eq!(map.picked.as_deref(), Some("src"));
     }
 

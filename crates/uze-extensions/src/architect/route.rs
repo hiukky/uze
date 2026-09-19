@@ -15,8 +15,9 @@
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
+use crate::shared::canvas::Frame;
+
 use super::{
-    canvas::Frame,
     layout::Placement,
     model::{Flow, Graph},
 };
@@ -106,7 +107,7 @@ impl Grid {
             vertical: vec![None; size],
         };
         for (frame, cluster) in placement.clusters.iter().zip(&graph.clusters) {
-            grid.fence(*frame, super::canvas::text_width(&cluster.title));
+            grid.fence(*frame, crate::shared::canvas::text_width(&cluster.title));
         }
         for frame in &placement.nodes {
             for y in frame.y - 1..=frame.y + frame.h {

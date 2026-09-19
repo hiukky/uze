@@ -192,19 +192,9 @@ A `.mmd` or `.mermaid` file of any other kind is still listed, under *Other*,
 with the reason it was not drawn — a file that silently fails to appear looks
 like a lost file.
 
-#### The code map
-
-One artifact needs no file: under *Code*, after every declared area, the
-checkout itself is drawn as a treemap. A file's area is its line count, a
-directory is a frame around what it holds, and a file's colour is how many
-commits touched it in the last year, ranked against the rest — the hotter
-tiles are shaded too, so the ranking survives any palette. What is too small to
-name is folded into one tile per directory that says how many files it stands
-for. Entering a directory, or a folded tile, draws it alone; a file opens in the
-code surface. The map is measured by Git, so it covers what Git tracks or does
-not ignore, leaves binaries out, and is there in a project that declares no
-artifacts at all. Its *Source* rendering is the ranking: every file by lines,
-with its commits.
+Everything here is a file somebody wrote. What the project *is* — where its
+lines are and which of them are hot — is measured rather than written, and is
+the code surface's **map**: press `m` beside the file tree, or its *Map* chip.
 
 ## `agents.lock`
 

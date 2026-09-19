@@ -11,7 +11,16 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::view::{ContentLine, LineTone, Role, Span};
 
-use super::model::Stroke;
+/// How a line is drawn. A property of the line rather than of whatever
+/// the line stands for, which is why it lives beside the drawing and not
+/// beside the model.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Stroke {
+    #[default]
+    Solid,
+    Dotted,
+    Thick,
+}
 
 pub const NORTH: u8 = 1;
 pub const EAST: u8 = 2;

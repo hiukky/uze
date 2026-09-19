@@ -21,13 +21,7 @@ pub enum Shape {
     Person,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Stroke {
-    #[default]
-    Solid,
-    Dotted,
-    Thick,
-}
+pub use crate::shared::canvas::Stroke;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Node {

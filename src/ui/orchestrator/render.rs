@@ -187,7 +187,7 @@ pub(super) fn render(
         let area = frame.area();
         let view = uze_extensions::code::view(
             code,
-            crate::ui::extension_view::content_space(area, model.code_tree_width),
+            crate::ui::extension_view::code_space(area, model.code_tree_width, Some(code)),
         );
         metrics.code = Some(crate::ui::extension_view::render(
             frame,
