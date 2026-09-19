@@ -189,12 +189,20 @@ pub struct Navigator {
     /// long way from the selection without the selection dragging the
     /// list back.
     pub anchor: Option<usize>,
-    /// The `id` of the group highlighted in the list of groups, while
-    /// that list is open — which only a [`Layout::Board`] offers, where
-    /// the groups fold into one selector. `None` when it is shut. The
-    /// extension's to say, like what a fold hides: opening it is a state
-    /// of the surface, and what is highlighted in it is a selection.
-    pub choosing: Option<usize>,
+    /// Which of the two lists a [`Layout::Board`] folds its rows into is
+    /// open, and what is highlighted in it. `None` when both are shut.
+    /// The extension's to say, like what a fold hides: opening a list is
+    /// a state of the surface, and what is highlighted in it a selection.
+    pub choosing: Option<Choosing>,
+}
+
+/// An open list on a board's menu, by the `id` highlighted in it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Choosing {
+    /// The list of groups.
+    Group(usize),
+    /// The list of the items in the group on show.
+    Item(usize),
 }
 
 /// What a navigator row *is*, so the host can mark it.
@@ -401,6 +409,9 @@ pub enum ViewHit {
     /// The selector that offers the groups, pressed: open the list of
     /// them, or shut it.
     ChooseGroup,
+    /// The same, for the selector that offers the items of the group on
+    /// show.
+    ChooseItem,
     /// A step of the [`View::trail`], by its index: go back to there.
     SelectTrail(usize),
     /// A click inside [`Content::Lines`], as far as the host can resolve
@@ -530,6 +541,8 @@ pub enum Command {
     NextMode,
     /// Open the list of groups, or shut it.
     ChooseGroup,
+    /// Open the list of the items in the group on show, or shut it.
+    ChooseItem,
     /// Select what lies this way from what is selected — on a board,
     /// where things are beside one another rather than in a list.
     SelectToward(PanDirection),

@@ -245,34 +245,68 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
 }
 
 #[test]
-fn the_list_of_areas_opens_on_the_one_on_show_and_a_choice_shuts_it() {
-    let mut state = showing("uze install");
+fn the_list_of_artifacts_opens_on_the_one_on_show_and_steps_over_to_the_areas() {
+    let mut state = showing("Containers");
     let areas = state.areas();
-    handle_command(&mut state, Command::ChooseGroup, SPACE);
-    assert_eq!(state.choosing, Some(areas[1]), "it opens on Sequence");
+    handle_command(&mut state, Command::ChooseItem, SPACE);
+    assert_eq!(state.choosing, Some(Choosing::Item(state.selected)));
     handle_command(&mut state, Command::Pan(PanDirection::Down), SPACE);
-    assert_eq!(state.choosing, Some(areas[2]));
     handle_command(&mut state, Command::Pan(PanDirection::Down), SPACE);
-    assert_eq!(state.choosing, Some(areas[0]), "and goes round");
+    assert_eq!(
+        state.choosing,
+        Some(Choosing::Item(areas[0])),
+        "three C4 views, so two steps down from the second is the first again"
+    );
+
+    handle_command(&mut state, Command::Pan(PanDirection::Left), SPACE);
+    assert_eq!(
+        state.choosing,
+        Some(Choosing::Group(areas[0])),
+        "left is the areas"
+    );
+    handle_command(&mut state, Command::Pan(PanDirection::Down), SPACE);
     handle_command(&mut state, Command::Activate, SPACE);
-    assert_eq!((state.selected, state.choosing), (areas[0], None));
+    assert_eq!((state.selected, state.choosing), (areas[1], None));
 }
 
 #[test]
-fn leaving_the_list_of_areas_leaves_the_surface_open() {
+fn a_list_offers_only_the_area_on_show() {
+    let state = showing("Crate layering");
+    let names: Vec<&str> = state
+        .siblings()
+        .into_iter()
+        .map(|artifact| state.catalog.get(artifact).unwrap().name.as_str())
+        .collect();
+    assert_eq!(names, ["Crate layering", "Install pipeline"]);
+}
+
+#[test]
+fn leaving_a_list_leaves_the_surface_open() {
     let mut state = opened();
-    handle_command(&mut state, Command::ChooseGroup, SPACE);
+    handle_command(&mut state, Command::ChooseItem, SPACE);
     let outcome = handle_command(&mut state, Command::Close, SPACE);
     assert_eq!((outcome, state.choosing), (ArchitectOutcome::Stay, None));
 
     handle_mouse(&mut state, Some(ViewHit::ChooseGroup), SPACE);
+    assert!(matches!(state.choosing, Some(Choosing::Group(_))));
+    handle_mouse(&mut state, Some(ViewHit::ChooseItem), SPACE);
+    assert!(
+        matches!(state.choosing, Some(Choosing::Item(_))),
+        "the other selector takes over rather than only shutting this one"
+    );
+
     let before = state.selected;
-    handle_mouse(&mut state, Some(ViewHit::SelectItem(before + 1)), SPACE);
+    let board = ViewHit::PlaceCaret { line: 1, cell: 1 };
+    handle_mouse(&mut state, Some(board), SPACE);
     assert_eq!(
-        (state.selected, state.choosing),
-        (before, None),
+        (state.selected, state.choosing, state.picked),
+        (before, None, None),
         "a click off the list shuts it and does nothing else"
     );
+
+    handle_mouse(&mut state, Some(ViewHit::ChooseItem), SPACE);
+    handle_mouse(&mut state, Some(ViewHit::SelectItem(before + 1)), SPACE);
+    assert_eq!((state.selected, state.choosing), (before + 1, None));
 }
 
 fn pick(state: &mut ArchitectView, alias: &str) {

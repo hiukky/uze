@@ -174,6 +174,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::ChooseArea,
         Control("the area selector at the head of the board's menu"),
     );
+    put(
+        Action::ChooseArtifact,
+        Control("the artifact selector beside the area one"),
+    );
     for select in [
         Action::SelectBoxLeft,
         Action::SelectBoxRight,

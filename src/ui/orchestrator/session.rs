@@ -2416,6 +2416,7 @@ impl Attach<'_> {
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
                 | ViewHit::ChooseGroup
+                | ViewHit::ChooseItem
                 | ViewHit::SelectTrail(_)
                 | ViewHit::PlaceCaret { .. }
                 | ViewHit::SelectMode(_)

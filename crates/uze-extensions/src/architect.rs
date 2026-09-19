@@ -31,7 +31,7 @@ use crate::{
     Host,
     registry::BuiltinExtension,
     view::{
-        Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow,
+        Choosing, Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow,
         PanDirection, Role, RowIcon, ScrollDirection, Size, Span, View, ViewHit,
     },
 };
@@ -93,10 +93,10 @@ pub struct ArchitectView {
     /// Why there is nothing on the board, while there is nothing: the
     /// read still in flight, or what it found instead of artifacts.
     nothing: Option<(String, Option<String>)>,
-    /// The area highlighted in the list of areas, while it is open — by
-    /// the index of its first artifact, which is how an area is named
-    /// everywhere here.
-    choosing: Option<usize>,
+    /// Which of the menu's two lists is open, and what is highlighted in
+    /// it: an area — by the index of its first artifact, which is how an
+    /// area is named everywhere here — or an artifact of the area on show.
+    choosing: Option<Choosing>,
     /// The levels entered to reach what is on show: each the artifact
     /// that was left and the box it was left through, so coming back can
     /// put the viewer where they were standing.
@@ -255,17 +255,44 @@ impl ArchitectView {
             .last()
     }
 
-    /// Moves the highlight in the open list of areas, round and round.
-    fn highlight(&mut self, step: isize) {
+    /// The artifacts of the area on show, by index.
+    fn siblings(&self) -> Vec<usize> {
         let areas = self.areas();
-        let Some(at) = self
-            .choosing
-            .and_then(|first| areas.iter().position(|&area| area == first))
-        else {
+        let Some(first) = self.area() else {
+            return Vec::new();
+        };
+        let next = areas
+            .iter()
+            .copied()
+            .find(|&area| area > first)
+            .unwrap_or(self.catalog.artifacts().len());
+        (first..next).collect()
+    }
+
+    /// Moves the highlight in whichever list is open, round and round.
+    fn highlight(&mut self, step: isize) {
+        let (list, at) = match self.choosing {
+            Some(Choosing::Group(at)) => (self.areas(), at),
+            Some(Choosing::Item(at)) => (self.siblings(), at),
+            None => return,
+        };
+        let Some(position) = list.iter().position(|&entry| entry == at) else {
             return;
         };
-        let next = (at as isize + step).rem_euclid(areas.len() as isize) as usize;
-        self.choosing = Some(areas[next]);
+        let next = list[(position as isize + step).rem_euclid(list.len() as isize) as usize];
+        self.choosing = Some(match self.choosing {
+            Some(Choosing::Group(_)) => Choosing::Group(next),
+            _ => Choosing::Item(next),
+        });
+    }
+
+    fn choose_area(&mut self) {
+        self.choosing = self.area().map(Choosing::Group);
+    }
+
+    fn choose_artifact(&mut self) {
+        self.choosing =
+            (!self.catalog.artifacts().is_empty()).then_some(Choosing::Item(self.selected));
     }
 
     /// Shows an artifact chosen from the menu: a fresh start, so whatever
@@ -668,7 +695,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         content: content(state, space),
         footer: vec![
             Command::Close,
-            Command::ChooseGroup,
+            Command::ChooseItem,
             Command::NextView,
             Command::NextMode,
         ],
@@ -756,26 +783,30 @@ pub fn handle_command(
 ) -> ArchitectOutcome {
     let page = i32::from(space.height.saturating_sub(2).max(1));
     let count = state.catalog.artifacts().len().max(1);
-    // The open list of areas takes the keys that mean something in a
-    // list, and the one that leaves: a list open over the board is what
-    // is being talked to, and the board under it waits.
-    if state.choosing.is_some() {
-        match command {
-            Command::Pan(PanDirection::Up) => state.highlight(-1),
-            Command::Pan(PanDirection::Down) => state.highlight(1),
-            Command::Activate => {
-                if let Some(first) = state.choosing {
-                    state.open(first);
-                }
+    // An open list takes the keys that mean something in a list, and the
+    // one that leaves: a list open over the board is what is being talked
+    // to, and the board under it waits. Left and right step between the
+    // two lists, which sit side by side on the menu.
+    if let Some(choosing) = state.choosing {
+        match (command, choosing) {
+            (Command::Pan(PanDirection::Up), _) => state.highlight(-1),
+            (Command::Pan(PanDirection::Down), _) => state.highlight(1),
+            (Command::Pan(PanDirection::Left), Choosing::Item(_)) => state.choose_area(),
+            (Command::Pan(PanDirection::Right), Choosing::Group(_)) => state.choose_artifact(),
+            (Command::Activate, Choosing::Group(entry) | Choosing::Item(entry)) => {
+                state.open(entry);
             }
-            Command::Close | Command::ChooseGroup => state.choosing = None,
+            (Command::Close | Command::ChooseGroup | Command::ChooseItem, _) => {
+                state.choosing = None;
+            }
             _ => {}
         }
         return ArchitectOutcome::Stay;
     }
     match command {
         Command::Close => return ArchitectOutcome::Close,
-        Command::ChooseGroup => state.choosing = state.area(),
+        Command::ChooseGroup => state.choose_area(),
+        Command::ChooseItem => state.choose_artifact(),
         Command::SelectToward(direction) => state.pick_toward(direction, space),
         Command::Activate => return state.enter(),
         Command::Back => state.back_to(state.trail.len().saturating_sub(1), space),
@@ -806,13 +837,20 @@ pub fn handle_mouse(
 ) -> ArchitectOutcome {
     // A click anywhere but on the list shuts it, and is spent doing so —
     // the same rule every menu over this client follows.
-    let list_was_open = state.choosing.take().is_some();
+    let was_open = state.choosing.take();
     match hit {
         Some(ViewHit::Close) => return ArchitectOutcome::Close,
-        Some(ViewHit::ChooseGroup) if !list_was_open => state.choosing = state.area(),
+        // A selector pressed while its own list is open shuts it; pressed
+        // while the other one is, it takes over.
+        Some(ViewHit::ChooseGroup) if !matches!(was_open, Some(Choosing::Group(_))) => {
+            state.choose_area();
+        }
+        Some(ViewHit::ChooseItem) if !matches!(was_open, Some(Choosing::Item(_))) => {
+            state.choose_artifact();
+        }
         Some(ViewHit::ToggleGroup(first)) => state.open(first),
-        _ if list_was_open => {}
         Some(ViewHit::SelectItem(artifact)) => state.open(artifact),
+        _ if was_open.is_some() => {}
         Some(ViewHit::SelectMode(mode)) => {
             if let Some(&(showing, _)) = MODES.get(mode) {
                 state.show(showing);

@@ -356,7 +356,12 @@ fn default_bindings() -> Vec<Binding> {
         // Free letters, both: `v` previews a profile and `a` analyses a
         // context elsewhere, and a letter names one action everywhere.
         bind(Scope::Architect, "g", Action::NextRendering),
-        bind(Scope::Architect, "o", Action::ChooseArea),
+        // One key for the two lists: `o` opens the artifacts, which is the
+        // list reached for most, and left and right step between it and
+        // the areas once either is open. Areas keep no key of their own —
+        // the free letters left name nothing, and a key nobody can guess
+        // is a key nobody presses.
+        bind(Scope::Architect, "o", Action::ChooseArtifact),
         // Enter goes *into* the selected box — the level below it, or the
         // code it names — and backspace comes back out. Shift turns the
         // arrows from moving the board to moving the selection on it.
@@ -468,7 +473,12 @@ mod tests {
                 "reset-key",
                 "install-project-environment",
                 "open-glossary",
-                "apply-profile"
+                "apply-profile",
+                // The list of areas is one step left of the list of
+                // artifacts, which has the key: `o`, then the arrow. A
+                // letter of its own would be one of the four nobody could
+                // guess.
+                "choose-area"
             ],
             "an action gained or lost a chord; say so here on purpose"
         );

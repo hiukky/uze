@@ -243,6 +243,8 @@ actions! {
         "Rendering", "Draw the diagram the next way it can be drawn";
     ChooseArea => "choose-area", false,
         "Areas", "Open the list of areas, to show another one's artifacts";
+    ChooseArtifact => "choose-artifact", false,
+        "Artifacts", "Open the list of artifacts in the area on show";
     SelectBoxLeft => "select-box-left", false,
         "Box to the left", "Select the box to the left of the selected one";
     SelectBoxRight => "select-box-right", false,

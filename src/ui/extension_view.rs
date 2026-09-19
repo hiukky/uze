@@ -19,9 +19,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Caret, Command, Content, ContentLine, Layout as ViewLayout, LineTone, Mode, Navigator,
-    NavigatorRow, PanDirection, Role, RowIcon, RowMark, ScrollTarget, Section, Size, Span, View,
-    ViewHit,
+    Caret, Choosing, Command, Content, ContentLine, Layout as ViewLayout, LineTone, Mode,
+    Navigator, NavigatorRow, PanDirection, Role, RowIcon, RowMark, ScrollTarget, Section, Size,
+    Span, View, ViewHit,
 };
 
 use crate::ui::scrollbar::Scrollbar;
@@ -430,13 +430,15 @@ fn render_board(
     rendered
 }
 
-/// A board's menu, on one row: the group on show folded into a selector,
-/// then the items of that group beside it.
+/// A board's menu, on one row: two selectors, the group on show and the
+/// item on show in it, each opening a list over the board.
 ///
-/// One level is visible at a time, which is what keeps the row readable —
-/// two levels side by side is a row where nothing says which word is a
-/// heading and which is a choice. Changing group is one step further
-/// away for it, and it is the rarer of the two moves.
+/// One level is visible at a time and one word of each, which is what
+/// keeps the row readable however many items a group holds — a row of
+/// every item is a row that has to be cut, and the cut lands on whatever
+/// the viewer was looking for. Once something has been entered the way
+/// in takes the place of the second selector, whose job its last step
+/// then does.
 fn render_menu(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -450,29 +452,23 @@ fn render_menu(
     else {
         return;
     };
+    let items = items_of(navigator, active.id);
+    let on_show = items
+        .iter()
+        .find(|item| item.selected)
+        .or(items.first())
+        .map_or("", |item| item.name);
 
-    let raised = theme::color(Token::SurfaceRaised);
-    let selector = vec![
-        TextSpan::styled(
-            format!(" {} ", active.name),
-            theme::fg_bold(Token::TextBright).bg(raised),
-        ),
-        TextSpan::styled(
-            format!("{} ", active.items),
-            theme::fg(Token::TextDim).bg(raised),
-        ),
-        TextSpan::styled(
-            format!("{} ", theme::glyph(Symbol::ChevronExpanded)),
-            theme::fg(Token::TextMuted).bg(raised),
-        ),
-    ];
-    let selector_width = spans_width(&selector).min(area.width);
-    let selector_rect = Rect::new(area.x, area.y, selector_width, 1);
-    frame.render_widget(Paragraph::new(Line::from(selector)), selector_rect);
-    hits.push((selector_rect, ViewHit::ChooseGroup));
+    let group_selector = render_selector(
+        frame,
+        Rect::new(area.x, area.y, area.width, 1),
+        active.name,
+        Some(active.items),
+    );
+    hits.push((group_selector, ViewHit::ChooseGroup));
 
     let divider = "  /  ";
-    let mut x = selector_rect.right();
+    let mut x = group_selector.right();
     if x.saturating_add(divider.len() as u16) < area.right() {
         frame.render_widget(
             Paragraph::new(TextSpan::styled(divider, theme::fg(Token::TextDim))),
@@ -481,22 +477,93 @@ fn render_menu(
         x += divider.len() as u16;
     }
     let rest = Rect::new(x, area.y, area.right().saturating_sub(x), 1);
-    // Once something has been entered, the way in is what the row is
-    // about: the siblings are a step back, and the path is here.
-    match trail.len() {
-        0 | 1 => render_items(frame, rest, navigator, active.id, hits),
+    let item_selector = match trail.len() {
+        0 | 1 => render_selector(frame, rest, on_show, None),
         _ => render_trail(frame, rest, trail, hits),
-    }
+    };
+    hits.push((item_selector, ViewHit::ChooseItem));
 
-    if let Some(highlighted) = navigator.choosing {
-        render_group_list(frame, selector_rect, board, &groups, highlighted, hits);
+    match navigator.choosing {
+        Some(Choosing::Group(highlighted)) => {
+            let rows: Vec<ChoiceRow<'_>> = groups
+                .iter()
+                .map(|group| ChoiceRow {
+                    hit: ViewHit::ToggleGroup(group.id),
+                    name: group.name,
+                    trailing: group.items.to_string(),
+                    highlighted: group.id == highlighted,
+                })
+                .collect();
+            render_choice_list(
+                frame,
+                group_selector,
+                board,
+                &rows,
+                ViewHit::ChooseGroup,
+                hits,
+            );
+        }
+        Some(Choosing::Item(highlighted)) => {
+            let rows: Vec<ChoiceRow<'_>> = items
+                .iter()
+                .map(|item| ChoiceRow {
+                    hit: ViewHit::SelectItem(item.id),
+                    name: item.name,
+                    trailing: String::new(),
+                    highlighted: item.id == highlighted,
+                })
+                .collect();
+            render_choice_list(
+                frame,
+                item_selector,
+                board,
+                &rows,
+                ViewHit::ChooseItem,
+                hits,
+            );
+        }
+        None => {}
     }
+}
+
+/// One selector: what is chosen, how many there are to choose from when
+/// that is worth a number, and the mark that says it opens.
+fn render_selector(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    name: &str,
+    count: Option<usize>,
+) -> Rect {
+    let raised = theme::color(Token::SurfaceRaised);
+    let mut spans = vec![TextSpan::styled(
+        format!(" {name} "),
+        theme::fg_bold(Token::TextBright).bg(raised),
+    )];
+    if let Some(count) = count {
+        spans.push(TextSpan::styled(
+            format!("{count} "),
+            theme::fg(Token::TextDim).bg(raised),
+        ));
+    }
+    spans.push(TextSpan::styled(
+        format!("{} ", theme::glyph(Symbol::ChevronExpanded)),
+        theme::fg(Token::TextMuted).bg(raised),
+    ));
+    let rect = Rect::new(area.x, area.y, spans_width(&spans).min(area.width), 1);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    rect
 }
 
 struct MenuGroup<'a> {
     id: usize,
     name: &'a str,
     items: usize,
+}
+
+struct MenuItem<'a> {
+    id: usize,
+    name: &'a str,
+    selected: bool,
 }
 
 fn groups_of(navigator: &Navigator) -> Vec<MenuGroup<'_>> {
@@ -516,6 +583,25 @@ fn groups_of(navigator: &Navigator) -> Vec<MenuGroup<'_>> {
         }
     }
     groups
+}
+
+fn items_of(navigator: &Navigator, group: usize) -> Vec<MenuItem<'_>> {
+    let mut items = Vec::new();
+    let mut current = None;
+    for row in &navigator.rows {
+        match row {
+            NavigatorRow::Group { id, .. } => current = Some(*id),
+            NavigatorRow::Item {
+                id, name, selected, ..
+            } if current == Some(group) => items.push(MenuItem {
+                id: *id,
+                name,
+                selected: *selected,
+            }),
+            NavigatorRow::Item { .. } => {}
+        }
+    }
+    items
 }
 
 fn spans_width(spans: &[TextSpan<'_>]) -> u16 {
@@ -539,103 +625,28 @@ fn active_group(navigator: &Navigator) -> Option<usize> {
     })
 }
 
-/// The items of the group on show. The chosen one is a filled segment,
-/// the rest legible rather than faint, since every one is something to
-/// click. When they do not all fit, the row is cut around the chosen one
-/// and says so at the end it was cut at.
-fn render_items(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    navigator: &Navigator,
-    group: usize,
-    hits: &mut Vec<(Rect, ViewHit)>,
-) {
-    let mut items: Vec<(usize, &str, bool)> = Vec::new();
-    let mut current = None;
-    for row in &navigator.rows {
-        match row {
-            NavigatorRow::Group { id, .. } => current = Some(*id),
-            NavigatorRow::Item {
-                id, name, selected, ..
-            } if current == Some(group) => items.push((*id, name.as_str(), *selected)),
-            NavigatorRow::Item { .. } => {}
-        }
-    }
-    let width_of = |name: &str| TextSpan::raw(name).width() as u16 + 3;
-    let chosen = items
-        .iter()
-        .position(|(_, _, selected)| *selected)
-        .unwrap_or(0);
-    let more = theme::glyph(Symbol::Ellipsis);
-    let more_width = TextSpan::raw(more.as_str()).width() as u16 + 1;
-
-    // Start as far left as still leaves room for the chosen one.
-    let mut first = 0;
-    while first < chosen {
-        let needed: u16 = items[first..=chosen]
-            .iter()
-            .map(|(_, name, _)| width_of(name))
-            .sum();
-        let lead = if first > 0 { more_width } else { 0 };
-        if needed + lead + more_width <= area.width {
-            break;
-        }
-        first += 1;
-    }
-
-    let mut x = area.x;
-    let quiet = theme::fg(Token::TextDim);
-    if first > 0 {
-        frame.render_widget(
-            Paragraph::new(TextSpan::styled(more.clone(), quiet)),
-            Rect::new(x, area.y, more_width, 1),
-        );
-        x += more_width;
-    }
-    for (index, (id, name, selected)) in items.iter().enumerate().skip(first) {
-        let width = width_of(name) - 1;
-        let is_last = index + 1 == items.len();
-        let reserve = if is_last { 0 } else { more_width };
-        if x.saturating_add(width + reserve) > area.right() {
-            frame.render_widget(
-                Paragraph::new(TextSpan::styled(more.clone(), quiet)),
-                Rect::new(x, area.y, more_width.min(area.right().saturating_sub(x)), 1),
-            );
-            break;
-        }
-        let style = match selected {
-            true => theme::fg_bold(Token::TextBright).bg(theme::color(Token::SurfaceSelected)),
-            false => theme::fg(Token::TextSecondary),
-        };
-        let rect = Rect::new(x, area.y, width, 1);
-        frame.render_widget(
-            Paragraph::new(TextSpan::styled(format!(" {name} "), style)),
-            rect,
-        );
-        hits.push((rect, ViewHit::SelectItem(*id)));
-        x += width + 1;
-    }
-}
-
 /// The way in, outermost first: every step but the last is somewhere to
-/// go back to, and the last is where the viewer is. Cut from the far end
+/// go back to, and the last is where the viewer is — drawn as the
+/// selector it stands in for, and answered as one. Cut from the far end
 /// when it does not fit, because the near end is the one that is true
-/// right now.
+/// right now. Answers where that last step was drawn.
 fn render_trail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     trail: &[String],
     hits: &mut Vec<(Rect, ViewHit)>,
-) {
+) -> Rect {
     let chevron = format!(" {} ", theme::glyph(Symbol::ChevronRight));
     let chevron_width = TextSpan::raw(chevron.as_str()).width() as u16;
     let width_of = |name: &str| TextSpan::raw(name).width() as u16 + 2;
     let more = theme::glyph(Symbol::Ellipsis);
     let more_width = TextSpan::raw(more.as_str()).width() as u16;
+    let (here, earlier) = trail.split_last().expect("a trail has steps");
+    let selector_width = width_of(here) + 2;
 
     let mut first = 0;
-    while first + 1 < trail.len() {
-        let needed: u16 = trail[first..]
+    while first < earlier.len() {
+        let needed: u16 = earlier[first..]
             .iter()
             .map(|name| width_of(name) + chevron_width)
             .sum();
@@ -644,7 +655,7 @@ fn render_trail(
         } else {
             0
         };
-        if needed + lead <= area.width + chevron_width {
+        if needed + lead + selector_width <= area.width {
             break;
         }
         first += 1;
@@ -664,82 +675,109 @@ fn render_trail(
         draw(frame, more, quiet, &mut x);
         draw(frame, chevron.clone(), quiet, &mut x);
     }
-    for (index, name) in trail.iter().enumerate().skip(first) {
-        let is_here = index + 1 == trail.len();
-        let style = match is_here {
-            true => theme::fg_bold(Token::TextBright).bg(theme::color(Token::SurfaceSelected)),
-            false => theme::fg(Token::TextSecondary),
-        };
-        let rect = draw(frame, format!(" {name} "), style, &mut x);
-        if !is_here {
-            hits.push((rect, ViewHit::SelectTrail(index)));
-            draw(frame, chevron.clone(), quiet, &mut x);
-        }
+    for (index, name) in earlier.iter().enumerate().skip(first) {
+        let rect = draw(
+            frame,
+            format!(" {name} "),
+            theme::fg(Token::TextSecondary),
+            &mut x,
+        );
+        hits.push((rect, ViewHit::SelectTrail(index)));
+        draw(frame, chevron.clone(), quiet, &mut x);
     }
+    render_selector(
+        frame,
+        Rect::new(x, area.y, area.right().saturating_sub(x), 1),
+        here,
+        None,
+    )
 }
 
-/// The open list of groups, hung from the selector and drawn over the
-/// board: each with what it holds at the far edge, the highlighted one
-/// filled.
-fn render_group_list(
+struct ChoiceRow<'a> {
+    hit: ViewHit,
+    name: &'a str,
+    trailing: String,
+    highlighted: bool,
+}
+
+/// An open list, hung from the selector it belongs to and drawn over the
+/// board: a row for each choice, the highlighted one filled. A list
+/// longer than the board is tall shows the rows around the highlighted
+/// one, which is the one row that must never be the one cut off.
+fn render_choice_list(
     frame: &mut ratatui::Frame<'_>,
     selector: Rect,
     board: Rect,
-    groups: &[MenuGroup<'_>],
-    highlighted: usize,
+    rows: &[ChoiceRow<'_>],
+    own_selector: ViewHit,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
-    let widest = groups
+    let widest = rows
         .iter()
-        .map(|group| TextSpan::raw(group.name).width())
+        .map(|row| TextSpan::raw(row.name).width() + row.trailing.len())
         .max()
         .unwrap_or(0) as u16;
+    let width = (widest + 8).max(selector.width).min(board.width);
+    let visible = (rows.len() as u16)
+        .min(board.height.saturating_sub(2))
+        .max(1);
     let area = Rect::new(
-        selector.x,
+        selector.x.min(board.right().saturating_sub(width)),
         selector.bottom(),
-        (widest + 10).max(selector.width).min(board.width),
-        (groups.len() as u16 + 2).min(board.height),
+        width,
+        visible + 2,
     );
+    let highlighted = rows.iter().position(|row| row.highlighted).unwrap_or(0);
+    let first = highlighted
+        .saturating_sub(usize::from(visible) / 2)
+        .min(rows.len().saturating_sub(usize::from(visible)));
+
     let raised = theme::color(Token::SurfaceRaised);
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::fg(Token::BorderDefault))
-            .style(Style::default().bg(raised)),
-        area,
-    );
-    for (row, group) in groups
-        .iter()
-        .enumerate()
-        .take(area.height.saturating_sub(2).into())
-    {
-        let rect = Rect::new(area.x + 1, area.y + 1 + row as u16, area.width - 2, 1);
-        let is_highlighted = group.id == highlighted;
-        let fill = match is_highlighted {
+    let mut frame_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(Style::default().bg(raised));
+    // A list that was cut says so, and where in it the highlight is —
+    // otherwise its last row reads as the last there is.
+    if rows.len() > usize::from(visible) {
+        frame_block = frame_block.title_bottom(
+            Line::from(TextSpan::styled(
+                format!(" {}/{} ", highlighted + 1, rows.len()),
+                theme::fg(Token::TextDim),
+            ))
+            .right_aligned(),
+        );
+    }
+    frame.render_widget(frame_block, area);
+    for (line, row) in rows.iter().skip(first).take(visible.into()).enumerate() {
+        let rect = Rect::new(area.x + 1, area.y + 1 + line as u16, area.width - 2, 1);
+        let fill = match row.highlighted {
             true => theme::color(Token::SurfaceSelected),
             false => raised,
         };
-        let ink = match is_highlighted {
+        let ink = match row.highlighted {
             true => theme::fg_bold(Token::TextBright),
             false => theme::fg(Token::TextSecondary),
         };
-        let count = group.items.to_string();
         let gap = usize::from(rect.width)
-            .saturating_sub(TextSpan::raw(group.name).width() + count.len() + 2);
+            .saturating_sub(TextSpan::raw(row.name).width() + row.trailing.len() + 2);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                TextSpan::styled(format!(" {}", group.name), ink.bg(fill)),
+                TextSpan::styled(format!(" {}", row.name), ink.bg(fill)),
                 TextSpan::styled(" ".repeat(gap), Style::default().bg(fill)),
-                TextSpan::styled(format!("{count} "), theme::fg(Token::TextDim).bg(fill)),
+                TextSpan::styled(
+                    format!("{} ", row.trailing),
+                    theme::fg(Token::TextDim).bg(fill),
+                ),
             ])),
             rect,
         );
-        hits.push((rect, ViewHit::ToggleGroup(group.id)));
+        hits.push((rect, row.hit));
     }
     // The list's own frame is still the list: a click on it is not a
     // click on the board beneath.
-    hits.push((area, ViewHit::ChooseGroup));
+    hits.push((area, own_selector));
 }
 
 fn render_navigator(
@@ -1369,7 +1407,7 @@ fn render_footer(
 /// is bound to. Kept here, beside the render that needs it, rather than in
 /// the extension, which knows nothing of either. Where two actions reach
 /// one command, the first row is the one a footer names.
-const COMMAND_ACTIONS: [(Command, uze_keys::Action); 35] = [
+const COMMAND_ACTIONS: [(Command, uze_keys::Action); 36] = [
     (Command::Close, uze_keys::Action::Dismiss),
     (Command::FocusNext, uze_keys::Action::FocusNext),
     (Command::FocusNext, uze_keys::Action::FocusPrevious),
@@ -1403,6 +1441,7 @@ const COMMAND_ACTIONS: [(Command, uze_keys::Action); 35] = [
     (Command::PreviousView, uze_keys::Action::PreviousDiagram),
     (Command::NextMode, uze_keys::Action::NextRendering),
     (Command::ChooseGroup, uze_keys::Action::ChooseArea),
+    (Command::ChooseItem, uze_keys::Action::ChooseArtifact),
     (
         Command::SelectToward(PanDirection::Left),
         uze_keys::Action::SelectBoxLeft,
@@ -1669,6 +1708,67 @@ mod tests {
         (rows, hits)
     }
 
+    /// A group with more items than the board has rows: the list shows the
+    /// rows around the highlighted one and says where in the list that is,
+    /// so its last row is not mistaken for the last there is.
+    #[test]
+    fn a_list_longer_than_the_board_keeps_the_highlight_in_view_and_says_where_it_is() {
+        let mut rows = vec![NavigatorRow::Group {
+            id: 0,
+            name: "Flowchart".to_owned(),
+            depth: 0,
+            collapsed: false,
+            icon: RowIcon::None,
+        }];
+        rows.extend((0..30).map(|id| NavigatorRow::Item {
+            id,
+            name: format!("Flow {id:02}"),
+            depth: 1,
+            marker: Span::default(),
+            selected: id == 0,
+            icon: RowIcon::None,
+        }));
+        let view = View {
+            title: vec![Span::new("Board", Role::Bright)],
+            navigator: Some(Navigator {
+                heading: String::new(),
+                badge: String::new(),
+                focused: false,
+                anchor: None,
+                choosing: Some(Choosing::Item(20)),
+                rows,
+            }),
+            content: Content::Lines {
+                heading: String::new(),
+                scroll: 0,
+                lines: Vec::new(),
+                total: 0,
+                caret: None,
+            },
+            footer: vec![Command::Close],
+            modes: Vec::new(),
+            layout: ViewLayout::Board,
+            trail: Vec::new(),
+        };
+        let (drawn, hits) = draw_sized(&view, 80, 20);
+        let text = drawn.join("\n");
+        assert!(text.contains("Flowchart 30"), "{text}");
+        assert!(
+            text.contains("Flow 20") && !text.contains("Flow 02"),
+            "{text}"
+        );
+        assert!(text.contains("21/30"), "{text}");
+        let first_hit = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, ViewHit::SelectItem(_)))
+            .map(|(_, hit)| *hit);
+        assert_ne!(
+            first_hit,
+            Some(ViewHit::SelectItem(0)),
+            "the rows cut off are not clickable"
+        );
+    }
+
     /// A board is drawn as the extension cut it: the screen it was told
     /// about is the screen it gets, so no row is folded and the last
     /// column is still the drawing's. Then the click: the row and column
@@ -1716,17 +1816,17 @@ mod tests {
         }
         assert!(
             rows[1].contains("C4 2") && rows[1].contains("Containers"),
-            "one row: the area on show as a selector, then its artifacts: {}",
+            "one row: the area on show, then the artifact on show in it: {}",
             rows[1]
         );
         assert!(
-            !rows[1].contains("Sequence") && !rows[1].contains("Crate layering"),
-            "and nothing of the areas that are not on show: {}",
+            !rows[1].contains("Sequence") && !rows[1].contains("System context"),
+            "and nothing that is not on show, of either level: {}",
             rows[1]
         );
         let footer = rows[usize::from(height) - 3].as_str();
         assert!(
-            footer.contains("o areas")
+            footer.contains("o artifacts")
                 && footer.contains("tab next artifact")
                 && footer.contains("containers.mmd"),
             "the footer names the board's own keys: {footer}"
