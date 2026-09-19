@@ -24,7 +24,7 @@ use uze_core::{
 };
 
 /// Root of every package's generated plugin directory. Lives under
-/// `$UZE_HOME/state/attachments/antigravity/plugins/` — the same convention
+/// `$UZE_HOME/runtime/attachments/antigravity/plugins/` — the same convention
 /// every other integration's generated envelopes use, never under the Store.
 pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
     crate::shared::path::attachment_root(uze_home, "antigravity").join("plugins")
@@ -418,7 +418,12 @@ mod generated_native_tests {
             before, after,
             "Store package tree must be byte-for-byte unchanged"
         );
-        assert!(dir.starts_with(uze_home.state_dir()));
+        assert!(
+            dir.starts_with(uze_home.runtime_dir()),
+            "a generated package is produced again from the Store and the \
+             Engine alone, so it belongs with what UZE generates rather than \
+             with the records"
+        );
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("plugin.json")).unwrap()).unwrap();
         assert_eq!(manifest["name"], "flow");

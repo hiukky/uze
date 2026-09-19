@@ -449,7 +449,12 @@ mod generated_native_tests {
             before, after,
             "Store package tree must be byte-for-byte unchanged"
         );
-        assert!(dir.starts_with(uze_home.state_dir()));
+        assert!(
+            dir.starts_with(uze_home.runtime_dir()),
+            "a generated package is produced again from the Store and the \
+             Engine alone, so it belongs with what UZE generates rather than \
+             with the records"
+        );
         assert!(dir.join(".codex-plugin/plugin.json").is_file());
         // Codex stages the envelope into its plugin cache without following
         // symlinks, so a default-policy Skill and the MCP file are real

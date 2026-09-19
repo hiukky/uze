@@ -982,7 +982,7 @@ fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
     );
     let wrapper = wrapper.as_path();
     assert!(
-        wrapper.ends_with("state/attachments/antigravity/hooks/exec"),
+        wrapper.ends_with("runtime/attachments/antigravity/hooks/exec"),
         "a shared config file has no plugin root, so the wrapper lives under UZE state: {}",
         wrapper.display()
     );

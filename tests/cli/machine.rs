@@ -9,7 +9,7 @@ fn contains_fixture_skill_wrapper(entries: &[PathBuf], uze_home: &std::path::Pat
         let Ok(target) = std::fs::read_link(entry) else {
             return false;
         };
-        target.starts_with(uze_home.join("state/attachments"))
+        target.starts_with(uze_home.join("runtime/attachments"))
             && std::fs::read_to_string(target.join("SKILL.md")).is_ok_and(|skill| {
                 skill.starts_with("---\nname: uze-agent-skill-conformance:uze-e2e\n")
             })
@@ -573,7 +573,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         claude_skills_entries.is_empty(),
         "no package should decompose into .claude/skills once generatable, got {claude_skills_entries:?}"
     );
-    let generated_root = uze_home.join("state/attachments/claude/generated");
+    let generated_root = uze_home.join("runtime/attachments/claude/generated");
     assert!(
         generated_root
             .join("uze-agent-skill-conformance@test/.claude-plugin/plugin.json")

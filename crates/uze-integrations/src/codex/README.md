@@ -51,7 +51,7 @@ provided = discovered ∩ declared (skills dir, mcpServers file) — see Native 
 Store package (no explicit envelope, but skills/ dir and/or root mcp.json present)  [Generated, ADR-013]
         │
         ▼
-$UZE_HOME/state/attachments/codex/generated/<id>/.codex-plugin/plugin.json
+$UZE_HOME/runtime/attachments/codex/generated/<id>/.codex-plugin/plugin.json
    (UZE-synthesized: skills="./skills/" and mcpServers="./.mcp.json",
     both mirrored as real bytes from the Store — `codex plugin add` stages
     the envelope into ~/.codex/plugins/cache without following symlinks,

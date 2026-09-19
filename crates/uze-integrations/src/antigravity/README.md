@@ -7,7 +7,7 @@
 | Surface | Status | Mechanism | Evidence |
 |---|---|---|---|
 | Plugin (explicit) | SUPPORTED, exact coverage | `agy plugin install <Store package path>` — the canonical `plugin.json` (name + description) **is** the vendor manifest (extra fields tolerated) | PROVEN — real-binary dogfood: attach → `agy plugin list` shows import → inspect MATCHED → remove → unregistered → reinstall MATCHED |
-| Plugin (generated) | SUPPORTED, exact coverage | canonical `mcp.json` → generated envelope (`mcp_config.json` translation: `url`/`httpUrl` → `serverUrl`) installed from `$UZE_HOME/state/attachments/antigravity/plugins/<id>/` | PROVEN — real-binary dogfood + `agy plugin validate` (skills + mcpServers processed) |
+| Plugin (generated) | SUPPORTED, exact coverage | canonical `mcp.json` → generated envelope (`mcp_config.json` translation: `url`/`httpUrl` → `serverUrl`) installed from `$UZE_HOME/runtime/attachments/antigravity/plugins/<id>/` | PROVEN — real-binary dogfood + `agy plugin validate` (skills + mcpServers processed) |
 | Skills | SUPPORTED, native (default policy) | via plugin (package-level) or a managed `SymlinkReference` → `~/.gemini/antigravity-cli/skills/<label>` (CLI-documented global skills root) | DOCUMENTED (root) + TESTED (lifecycle/drift) |
 | Skill invocation policy | NATIVE model-only; ADAPTED user-only | `disable-slash-command: true` preserves `model=true,user=false`; no model-discovery suppression exists for `model=false,user=true` | PROVEN (agy 1.1.21) + TESTED |
 | MCP | SUPPORTED, adapted | `agy mcp add <name> <command> [args…]` → `~/.gemini/config/mcp_config.json` | PROVEN (add/list/remove/disable) + TESTED (inspection) |
@@ -68,7 +68,7 @@ it become authoritative.
   canonical group, keyed `<package>:<group-id>`, grouped with the translated
   matcher for the tool events and flat for `Stop`, whose command is the
   generated `hooks/exec` wrapper under
-  `$UZE_HOME/state/attachments/antigravity/hooks/exec` — absolute, because
+  `$UZE_HOME/runtime/attachments/antigravity/hooks/exec` — absolute, because
   the harness runs a hook with its cwd set to the directory holding
   `hooks.json`, and no `uze` sits on the execution path. The document root
   *is* the named-hook map, so UZE owns exactly its own keys: a hand-written

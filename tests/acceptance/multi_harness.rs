@@ -48,7 +48,7 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
 
     // Claude: generated native package envelope under UZE_HOME state.
     let claude_envelope = env.uze_home.join(
-        "state/attachments/claude/generated/uze-agent-skill-conformance@test/.claude-plugin/plugin.json",
+        "runtime/attachments/claude/generated/uze-agent-skill-conformance@test/.claude-plugin/plugin.json",
     );
     assertions::assert_file(&claude_envelope, "claude generated envelope");
 
@@ -164,7 +164,7 @@ fn invocation_policy_projects_per_harness_classification() {
         "the wrapper must carry the skill bytes, got {review_target:?}"
     );
     let codex_policy = env.uze_home.join(
-        "state/attachments/codex/generated/policy-fixture@test/skills/review/agents/openai.yaml",
+        "runtime/attachments/codex/generated/policy-fixture@test/skills/review/agents/openai.yaml",
     );
     assert!(
         codex_policy.is_file(),

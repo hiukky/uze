@@ -443,7 +443,7 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         // wrapper predates the superset: it claims the shared name but
         // carries no vendor encoding at all.
         let legacy_wrapper = uze_home
-            .state_dir()
+            .runtime_dir()
             .join("attachments/codex/skills/flow/legacy");
         fs::create_dir_all(&legacy_wrapper).unwrap();
         fs::write(
@@ -682,7 +682,7 @@ fn user_only_skill_codex_only_is_model_hidden() {
             "the envelope covers the skill; no shared-root entry is created"
         );
         let envelope_skill = uze_home
-            .state_dir()
+            .runtime_dir()
             .join("attachments/codex/generated/flow@local/skills/review");
         assert_eq!(
             fs::read_to_string(envelope_skill.join("agents/openai.yaml")).unwrap(),
@@ -755,7 +755,7 @@ fn repeated_setup_is_idempotent() {
     // still Matched — repeated setup never churns the physical entry.
     let root = temp("idempotent");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -808,7 +808,7 @@ fn detach_codex_preserves_opencode_consumer() {
     // touch the shared entry OpenCode still consumes.
     let root = temp("detach-codex");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -882,7 +882,7 @@ fn detach_opencode_preserves_codex_consumer() {
     // leaves Codex's own representation — the generated envelope — intact.
     let root = temp("detach-opencode");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -951,7 +951,7 @@ fn detach_last_consumer_cleans_projection() {
     // fully gone: no entry, no wrapper, no generated envelope.
     let root = temp("detach-last");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
