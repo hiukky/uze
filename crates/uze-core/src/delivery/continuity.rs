@@ -191,7 +191,7 @@ mod tests {
         exposure::ExposurePlan,
         integration::HarnessDetection,
         router::HarnessCapabilities,
-        task::{self, Base, Task, TaskStore},
+        task::{self, Agent, Base, TaskStore},
     };
     use std::{
         cell::RefCell,
@@ -262,8 +262,14 @@ mod tests {
         let slot = primary.join(".worktrees").join("slot-1");
         std::fs::create_dir_all(&slot).unwrap();
 
-        let mut task = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
-        task.checkout = Some(CheckoutId::adopted("slot-1"));
+        let mut task = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            String::new(),
+            "main".into(),
+        );
+        task.isolation_mut().unwrap().checkout = Some(CheckoutId::adopted("slot-1"));
         let id = task.id.as_str().to_owned();
         let mut store = TaskStore::default();
         store.upsert(task);
@@ -277,7 +283,7 @@ mod tests {
 
     fn recorded(home: &UzeHome, primary: &Path) -> Option<SessionId> {
         let store = task::load(home, primary).unwrap();
-        let task = store.tasks.first()?;
+        let task = store.agents.first()?;
         conversation::load(home, primary, &task.id)
             .get("harness")?
             .conversation
@@ -327,7 +333,7 @@ mod tests {
         );
 
         let store = task::load(&home, &primary).unwrap();
-        let entry = conversation::load(&home, &primary, &store.tasks[0].id)
+        let entry = conversation::load(&home, &primary, &store.agents[0].id)
             .get("harness")
             .cloned()
             .expect("the launch was recorded");
@@ -394,8 +400,14 @@ mod tests {
     #[test]
     fn two_agents_in_one_directory_keep_their_own_conversations() {
         let (home, primary, slot, first) = managed("continuity-shared-directory");
-        let mut second = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
-        second.checkout = Some(CheckoutId::adopted("slot-1"));
+        let mut second = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            String::new(),
+            "main".into(),
+        );
+        second.isolation_mut().unwrap().checkout = Some(CheckoutId::adopted("slot-1"));
         let second_id = second.id.as_str().to_owned();
         let mut store = task::load(&home, &primary).unwrap();
         store.upsert(second);
@@ -461,7 +473,7 @@ mod tests {
     fn unreadable_state_still_launches_the_agent() {
         let (home, primary, slot, id) = managed("continuity-unreadable");
         let store = task::load(&home, &primary).unwrap();
-        let path = conversation::store_path(&home, &primary, &store.tasks[0].id);
+        let path = conversation::store_path(&home, &primary, &store.agents[0].id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not json at all").unwrap();
 

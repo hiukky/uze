@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     UzeHome,
     checkout::CheckoutId,
-    task::{self, Base, Task, TaskStore},
+    task::{self, Agent, Base, TaskStore},
 };
 use uze_testkit::fake_harness::{Action, FakeHarness};
 use uze_testkit::temp::TestEnvironment;
@@ -38,8 +38,17 @@ fn managed_slot(env: &TestEnvironment) -> (PathBuf, PathBuf, String) {
     let slot = primary.join(".worktrees").join("slot-1");
     std::fs::create_dir_all(&slot).unwrap();
 
-    let mut recorded = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
-    recorded.checkout = Some(CheckoutId::adopted("slot-1"));
+    let mut recorded = Agent::isolated(
+        "claude",
+        None,
+        Base::Ref("main".into()),
+        String::new(),
+        "main".into(),
+    );
+    recorded
+        .isolation_mut()
+        .expect("an isolated agent carries its isolation")
+        .checkout = Some(CheckoutId::adopted("slot-1"));
     let id = recorded.id.as_str().to_owned();
     let mut store = TaskStore::default();
     store.upsert(recorded);
@@ -259,7 +268,7 @@ fn a_launch_nested_inside_an_agents_launch_is_ordinary() {
     );
     let store = task::load(&UzeHome::at(&env.uze_home), &primary).unwrap();
     let record =
-        uze_core::conversation::load(&UzeHome::at(&env.uze_home), &primary, &store.tasks[0].id);
+        uze_core::conversation::load(&UzeHome::at(&env.uze_home), &primary, &store.agents[0].id);
     assert_eq!(
         record
             .get(INTEGRATION)

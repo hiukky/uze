@@ -75,7 +75,7 @@ pub use machine::{
 pub use package::{acquisition, naming, store, trust};
 pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
-    project_root, task, tenant, text_region, workspace, worktree,
+    project_root, task, text_region, workspace, worktree,
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};

@@ -23,7 +23,7 @@ Three levels, and no more:
 
 | Level | What it is |
 | --- | --- |
-| **Space** | One project directory, of one of two kinds — see [Two kinds of space](#two-kinds-of-space). The sidebar lists them; `+ new` (or `Alt+S`) opens a picker to add one. |
+| **Space** | One directory you work in — see [An agent is isolated, or it works where you work](#an-agent-is-isolated-or-it-works-where-you-work). The sidebar lists them; `+ new` (or `Alt+S`) opens a picker to add one. |
 | **Tab** | One session inside a space — a plain shell, or an agent. |
 | **Pane** | The live terminal a tab draws. Owned by the runtime server, not by the client. |
 
@@ -86,35 +86,54 @@ has the per-harness column.
 Everything else typed goes to the pane. Tabs and spaces can be renamed inline
 and reordered by dragging; right-click gives the same actions as a menu.
 
-## Two kinds of space
+## An agent is isolated, or it works where you work
 
-A space is created as one of two kinds, chosen in the picker and kept for the
-space's life. The same directory can be the root of one space of each kind.
+A space is a directory you opened uze at, and nothing more. Every agent you
+start in one begins **where the project says**, and any single agent can be
+given a checkout of its own afterwards — `Isolate`, on the agent's own row.
 
-| Kind | Where an agent works | What uze does with its work |
-| --- | --- | --- |
-| **worktree** | A checkout of its own under `.worktrees/<id>`, on branch `agent/<id>` | Readiness, delivery and naming, as described below |
-| **workspace** | The space's own directory, on whatever branch it is on | Nothing: the commits are already on your branch |
+| Where an agent works | What uze does with its work |
+| --- | --- |
+| **In the space's root**, on whatever branch it is on | Nothing: the commits are already on your branch |
+| **Isolated**, in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>` | Readiness, delivery and naming, as described below |
 
-The worktree kind is the default for a repository and the only kind that
-isolates; a directory that is not a Git repository can only be a workspace
-space. In a workspace space the sidebar lists the agents flat, one row each.
-Two agents there share one tree, the way two people in a shell would; uze keeps
-their conversations apart, and nothing else.
+An agent in the root shares one tree with everyone else there, the way two
+people in a shell would; uze keeps their conversations apart, and nothing
+else. The column draws the two apart: the agents in the root first, then the
+isolated ones under a blank row, each group in its own hue.
 
-In either kind, an agent's row says two things: the name of the work, and
-underneath it the harness running it — `claude`, `codex`, `agy`. Not the
-branch: a named task's label *is* its branch read as words, and every agent of
-a workspace space shares the operator's branch, so the caption repeated what
-the row already said. Where the work lives is the space's, said once — on the
-header, behind the `⇄` that swaps the space's name for its root, and in the
-timeline below.
+An agent's row says two things: the name of the work, and underneath it the
+harness running it — `claude`, `codex`, `agy`. Not the branch: a named task's
+label *is* its branch read as words, and every agent in the root shares the
+operator's branch, so the caption repeated what the row already said. Where
+the work lives is the space's, said once — on the header, behind the `⇄` that
+swaps the space's name for its root, and in the timeline below.
 
-## An agent of a worktree space gets its own checkout
+### Isolate
 
-In any Git repository with at least one commit, uze places an agent of a worktree
-space in an isolated checkout **before its harness starts** — no question asked,
-and nothing required of the harness. The primary checkout stays yours.
+`Isolate` is on an agent's right-click menu, and it is offered only where it
+can be honoured: the space has to be a Git repository with a commit to branch
+from, and the agent must not already have a checkout. It keeps the agent's
+identity, its tab and its place in everything uze records about it; the
+harness is relaunched in the new checkout.
+
+Whether the *harness's own* conversation follows is up to the harness. One
+that keeps a conversation under the directory it ran in — Claude Code does —
+cannot resume it somewhere else, so the agent picks up in the new checkout
+with a fresh conversation. Isolate early if the thread matters.
+
+It comes in two rows: **Isolate**, and **Isolate with my changes** — which
+copies whatever your tree has uncommitted into the new checkout — edits to
+tracked files and new files git isn't ignoring alike. A copy: your own tree is
+exactly what you left it, either way. Both rows are always there,
+because whether your tree is dirty is a question only Git answers and the
+sidebar never waits on one; on a clean tree they do the same thing.
+
+## An isolated agent gets its own checkout
+
+In any Git repository with at least one commit, uze places an isolated agent in
+a checkout of its own **before its harness starts** — nothing required of the
+harness. The primary checkout stays yours.
 
 - The checkout is a **slot**: `.worktrees/<id>`, on branch `agent/<id>`.
 - A new agent takes a **free slot** — new branch from the base, tracked and
@@ -122,9 +141,8 @@ and nothing required of the harness. The primary checkout stays yours.
   in place — and a new directory is created only when no slot is free. The number
   of checkouts is bounded by peak concurrency, not by how many tasks you run.
 - Where a slot cannot be acquired (no commit yet, the slot cap reached, Git
-  refusing), no agent starts and the reason is said — an agent you asked to
-  isolate never lands in your own tree. A directory with no repository is
-  offered the workspace kind only.
+  refusing), nothing moves and the reason is said — an agent you asked to
+  isolate never lands in your own tree.
 
 Because the slot is reused, the second agent in a Rust project doesn't pay for a
 cold build the way a fresh `git worktree` would.
@@ -141,6 +159,7 @@ that owns it — a worktree's own manifest is ignored:
 
 ```yaml
 worktrees:
+  default: in-place        # in-place | isolated — where an agent launched here starts
   target: main             # branch finished work targets (default: the primary's branch)
   completion: handoff      # handoff | merge | pr
   branch: conventional     # the vocabulary an agent's own name for its work is judged against

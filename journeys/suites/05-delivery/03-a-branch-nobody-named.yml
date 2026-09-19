@@ -18,6 +18,7 @@ world:
   remote: bare
   manifest: |
     worktrees:
+      default: isolated
       target: main
       completion: pr
       branch: conventional

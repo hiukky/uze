@@ -16,6 +16,7 @@ world:
   project: demo-app
   manifest: |
     worktrees:
+      default: isolated
       target: main
       completion: merge
       slots: 3

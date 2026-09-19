@@ -6,7 +6,7 @@ use std::path::Path;
 use uze_core::{
     UzeHome,
     checkout::CheckoutId,
-    task::{self, Base, Task, TaskStore},
+    task::{self, Agent, Base, TaskStore},
 };
 use uze_testkit::temp::TestEnvironment;
 
@@ -73,9 +73,18 @@ fn an_agent_names_its_work_through_the_real_binary() {
     // records one: this tier asserts against the machine, so the record is
     // laid down as data rather than through the surface under test. Its
     // identifier is what the agent's launch carries.
-    let mut recorded = Task::new(None, Base::Ref("main".into()), String::new(), "main".into());
-    recorded.checkout = Some(CheckoutId::adopted("manual"));
-    recorded.branch = "agent/zulqgq".to_owned();
+    let mut recorded = Agent::isolated(
+        "claude",
+        None,
+        Base::Ref("main".into()),
+        String::new(),
+        "main".into(),
+    );
+    let isolation = recorded
+        .isolation_mut()
+        .expect("an isolated agent carries its isolation");
+    isolation.checkout = Some(CheckoutId::adopted("manual"));
+    isolation.branch = "agent/zulqgq".to_owned();
     let identity = recorded.id.as_str().to_owned();
     let mut store = TaskStore::default();
     store.upsert(recorded);

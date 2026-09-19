@@ -239,6 +239,24 @@ pub fn label_of(branch: &str) -> String {
         .replace('-', " ")
 }
 
+/// Where an agent starts: in the project's own root, or in a checkout of
+/// its own.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPlacementDefault {
+    /// In the project's root, on whatever branch the operator is on.
+    #[default]
+    InPlace,
+    /// In a checkout of its own, as `Isolate` would give it.
+    Isolated,
+}
+
+impl AgentPlacementDefault {
+    pub fn is_isolated(self) -> bool {
+        self == Self::Isolated
+    }
+}
+
 /// What happens to an isolated agent's work once it is done. The only axis
 /// a project declares, because it is the only one that is a team decision
 /// rather than infrastructure.
@@ -295,6 +313,16 @@ impl CompletionBehavior {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreePolicy {
+    /// Where an agent launched in this project starts. Undeclared, it
+    /// starts in the project's own root and is isolated when somebody
+    /// asks for it; declared `isolated`, every agent is placed in a
+    /// checkout of its own at launch.
+    ///
+    /// A project's answer rather than a person's: someone who always
+    /// isolates should not pay a gesture per agent, and a default each
+    /// person sets by hand is one the next person does not have.
+    #[serde(default)]
+    pub default: AgentPlacementDefault,
     /// The branch finished work targets. Undeclared, it is the branch the
     /// primary checkout is on when a task is created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -460,7 +488,7 @@ impl WorktreePolicy {
     ///
     /// Written for a writer UZE did not place. It states the layout so a
     /// subagent can reproduce it, and it states where the reader already is
-    /// — isolated in a slot, or a tenant of the operator's own checkout —
+    /// — isolated in a slot, or running in the operator's own checkout —
     /// so an agent UZE isolated does not isolate itself again and an agent
     /// UZE placed on the operator's branch does not go looking for a slot.
     /// It never asks anyone to create a top-level worktree: UZE already did
@@ -474,8 +502,8 @@ impl WorktreePolicy {
             "## Concurrent work isolation\n\
              \n\
              {naming}\
-             - An agent UZE launches into a worktree space works in a checkout of its own \
-             under `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is \
+             - An agent UZE isolated works in a checkout of its own under \
+             `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is \
              inside `{directory}/`, you are already isolated; do not switch branches.\n\
              - If your working directory is not inside `{directory}/`, you are in the \
              operator's own checkout, on the branch they are on: commit there, as you go, and \
@@ -612,6 +640,7 @@ mod tests {
         );
 
         let merging = WorktreePolicy {
+            default: Default::default(),
             completion: CompletionBehavior::Merge,
             ..WorktreePolicy::default()
         };
@@ -634,6 +663,7 @@ mod tests {
     fn a_changed_policy_claims_a_different_region() {
         let handoff = WorktreePolicy::default();
         let merge = WorktreePolicy {
+            default: Default::default(),
             completion: CompletionBehavior::Merge,
             ..WorktreePolicy::default()
         };
@@ -848,6 +878,7 @@ mod naming_tests {
     #[test]
     fn the_projected_clause_spells_out_the_vocabulary_in_force() {
         let policy = WorktreePolicy {
+            default: Default::default(),
             branch: BranchVocabulary::Types(vec!["ui".to_owned(), "fix".to_owned()]),
             ..WorktreePolicy::default()
         };
@@ -863,6 +894,7 @@ mod naming_tests {
     #[test]
     fn naming_is_the_first_thing_the_projected_text_asks_for() {
         let policy = WorktreePolicy {
+            default: Default::default(),
             branch: BranchVocabulary::Preset(BranchPreset::Conventional),
             ..WorktreePolicy::default()
         };
@@ -892,6 +924,7 @@ mod naming_tests {
     fn changing_the_vocabulary_changes_the_regions_identity() {
         let before = WorktreePolicy::default().region_identity();
         let after = WorktreePolicy {
+            default: Default::default(),
             branch: BranchVocabulary::Preset(BranchPreset::Conventional),
             ..WorktreePolicy::default()
         }

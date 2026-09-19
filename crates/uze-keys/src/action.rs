@@ -206,7 +206,13 @@ actions! {
     CloseTab => "close-tab", true,
         "Close tab", "Close the selected tab";
     NewAgent => "new-agent", false,
-        "New agent", "Start an agent in a checkout of its own";
+        "New agent", "Start an agent in this space";
+    IsolateAgent => "isolate-agent", false,
+        "Isolate", "Give this agent a checkout of its own, cut from where this tree stands";
+    IsolateAgentWithChanges => "isolate-agent-with-changes", false,
+        "Isolate with my changes",
+        "Give this agent a checkout of its own, carrying a copy of whatever \
+         this tree has uncommitted";
     NewSpace => "new-space", false,
         "New space", "Open a space at a directory";
     RenameSelection => "rename-selection", false,

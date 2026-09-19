@@ -21,9 +21,6 @@
 
 use std::path::{Path, PathBuf};
 
-use uze_application::RootProfile;
-use uze_terminal::SpaceKind;
-
 /// One directory the prompt can land on.
 pub(super) struct Candidate {
     pub(super) name: String,
@@ -55,35 +52,23 @@ pub(super) struct RootPicker {
     /// narrows the filter does not touch the filesystem again.
     listed: PathBuf,
     listing: Vec<Candidate>,
-    /// Which rows of `listing` a worktree space could come from, answered
-    /// once per row per listing: the walk below costs a few `stat`s, and
-    /// a keystroke only narrows what was already read.
-    reaches: std::collections::HashMap<PathBuf, bool>,
     /// Indices into `listing` matching the input's trailing segment, best
     /// match first.
     matched: Vec<usize>,
     selected: usize,
     /// The project the operator is standing in, when it is one of the
     /// rows. The prompt opens on it and returns to it whenever the
-    /// listing is read again with nothing typed — a kind chosen, a
-    /// profile landing — so "another space over this project" stays one
-    /// `Enter` away while the listing shows everywhere else they could
-    /// go.
+    /// listing is read again with nothing typed, so "another space over
+    /// this project" stays one `Enter` away while the listing shows
+    /// everywhere else they could go.
     marked: Option<PathBuf>,
     /// The directory the prompt is on right now — the row chosen in the
     /// listing, or the directory being listed — resolved when the input or
     /// the selection changes rather than on every frame: it probes the
     /// filesystem.
     picked: Option<PathBuf>,
-    /// The repository or workspace `picked` belongs to, which is what a
-    /// worktree space is cut from and what the profile is asked about.
+    /// The repository or workspace `picked` belongs to.
     landed: Option<PathBuf>,
-    /// The kind the operator chose, if they chose one.
-    chosen: Option<SpaceKind>,
-    /// The profile of `landed`, once a worker answered it — asked off the
-    /// frame, because it asks Git, and the picker never waits on a
-    /// repository.
-    profile: Option<RootProfile>,
 }
 
 impl RootPicker {
@@ -109,87 +94,14 @@ impl RootPicker {
             touched: false,
             listed: PathBuf::new(),
             listing: Vec::new(),
-            reaches: std::collections::HashMap::new(),
             matched: Vec::new(),
             selected: 0,
             marked: standing_in.map(Path::to_path_buf),
             picked: None,
             landed: None,
-            chosen: None,
-            profile: None,
         };
         picker.refresh();
         picker
-    }
-
-    /// The kind the space would be created as right now: what the operator
-    /// chose while the root allows it, and otherwise what the root's
-    /// profile lands on — a worktree until the profile answers.
-    pub(super) fn kind(&self) -> SpaceKind {
-        match (self.chosen, self.slots_available()) {
-            (Some(kind), _) => kind,
-            // Until the profile answers, the directory being listed decides:
-            // a repository is somewhere agents get checkouts of their own,
-            // and anywhere else a worktree space would list nothing at all
-            // (see the filter in `refresh`).
-            (None, _) => match self.profile {
-                Some(profile) => crate::ui::default_space_kind(profile),
-                // The directory the prompt *opened* on: the project it
-                // is standing in when there is one, and otherwise the
-                // one being listed. Deliberately not the row it has
-                // moved to since — that is what the profile answers,
-                // and reading `picked` here would read it mid-refresh,
-                // before this pass has resolved it.
-                None if holds_a_repository(self.marked.as_deref().unwrap_or(&self.origin)) => {
-                    SpaceKind::Worktree
-                }
-                None => SpaceKind::Workspace,
-            },
-        }
-    }
-
-    /// Whether the worktree kind is available for the landed root: unknown
-    /// until the profile answers, which the chips show as available.
-    pub(super) fn slots_available(&self) -> bool {
-        self.profile.is_none_or(|profile| profile.slots_possible)
-    }
-
-    /// Chooses a kind. Always answered: where it was refused, the control
-    /// was dead in exactly the place a person would use it, standing in a
-    /// directory that is no repository and looking for one under it.
-    pub(super) fn choose_kind(&mut self, kind: SpaceKind) {
-        self.chosen = Some(kind);
-        self.refresh();
-    }
-
-    pub(super) fn toggle_kind(&mut self) {
-        self.choose_kind(match self.kind() {
-            SpaceKind::Worktree => SpaceKind::Workspace,
-            SpaceKind::Workspace => SpaceKind::Worktree,
-        });
-    }
-
-    /// The root a worker should profile: the one `chosen` would answer
-    /// with, when there is one.
-    pub(super) fn landed(&self) -> Option<PathBuf> {
-        self.landed.clone()
-    }
-
-    /// Takes a worker's answer about `root`, when it is still the root
-    /// landed on.
-    pub(super) fn absorb_profile(&mut self, root: PathBuf, profile: RootProfile) {
-        if self.landed.as_ref() != Some(&root) {
-            return;
-        }
-        self.profile = Some(profile);
-        // The first answer decides the kind, and from then on only the
-        // operator does: a kind that keeps re-deciding itself as the
-        // selection moves changes what `Enter` would create while nobody
-        // asked it to.
-        if self.chosen.is_none() {
-            self.chosen = Some(crate::ui::default_space_kind(profile));
-            self.refresh();
-        }
     }
 
     pub(super) fn input(&self) -> &str {
@@ -330,29 +242,11 @@ impl RootPicker {
     /// asked with the mouse, and answering it differently is what put a
     /// `.worktrees/<id>` space in the sidebar beside the space whose agent
     /// was working in it.
-    pub(super) fn chosen(&self) -> Option<(PathBuf, SpaceKind)> {
-        let kind = self.kind();
-        // A worktree space cuts its agents' checkouts from a repository, so
-        // a directory inside one is that repository. A workspace space runs
-        // its agents where it stands, and there the directory chosen is the
-        // answer — mapping it up put the space somewhere nobody picked.
-        let root = match kind {
-            // Only a repository can have slots cut from it, so a worktree
-            // space over anything else is nothing to create yet: the prompt
-            // stays open on a listing of the repositories under it.
-            SpaceKind::Worktree => {
-                let landed = self.landed.clone()?;
-                if !self.slots_available() || !holds_a_repository(&landed) {
-                    return None;
-                }
-                landed
-            }
-            // An agent's own checkout is still the repository it was cut
-            // from — a space there is a space in the project, not in one
-            // agent's working directory (see `uze_application::slot_key`).
-            SpaceKind::Workspace => uze_application::slot_key(self.picked.as_deref()?),
-        };
-        Some((root, kind))
+    pub(super) fn chosen(&self) -> Option<PathBuf> {
+        // An agent's own checkout is still the repository it was cut
+        // from — a space there is a space in the project, not in one
+        // agent's working directory (see `uze_application::slot_key`).
+        Some(uze_application::slot_key(self.picked.as_deref()?))
     }
 
     fn resolve_picked(&self) -> Option<PathBuf> {
@@ -377,28 +271,17 @@ impl RootPicker {
         Some(landed)
     }
 
-    /// Re-resolves the landed root after the selection moved; a different
-    /// root forgets the previous one's profile.
+    /// Re-resolves what the prompt is on after the selection moved.
     fn reland(&mut self) {
         let picked = self.resolve_picked();
-        let landed = picked.as_deref().map(uze_application::space_root);
+        self.landed = picked.as_deref().map(uze_application::space_root);
         self.picked = picked;
-        if landed != self.landed {
-            self.profile = None;
-            self.landed = landed;
-        }
     }
 
     /// Reads the directory the line names and matches the segment inside
-    /// it. Every directory is offered, whichever kind is being created:
-    /// the worktree kind used to keep only the rows that were
-    /// repositories, which made every repository that is not a direct
-    /// child of the directory being listed unreachable — `~/projects`
-    /// holds nothing but repositories and showed as empty, because
-    /// `projects` is not one itself. A directory is the way to what is
-    /// under it whether or not it is the thing being looked for, and
-    /// what a worktree space may be created on is decided by
-    /// [`Self::chosen`], which is where it was always decided.
+    /// it. Every directory is offered: a space is a directory somebody
+    /// opened, and any directory can be one — whether an agent in it can
+    /// be isolated is the agent's question, asked where isolation is.
     fn refresh(&mut self) {
         let (base, segment) = self.split_input();
         let needle = segment.to_lowercase();
@@ -406,7 +289,6 @@ impl RootPicker {
         if self.base != self.listed {
             self.listing = read_directories(&self.base);
             self.listed = self.base.clone();
-            self.reaches.clear();
         }
         let mut leading = Vec::new();
         let mut inner = Vec::new();
@@ -424,22 +306,6 @@ impl RootPicker {
             }
         }
         leading.append(&mut inner);
-        // A worktree space is cut from a repository, so a row that is
-        // neither one nor the way to one is not an answer to what is
-        // being looked for. Applied to the row *itself* this hid the way:
-        // a `projects` folder holding nothing but repositories drew as
-        // empty, because `projects` is not one. So the question is asked
-        // of the rows below it too, as far as `REPOSITORY_REACH`.
-        if self.kind() == SpaceKind::Worktree {
-            let mut reaches = std::mem::take(&mut self.reaches);
-            leading.retain(|index| match self.listing.get(*index) {
-                Some(candidate) => *reaches
-                    .entry(candidate.path.clone())
-                    .or_insert_with(|| reaches_a_repository(&candidate.path, REPOSITORY_REACH)),
-                None => false,
-            });
-            self.reaches = reaches;
-        }
         self.matched = leading;
         self.selected = 0;
         // Typing is choosing: the best match leads the list, and it is the
@@ -447,10 +313,8 @@ impl RootPicker {
         // segment, so it has chosen nothing inside what it names.
         self.touched = !needle.is_empty();
         // Nothing typed, so the prompt is back on the project the
-        // operator is standing in. The listing is re-read whenever the
-        // kind changes — including when the profile lands and decides it
-        // — and a re-read that moved them off it would change what
-        // `Enter` creates while nobody asked.
+        // operator is standing in: a re-read that moved them off it would
+        // change what `Enter` creates while nobody asked.
         if self.input.is_empty()
             && let Some(marked) = self.marked.clone()
             && let Some(index) = self
@@ -463,47 +327,6 @@ impl RootPicker {
         }
         self.reland();
     }
-}
-
-/// Whether `directory` is the root of a Git repository: a checkout carries
-/// `.git` as a directory, a worktree of one as a file pointing at it.
-fn holds_a_repository(directory: &Path) -> bool {
-    directory.join(".git").exists()
-}
-
-/// How far below a row a repository still counts as reachable from it.
-/// Two, because that is where they are: a folder of projects, and a
-/// folder of folders of projects for anyone who groups them by client or
-/// by org. Deeper is a search, and this is a listing.
-const REPOSITORY_REACH: usize = 2;
-
-/// How many entries of one directory are looked at while answering. The
-/// walk is bounded on every axis on purpose — a `node_modules` on the way
-/// must cost a handful of `stat`s, not a traversal.
-const ENTRIES_SCANNED: usize = 64;
-
-/// Whether a worktree space could be created at `directory` or anywhere
-/// `depth` levels below it.
-fn reaches_a_repository(directory: &Path, depth: usize) -> bool {
-    if holds_a_repository(directory) {
-        return true;
-    }
-    if depth == 0 {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return false;
-    };
-    entries
-        .flatten()
-        .take(ENTRIES_SCANNED)
-        // A hidden directory is not offered as a row, so it is not a way
-        // to one either — and skipping it keeps the walk out of the
-        // caches and histories every home is full of.
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .any(|path| reaches_a_repository(&path, depth - 1))
 }
 
 fn read_directories(directory: &Path) -> Vec<Candidate> {
