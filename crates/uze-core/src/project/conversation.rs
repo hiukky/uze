@@ -253,6 +253,7 @@ impl uze_document::Shaped for ConversationRecord {
 
 /// Replaces the document atomically.
 pub fn save(home: &UzeHome, project_root: &Path, record: &ConversationRecord) -> Result<()> {
+    crate::record::ensure(home, project_root)?;
     let payload =
         serde_json::to_vec_pretty(record).expect("conversation record serialization is infallible");
     write_atomic(&store_path(home, project_root, &record.agent), &payload)

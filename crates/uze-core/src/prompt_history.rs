@@ -182,6 +182,7 @@ pub fn record(
     let Some(entry) = PromptEntry::new(origin, raw_prompt) else {
         return Ok(());
     };
+    crate::record::ensure(home, workspace_root)?;
     let file = path(home, workspace_root);
     let mut line = serde_json::to_vec(&entry).expect("prompt entry serialization is infallible");
     line.push(b'\n');

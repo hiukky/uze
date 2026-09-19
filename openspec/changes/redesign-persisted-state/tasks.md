@@ -83,14 +83,14 @@
 
 ## 6. A project is one directory
 
-- [ ] 6.1 Add `state/projects/<id>/project.json` naming the canonical root,
+- [x] 6.1 Add `state/projects/<id>/project.json` naming the canonical root,
       and make it the one thing a sweep reads to resolve a project.
-- [ ] 6.2 Move the task store to `agents.json`, conversations to
+- [x] 6.2 Move the task store to `agents.json`, conversations to
       `conversations/<agent>.json`, prompt history to
       `prompt-history.jsonl`, each under that directory — each move a
       ladder step, so nothing is lost by moving.
-- [ ] 6.3 Make forgetting a project the removal of that one directory.
-- [ ] 6.4 Test that a project whose recorded root no longer exists is still
+- [x] 6.3 Make forgetting a project the removal of that one directory.
+- [x] 6.4 Test that a project whose recorded root no longer exists is still
       readable and still names that root.
 
 ## 7. The receipt ledger

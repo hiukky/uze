@@ -534,6 +534,11 @@ fn set_aside(path: &Path, reason: &uze_document::DocumentError) -> Result<Recove
 /// Replaces the document atomically: readers see the previous version or
 /// this one, never a truncated file.
 pub fn save(home: &UzeHome, project_root: &Path, store: &TaskStore) -> Result<()> {
+    // Marked before it is written, so a project that has records always
+    // has the marker that says which repository they are about. A sweep
+    // meeting one without the other could enumerate agents it could not
+    // locate, which is the state this replaced.
+    crate::record::ensure(home, project_root)?;
     let payload = serde_json::to_vec_pretty(store).expect("task store serialization is infallible");
     write_atomic(&store_path(home, project_root), &payload)
 }

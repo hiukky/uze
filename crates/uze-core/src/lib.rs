@@ -75,7 +75,7 @@ pub use machine::{
 pub use package::{acquisition, naming, store, trust};
 pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
-    project_root, task, text_region, workspace, worktree,
+    project_root, record, task, text_region, workspace, worktree,
 };
 /// How a record written by another build is read by this one. A leaf crate
 /// rather than a module here, because the terminal runtime holds the

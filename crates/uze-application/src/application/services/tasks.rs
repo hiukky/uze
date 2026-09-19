@@ -3372,10 +3372,13 @@ mod task_service_tests {
         let repository = repository("svc-recovered-launch");
         let root = repository.root().to_path_buf();
         let app = application("svc-recovered-launch-home");
-        // Schema 1's shape: what every UZE before this one wrote.
-        std::fs::create_dir_all(app.home.state_dir().join("tasks")).unwrap();
+        // Shape 1: what every UZE before this one wrote, and a shape the
+        // ladder has no rung for — so it reaches the floor rather than
+        // being carried across, which is the case being proven.
+        let canonical = root.canonicalize().unwrap();
+        uze_core::record::ensure(&app.home, &canonical).unwrap();
         std::fs::write(
-            task::store_path(&app.home, &root.canonicalize().unwrap()),
+            task::store_path(&app.home, &canonical),
             br#"{"schema_version": 1, "tasks": []}"#,
         )
         .unwrap();

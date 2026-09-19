@@ -58,22 +58,55 @@ impl UzeHome {
         self.state_dir().join("packages.json")
     }
 
-    /// A project's task graph — every agent launch UZE has made in it, keyed
-    /// on the project id so removing a checkout can never remove history.
-    pub fn tasks_path(&self, project_id: &str) -> PathBuf {
-        self.state_dir()
-            .join("tasks")
-            .join(format!("{project_id}.json"))
+    /// Everything UZE records about one project, in one directory.
+    ///
+    /// It used to be four: `state/tasks/<id>.json`,
+    /// `state/conversations/<id>/`, `state/prompt-history/<id>.json` and
+    /// `runtime/projects/<id>/`, each keyed by the same
+    /// `harness_runtime::project_id_for` — a one-way hash — and only the
+    /// last of them recording what the hash *meant*. So the records could
+    /// be enumerated and none of them resolved: a sweep of the machine
+    /// could see every project's agents and locate not one checkout.
+    ///
+    /// One directory answers that by holding
+    /// [`Self::project_marker_path`], and it pays twice more: forgetting a
+    /// project becomes a single removal, and this mirrors
+    /// [`Self::runtime_project_dir`] under the same id, so which of the two
+    /// is safe to delete is legible from the layout alone.
+    pub fn project_dir(&self, project_id: &str) -> PathBuf {
+        self.state_dir().join("projects").join(project_id)
     }
 
-    /// One task's recorded conversations, beside the task store and keyed
-    /// the same way. A directory per project rather than a flat
-    /// `<project>-<task>.json`, so forgetting a project is one removal and
-    /// a task's own document is one write.
+    /// The canonical root a project's records were written for — what
+    /// makes the id reversible, and the whole input to a sweep of every
+    /// project UZE knows.
+    ///
+    /// The same answer `harness_runtime::PROJECTION_MARKER` already gives
+    /// the generated tree: name the root, so a sweep is a `readdir` rather
+    /// than an exercise in inverting a hash.
+    pub fn project_marker_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("project.json")
+    }
+
+    /// Every project UZE has recorded an agent for, one directory each —
+    /// the whole input to a machine-wide sweep.
+    pub fn projects_dir(&self) -> PathBuf {
+        self.state_dir().join("projects")
+    }
+
+    /// A project's agents — every launch UZE has made in it, isolated or
+    /// not — keyed on the project id so removing a checkout can never
+    /// remove history.
+    pub fn tasks_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("agents.json")
+    }
+
+    /// One agent's recorded conversations, beside the agents that name it.
+    /// A file per agent rather than one document for the project, so a
+    /// launch is one write and forgetting a project is still one removal.
     pub fn conversation_path(&self, project_id: &str, task_id: &str) -> PathBuf {
-        self.state_dir()
+        self.project_dir(project_id)
             .join("conversations")
-            .join(project_id)
             .join(format!("{task_id}.json"))
     }
 
@@ -197,12 +230,9 @@ impl UzeHome {
         self.state_dir().join("superseded")
     }
 
-    /// One workspace root's prompt history, keyed the way every project
-    /// record is.
+    /// One project's prompt history, beside its other records.
     pub fn prompt_history_path(&self, project_id: &str) -> PathBuf {
-        self.state_dir()
-            .join("prompt-history")
-            .join(format!("{project_id}.json"))
+        self.project_dir(project_id).join("prompt-history.json")
     }
 
     /// Where UZE writes its own log when asked to. Disposable, which is
