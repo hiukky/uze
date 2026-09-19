@@ -124,6 +124,12 @@ impl Artifact {
         }
     }
 
+    /// Which level of its area's model this is, or zero where the area
+    /// is not a model of levels. See [`Kind::depth`].
+    pub fn level(&self) -> u8 {
+        self.depth
+    }
+
     /// The diagram without its front matter, which Mermaid reads as
     /// settings and this surface reads only for the name.
     pub fn diagram(&self) -> &str {

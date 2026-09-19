@@ -137,14 +137,36 @@ pub struct View {
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
     pub layout: Layout,
-    /// The way in: what was entered to reach what is on show, outermost
-    /// first and ending with it. Empty when nothing was entered — which
-    /// is most surfaces, and every surface until something is.
+    /// The descent the viewer is in, outermost first, with the step they
+    /// are standing on marked. Empty where what there is to see does not
+    /// descend — and that emptiness is the choice between the surface's
+    /// two ways of offering its items: a trail is walked, and no trail
+    /// means a list to pick from.
     ///
     /// A path rather than a position, which is why it is not the list's
-    /// job: the list says what there is, this says how the viewer got
-    /// here, and only the second can be walked back.
-    pub trail: Vec<String>,
+    /// job: the list says what there is, this says where in a descent the
+    /// viewer is — and a descent can be walked, in both directions. Steps
+    /// after the current one are levels not yet reached but reachable,
+    /// which is how a fixed ladder (a model's own levels) differs from a
+    /// way in that was made by entering (a directory drilled into).
+    pub trail: Vec<TrailStep>,
+}
+
+/// One step of a [`View::trail`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrailStep {
+    pub name: String,
+    /// The one the viewer is standing on. Exactly one step is.
+    pub current: bool,
+}
+
+impl TrailStep {
+    pub fn new(name: impl Into<String>, current: bool) -> Self {
+        Self {
+            name: name.into(),
+            current,
+        }
+    }
 }
 
 /// How a view's list and its content share the frame.
@@ -412,7 +434,9 @@ pub enum ViewHit {
     /// The same, for the selector that offers the items of the group on
     /// show.
     ChooseItem,
-    /// A step of the [`View::trail`], by its index: go back to there.
+    /// A step of the [`View::trail`], by its index: go there. Back, for
+    /// a step already walked; on, for one the descent reaches but the
+    /// viewer has not.
     SelectTrail(usize),
     /// A click inside [`Content::Lines`], as far as the host can resolve
     /// it: which line, and how many display cells into that line's text

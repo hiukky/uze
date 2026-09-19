@@ -21,7 +21,7 @@ use ratatui::{
 use uze_extensions::view::{
     Caret, Choosing, Command, Content, ContentLine, Layout as ViewLayout, LineTone, Mode,
     Navigator, NavigatorRow, PanDirection, Role, RowIcon, RowMark, ScrollTarget, Section, Size,
-    Span, View, ViewHit,
+    Span, TrailStep, View, ViewHit,
 };
 
 use crate::ui::scrollbar::Scrollbar;
@@ -444,7 +444,7 @@ fn render_menu(
     area: Rect,
     board: Rect,
     navigator: &Navigator,
-    trail: &[String],
+    trail: &[TrailStep],
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
     let groups = groups_of(navigator);
@@ -459,13 +459,23 @@ fn render_menu(
         .or(items.first())
         .map_or("", |item| item.name);
 
+    // A selector opens only where there is something to choose. With one
+    // group, or one item in it, the list would offer what is already on
+    // show — so the mark that says it opens is left off and the press
+    // that would open it is never offered.
+    let opens_groups = groups.len() > 1;
     let group_selector = render_selector(
         frame,
         Rect::new(area.x, area.y, area.width, 1),
         active.name,
-        Some(active.items),
+        // How many the area holds, unless the trail beside it is already
+        // showing them one by one.
+        Some(active.items).filter(|&items| items > 1 && trail.is_empty()),
+        opens_groups,
     );
-    hits.push((group_selector, ViewHit::ChooseGroup));
+    if opens_groups {
+        hits.push((group_selector, ViewHit::ChooseGroup));
+    }
 
     let divider = "  /  ";
     let mut x = group_selector.right();
@@ -477,11 +487,17 @@ fn render_menu(
         x += divider.len() as u16;
     }
     let rest = Rect::new(x, area.y, area.right().saturating_sub(x), 1);
-    let item_selector = match trail.len() {
-        0 | 1 => render_selector(frame, rest, on_show, None),
-        _ => render_trail(frame, rest, trail, hits),
+    // Which of the two the second half is, is the view's answer: a
+    // descent is walked, and where there is none there is a list to pick
+    // from. One control, never both — an area is one thing or the other.
+    let opens_items = trail.is_empty() && items.len() > 1;
+    let item_selector = match trail.is_empty() {
+        true => render_selector(frame, rest, on_show, None, opens_items),
+        false => render_trail(frame, rest, trail, hits),
     };
-    hits.push((item_selector, ViewHit::ChooseItem));
+    if opens_items {
+        hits.push((item_selector, ViewHit::ChooseItem));
+    }
 
     match navigator.choosing {
         Some(Choosing::Group(highlighted)) => {
@@ -527,12 +543,15 @@ fn render_menu(
 }
 
 /// One selector: what is chosen, how many there are to choose from when
-/// that is worth a number, and the mark that says it opens.
+/// that is worth a number, and — when it opens onto anything other than
+/// itself — the mark that says so. Without that mark it is not a control
+/// but a label: where the viewer is.
 fn render_selector(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     name: &str,
     count: Option<usize>,
+    opens: bool,
 ) -> Rect {
     let raised = theme::color(Token::SurfaceRaised);
     let mut spans = vec![TextSpan::styled(
@@ -545,10 +564,12 @@ fn render_selector(
             theme::fg(Token::TextDim).bg(raised),
         ));
     }
-    spans.push(TextSpan::styled(
-        format!("{} ", theme::glyph(Symbol::ChevronExpanded)),
-        theme::fg(Token::TextMuted).bg(raised),
-    ));
+    if opens {
+        spans.push(TextSpan::styled(
+            format!("{} ", theme::glyph(Symbol::ChevronExpanded)),
+            theme::fg(Token::TextMuted).bg(raised),
+        ));
+    }
     let rect = Rect::new(area.x, area.y, spans_width(&spans).min(area.width), 1);
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     rect
@@ -625,40 +646,59 @@ fn active_group(navigator: &Navigator) -> Option<usize> {
     })
 }
 
-/// The way in, outermost first: every step but the last is somewhere to
-/// go back to, and the last is where the viewer is — drawn as the
-/// selector it stands in for, and answered as one. Cut from the far end
-/// when it does not fit, because the near end is the one that is true
-/// right now. Answers where that last step was drawn.
+/// A descent, drawn as the row it is walked on: a step per level, the
+/// one being looked at drawn as the chip the item selector would be, and
+/// every other step a place to go — back, for the ones already walked,
+/// and on, for the ones this descent reaches but nobody has entered.
+///
+/// Cut around the current step rather than from one end, because that is
+/// the one step that must never be the one cut off, and it need not be
+/// the last: a model's levels are all there from the start, and the
+/// viewer may be standing in the middle of them. Answers where the
+/// current step was drawn.
 fn render_trail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    trail: &[String],
+    trail: &[TrailStep],
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> Rect {
     let chevron = format!(" {} ", theme::glyph(Symbol::ChevronRight));
     let chevron_width = TextSpan::raw(chevron.as_str()).width() as u16;
-    let width_of = |name: &str| TextSpan::raw(name).width() as u16 + 2;
     let more = theme::glyph(Symbol::Ellipsis);
-    let more_width = TextSpan::raw(more.as_str()).width() as u16;
-    let (here, earlier) = trail.split_last().expect("a trail has steps");
-    let selector_width = width_of(here) + 2;
+    let more_width = TextSpan::raw(more.as_str()).width() as u16 + chevron_width;
+    let width_of = |step: &TrailStep| TextSpan::raw(step.name.as_str()).width() as u16 + 2;
+    let Some(current) = trail.iter().position(|step| step.current) else {
+        return Rect::new(area.x, area.y, 0, 1);
+    };
 
-    let mut first = 0;
-    while first < earlier.len() {
-        let needed: u16 = earlier[first..]
-            .iter()
-            .map(|name| width_of(name) + chevron_width)
-            .sum();
-        let lead = if first > 0 {
-            more_width + chevron_width
-        } else {
-            0
+    // Outward from the current step, taking what fits — the way back
+    // first, because a step already walked is the one more likely wanted.
+    let (mut first, mut last) = (current, current);
+    let mut used = width_of(&trail[current]) + 2;
+    loop {
+        let room = |used: u16, edge: bool| {
+            area.width
+                .saturating_sub(used + if edge { more_width } else { 0 })
         };
-        if needed + lead + selector_width <= area.width {
+        let back = first
+            .checked_sub(1)
+            .filter(|&step| width_of(&trail[step]) + chevron_width <= room(used, step > 0));
+        if let Some(step) = back {
+            used += width_of(&trail[step]) + chevron_width;
+            first = step;
+        }
+        let on = Some(last + 1)
+            .filter(|&step| step < trail.len())
+            .filter(|&step| {
+                width_of(&trail[step]) + chevron_width <= room(used, step + 1 < trail.len())
+            });
+        if let Some(step) = on {
+            used += width_of(&trail[step]) + chevron_width;
+            last = step;
+        }
+        if back.is_none() && on.is_none() {
             break;
         }
-        first += 1;
     }
 
     let quiet = theme::fg(Token::TextDim);
@@ -672,25 +712,40 @@ fn render_trail(
         rect
     };
     if first > 0 {
+        draw(frame, more.clone(), quiet, &mut x);
+        draw(frame, chevron.clone(), quiet, &mut x);
+    }
+    let mut here = Rect::new(x, area.y, 0, 1);
+    for (step, name) in trail.iter().enumerate().take(last + 1).skip(first) {
+        if step == current {
+            here = render_selector(
+                frame,
+                Rect::new(x, area.y, area.right().saturating_sub(x), 1),
+                &name.name,
+                None,
+                false,
+            );
+            x = here.right();
+        } else {
+            // A step behind is the way back and a step ahead is a level
+            // not yet reached: told apart by weight, since both are
+            // pressed the same way.
+            let ink = match step < current {
+                true => theme::fg(Token::TextSecondary),
+                false => quiet,
+            };
+            let rect = draw(frame, format!(" {} ", name.name), ink, &mut x);
+            hits.push((rect, ViewHit::SelectTrail(step)));
+        }
+        if step < last {
+            draw(frame, chevron.clone(), quiet, &mut x);
+        }
+    }
+    if last + 1 < trail.len() {
+        draw(frame, chevron, quiet, &mut x);
         draw(frame, more, quiet, &mut x);
-        draw(frame, chevron.clone(), quiet, &mut x);
     }
-    for (index, name) in earlier.iter().enumerate().skip(first) {
-        let rect = draw(
-            frame,
-            format!(" {name} "),
-            theme::fg(Token::TextSecondary),
-            &mut x,
-        );
-        hits.push((rect, ViewHit::SelectTrail(index)));
-        draw(frame, chevron.clone(), quiet, &mut x);
-    }
-    render_selector(
-        frame,
-        Rect::new(x, area.y, area.right().saturating_sub(x), 1),
-        here,
-        None,
-    )
+    here
 }
 
 struct ChoiceRow<'a> {
@@ -704,6 +759,12 @@ struct ChoiceRow<'a> {
 /// board: a row for each choice, the highlighted one filled. A list
 /// longer than the board is tall shows the rows around the highlighted
 /// one, which is the one row that must never be the one cut off.
+///
+/// Dressed as the workspace's other dropdowns are — the surface it sits
+/// on rather than one raised above it, a fill on the highlighted row and
+/// nothing on the rest. The highlight follows the pointer, so hovering a
+/// row *is* highlighting it and there is no second, quieter state to
+/// draw.
 fn render_choice_list(
     frame: &mut ratatui::Frame<'_>,
     selector: Rect,
@@ -717,7 +778,7 @@ fn render_choice_list(
         .map(|row| TextSpan::raw(row.name).width() + row.trailing.len())
         .max()
         .unwrap_or(0) as u16;
-    let width = (widest + 8).max(selector.width).min(board.width);
+    let width = (widest + 6).max(selector.width).min(board.width);
     let visible = (rows.len() as u16)
         .min(board.height.saturating_sub(2))
         .max(1);
@@ -732,12 +793,12 @@ fn render_choice_list(
         .saturating_sub(usize::from(visible) / 2)
         .min(rows.len().saturating_sub(usize::from(visible)));
 
-    let raised = theme::color(Token::SurfaceRaised);
+    let surface = theme::color(Token::SurfaceBackground);
     frame.render_widget(Clear, area);
     let mut frame_block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme::fg(Token::BorderDefault))
-        .style(Style::default().bg(raised));
+        .style(Style::default().bg(surface));
     // A list that was cut says so, and where in it the highlight is —
     // otherwise its last row reads as the last there is.
     if rows.len() > usize::from(visible) {
@@ -752,13 +813,17 @@ fn render_choice_list(
     frame.render_widget(frame_block, area);
     for (line, row) in rows.iter().skip(first).take(visible.into()).enumerate() {
         let rect = Rect::new(area.x + 1, area.y + 1 + line as u16, area.width - 2, 1);
+        // A filled bar for the highlighted row, not just bold text: the
+        // same narrowly-scoped exception the agent picker makes, for the
+        // same reason — a menu the pointer and the arrows share needs the
+        // affordance.
         let fill = match row.highlighted {
-            true => theme::color(Token::SurfaceSelected),
-            false => raised,
+            true => theme::color(Token::Accent),
+            false => surface,
         };
         let ink = match row.highlighted {
-            true => theme::fg_bold(Token::TextBright),
-            false => theme::fg(Token::TextSecondary),
+            true => theme::fg_bold(Token::SurfaceBackground),
+            false => theme::fg(Token::TextInactive),
         };
         let gap = usize::from(rect.width)
             .saturating_sub(TextSpan::raw(row.name).width() + row.trailing.len() + 2);
@@ -1708,6 +1773,156 @@ mod tests {
         (rows, hits)
     }
 
+    /// A board menu of `groups` areas, each holding `items` artifacts,
+    /// offered as `trail` — empty for a list to pick from, or a step per
+    /// level with the one being looked at marked.
+    fn board(groups: usize, items: usize, trail: &[(&str, bool)]) -> View {
+        let mut rows = Vec::new();
+        for group in 0..groups {
+            rows.push(NavigatorRow::Group {
+                id: group * items,
+                name: format!("Area {group}"),
+                depth: 0,
+                collapsed: false,
+                icon: RowIcon::None,
+            });
+            rows.extend((0..items).map(|item| NavigatorRow::Item {
+                id: group * items + item,
+                name: format!("Artifact {group}{item}"),
+                depth: 1,
+                marker: Span::default(),
+                selected: group == 0 && item == 0,
+                icon: RowIcon::None,
+            }));
+        }
+        View {
+            title: vec![Span::new("Board", Role::Bright)],
+            navigator: Some(Navigator {
+                heading: String::new(),
+                badge: String::new(),
+                focused: false,
+                anchor: None,
+                choosing: None,
+                rows,
+            }),
+            content: Content::Lines {
+                heading: String::new(),
+                scroll: 0,
+                lines: Vec::new(),
+                total: 0,
+                caret: None,
+            },
+            footer: vec![Command::Close],
+            modes: Vec::new(),
+            layout: ViewLayout::Board,
+            trail: trail
+                .iter()
+                .map(|&(name, current)| TrailStep::new(name, current))
+                .collect(),
+        }
+    }
+
+    /// A selector that opens onto nothing but what is already on show is
+    /// not a control: no mark that says it opens, and no press that does.
+    #[test]
+    fn a_selector_with_one_choice_neither_opens_nor_says_it_does() {
+        let chevron = theme::glyph(Symbol::ChevronExpanded);
+        let (drawn, hits) = draw_sized(&board(1, 1, &[]), 80, 20);
+        let menu = drawn[1].clone();
+        assert!(!menu.contains(&chevron), "no mark on either: {menu}");
+        assert!(!menu.contains(" 1 "), "nor a count of one: {menu}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, ViewHit::ChooseGroup | ViewHit::ChooseItem)),
+            "and neither can be pressed"
+        );
+
+        let (drawn, hits) = draw_sized(&board(2, 3, &[]), 80, 20);
+        assert_eq!(
+            drawn[1].matches(chevron.as_str()).count(),
+            2,
+            "both open where there is a choice: {}",
+            drawn[1]
+        );
+        assert!(
+            hits.iter().any(|(_, h)| *h == ViewHit::ChooseGroup)
+                && hits.iter().any(|(_, h)| *h == ViewHit::ChooseItem)
+        );
+    }
+
+    /// The second half of the menu is one control or the other, never
+    /// both: an area that descends is walked, and one that does not is
+    /// picked from. Which it is, is the view's answer, not the host's.
+    #[test]
+    fn an_area_that_descends_is_walked_and_one_that_does_not_is_picked_from() {
+        let chevron = theme::glyph(Symbol::ChevronExpanded);
+        let (drawn, hits) = draw_sized(&board(2, 3, &[]), 100, 20);
+        assert_eq!(
+            drawn[1].matches(chevron.as_str()).count(),
+            2,
+            "a set is two lists: {}",
+            drawn[1]
+        );
+        assert!(hits.iter().any(|(_, h)| *h == ViewHit::ChooseItem));
+
+        // Standing on the middle level of three: the one behind is the
+        // way back, the one ahead is a level this descent reaches.
+        let ladder = board(
+            2,
+            3,
+            &[
+                ("Context", false),
+                ("Containers", true),
+                ("Components", false),
+            ],
+        );
+        let (drawn, hits) = draw_sized(&ladder, 100, 20);
+        let menu = drawn[1].clone();
+        assert!(
+            menu.contains("Context") && menu.contains("Containers") && menu.contains("Components"),
+            "every level is on show at once: {menu}"
+        );
+        assert_eq!(
+            menu.matches(chevron.as_str()).count(),
+            1,
+            "and only the area is still a list: {menu}"
+        );
+        assert!(
+            !hits.iter().any(|(_, h)| *h == ViewHit::ChooseItem),
+            "a descent is walked, not opened"
+        );
+        assert!(
+            hits.iter().any(|(_, h)| *h == ViewHit::SelectTrail(0))
+                && hits.iter().any(|(_, h)| *h == ViewHit::SelectTrail(2)),
+            "both directions are a place to go: {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|(_, h)| *h == ViewHit::SelectTrail(1)),
+            "except where the viewer already is"
+        );
+    }
+
+    /// A descent too long for the row is cut around the step the viewer
+    /// is on — the one step that must never be the one cut off.
+    #[test]
+    fn a_descent_wider_than_the_row_keeps_the_step_it_is_standing_on() {
+        let steps: Vec<(String, bool)> = (0..12)
+            .map(|level| (format!("Level number {level}"), level == 7))
+            .collect();
+        let borrowed: Vec<(&str, bool)> = steps
+            .iter()
+            .map(|(name, current)| (name.as_str(), *current))
+            .collect();
+        let (drawn, _) = draw_sized(&board(2, 3, &borrowed), 70, 20);
+        let menu = drawn[1].clone();
+        assert!(menu.contains("Level number 7"), "{menu}");
+        assert!(
+            menu.contains(&theme::glyph(Symbol::Ellipsis)),
+            "cut: {menu}"
+        );
+    }
+
     /// A group with more items than the board has rows: the list shows the
     /// rows around the highlighted one and says where in the list that is,
     /// so its last row is not mistaken for the last there is.
@@ -1815,13 +2030,16 @@ mod tests {
             println!("{}", rows.join("\n"));
         }
         assert!(
-            rows[1].contains("C4 2") && rows[1].contains("Containers"),
-            "one row: the area on show, then the artifact on show in it: {}",
+            rows[1].contains("C4")
+                && !rows[1].contains("C4 2")
+                && rows[1].contains("System context")
+                && rows[1].contains("Containers"),
+            "one row: the area on show, then its levels, the one on show among them: {}",
             rows[1]
         );
         assert!(
-            !rows[1].contains("Sequence") && !rows[1].contains("System context"),
-            "and nothing that is not on show, of either level: {}",
+            !rows[1].contains("Sequence") && !rows[1].contains("Install"),
+            "and nothing of any other area: {}",
             rows[1]
         );
         let footer = rows[usize::from(height) - 3].as_str();

@@ -317,28 +317,44 @@ fn pick(state: &mut ArchitectView, alias: &str) {
     assert!(state.picked.is_some(), "`{alias}` is drawn here");
 }
 
+/// The descent the menu offers, as names.
 fn trail(state: &ArchitectView) -> Vec<String> {
-    view(state, SPACE).trail
+    view(state, SPACE)
+        .trail
+        .into_iter()
+        .map(|step| step.name)
+        .collect()
 }
+
+/// The step of it the viewer is standing on.
+fn here(state: &ArchitectView) -> String {
+    view(state, SPACE)
+        .trail
+        .into_iter()
+        .find(|step| step.current)
+        .map(|step| step.name)
+        .unwrap_or_default()
+}
+
+const LEVELS: [&str; 3] = ["System context", "Containers", "Core components"];
 
 #[test]
 fn the_levels_are_joined_by_alias_from_the_context_down_to_the_code() {
     let mut state = showing("System context");
-    assert!(trail(&state).is_empty(), "nothing has been entered yet");
+    assert_eq!(trail(&state), LEVELS, "a model's levels are all on show");
+    assert_eq!(here(&state), "System context", "at the outermost of them");
 
     pick(&mut state, "uze");
     assert_eq!(
         handle_command(&mut state, Command::Activate, SPACE),
         ArchitectOutcome::Stay
     );
-    assert_eq!(trail(&state), ["System context", "Containers"]);
+    assert_eq!(trail(&state), LEVELS, "the levels do not change");
+    assert_eq!(here(&state), "Containers", "only where the viewer stands");
 
     pick(&mut state, "core");
     handle_command(&mut state, Command::Activate, SPACE);
-    assert_eq!(
-        trail(&state),
-        ["System context", "Containers", "Core components"]
-    );
+    assert_eq!(here(&state), "Core components");
 
     pick(&mut state, "package");
     assert_eq!(
@@ -360,7 +376,7 @@ fn coming_back_puts_the_viewer_where_they_were_standing() {
     handle_command(&mut state, Command::Activate, SPACE);
 
     handle_command(&mut state, Command::Back, SPACE);
-    assert_eq!(trail(&state), ["System context", "Containers"]);
+    assert_eq!(here(&state), "Containers");
     let Drawing::Graph(scene) = &state.drawing else {
         panic!("containers is a graph");
     };
@@ -372,13 +388,16 @@ fn coming_back_puts_the_viewer_where_they_were_standing() {
 
     handle_mouse(&mut state, Some(ViewHit::SelectTrail(0)), SPACE);
     assert!(
-        trail(&state).is_empty(),
+        state.trail.is_empty(),
         "back at the top, nothing is entered"
     );
-    assert_eq!(
-        state.catalog.get(state.selected).unwrap().name,
-        "System context"
-    );
+    assert_eq!(here(&state), "System context");
+
+    // And the other way: a level this descent reaches that nobody
+    // entered is a step forward, not a step back.
+    handle_mouse(&mut state, Some(ViewHit::SelectTrail(2)), SPACE);
+    assert_eq!(here(&state), "Core components");
+    assert!(state.trail.is_empty(), "jumped to, not descended into");
 }
 
 #[test]
@@ -387,7 +406,7 @@ fn choosing_from_the_menu_forgets_the_way_in() {
     pick(&mut state, "uze");
     handle_command(&mut state, Command::Activate, SPACE);
     handle_command(&mut state, Command::NextView, SPACE);
-    assert!(trail(&state).is_empty());
+    assert!(state.trail.is_empty());
 }
 
 #[test]
@@ -410,9 +429,9 @@ fn a_second_click_on_a_box_that_leads_somewhere_follows_it() {
     };
     handle_mouse(&mut state, Some(hit), SPACE);
     assert_eq!(state.picked, Some(uze));
-    assert!(trail(&state).is_empty(), "one click only picks");
+    assert_eq!(here(&state), "System context", "one click only picks");
     handle_mouse(&mut state, Some(hit), SPACE);
-    assert_eq!(trail(&state), ["System context", "Containers"]);
+    assert_eq!(here(&state), "Containers", "the second goes inside");
 }
 
 #[test]
@@ -451,6 +470,21 @@ fn measured() -> CodeMeasure {
             file("docs/guide.md", 300, 1),
         ],
     }
+}
+
+/// Selects the tile of `path` the way a viewer does — a click on it —
+/// rather than by walking the arrows to wherever the layout put it.
+fn click_tile(state: &mut ArchitectView, path: &str, space: Size) {
+    let cells = (i32::from(space.width), i32::from(space.height));
+    let map = state.code.as_mut().expect("measured");
+    let frame = map
+        .tiles(cells)
+        .into_iter()
+        .find(|tile| tile.path == path)
+        .unwrap_or_else(|| panic!("no tile for {path}"))
+        .frame;
+    let (x, y) = frame.center();
+    map.click(x, y, cells);
 }
 
 fn areas_listed(state: &ArchitectView) -> Vec<String> {
@@ -526,14 +560,8 @@ fn the_map_is_entered_and_left_and_a_file_on_it_opens_the_code() {
         text: "declares nothing".to_owned(),
         hint: String::new(),
     });
-    let map = state.code.as_mut().expect("measured");
-    map.pick_toward(PanDirection::Right, (100, 30));
-    let mut safety = 0;
-    while !map.caption((100, 30)).starts_with("src/ ") {
-        map.pick_toward(PanDirection::Left, (100, 30));
-        safety += 1;
-        assert!(safety < 8, "src is somewhere to the left");
-    }
+    click_tile(&mut state, "src", SPACE);
+    assert!(state.caption(SPACE).starts_with("src/ "));
     assert_eq!(
         handle_command(&mut state, Command::Activate, SPACE),
         ArchitectOutcome::Stay
@@ -546,13 +574,8 @@ fn the_map_is_entered_and_left_and_a_file_on_it_opens_the_code() {
     );
     assert!(state.minimap(SPACE).is_none());
 
-    let map = state.code.as_mut().expect("measured");
-    map.pick_toward(PanDirection::Right, (100, 30));
-    while !map.caption((100, 30)).starts_with("src/main.rs ") {
-        map.pick_toward(PanDirection::Left, (100, 30));
-        safety += 1;
-        assert!(safety < 16, "main.rs is on the map of src");
-    }
+    click_tile(&mut state, "src/main.rs", SPACE);
+    assert!(state.caption(SPACE).starts_with("src/main.rs "));
     assert_eq!(
         handle_command(&mut state, Command::Activate, SPACE),
         ArchitectOutcome::OpenPath {
@@ -562,7 +585,7 @@ fn the_map_is_entered_and_left_and_a_file_on_it_opens_the_code() {
     );
 
     handle_command(&mut state, Command::Back, SPACE);
-    assert!(trail(&state).is_empty());
+    assert_eq!(trail(&state), ["Code map"]);
     assert!(
         state.caption(SPACE).starts_with("src/ "),
         "back with the directory that was entered selected: {}",
@@ -603,4 +626,117 @@ fn the_map_is_laid_out_again_for_a_narrower_space() {
             "filled edge to edge at {space:?}"
         );
     }
+}
+
+/// The key that closes peels one level at a time. Anything else makes a
+/// surface that can be entered but not looked around in: one press and
+/// the viewer is back where they started with three levels of work gone.
+#[test]
+fn the_key_that_closes_goes_up_a_level_until_there_is_none_left() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: "declares nothing".to_owned(),
+        hint: String::new(),
+    });
+
+    click_tile(&mut state, "src", SPACE);
+    assert_eq!(
+        handle_command(&mut state, Command::Close, SPACE),
+        ArchitectOutcome::Stay,
+        "the selection is let go of first"
+    );
+    assert!(
+        state.caption(SPACE).starts_with("4 files"),
+        "nothing picked"
+    );
+
+    click_tile(&mut state, "src", SPACE);
+    handle_command(&mut state, Command::Activate, SPACE);
+    click_tile(&mut state, "src/ui", SPACE);
+    handle_command(&mut state, Command::Activate, SPACE);
+    assert_eq!(trail(&state), ["Code map", "src", "ui"]);
+
+    for left in [["Code map", "src"].as_slice(), ["Code map"].as_slice()] {
+        assert_eq!(
+            handle_command(&mut state, Command::Close, SPACE),
+            ArchitectOutcome::Stay
+        );
+        // Coming back selects what was entered, which is a level of its
+        // own — the next press lets go of it, the one after goes up.
+        assert_eq!(
+            handle_command(&mut state, Command::Close, SPACE),
+            ArchitectOutcome::Stay
+        );
+        assert_eq!(trail(&state), left);
+    }
+    assert_eq!(trail(&state), ["Code map"], "back at the top");
+    assert_eq!(
+        handle_command(&mut state, Command::Close, SPACE),
+        ArchitectOutcome::Close,
+        "and only there does it close"
+    );
+}
+
+/// The way up is named in the footer only where there is one.
+#[test]
+fn the_footer_offers_the_way_up_only_once_something_has_been_entered() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    state.absorb(ArtifactsAnswer::Nothing {
+        text: String::new(),
+        hint: String::new(),
+    });
+    assert!(!view(&state, SPACE).footer.contains(&Command::Back));
+
+    click_tile(&mut state, "src", SPACE);
+    handle_command(&mut state, Command::Activate, SPACE);
+    assert!(view(&state, SPACE).footer.contains(&Command::Back));
+}
+
+/// A selector that offers only what is on show is not opened at all, by
+/// the pointer or by the key — the host draws it without the mark that
+/// says it opens, and there is nothing behind it to draw.
+#[test]
+fn a_selector_with_nothing_to_choose_stays_shut() {
+    let mut state = ArchitectView::opening();
+    state.absorb_code(measured());
+    handle_command(&mut state, Command::ChooseGroup, SPACE);
+    assert_eq!(state.choosing, None, "one area");
+    handle_command(&mut state, Command::ChooseItem, SPACE);
+    assert_eq!(state.choosing, None, "one artifact in it");
+
+    let mut state = opened();
+    handle_command(&mut state, Command::ChooseGroup, SPACE);
+    assert!(state.choosing.is_some(), "four areas is a choice");
+}
+
+/// While a list is open the highlight follows the pointer: hovering a
+/// row is highlighting it, which is what makes it read as a menu.
+#[test]
+fn hovering_a_row_of_an_open_list_highlights_it() {
+    let mut state = showing("Crate layering");
+    handle_command(&mut state, Command::ChooseItem, SPACE);
+    let Some(Choosing::Item(first)) = state.choosing else {
+        panic!("the artifacts of the area are offered");
+    };
+    let other = *state
+        .siblings()
+        .iter()
+        .find(|&&artifact| artifact != first)
+        .expect("the area holds two");
+
+    assert!(handle_hover(&mut state, Some(ViewHit::SelectItem(other))));
+    assert_eq!(state.choosing, Some(Choosing::Item(other)));
+    assert!(
+        !handle_hover(&mut state, Some(ViewHit::SelectItem(other))),
+        "standing still costs no frame"
+    );
+    assert_eq!(state.selected, first, "hovering chooses nothing");
+
+    state.choosing = None;
+    assert!(
+        !handle_hover(&mut state, Some(ViewHit::SelectItem(other))),
+        "and with no list open it is the board's pointer, not a menu's"
+    );
 }

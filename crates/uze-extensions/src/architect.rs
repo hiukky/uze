@@ -34,7 +34,7 @@ use crate::{
     registry::BuiltinExtension,
     view::{
         Choosing, Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow,
-        PanDirection, Role, RowIcon, ScrollDirection, Size, Span, View, ViewHit,
+        PanDirection, Role, RowIcon, ScrollDirection, Size, Span, TrailStep, View, ViewHit,
     },
 };
 
@@ -62,6 +62,22 @@ const PAN_ROWS: i32 = 3;
 /// through and regular enough that moving the board is visible even
 /// where there is nothing drawn.
 const GRID: (i32, i32) = (6, 3);
+
+/// How an area offers what is in it. Which of the two an area gets is
+/// read off the area itself rather than declared: some things are levels
+/// of one model and are *walked*, and some sit beside one another and are
+/// *picked from*. A ladder drawn as a list hides that there is a descent
+/// at all; a set drawn as a ladder invents an order nobody meant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Offering {
+    /// Levels of one descent, all of them shown at once with the one on
+    /// show marked — so the ones not yet reached are as visible as the
+    /// way back. The C4 views are the written kind; the code map's
+    /// directories are the measured kind, made a step at a time.
+    Ladder,
+    /// Artifacts that stand beside one another: a list to choose from.
+    Set,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Showing {
@@ -352,13 +368,150 @@ impl ArchitectView {
         });
     }
 
+    /// A selector with one entry is not a choice: it opens onto the
+    /// thing already on show, which is a list nobody can answer. The two
+    /// of them stay shut, and the host draws them without the mark that
+    /// says they open.
     fn choose_area(&mut self) {
-        self.choosing = self.area().map(Choosing::Group);
+        if self.areas().len() > 1 {
+            self.choosing = self.area().map(Choosing::Group);
+        }
     }
 
     fn choose_artifact(&mut self) {
-        self.choosing =
-            (!self.catalog.artifacts().is_empty()).then_some(Choosing::Item(self.selected));
+        if self.siblings().len() > 1 {
+            self.choosing = Some(Choosing::Item(self.selected));
+        }
+    }
+
+    /// One step out, and never more than one: what is selected is let go
+    /// of, then the level that was entered is left, and only with neither
+    /// of those left does the surface itself close. The list that may be
+    /// open is a step too — the first — but it takes every key while it
+    /// is, so it is left where that happens. A key that shuts everything
+    /// at once is a key nobody can use to look around with.
+    fn leave(&mut self, space: Size) -> ArchitectOutcome {
+        if self.let_go() {
+            return ArchitectOutcome::Stay;
+        }
+        match self.depth() {
+            0 => ArchitectOutcome::Close,
+            depth => {
+                self.back_to(depth - 1, space);
+                ArchitectOutcome::Stay
+            }
+        }
+    }
+
+    /// Whether something was selected, and now is not.
+    fn let_go(&mut self) -> bool {
+        if let (Drawing::Code, Some(map)) = (&self.drawing, self.code.as_mut()) {
+            return map.let_go();
+        }
+        if self.picked.take().is_some() {
+            self.repaint();
+            return true;
+        }
+        false
+    }
+
+    /// How many levels were entered to reach what is on show.
+    fn depth(&self) -> usize {
+        match (&self.drawing, &self.code) {
+            (Drawing::Code, Some(map)) => map.crumbs().len(),
+            _ => self.trail.len(),
+        }
+    }
+
+    /// Whether the area on show is a descent or a set.
+    ///
+    /// A descent is an area whose artifacts are each a level of one
+    /// model, no two on the same one — which is what C4's views are and
+    /// what nothing else declares. The code map is one by construction:
+    /// its levels are the directories, and they are made by entering.
+    fn offering(&self) -> Offering {
+        if matches!(self.drawing, Drawing::Code) {
+            return Offering::Ladder;
+        }
+        let artifacts = self.catalog.artifacts();
+        let mut levels: Vec<u8> = self
+            .siblings()
+            .iter()
+            .filter_map(|&artifact| artifacts.get(artifact))
+            .map(|artifact| artifact.level())
+            .collect();
+        let count = levels.len();
+        levels.sort_unstable();
+        levels.dedup();
+        match count > 1 && levels.len() == count && levels.first() != Some(&0) {
+            true => Offering::Ladder,
+            false => Offering::Set,
+        }
+    }
+
+    /// The descent the viewer is in, for the menu to draw.
+    fn steps(&self) -> Vec<TrailStep> {
+        if self.offering() == Offering::Set {
+            return Vec::new();
+        }
+        if let (Drawing::Code, Some(map)) = (&self.drawing, &self.code) {
+            let crumbs = map.crumbs();
+            let here = self
+                .catalog
+                .get(self.selected)
+                .map(|artifact| artifact.name.clone())
+                .unwrap_or_default();
+            let depth = crumbs.len();
+            return std::iter::once(here)
+                .chain(crumbs)
+                .enumerate()
+                .map(|(step, name)| TrailStep::new(name, step == depth))
+                .collect();
+        }
+        self.siblings()
+            .into_iter()
+            .filter_map(|artifact| Some((artifact, self.catalog.get(artifact)?)))
+            .map(|(artifact, at)| TrailStep::new(&at.name, artifact == self.selected))
+            .collect()
+    }
+
+    /// A step of the descent, pressed. A level already walked is gone
+    /// back to, standing where the viewer stood; one the descent reaches
+    /// but nobody entered is simply shown.
+    fn go_to(&mut self, step: usize, space: Size) {
+        if matches!(self.drawing, Drawing::Code) {
+            self.back_to(step, space);
+            return;
+        }
+        let Some(&target) = self.siblings().get(step) else {
+            return;
+        };
+        match self
+            .trail
+            .iter()
+            .position(|(artifact, _)| *artifact == target)
+        {
+            Some(depth) => self.back_to(depth, space),
+            None if target != self.selected => self.open(target),
+            None => {}
+        }
+    }
+
+    /// The pointer moved: while a list is open the highlight follows it,
+    /// which is what makes the list read as a menu rather than as a
+    /// keyboard-only one. Answers whether the highlight moved.
+    fn hover(&mut self, hit: Option<ViewHit>) -> bool {
+        let moved = match (hit, self.choosing) {
+            (Some(ViewHit::ToggleGroup(entry)), Some(Choosing::Group(at))) if entry != at => {
+                Choosing::Group(entry)
+            }
+            (Some(ViewHit::SelectItem(entry)), Some(Choosing::Item(at))) if entry != at => {
+                Choosing::Item(entry)
+            }
+            _ => return false,
+        };
+        self.choosing = Some(moved);
+        true
     }
 
     /// Shows an artifact chosen from the menu: a fresh start, so whatever
@@ -818,7 +971,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         });
     }
     View {
-        title: vec![Span::new("Architect", Role::Bright).bold()],
+        title: title(state),
         navigator: Some(Navigator {
             heading: "ARTIFACTS".to_owned(),
             badge: state.catalog.artifacts().len().to_string(),
@@ -828,12 +981,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             choosing: state.choosing,
         }),
         content: content(state, space),
-        footer: vec![
-            Command::Close,
-            Command::ChooseItem,
-            Command::NextView,
-            Command::NextMode,
-        ],
+        footer: footer(state),
         modes: MODES
             .iter()
             .map(|&(showing, label)| Mode {
@@ -842,27 +990,40 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             })
             .collect(),
         layout: Layout::Board,
-        trail: match state.trail.is_empty() {
-            true => match (&state.drawing, &state.code) {
-                (Drawing::Code, Some(map)) if map.is_zoomed() => state
-                    .catalog
-                    .get(state.selected)
-                    .map(|artifact| artifact.name.clone())
-                    .into_iter()
-                    .chain(map.crumbs())
-                    .collect(),
-                _ => Vec::new(),
-            },
-            false => state
-                .trail
-                .iter()
-                .map(|(artifact, _)| *artifact)
-                .chain(std::iter::once(state.selected))
-                .filter_map(|artifact| state.catalog.get(artifact))
-                .map(|artifact| artifact.name.clone())
-                .collect(),
-        },
+        trail: state.steps(),
     }
+}
+
+/// What the surface can be asked right now. The way up is named only
+/// where there is a level to leave — which is also where the key that
+/// closes stops closing and starts going up.
+fn footer(state: &ArchitectView) -> Vec<Command> {
+    let mut commands = vec![Command::Close];
+    if state.depth() > 0 {
+        commands.push(Command::Back);
+    }
+    commands.extend([Command::ChooseItem, Command::NextView, Command::NextMode]);
+    commands
+}
+
+/// What the surface is and which project it is about — told apart by
+/// weight, the way the code surface's title is: the name is a label said
+/// once, and what the eye should land on is the project.
+fn title(state: &ArchitectView) -> Vec<Span> {
+    // The declaration says which project this is; where there is none,
+    // the checkout the map was measured from says the same thing.
+    let project = state
+        .project
+        .file_name()
+        .or_else(|| state.code.as_ref()?.root().file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut spans = vec![Span::new("architect", Role::Muted)];
+    if !project.is_empty() {
+        spans.push(Span::new(" · ", Role::Faint));
+        spans.push(Span::new(project, Role::Bright).bold());
+    }
+    spans
 }
 
 fn content(state: &ArchitectView, space: Size) -> Content {
@@ -948,18 +1109,12 @@ pub fn handle_command(
         return ArchitectOutcome::Stay;
     }
     match command {
-        Command::Close => return ArchitectOutcome::Close,
+        Command::Close => return state.leave(space),
         Command::ChooseGroup => state.choose_area(),
         Command::ChooseItem => state.choose_artifact(),
         Command::SelectToward(direction) => state.pick_toward(direction, space),
         Command::Activate => return state.enter(space),
-        Command::Back => {
-            let depth = match (&state.drawing, &state.code) {
-                (Drawing::Code, Some(map)) => map.crumbs().len(),
-                _ => state.trail.len(),
-            };
-            state.back_to(depth.saturating_sub(1), space);
-        }
+        Command::Back => state.back_to(state.depth().saturating_sub(1), space),
         // Nothing to move on a map that fits: the arrows walk its tiles.
         Command::Pan(direction) if state.fits_view() => state.pick_toward(direction, space),
         Command::NextView => state.open(state.selected + 1),
@@ -980,6 +1135,12 @@ pub fn handle_command(
         _ => {}
     }
     ArchitectOutcome::Stay
+}
+
+/// The pointer moved over the surface, without pressing anything.
+/// Answers whether the frame has to be drawn again.
+pub fn handle_hover(state: &mut ArchitectView, hit: Option<ViewHit>) -> bool {
+    state.hover(hit)
 }
 
 pub fn handle_mouse(
@@ -1011,7 +1172,7 @@ pub fn handle_mouse(
         Some(ViewHit::PlaceCaret { line, cell }) if state.showing != Showing::Source => {
             return state.click(cell as i32, line as i32, space);
         }
-        Some(ViewHit::SelectTrail(depth)) => state.back_to(depth, space),
+        Some(ViewHit::SelectTrail(step)) => state.go_to(step, space),
         _ => {}
     }
     ArchitectOutcome::Stay

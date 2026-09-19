@@ -238,19 +238,6 @@ pub fn leads_glyph(out_of_the_board: bool, glyphs: Glyphs) -> &'static str {
     }
 }
 
-/// How much a tile is filled, for a drawing that says something by how
-/// dark a region is: nothing, light, heavy. A second channel beside the
-/// role, because two roles a theme renders alike still differ in ink.
-pub fn shade_glyph(weight: u8, glyphs: Glyphs) -> char {
-    match (glyphs, weight) {
-        (_, 0) => ' ',
-        (Glyphs::Unicode, 1) => '░',
-        (Glyphs::Unicode, _) => '▒',
-        (Glyphs::Ascii, 1) => ':',
-        (Glyphs::Ascii, _) => '#',
-    }
-}
-
 /// The mark on something that differs from what was last committed.
 pub fn changed_glyph(glyphs: Glyphs) -> char {
     match glyphs {

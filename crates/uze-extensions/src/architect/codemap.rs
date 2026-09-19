@@ -3,8 +3,16 @@
 //! The one artifact nobody writes. It is measured rather than read — a
 //! file's lines, how many commits touched it this year, whether it differs
 //! from what was committed — and drawn as a treemap, which is the diagram
-//! a grid of cells is best at: rectangles in rectangles, and no edge to
-//! route.
+//! a grid of cells is best at: rectangles, and no edge to route.
+//!
+//! **One level at a time.** A treemap that opens directories inside
+//! directories spends most of its ink on borders and most of its names on
+//! three letters and a cut. So a level draws its own children and nothing
+//! below them — each tile large enough to carry a whole name and what it
+//! measures — and a directory is *entered* rather than unfolded. How many
+//! tiles are on the screen is then a property of the directory being
+//! looked at, never of the repository's size, which is what makes the map
+//! read the same in a project of ten files and one of ten thousand.
 //!
 //! Unlike every other drawing here it has no size of its own. A map is
 //! for seeing the whole, so it is laid out *for* the space it is given and
@@ -30,15 +38,19 @@ use super::{
 };
 
 /// The smallest tile that can carry a name: a border, a row, a border,
-/// and enough columns for a few letters between two more.
-const NAMED: (i32, i32) = (7, 3);
-/// The smallest frame worth opening a directory in; under it the
-/// directory is one tile.
-const OPENED: (i32, i32) = (16, 5);
-/// How many directories are opened inside one another. Every level costs
-/// a border all round, and past a few the frames are most of what is
-/// drawn; what is deeper is one tile, and entered.
-const NESTED: usize = 3;
+/// and enough columns for a name rather than three letters and a cut.
+const NAMED: (i32, i32) = (13, 3);
+/// From this height on a tile says how many lines it holds, and from the
+/// next one what it is made of — a row per measure, under the name.
+const COUNTED: i32 = 4;
+const DETAILED: i32 = 5;
+/// How many tiles one level is drawn as, at most. A map is read by
+/// comparing what is on it, and past a couple of dozen rectangles nobody
+/// compares; the tail is one tile, and entered.
+const MOST: usize = 20;
+/// How many times a level is laid out again with one tile fewer, looking
+/// for a split where every tile kept can carry its name.
+const NARROWINGS: usize = 16;
 /// What marks the folded tile's path. No file is called this.
 const FOLDED: &str = "\0folded";
 
@@ -137,14 +149,6 @@ impl Heat {
             Self::Touched => Role::Muted,
             Self::Warm => Role::Warning,
             Self::Hot => Role::Danger,
-        }
-    }
-
-    fn shade(self) -> u8 {
-        match self {
-            Self::Untouched | Self::Touched => 0,
-            Self::Warm => 1,
-            Self::Hot => 2,
         }
     }
 }
@@ -271,10 +275,9 @@ impl Folder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TileKind {
     File,
-    /// A directory, drawn around its contents or — too small — as a tile.
-    Directory {
-        opened: bool,
-    },
+    /// A directory, drawn as a tile whatever is in it: what is inside is
+    /// seen by going inside.
+    Directory,
     /// The tail of a directory, too small to name one by one: everything
     /// from child `from` on.
     Folded {
@@ -402,8 +405,8 @@ impl CodeMap {
             .collect()
     }
 
-    /// Every tile for a space, a directory before what is in it — so the
-    /// last tile that contains a cell is the innermost one there.
+    /// The tiles of the level on show, in a space. One per child, none
+    /// inside another, so a cell belongs to exactly one of them.
     pub fn tiles(&self, space: (i32, i32)) -> Vec<Tile> {
         let mut tiles = Vec::new();
         let (entry, from) = self.showing();
@@ -413,23 +416,43 @@ impl CodeMap {
             w: space.0,
             h: space.1,
         };
-        lay(entry, from, within, self.steps, NESTED, &mut tiles);
+        lay(entry, from, within, self.steps, &mut tiles);
         tiles
     }
 
+    /// The borders are gathered into one grid before any of them is
+    /// drawn, so two tiles side by side share a single line and meet the
+    /// ones above and below at a junction. Drawn a box at a time they
+    /// would stand one beside the other, and a dozen of them read as a
+    /// stack of boxes rather than as a map.
     pub fn paint(&self, space: (i32, i32), glyphs: Glyphs) -> Canvas {
         let mut canvas = Canvas::new(space.0, space.1, glyphs);
-        for tile in self.tiles(space) {
-            let picked = self.picked.as_deref() == Some(tile.path.as_str());
-            paint_tile(&mut canvas, &tile, picked);
+        let tiles = self.tiles(space);
+        let picked = |tile: &Tile| self.picked.as_deref() == Some(tile.path.as_str());
+        let mut grid = Grid::new(space);
+        for tile in &tiles {
+            let role = match picked(tile) {
+                true => Role::Accent,
+                false => tile.heat.role(),
+            };
+            grid.outline(bordered(tile.frame, space), role, picked(tile));
+        }
+        grid.draw(&mut canvas);
+        for tile in &tiles {
+            label(&mut canvas, tile, bordered(tile.frame, space), picked(tile));
         }
         canvas
+    }
+
+    /// Lets go of the selected tile, answering whether there was one.
+    pub fn let_go(&mut self) -> bool {
+        self.picked.take().is_some()
     }
 
     /// A click: selects, or — on what is already selected — follows.
     pub fn click(&mut self, x: i32, y: i32, space: (i32, i32)) -> Followed {
         let tiles = self.tiles(space);
-        let Some(tile) = tiles.iter().rev().find(|tile| tile.frame.contains(x, y)) else {
+        let Some(tile) = tiles.iter().find(|tile| tile.frame.contains(x, y)) else {
             self.picked = None;
             return Followed::Nothing;
         };
@@ -451,7 +474,7 @@ impl CodeMap {
         };
         let step = match tile.kind {
             TileKind::File => return Followed::Open(tile.path.clone()),
-            TileKind::Directory { .. } => Step {
+            TileKind::Directory => Step {
                 directory: tile.path.clone(),
                 from: 0,
             },
@@ -485,10 +508,7 @@ impl CodeMap {
     /// where its name is, since its middle belongs to what is in it.
     pub fn pick_toward(&mut self, direction: PanDirection, space: (i32, i32)) {
         let tiles = self.tiles(space);
-        let stands_at = |tile: &Tile| match tile.kind {
-            TileKind::Directory { opened: true } => (tile.frame.x + 2, tile.frame.y),
-            _ => tile.frame.center(),
-        };
+        let stands_at = |tile: &Tile| tile.frame.center();
         let picked = tiles
             .iter()
             .find(|tile| self.picked.as_deref() == Some(tile.path.as_str()));
@@ -537,7 +557,7 @@ impl CodeMap {
                 grouped(tile.lines),
                 commits(tile.commits),
             ),
-            TileKind::Directory { .. } => format!(
+            TileKind::Directory => format!(
                 "{}/ · {} files · {} lines{changed} · enter goes inside",
                 tile.path,
                 grouped(tile.files as u64),
@@ -606,15 +626,10 @@ fn grouped(number: u64) -> String {
     grouped
 }
 
-/// Lays `entry`'s children, from `from` on, into `within`.
-fn lay(
-    entry: &Entry,
-    from: usize,
-    within: Frame,
-    steps: Steps,
-    nested: usize,
-    tiles: &mut Vec<Tile>,
-) {
+/// Lays `entry`'s children, from `from` on, into `within` — and stops
+/// there. What is inside a child is not drawn inside its tile; it is what
+/// the next level shows.
+fn lay(entry: &Entry, from: usize, within: Frame, steps: Steps, tiles: &mut Vec<Tile>) {
     let children = &entry.children[from.min(entry.children.len())..];
     if children.is_empty() || within.w < 1 || within.h < 1 {
         return;
@@ -627,51 +642,47 @@ fn lay(
     // What is too small to name is always the tail, children being largest
     // first. Where that is all of them, as many are kept as half the space
     // can name: a directory of nothing but small files would otherwise
-    // fold into one tile that opens onto itself.
+    // fold into one tile that opens onto itself. Either way no more than
+    // a screenful of tiles, so the map is the same size in every project.
     let nameable = children
         .iter()
         .take_while(|child| share(child.lines) >= named)
         .count();
-    let mut kept = match nameable {
+    let mut keeping = match nameable {
         0 => ((cells / named / 2.0) as usize).clamp(1, children.len()),
         nameable => nameable,
-    };
-    if children.len() - kept < 2 {
-        kept = children.len();
     }
-    let (kept, folded) = children.split_at(kept);
+    .min(MOST);
+    if children.len() - keeping < 2 {
+        keeping = children.len();
+    }
 
-    let mut weights: Vec<u64> = kept.iter().map(|child| child.lines).collect();
-    if !folded.is_empty() {
-        let lines: u64 = folded.iter().map(|child| child.lines).sum();
-        // Large enough to say what it is, whatever it weighs.
-        let legible = (named * 1.5 / cells * total as f64) as u64;
-        weights.push(lines.max(legible));
-    }
-    let mut frames = treemap::squarified(&weights, within);
-    // A share of the area is no promise of a shape, and the smallest
-    // weight is the one that ends up alone in a sliver. The folded tile
-    // has to be readable to be of any use, so it is given more until it is
-    // — the one place the map trades proportion for legibility.
-    for _ in 0..8 {
-        let legible = frames
-            .get(kept.len())
-            .is_none_or(|frame| frame.w >= NAMED.0 && frame.h >= NAMED.1);
-        if legible {
+    // A share of the area is no promise of a shape: the smallest weights
+    // are the ones that end up in a sliver. A tile nobody can read the
+    // name of says less than one more name under "the rest", so the split
+    // is tried, looked at, and tried again one tile smaller until every
+    // tile that was kept can say what it is.
+    for _ in 0..NARROWINGS {
+        let frames = frames_for(children, keeping, within, cells, total);
+        let cramped = frames.iter().take(keeping).position(|f| !fits_a_name(f));
+        let Some(index) = cramped.filter(|&index| index > 0) else {
             break;
+        };
+        keeping = index;
+        // Leaving exactly one child out would fold it into a tile reading
+        // "+1 files", which is a worse name than the one it already has.
+        if children.len() - keeping == 1 && keeping > 1 {
+            keeping -= 1;
         }
-        if let Some(weight) = weights.last_mut() {
-            *weight = *weight * 3 / 2 + 1;
-        }
-        frames = treemap::squarified(&weights, within);
     }
+    let (kept, folded) = children.split_at(keeping);
+    let frames = frames_for(children, keeping, within, cells, total);
 
     for (child, &frame) in kept.iter().zip(&frames) {
-        let opened = child.directory && nested > 0 && frame.w >= OPENED.0 && frame.h >= OPENED.1;
         tiles.push(Tile {
             frame,
             kind: match child.directory {
-                true => TileKind::Directory { opened },
+                true => TileKind::Directory,
                 false => TileKind::File,
             },
             path: child.path.clone(),
@@ -682,15 +693,6 @@ fn lay(
             changed: child.changed,
             heat: child.heat,
         });
-        if opened {
-            let inside = Frame {
-                x: frame.x + 1,
-                y: frame.y + 1,
-                w: frame.w - 2,
-                h: frame.h - 2,
-            };
-            lay(child, 0, inside, steps, nested - 1, tiles);
-        }
     }
     if let Some(&frame) = frames.get(kept.len()) {
         let (commits, heat) = steps.together(folded);
@@ -710,70 +712,147 @@ fn lay(
     }
 }
 
-fn paint_tile(canvas: &mut Canvas, tile: &Tile, picked: bool) {
-    let Frame { x, y, w, h } = tile.frame;
-    if w < 1 || h < 1 {
-        return;
+/// Room for a name, a measure under it, and a border either side.
+fn fits_a_name(frame: &Frame) -> bool {
+    frame.w >= NAMED.0 && frame.h >= NAMED.1
+}
+
+/// The frames for a split at `keeping`: what is kept, and — unless
+/// nothing was left out — the tile the rest is folded into. That last one
+/// is given more area until it is readable, whatever it weighs: it is of
+/// no use unless it can say how many files it stands for, and it is the
+/// one place the map trades proportion for legibility.
+fn frames_for(
+    children: &[Entry],
+    keeping: usize,
+    within: Frame,
+    cells: f64,
+    total: u64,
+) -> Vec<Frame> {
+    let (kept, folded) = children.split_at(keeping.min(children.len()));
+    let mut weights: Vec<u64> = kept.iter().map(|child| child.lines).collect();
+    if !folded.is_empty() {
+        let named = f64::from(NAMED.0 * NAMED.1);
+        let lines: u64 = folded.iter().map(|child| child.lines).sum();
+        let legible = (named * 1.5 / cells * total as f64) as u64;
+        weights.push(lines.max(legible));
     }
+    let mut frames = treemap::squarified(&weights, within);
+    for _ in 0..8 {
+        if frames.get(kept.len()).is_none_or(fits_a_name) {
+            break;
+        }
+        match weights.last_mut() {
+            Some(weight) => *weight = *weight * 3 / 2 + 1,
+            None => break,
+        }
+        frames = treemap::squarified(&weights, within);
+    }
+    frames
+}
+
+/// The rectangle a tile's border is drawn on: its own, grown by a cell
+/// so that it ends *on* its neighbour's first column rather than beside
+/// it — except at the map's own edge, where there is no neighbour to
+/// meet. The tile still answers for the cells it was laid on, so the
+/// shared line belongs to whichever of the two lies after it.
+fn bordered(frame: Frame, space: (i32, i32)) -> Frame {
+    let right = (frame.x + frame.w).min(space.0 - 1);
+    let bottom = (frame.y + frame.h).min(space.1 - 1);
+    Frame {
+        x: frame.x,
+        y: frame.y,
+        w: right - frame.x + 1,
+        h: bottom - frame.y + 1,
+    }
+}
+
+/// Every border on the map, by cell: which sides meet there, and in
+/// whose colour. The selected tile claims the cells it shares, so its
+/// outline is unbroken however many neighbours it has.
+struct Grid {
+    width: i32,
+    height: i32,
+    cells: Vec<(u8, Role, bool)>,
+}
+
+impl Grid {
+    fn new((width, height): (i32, i32)) -> Self {
+        let (width, height) = (width.max(1), height.max(1));
+        Self {
+            width,
+            height,
+            cells: vec![(0, Role::Default, false); (width * height) as usize],
+        }
+    }
+
+    fn add(&mut self, x: i32, y: i32, sides: u8, role: Role, picked: bool) {
+        if sides == 0 || x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return;
+        }
+        let cell = &mut self.cells[(y * self.width + x) as usize];
+        cell.0 |= sides;
+        if picked || !cell.2 {
+            cell.1 = role;
+            cell.2 |= picked;
+        }
+    }
+
+    fn outline(&mut self, frame: Frame, role: Role, picked: bool) {
+        let Frame { x, y, w, h } = frame;
+        if w < 1 || h < 1 {
+            return;
+        }
+        let (right, bottom) = (x + w - 1, y + h - 1);
+        for column in x..=right {
+            let mut along = 0;
+            if column > x {
+                along |= WEST;
+            }
+            if column < right {
+                along |= EAST;
+            }
+            let corner = column == x || column == right;
+            let down = if corner && bottom > y { SOUTH } else { 0 };
+            let up = if corner { NORTH } else { 0 };
+            self.add(column, y, along | down, role, picked);
+            if bottom > y {
+                self.add(column, bottom, along | up, role, picked);
+            }
+        }
+        for row in y + 1..bottom {
+            self.add(x, row, NORTH | SOUTH, role, picked);
+            self.add(right, row, NORTH | SOUTH, role, picked);
+        }
+    }
+
+    fn draw(&self, canvas: &mut Canvas) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let (sides, role, _) = self.cells[(y * self.width + x) as usize];
+                if sides != 0 {
+                    let glyph =
+                        canvas::line_glyph(sides, Stroke::Solid, canvas.glyphs, Corners::Square);
+                    canvas.put(x, y, glyph, role, false);
+                }
+            }
+        }
+    }
+}
+
+/// What a tile says inside its border: its name, and under it a measure
+/// per row as far down as there is room.
+fn label(canvas: &mut Canvas, tile: &Tile, frame: Frame, picked: bool) {
+    let Frame { x, y, w, h } = frame;
     let glyphs = canvas.glyphs;
-    let opened = tile.kind == TileKind::Directory { opened: true };
-    let border = match (picked, opened) {
-        (true, _) => Role::Accent,
-        (_, true) => Role::Faint,
-        _ => tile.heat.role(),
-    };
-
-    // Too thin for a frame: a line of the tile's own colour, so its area
-    // is still on the map even though nothing can be said in it.
-    if w < 2 || h < 2 {
-        let sides = if h < 2 { EAST | WEST } else { NORTH | SOUTH };
-        for row in y..y + h {
-            for column in x..x + w {
-                canvas.line(column, row, sides, Stroke::Solid, border);
-            }
-        }
-        return;
-    }
-
-    if !opened {
-        let shade = canvas::shade_glyph(tile.heat.shade(), glyphs);
-        for row in y + 1..y + h - 1 {
-            for column in x + 1..x + w - 1 {
-                canvas.put(column, row, shade, tile.heat.role(), false);
-            }
-        }
-    }
-    let corners = match tile.kind {
-        TileKind::File => Corners::Rounded,
-        _ => Corners::Square,
-    };
-    canvas.frame(tile.frame, corners, border);
-
-    let name = match tile.kind {
-        TileKind::Directory { .. } => format!("{}/", tile.name),
-        _ => tile.name.clone(),
-    };
-    let mark = match tile.changed {
-        true => format!(" {}", canvas::changed_glyph(glyphs)),
-        false => String::new(),
-    };
-    if opened {
-        let room = w - 6 - text_width(&mark);
-        if room >= 2 {
-            let title = format!(" {}{mark} ", canvas::fitted(&name, room, glyphs));
-            let role = if picked {
-                Role::Accent
-            } else {
-                Role::Secondary
-            };
-            canvas.text(x + 2, y, &title, role, true);
-        }
-        return;
-    }
     let room = w - 4;
     if room < 3 || h < NAMED.1 {
         return;
     }
+    let name = match tile.kind {
+        TileKind::Directory => format!("{}/", tile.name),
+        _ => tile.name.clone(),
+    };
     let (role, bold) = match (picked, tile.kind, tile.heat) {
         (true, ..) => (Role::Accent, true),
         (_, TileKind::Folded { .. }, _) => (Role::Dim, false),
@@ -781,16 +860,36 @@ fn paint_tile(canvas: &mut Canvas, tile: &Tile, picked: bool) {
         (_, _, Heat::Touched) => (Role::Bright, false),
         (_, _, heat) => (heat.role(), true),
     };
-    let mark = if text_width(&name) + text_width(&mark) <= room {
-        mark
-    } else {
-        String::new()
+    // The mark outlives the name: a name is cut to make room for it,
+    // because what changed is the one thing a reader came for.
+    let mark = match tile.changed {
+        true => format!(" {}", canvas::changed_glyph(glyphs)),
+        false => String::new(),
     };
     let name = canvas::fitted(&name, room - text_width(&mark), glyphs);
-    canvas.text(x + 1, y + 1, &format!(" {name}{mark} "), role, bold);
-    if h >= 4 {
-        let lines = canvas::fitted(&grouped(tile.lines), room, glyphs);
-        canvas.text(x + 1, y + 2, &format!(" {lines} "), Role::Dim, false);
+    canvas.text(x + 2, y + 1, &format!("{name}{mark}"), role, bold);
+
+    if h >= COUNTED {
+        let lines = canvas::fitted(&format!("{} lines", grouped(tile.lines)), room, glyphs);
+        canvas.text(x + 2, y + 2, &lines, Role::Dim, false);
+    }
+    if h >= DETAILED
+        && let Some(detail) = detail(tile)
+    {
+        let detail = canvas::fitted(&detail, room, glyphs);
+        canvas.text(x + 2, y + 3, &detail, Role::Faint, false);
+    }
+}
+
+/// The third row: what the tile is made of. A folded tile has none —
+/// its name is already the count.
+fn detail(tile: &Tile) -> Option<String> {
+    match tile.kind {
+        TileKind::Directory => Some(format!("{} files", grouped(tile.files as u64))),
+        TileKind::File => {
+            (tile.commits > 0).then(|| format!("{} this year", commits(tile.commits)))
+        }
+        TileKind::Folded { .. } => None,
     }
 }
 
@@ -825,12 +924,70 @@ mod tests {
 
     #[test]
     fn a_large_file_is_a_large_tile_and_a_hot_one_a_hot_tile() {
-        let mut files = vec![file("src/big.rs", 5000, 0), file("src/busy.rs", 200, 90)];
-        files.extend((0..20).map(|n| file(&format!("src/f{n}.rs"), 300, 1 + n % 3)));
+        let mut files = vec![file("big.rs", 5000, 0), file("busy.rs", 400, 90)];
+        files.extend((0..20).map(|n| file(&format!("f{n}.rs"), 300, 1 + n % 3)));
         let tiles = map(files).tiles(SPACE);
-        let (big, busy) = (tile(&tiles, "src/big.rs"), tile(&tiles, "src/busy.rs"));
+        let (big, busy) = (tile(&tiles, "big.rs"), tile(&tiles, "busy.rs"));
         assert!(big.frame.w * big.frame.h > busy.frame.w * busy.frame.h * 5);
         assert_eq!((big.heat, busy.heat), (Heat::Untouched, Heat::Hot));
+    }
+
+    #[test]
+    fn a_level_draws_its_own_children_and_a_directory_is_entered_to_see_inside() {
+        let mut files = vec![file("README.md", 4000, 1)];
+        files.extend((0..8).map(|n| file(&format!("src/ui/w{n}.rs"), 900, n)));
+        files.extend((0..8).map(|n| file(&format!("src/core/c{n}.rs"), 700, n)));
+        let mut map = map(files);
+
+        let tiles = map.tiles(SPACE);
+        let paths: Vec<&str> = tiles.iter().map(|tile| tile.path.as_str()).collect();
+        assert_eq!(paths, ["src", "README.md"], "nothing below them is drawn");
+        for (index, tile) in tiles.iter().enumerate() {
+            for other in &tiles[index + 1..] {
+                let (x, y) = other.frame.center();
+                assert!(!tile.frame.contains(x, y), "no tile sits inside another");
+            }
+        }
+
+        map.picked = Some("src".to_owned());
+        assert!(matches!(map.follow(SPACE), Followed::Entered));
+        let inside: Vec<String> = map.tiles(SPACE).into_iter().map(|tile| tile.path).collect();
+        assert_eq!(inside, ["src/ui", "src/core"], "one level closer");
+    }
+
+    #[test]
+    fn every_tile_on_a_level_is_large_enough_to_carry_its_name() {
+        let mut files = vec![
+            file("Cargo.lock", 3799, 2),
+            file("AGENTS.md", 620, 9),
+            file("README.md", 300, 4),
+        ];
+        files.extend((0..14).map(|n| file(&format!("crates/core/m{n}.rs"), 1400 + n * 60, n)));
+        files.extend((0..7).map(|n| file(&format!("src/ui/u{n}.rs"), 2400, 20 + n)));
+        files.extend((0..40).map(|n| file(&format!("docs/adr/{n:03}.md"), 180, 1)));
+        for space in [(150, 38), SPACE, (80, 24)] {
+            for tile in map(files.clone()).tiles(space) {
+                assert!(
+                    fits_a_name(&tile.frame),
+                    "{} drawn as {:?} in {space:?}",
+                    tile.name,
+                    tile.frame
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_level_is_never_more_than_a_screenful_of_tiles() {
+        let map = map((0..200)
+            .map(|n| file(&format!("f{n:03}.rs"), 400 + n, 0))
+            .collect());
+        let tiles = map.tiles((200, 60));
+        assert!(
+            tiles.len() <= MOST + 1,
+            "{} tiles on a level of 200 files",
+            tiles.len()
+        );
     }
 
     #[test]
@@ -971,14 +1128,15 @@ mod tests {
 
     #[test]
     fn the_ascii_rendering_is_ascii() {
-        let mut files = vec![file("src/busy.rs", 900, 50)];
+        let mut files = vec![file("busy.rs", 900, 50)];
         files.extend((0..12).map(|n| FileMeasure {
             changed: n == 0,
-            ..file(&format!("src/a-rather-long-file-name-{n}.rs"), 300, n)
+            ..file(&format!("a-rather-long-file-name-{n}.rs"), 300, n)
         }));
         let text = map(files).paint(SPACE, Glyphs::Ascii).to_text();
         assert!(text.is_ascii(), "{text}");
-        assert!(text.contains('#'), "the hottest tile is shaded:\n{text}");
+        assert!(text.contains('*'), "what changed is marked:\n{text}");
+        assert!(text.contains("lines"), "a tile says what it holds:\n{text}");
     }
 
     #[test]
