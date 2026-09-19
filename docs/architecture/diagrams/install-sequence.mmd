@@ -1,0 +1,25 @@
+---
+title: uze install
+---
+sequenceDiagram
+  actor Dev as Developer
+  participant CLI as uze CLI
+  participant App as Application
+  participant Core as Core · Store
+  participant Int as Integration
+  participant H as Harness config
+  Dev->>CLI: uze install
+  CLI->>App: install(project)
+  App->>Core: resolve agents.yaml
+  Core->>Core: clone marketplace, verify digest
+  Core-->>App: packages + agents.lock
+  loop each detected harness
+    App->>Int: plan(capabilities)
+    Int-->>App: native | generated | adapter
+    App->>Int: apply(plan)
+    Int->>H: write owned artifact
+    Int-->>Core: typed receipt
+  end
+  Note over App: reconcile AGENTS.md
+  App-->>CLI: report
+  CLI-->>Dev: what changed

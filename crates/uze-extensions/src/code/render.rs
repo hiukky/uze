@@ -11,14 +11,15 @@
 //! it is easiest to break.
 
 use super::{
-    CodeView, ContentMode, Focus, NavigatorMode,
+    CodeView, ContentMode, Focus, MapShowing, NavigatorMode, Showing,
     changes_tree::{FileTreeItem, file_tree_items, selected_tree_row},
     diff::content_line,
     editor::OpenFile,
 };
+use crate::shared::canvas::Glyphs;
 use crate::view::{
-    Command, Content, ContentLine, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon, Size,
-    Span, View,
+    Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
+    Size, Span, TrailStep, View,
 };
 
 /// `space` is advisory: it bounds how much content is worth producing,
@@ -42,6 +43,24 @@ pub fn view(code: &CodeView, space: Size) -> View {
             },
             footer,
             modes: Vec::new(),
+            layout: Layout::Sidebar,
+            trail: Vec::new(),
+        };
+    }
+
+    // The map is the one mode that is not read beside a list: it is a
+    // picture of the whole checkout, and a picture of the whole in a
+    // third of the width is a picture of nothing. So it takes the frame,
+    // and the tree it replaces is what the toggle goes back to.
+    if code.content == ContentMode::Map {
+        return View {
+            title,
+            navigator: None,
+            content: map_content(code, space),
+            footer,
+            modes: modes(code),
+            layout: Layout::Board,
+            trail: map_trail(code),
         };
     }
 
@@ -55,31 +74,111 @@ pub fn view(code: &CodeView, space: Size) -> View {
             ContentMode::Diff => diff_content(code, space),
             ContentMode::Contents => contents_content(code, space),
             ContentMode::Preview => preview_content(code, space),
+            ContentMode::Map => unreachable!("the map took the frame above"),
         },
         footer,
         modes: modes(code),
+        layout: Layout::Sidebar,
+        trail: Vec::new(),
     }
 }
 
-/// The ways the selection can be shown, when there is more than one.
+/// The map drawn for the space it has, or the table it is a picture of.
+fn map_content(code: &CodeView, space: Size) -> Content {
+    let Some(map) = code.map_view() else {
+        return Content::Message {
+            text: "The checkout has not been measured yet".to_owned(),
+            hint: None,
+            role: Role::Muted,
+        };
+    };
+    let cells = (i32::from(space.width), i32::from(space.height));
+    let lines: Vec<ContentLine> = match code.map_showing() {
+        MapShowing::Ranking => map
+            .ranking()
+            .lines()
+            .map(|line| plain_line(line.to_owned()))
+            .collect(),
+        showing => {
+            let glyphs = match showing {
+                MapShowing::Ascii => Glyphs::Ascii,
+                _ => Glyphs::Unicode,
+            };
+            map.paint(cells, glyphs).lines()
+        }
+    };
+    // A board hands over its screen and nothing else: it is cut to the
+    // frame rather than scrolled, so there is no scroll to apply.
+    Content::Lines {
+        heading: map.caption(cells),
+        scroll: 0,
+        total: lines.len(),
+        lines,
+        caret: None,
+    }
+}
+
+fn plain_line(text: String) -> ContentLine {
+    ContentLine {
+        gutter: " ".to_owned(),
+        number: String::new(),
+        tone: LineTone::Neutral,
+        spans: vec![Span::new(text, Role::Default)],
+    }
+}
+
+/// The descent the map is in: the checkout, then each directory entered.
+fn map_trail(code: &CodeView) -> Vec<TrailStep> {
+    let Some(map) = code.map_view() else {
+        return Vec::new();
+    };
+    let crumbs = map.crumbs();
+    let depth = crumbs.len();
+    std::iter::once(code.checkout_name())
+        .chain(crumbs)
+        .enumerate()
+        .map(|(step, name)| TrailStep::new(name, step == depth))
+        .collect()
+}
+
+/// The ways this surface can show what it is showing.
 ///
 /// Only for a document, and only while its contents are what is on
 /// screen: offering "preview" beside a diff would be offering to leave
-/// the diff, which is what the diff's own door is for.
+/// the diff, which is what the diff's own door is for. The map is
+/// offered wherever there is one, because it is the same checkout seen
+/// another way — and the entry that leaves it is what makes the toggle a
+/// control somebody can point at rather than a key they have to know.
 fn modes(code: &CodeView) -> Vec<Mode> {
-    if !code.selected_is_markdown() || code.content == ContentMode::Diff {
-        return Vec::new();
+    code.showings()
+        .into_iter()
+        .map(|showing| Mode {
+            label: mode_label(code, showing),
+            active: match showing {
+                Showing::Selection(mode) => code.content == mode,
+                Showing::Measured(map) => {
+                    code.content == ContentMode::Map && code.map_showing() == map
+                }
+            },
+        })
+        .collect()
+}
+
+fn mode_label(code: &CodeView, showing: Showing) -> String {
+    match showing {
+        Showing::Selection(ContentMode::Preview) => "Preview".to_owned(),
+        Showing::Selection(ContentMode::Contents) => match code.content {
+            // Beside "Preview" it names the markup; beside the map it
+            // names the half the viewer would be going back to.
+            ContentMode::Map => "Files".to_owned(),
+            _ => "Source".to_owned(),
+        },
+        Showing::Selection(ContentMode::Diff) => "Changes".to_owned(),
+        Showing::Selection(ContentMode::Map) => "Map".to_owned(),
+        Showing::Measured(MapShowing::Unicode) => "Map".to_owned(),
+        Showing::Measured(MapShowing::Ascii) => "ASCII".to_owned(),
+        Showing::Measured(MapShowing::Ranking) => "Ranking".to_owned(),
     }
-    [
-        ("Preview", ContentMode::Preview),
-        ("Source", ContentMode::Contents),
-    ]
-    .into_iter()
-    .map(|(label, mode)| Mode {
-        label: label.to_owned(),
-        active: code.content == mode,
-    })
-    .collect()
 }
 
 /// What the surface is, which checkout it is on, and which branch that
@@ -118,6 +217,17 @@ fn footer(code: &CodeView) -> Vec<Command> {
     if code.editing() {
         return vec![Command::Save, Command::Close];
     }
+    // The map is the same checkout seen another way, so it is offered
+    // wherever the checkout is — and from inside it, the way back out is
+    // the same key.
+    if code.content == ContentMode::Map {
+        return vec![
+            Command::SelectNext,
+            Command::Activate,
+            Command::ToggleMap,
+            Command::Close,
+        ];
+    }
     let mut commands = vec![Command::SelectNext, Command::Collapse, Command::Expand];
     if code.selected_is_markdown() {
         commands.push(Command::TogglePreview);
@@ -125,6 +235,13 @@ fn footer(code: &CodeView) -> Vec<Command> {
     if code.selected_is_a_file() {
         commands.push(Command::Edit);
         commands.push(Command::Delete);
+    }
+    if code
+        .showings()
+        .iter()
+        .any(|showing| matches!(showing, Showing::Measured(_)))
+    {
+        commands.push(Command::ToggleMap);
     }
     commands.push(Command::FocusNext);
     commands.push(Command::Close);
@@ -139,6 +256,7 @@ pub(super) fn changes_navigator(code: &CodeView) -> Navigator {
         badge: code.changes.files.len().to_string(),
         focused: code.focus == Focus::Navigator,
         anchor: selected_tree_row(&items, selected),
+        choosing: None,
         rows: items
             .iter()
             .enumerate()
@@ -182,6 +300,7 @@ fn files_navigator(code: &CodeView) -> Navigator {
         badge: rows.iter().filter(|row| !row.directory).count().to_string(),
         focused: code.focus == Focus::Navigator,
         anchor,
+        choosing: None,
         rows: rows
             .iter()
             .enumerate()

@@ -261,6 +261,8 @@ vocabulary! {
         Manage = "manage",
         /// The code of a checkout — what the code surface opens onto.
         Code = "code",
+        /// The shape of a project — what the architect surface opens onto.
+        Architect = "architect",
 
         // ── typography ─────────────────────────────────────────────────
         /// Elided text.

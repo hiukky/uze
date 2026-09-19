@@ -136,6 +136,54 @@ pub struct View {
     /// be reachable by pointing at it, and a mode nothing on screen
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
+    pub layout: Layout,
+    /// The descent the viewer is in, outermost first, with the step they
+    /// are standing on marked. Empty where what there is to see does not
+    /// descend — and that emptiness is the choice between the surface's
+    /// two ways of offering its items: a trail is walked, and no trail
+    /// means a list to pick from.
+    ///
+    /// A path rather than a position, which is why it is not the list's
+    /// job: the list says what there is, this says where in a descent the
+    /// viewer is — and a descent can be walked, in both directions. Steps
+    /// after the current one are levels not yet reached but reachable,
+    /// which is how a fixed ladder (a model's own levels) differs from a
+    /// way in that was made by entering (a directory drilled into).
+    pub trail: Vec<TrailStep>,
+}
+
+/// One step of a [`View::trail`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrailStep {
+    pub name: String,
+    /// The one the viewer is standing on. Exactly one step is.
+    pub current: bool,
+}
+
+impl TrailStep {
+    pub fn new(name: impl Into<String>, current: bool) -> Self {
+        Self {
+            name: name.into(),
+            current,
+        }
+    }
+}
+
+/// How a view's list and its content share the frame.
+///
+/// A meaning rather than a geometry, like everything else here: the
+/// extension says what kind of surface it is, and the host decides what
+/// that looks like.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Layout {
+    /// A list to work through, with what is selected shown beside it.
+    #[default]
+    Sidebar,
+    /// A drawing larger than the screen. The content is the surface: it
+    /// takes the whole frame, and is cut at the edge rather than wrapped,
+    /// because a wrapped drawing is noise. The list is how the drawing is
+    /// switched, so it becomes a row of tabs above it.
+    Board,
 }
 
 /// One way of showing the content, offered beside it.
@@ -163,6 +211,20 @@ pub struct Navigator {
     /// long way from the selection without the selection dragging the
     /// list back.
     pub anchor: Option<usize>,
+    /// Which of the two lists a [`Layout::Board`] folds its rows into is
+    /// open, and what is highlighted in it. `None` when both are shut.
+    /// The extension's to say, like what a fold hides: opening a list is
+    /// a state of the surface, and what is highlighted in it a selection.
+    pub choosing: Option<Choosing>,
+}
+
+/// An open list on a board's menu, by the `id` highlighted in it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Choosing {
+    /// The list of groups.
+    Group(usize),
+    /// The list of the items in the group on show.
+    Item(usize),
 }
 
 /// What a navigator row *is*, so the host can mark it.
@@ -366,6 +428,16 @@ pub enum ViewHit {
     SelectItem(usize),
     /// The `id` of a [`NavigatorRow::Group`], clicked to fold or unfold it.
     ToggleGroup(usize),
+    /// The selector that offers the groups, pressed: open the list of
+    /// them, or shut it.
+    ChooseGroup,
+    /// The same, for the selector that offers the items of the group on
+    /// show.
+    ChooseItem,
+    /// A step of the [`View::trail`], by its index: go there. Back, for
+    /// a step already walked; on, for one the descent reaches but the
+    /// viewer has not.
+    SelectTrail(usize),
     /// A click inside [`Content::Lines`], as far as the host can resolve
     /// it: which line, and how many display cells into that line's text
     /// the pointer landed.
@@ -479,4 +551,36 @@ pub enum Command {
     EraseBack,
     /// Delete the character under it.
     EraseForward,
+
+    // --- Asked of a board -----------------------------------------------
+    //
+    // A third kind of surface, and the same bar: a board is moved, which
+    // neither "select next" nor a caret can say.
+    /// Show what lies further this way.
+    Pan(PanDirection),
+    /// The next entry of the list, from wherever focus is.
+    NextView,
+    PreviousView,
+    /// The next of the [`View::modes`] offered.
+    NextMode,
+    /// Open the list of groups, or shut it.
+    ChooseGroup,
+    /// Open the list of the items in the group on show, or shut it.
+    ChooseItem,
+    /// Select what lies this way from what is selected — on a board,
+    /// where things are beside one another rather than in a list.
+    SelectToward(PanDirection),
+    /// Leave what was entered, for where it was entered from.
+    Back,
+    /// Show the checkout as a map, or leave the map for whatever was on
+    /// show before it.
+    ToggleMap,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanDirection {
+    Left,
+    Right,
+    Up,
+    Down,
 }

@@ -34,7 +34,7 @@ use uze_application::{
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
-    ExtensionHit, code,
+    ExtensionHit, architect, code,
     view::{ScrollDirection, ViewHit},
 };
 use uze_keys::{Action, Chord, Key};
@@ -865,6 +865,73 @@ fn spawn_changes_refresh(
     });
 }
 
+/// The artifacts a project declares, read for the checkout they were
+/// asked about.
+struct ArtifactsResolution {
+    root: PathBuf,
+    answer: architect::ArtifactsAnswer,
+}
+
+/// The checkout measured for the code surface's map, tagged with the
+/// checkout it was measured from — an answer landing after the viewer
+/// moved to another tab describes a repository nobody is looking at.
+struct MeasureResolution {
+    root: PathBuf,
+    /// `None` outside a repository, where there is nothing to measure.
+    measure: Option<code::Measure>,
+}
+
+/// Resolving the manifest, walking the declared directory and reading
+/// every file in it: three unbounded reads, none of them the render
+/// thread's to make.
+fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.architect_artifacts").entered();
+        let silence = architect::ArtifactsAnswer::Nothing {
+            text: "Reading the project's artifacts failed".to_owned(),
+            hint: "Close this and open it again.".to_owned(),
+        };
+        let answer = answered_or(
+            || {
+                let source = match uze_application::project_artifacts(&root) {
+                    uze_application::ProjectArtifacts::Undeclared => {
+                        architect::ArtifactSource::Undeclared
+                    }
+                    uze_application::ProjectArtifacts::Refused(reason) => {
+                        architect::ArtifactSource::Refused(reason)
+                    }
+                    uze_application::ProjectArtifacts::Declared {
+                        directory,
+                        declared,
+                        project,
+                    } => architect::ArtifactSource::Directory {
+                        path: directory,
+                        declared: declared.display().to_string(),
+                        project,
+                    },
+                };
+                architect::read_artifacts(&WorkspaceHost, source)
+            },
+            silence,
+        );
+        let _ = sender.send(ArtifactsResolution { root, answer });
+    });
+}
+
+/// Measuring the checkout for the code surface's map: a `git grep` over
+/// every file in it, which is as unbounded as a read gets.
+fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<MeasureResolution>) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.code_measure").entered();
+        let measure = answered_or(|| code::measure(&WorkspaceHost, &root).ok(), None);
+        let _ = sender.send(MeasureResolution { root, measure });
+    });
+}
+
 /// What a root's profile answered, tagged with the root it was asked for.
 struct RootProfileResolution {
     root: PathBuf,
@@ -1266,6 +1333,8 @@ pub(super) enum WorkspaceHit {
     /// changes chip *says* still varies, which is where that signal
     /// lives now.
     OpenFiles,
+    /// The tab strip's architect button, beside the code one.
+    OpenArchitect,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
     /// The task mark on a sidebar agent row — opens the catalog of what
@@ -1349,6 +1418,13 @@ enum TabDragGroup {
 /// The same shape `DraggingTab` uses, and for the same reason: a gesture
 /// that has not happened yet cannot be classified, and guessing early is
 /// how a drag becomes the wrong one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiagramGrab {
+    last: (u16, u16),
+    moved: bool,
+    click: ViewHit,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EdgeDrag {
     origin: (u16, u16),
@@ -1985,6 +2061,9 @@ struct Channels {
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
     root_profiles: Answers<RootProfileResolution>,
+    artifacts: Answers<ArtifactsResolution>,
+    /// The code surface's map, measured once per checkout it is opened on.
+    code_measures: Answers<MeasureResolution>,
 }
 
 /// The half of [`WorkspaceModel`] that outlives one attach. Everything
@@ -2200,6 +2279,22 @@ struct WorkspaceModel {
     /// discards" rule — it covers the full frame, so there is no outside;
     /// `Esc` (or either shortcut that opens it) is the only dismissal.
     code: Option<code::CodeView>,
+    /// Open state of the architect surface. It borrows the code surface's
+    /// frame — the navigator width, its scroll, the scrollbars — because
+    /// the two are never open together and the frame is the host's, not
+    /// either extension's.
+    architect: Option<architect::ArchitectView>,
+    /// The diagram held by the pointer. A press on it is not yet a click
+    /// or a drag — the first movement says which, as it does for
+    /// [`EdgeDrag`] — so the click it might turn out to be is kept here
+    /// until release.
+    architect_grab: Option<DiagramGrab>,
+    /// The checkout the open architect surface belongs to, and whether
+    /// its artifacts have been asked for yet. Asked once per opening: the
+    /// answer carries the root, so one that arrives for a surface since
+    /// closed or reopened elsewhere is dropped rather than drawn.
+    architect_root: Option<PathBuf>,
+    architect_asked: bool,
     /// User-dragged navigator width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
     /// above, kept on the model rather than on the view itself so it
@@ -2236,6 +2331,10 @@ struct WorkspaceModel {
     /// halves have two cadences and can be in flight at once.
     code_changes_pending: bool,
     code_request_pending: bool,
+    /// The checkout the map's measurement was asked about. Not a flag:
+    /// the answer outside a repository is nothing, and a flag cleared on
+    /// nothing would ask again every frame.
+    code_measure_asked: Option<PathBuf>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
@@ -2590,6 +2689,7 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.code.is_none()
+            && self.architect.is_none()
             && self.action_index.is_none()
             && self.manage.is_none()
             && !self.commit_detail_open()
@@ -3308,6 +3408,26 @@ impl WorkspaceModel {
         spawn_file_request(root, request, sender.clone());
     }
 
+    fn schedule_artifacts_read(&mut self, sender: &mpsc::Sender<ArtifactsResolution>) {
+        if self.architect.is_none() || self.architect_asked {
+            return;
+        }
+        if let Some(root) = self.architect_root.clone() {
+            self.architect_asked = true;
+            spawn_artifacts_read(root, sender.clone());
+        }
+    }
+
+    fn absorb_artifacts(&mut self, resolution: ArtifactsResolution) -> bool {
+        match self.architect.as_mut() {
+            Some(view) if self.architect_root.as_ref() == Some(&resolution.root) => {
+                view.absorb(resolution.answer);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Installs one file answer, if the surface is still open on the
     /// checkout it was read for.
     fn absorb_file_answer(&mut self, resolution: FileResolution) -> bool {
@@ -3338,6 +3458,40 @@ impl WorkspaceModel {
         }
         self.code_changes_pending = true;
         spawn_changes_refresh(view.root().to_path_buf(), view.placement(), sender.clone());
+    }
+
+    /// Asks for the checkout's measurement, once per surface that has no
+    /// map yet. A `git grep` over every file is not a read to repeat, so
+    /// the root it was asked about is remembered rather than the request
+    /// being in flight: outside a repository the answer is nothing, and
+    /// nothing must not be asked for again.
+    fn schedule_code_measure(&mut self, sender: &mpsc::Sender<MeasureResolution>) {
+        let Some(view) = self.code.as_ref().filter(|view| !view.has_map()) else {
+            return;
+        };
+        let root = view.root().to_path_buf();
+        if self.code_measure_asked.as_deref() == Some(root.as_path()) {
+            return;
+        }
+        self.code_measure_asked = Some(root.clone());
+        spawn_code_measure(root, sender.clone());
+    }
+
+    /// Installs the measurement, if the surface is still open on the
+    /// checkout it was measured from.
+    fn absorb_measure(&mut self, resolution: MeasureResolution) -> bool {
+        let Some(measure) = resolution.measure else {
+            return false;
+        };
+        let Some(view) = self
+            .code
+            .as_mut()
+            .filter(|view| view.root() == resolution.root)
+        else {
+            return false;
+        };
+        view.absorb_measure(measure);
+        true
     }
 
     /// Installs a refreshed changes half, if the surface is still open on
@@ -4273,6 +4427,40 @@ impl WorkspaceModel {
     }
 }
 
+fn open_architect(model: &mut WorkspaceModel) {
+    let Some(session) = model.session.as_ref() else {
+        return;
+    };
+    let root = session.selected_tab().pane.cwd.clone();
+    model.close_code();
+    model.architect_root = Some(root);
+    model.architect_asked = false;
+    model.architect = Some(architect::ArchitectView::opening());
+    model.code_tree_scroll = extension_view::NavigatorScroll::default();
+    model.dirty = true;
+}
+
+/// The code surface, opened on a path a diagram pointed at: the last
+/// step down from an architecture is the file, and this is that step.
+///
+/// Rooted at the project rather than at the tab's directory, because the
+/// path was written relative to the project and may sit outside a tab
+/// that is somewhere below it.
+fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
+    let display_root = crate::ui::display_project_path(project);
+    let place = code::CodePlace::at(project, target, target.is_dir());
+    let view = code::CodeView::opening(
+        project.to_path_buf(),
+        display_root,
+        code::ContentMode::Contents,
+    );
+    model.architect = None;
+    model.code = Some(view.resuming(place));
+    model.code_tree_scroll = extension_view::NavigatorScroll::default();
+    model.code_measure_asked = None;
+    model.dirty = true;
+}
+
 fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let Some(session) = model.session.as_ref() else {
         return;
@@ -4282,10 +4470,12 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let display_root = crate::ui::display_project_path(&cwd);
     let place = model.remembered.code_places.get(&cwd).cloned();
     let view = code::CodeView::opening(cwd, display_root, mode);
+    model.architect = None;
     model.code = Some(match place {
         Some(place) => view.resuming(place),
         None => view,
     });
+    model.code_measure_asked = None;
     // The scroll is not restored with the place: the first frame reveals
     // whatever is selected, which is where the viewer was looking anyway.
     model.code_tree_scroll = extension_view::NavigatorScroll::default();

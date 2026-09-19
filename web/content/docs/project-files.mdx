@@ -124,6 +124,78 @@ uze's own marketplace is not declared here. `uze-official` is built into the
 binary, its plugins are installed for every project, and an entry claiming that
 name is refused — the only thing it could express is shadowing the built-in one.
 
+### `artifacts`
+
+Where the project keeps the artifacts that describe it. Today that means
+architecture diagrams: Mermaid files the workspace's architect surface draws in
+the terminal.
+
+```yaml
+artifacts:
+  path: docs/architecture
+```
+
+`path` is a directory inside the project, read as deep as it goes; a path that
+climbs out of it (`../`) or starts at the machine's root is refused, because
+this file is checked in and would point somewhere else on every machine.
+
+Nothing lists the files. Each one says what it is in its own first word, which
+is also the area it appears under, and names itself with Mermaid's own front
+matter — falling back to its file name:
+
+```text
+---
+title: System context
+---
+C4Context
+  Person(dev, "Developer")
+  System(uze, "uze")
+  Rel(dev, uze, "Installs, launches, reviews")
+```
+
+| The diagram starts with | Area |
+| --- | --- |
+| `C4Context`, `C4Container`, `C4Component`, … | C4 |
+| `sequenceDiagram` | Sequence |
+| `flowchart`, `graph` | Flowchart |
+
+#### Levels, and the way down to the code
+
+C4 is a model of levels — a system, the containers inside it, the components
+inside one of those — and the files are joined into levels the same way they are
+sorted into areas: by what they already say. A box has a level below it when
+another C4 file draws its **inside**, which is a boundary carrying the box's
+alias:
+
+```text
+system-context.mmd    System(uze, "uze", …)
+containers.mmd        System_Boundary(uze, "uze") { … Container(core, "Core", …) … }
+core-components.mmd   Container_Boundary(core, "Core") { … }
+```
+
+A box like that is marked, and entering it opens the file that draws its inside;
+the way in is kept as a trail, every step of which goes back. The last level is
+the code itself. Mermaid's own `$link` on an element names where it lives,
+relative to the project, and entering that box opens it in the code surface:
+
+```text
+Component(store, "store", "Rust module", "Owns installed bytes", $link="crates/core/src/store.rs")
+```
+
+A flowchart says the same with `click store href "crates/core/src/store.rs"`.
+
+Within an area the files are listed by name — except C4, which is listed the way
+it is read: the context, then containers, then components, then the dynamic and
+deployment views.
+
+A `.mmd` or `.mermaid` file of any other kind is still listed, under *Other*,
+with the reason it was not drawn — a file that silently fails to appear looks
+like a lost file.
+
+Everything here is a file somebody wrote. What the project *is* — where its
+lines are and which of them are hot — is measured rather than written, and is
+the code surface's **map**: press `m` beside the file tree, or its *Map* chip.
+
 ## `agents.lock`
 
 Generated, never edited, and deleted outright when nothing is left to

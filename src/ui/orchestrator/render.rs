@@ -154,6 +154,29 @@ pub(super) fn render(
     // immediately hidden underneath it, so skip it outright rather than
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
+    if let Some(architect) = &model.architect {
+        let mut view_hits = Vec::new();
+        let area = frame.area();
+        let view = uze_extensions::architect::view(
+            architect,
+            crate::ui::extension_view::board_space(area),
+        );
+        metrics.code = Some(crate::ui::extension_view::render(
+            frame,
+            &view,
+            area,
+            model.code_tree_width,
+            model.code_tree_scroll,
+            uze_keys::Scope::Architect,
+            &mut view_hits,
+        ));
+        hits.extend(
+            view_hits
+                .into_iter()
+                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Architect(hit)))),
+        );
+        return;
+    }
     if let Some(code) = &model.code {
         // The extension answers with content; the host lays it out and
         // therefore is the only side that can say which rectangle a click
@@ -164,7 +187,7 @@ pub(super) fn render(
         let area = frame.area();
         let view = uze_extensions::code::view(
             code,
-            crate::ui::extension_view::content_space(area, model.code_tree_width),
+            crate::ui::extension_view::code_space(area, model.code_tree_width, Some(code)),
         );
         metrics.code = Some(crate::ui::extension_view::render(
             frame,
@@ -172,6 +195,7 @@ pub(super) fn render(
             area,
             model.code_tree_width,
             model.code_tree_scroll,
+            uze_keys::Scope::Code,
             &mut view_hits,
         ));
         hits.extend(
@@ -3003,6 +3027,19 @@ pub(super) fn render_tab_strip(
             chip_state(model, Some(WorkspaceHit::OpenFiles)),
         );
         hits.push((rect, WorkspaceHit::OpenFiles));
+        trailing_right = rect.x.saturating_sub(1);
+    }
+    {
+        let label = theme::glyph(Symbol::Architect);
+        let rect = chip_rect(&label, trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
+            &label,
+            theme::color(Token::TextSecondary),
+            chip_state(model, Some(WorkspaceHit::OpenArchitect)),
+        );
+        hits.push((rect, WorkspaceHit::OpenArchitect));
         trailing_right = rect.x.saturating_sub(1);
     }
     render_notice_chip(frame, model, inner, trailing_right);

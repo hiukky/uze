@@ -308,6 +308,7 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "ctrl+w", Action::CloseTab),
         bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
         bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Workspace, "alt+a", Action::ToggleArchitect),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
         // The container of agents, beside the agent's own chord: `s` for
         // space, on the same modifier.
@@ -338,8 +339,43 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Code, "pagedown", Action::ScrollPageDown),
         bind(Scope::Code, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Code, "alt+a", Action::ToggleArchitect),
+        bind(Scope::Architect, "esc", Action::Dismiss),
+        bind(Scope::Architect, "alt+a", Action::ToggleArchitect),
+        bind(Scope::Architect, "ctrl+g", Action::ToggleChanges),
+        bind(Scope::Architect, "ctrl+e", Action::ToggleFiles),
+        // The arrows move the board, all four ways: on a surface whose
+        // whole point is a drawing larger than the screen, that is what
+        // an arrow means, and the list of diagrams is a row of tabs.
+        bind(Scope::Architect, "left", Action::PanLeft),
+        bind(Scope::Architect, "right", Action::PanRight),
+        bind(Scope::Architect, "up", Action::PanUp),
+        bind(Scope::Architect, "down", Action::PanDown),
+        bind(Scope::Architect, "tab", Action::NextDiagram),
+        bind(Scope::Architect, "shift+tab", Action::PreviousDiagram),
+        // Free letters, both: `v` previews a profile and `a` analyses a
+        // context elsewhere, and a letter names one action everywhere.
+        bind(Scope::Architect, "g", Action::NextRendering),
+        // One key for the two lists: `o` opens the artifacts, which is the
+        // list reached for most, and left and right step between it and
+        // the areas once either is open. Areas keep no key of their own —
+        // the free letters left name nothing, and a key nobody can guess
+        // is a key nobody presses.
+        bind(Scope::Architect, "o", Action::ChooseArtifact),
+        // Enter goes *into* the selected box — the level below it, or the
+        // code it names — and backspace comes back out. Shift turns the
+        // arrows from moving the board to moving the selection on it.
+        bind(Scope::Architect, "enter", Action::Activate),
+        bind(Scope::Architect, "backspace", Action::LevelUp),
+        bind(Scope::Architect, "shift+left", Action::SelectBoxLeft),
+        bind(Scope::Architect, "shift+right", Action::SelectBoxRight),
+        bind(Scope::Architect, "shift+up", Action::SelectBoxUp),
+        bind(Scope::Architect, "shift+down", Action::SelectBoxDown),
+        bind(Scope::Architect, "pagedown", Action::ScrollPageDown),
+        bind(Scope::Architect, "pageup", Action::ScrollPageUp),
         bind(Scope::Code, "e", Action::EditFile),
         bind(Scope::Code, "p", Action::TogglePreview),
+        bind(Scope::Code, "m", Action::ToggleMap),
         bind(Scope::Code, "d", Action::DeleteFile),
         bind(Scope::Code, "y", Action::ConfirmDelete),
         // Typing has a scope of its own so nothing behind it answers a
@@ -438,7 +474,12 @@ mod tests {
                 "reset-key",
                 "install-project-environment",
                 "open-glossary",
-                "apply-profile"
+                "apply-profile",
+                // The list of areas is one step left of the list of
+                // artifacts, which has the key: `o`, then the arrow. A
+                // letter of its own would be one of the four nobody could
+                // guess.
+                "choose-area"
             ],
             "an action gained or lost a chord; say so here on purpose"
         );

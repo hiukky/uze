@@ -146,6 +146,50 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Action::ToggleFiles,
         Control("the tab strip's code chip, beside the changes one"),
     );
+    put(
+        Action::ToggleArchitect,
+        Control("the tab strip's architect chip, beside the code one"),
+    );
+    for pan in [
+        Action::PanLeft,
+        Action::PanRight,
+        Action::PanUp,
+        Action::PanDown,
+    ] {
+        put(
+            pan,
+            Control("dragging the board, or a click on its minimap"),
+        );
+    }
+    put(Action::NextDiagram, Control("clicking the diagram's tab"));
+    put(
+        Action::PreviousDiagram,
+        Control("clicking the diagram's tab"),
+    );
+    put(
+        Action::NextRendering,
+        Control("clicking a rendering segment"),
+    );
+    put(
+        Action::ChooseArea,
+        Control("the area selector at the head of the board's menu"),
+    );
+    put(
+        Action::ChooseArtifact,
+        Control("the artifact selector beside the area one"),
+    );
+    for select in [
+        Action::SelectBoxLeft,
+        Action::SelectBoxRight,
+        Action::SelectBoxUp,
+        Action::SelectBoxDown,
+    ] {
+        put(select, Control("clicking the box"));
+    }
+    put(
+        Action::LevelUp,
+        Control("clicking an earlier step of the board's trail"),
+    );
 
     // --- The code surface, and typing into a file -----------------------
     put(
@@ -193,6 +237,10 @@ fn affordances() -> BTreeMap<Action, Affordance> {
             ),
         );
     }
+    put(
+        Action::ToggleMap,
+        Control("the Map chip, beside the code surface's other views"),
+    );
     put(
         Action::DeliverTask,
         Control("the tab strip's deliver button"),

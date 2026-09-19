@@ -223,6 +223,40 @@ actions! {
         "Changes", "Open or close the changes in the selected tab's checkout";
     ToggleFiles => "toggle-files", false,
         "Files", "Open or close the files of the selected tab's checkout";
+    ToggleArchitect => "toggle-architect", false,
+        "Architect", "Open or close the project's architecture diagrams";
+
+    // --- The architect surface -------------------------------------------
+    PanLeft => "pan-left", false,
+        "Move left", "Move the board to show what is further left";
+    PanRight => "pan-right", false,
+        "Move right", "Move the board to show what is further right";
+    PanUp => "pan-up", false,
+        "Move up", "Move the board to show what is further up";
+    PanDown => "pan-down", false,
+        "Move down", "Move the board to show what is further down";
+    NextDiagram => "next-diagram", false,
+        "Next artifact", "Show the next artifact on the board";
+    PreviousDiagram => "previous-diagram", false,
+        "Previous artifact", "Show the previous artifact on the board";
+    NextRendering => "next-rendering", false,
+        "Rendering", "Draw the diagram the next way it can be drawn";
+    ChooseArea => "choose-area", false,
+        "Areas", "Open the list of areas, to show another one's artifacts";
+    ChooseArtifact => "choose-artifact", false,
+        "Artifacts", "Open the list of artifacts in the area on show";
+    SelectBoxLeft => "select-box-left", false,
+        "Box to the left", "Select the box to the left of the selected one";
+    SelectBoxRight => "select-box-right", false,
+        "Box to the right", "Select the box to the right of the selected one";
+    SelectBoxUp => "select-box-up", false,
+        "Box above", "Select the box above the selected one";
+    SelectBoxDown => "select-box-down", false,
+        "Box below", "Select the box below the selected one";
+    LevelUp => "level-up", false,
+        "Level up", "Go back to the diagram this one was entered from";
+    ToggleMap => "toggle-map", false,
+        "Map", "Show the checkout as a map of where its lines are, or leave it";
 
     // --- The code surface, and typing into a file ------------------------
     EditFile => "edit-file", false,

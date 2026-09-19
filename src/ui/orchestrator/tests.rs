@@ -6388,6 +6388,88 @@ mod workspace_tests {
         }
     }
 
+    /// A list opened over the architect's board follows the pointer, the
+    /// way every other dropdown in this client does.
+    ///
+    /// The hit list carries two orders at once: the workspace reads its
+    /// own chrome latest-drawn first, while an extension hands its hits
+    /// down topmost first, an open list spliced in front of the board it
+    /// covers. Read the wrong way round, a pointer over a row of the list
+    /// finds the drawing underneath it and the highlight never moves.
+    #[test]
+    fn a_list_open_over_the_architects_board_follows_the_pointer() {
+        use uze_extensions::{architect, view::Choosing};
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-architect-hover"));
+        let mut view = architect::ArchitectView::opening();
+        view.absorb(architect::ArtifactsAnswer::Found {
+            artifacts: [
+                (
+                    "crate-layering.mmd",
+                    include_str!("../../../docs/architecture/diagrams/crate-layering.mmd"),
+                ),
+                (
+                    "install-pipeline.mmd",
+                    include_str!("../../../docs/architecture/diagrams/install-pipeline.mmd"),
+                ),
+            ]
+            .map(|(origin, source)| architect::Artifact::read(origin, source))
+            .into(),
+            project: PathBuf::from("/repo"),
+        });
+        let mut model = model_of(session("/repo", uze_terminal::SpaceKind::Worktree));
+        model.architect = Some(view);
+        let mut driven = driven(model, &home);
+
+        let space = crate::ui::extension_view::board_space(Rect::new(0, 0, 80, 24));
+        let highlighted = |driven: &Driven<'_>| {
+            architect::view(driven.attach.model.architect.as_ref().unwrap(), space)
+                .navigator
+                .expect("a menu")
+                .choosing
+        };
+        let row_of = |driven: &Driven<'_>, item: usize| {
+            driven
+                .attach
+                .model
+                .hits
+                .iter()
+                .find(|(_, hit)| {
+                    *hit == WorkspaceHit::Extension(ExtensionHit::Architect(ViewHit::SelectItem(
+                        item,
+                    )))
+                })
+                .map(|(rect, _)| *rect)
+                .unwrap_or_else(|| panic!("no row for artifact {item}"))
+        };
+
+        driven.frame();
+        let selector = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| {
+                *hit == WorkspaceHit::Extension(ExtensionHit::Architect(ViewHit::ChooseItem))
+            })
+            .map(|(rect, _)| *rect)
+            .expect("two artifacts in the area, so it opens");
+        driven.press(selector.x + 1, selector.y);
+        driven.frame();
+        assert_eq!(highlighted(&driven), Some(Choosing::Item(0)));
+
+        let other = row_of(&driven, 1);
+        driven.mouse(other.x + 1, other.y, MouseEventKind::Moved);
+        assert_eq!(
+            highlighted(&driven),
+            Some(Choosing::Item(1)),
+            "the row under the pointer is the highlighted one"
+        );
+        driven.frame();
+        let first = row_of(&driven, 0);
+        driven.mouse(first.x + 1, first.y, MouseEventKind::Moved);
+        assert_eq!(highlighted(&driven), Some(Choosing::Item(0)), "and back");
+    }
+
     /// A space's own row lands on a shell of the space's, not on whichever
     /// agent the strip was showing: it is the way back to the space's
     /// shells. A space of nothing but agents has no such tab, so the click

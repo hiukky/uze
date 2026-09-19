@@ -4,21 +4,24 @@
 //! harness registry: one crate, one module per extension, one registry
 //! entry point ([`registry::ExtensionRegistry`]) naming the set.
 //!
-//! One extension ships today — [`code`], which draws three surfaces of
-//! the active checkout: what changed in it, what it contains, and its
-//! commit timeline. A second is another module with its own `CATALOG`
-//! entry, one registration in `ExtensionRegistry::builtin`, and one
-//! [`ExtensionHit`] variant per surface it draws, not a new crate.
+//! Two ship today. [`code`] draws the active checkout four ways: what
+//! changed in it, what it contains, its commit timeline, and a map of
+//! where its lines are.
+//! [`architect`] is a proof of concept that draws architecture diagrams
+//! in cells. Another is a module with its own `CATALOG` entry, one
+//! registration in `ExtensionRegistry::builtin`, and one [`ExtensionHit`]
+//! variant per surface it draws, not a new crate.
 //!
 //! # Where a file goes
 //!
 //! One directory per extension, named after it, with the extension's own
 //! surface — its state, its keys, its registry entry — in the file beside
-//! it. What more than one extension needs would live under a `shared`
-//! module, created the day a second extension actually reaches for it and
-//! not before. [`view`] is neither: it is the contract between an
-//! extension and whatever draws it, which is why it sits at the root
-//! alongside [`Host`], the contract in the other direction.
+//! it. What more than one extension needs lives under `shared`, created
+//! the day a second extension actually reached for it and not before —
+//! today that is the canvas a drawing in cells is made on. [`view`] is
+//! neither: it is the contract between an extension and whatever draws
+//! it, which is why it sits at the root alongside [`Host`], the contract
+//! in the other direction.
 //!
 //! # An extension holds no machine access of its own
 //!
@@ -40,8 +43,10 @@
 //! along with the two-sided "keep these in sync by eye" it required. See
 //! [`view`] for the rest of the reasoning.
 
+pub mod architect;
 pub mod code;
 pub mod registry;
+mod shared;
 pub mod view;
 
 /// Something a viewer did inside an extension's own surface, addressed to
@@ -64,6 +69,8 @@ pub enum ExtensionHit {
     /// file list than in a list of commits, and the host is the only side
     /// that knows which of the two it drew.
     CodeTimeline(view::ViewHit),
+    /// The architect extension's full-frame surface.
+    Architect(view::ViewHit),
 }
 
 /// One entry of a directory listing, as [`Host::list_dir`] answers it.

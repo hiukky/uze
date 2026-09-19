@@ -358,6 +358,8 @@ impl Attach<'_> {
             // A file taking text seals everything behind it, the same way
             // the action index does: nothing else may answer a letter.
             Scope::CodeEditing
+        } else if self.model.architect.is_some() {
+            Scope::Architect
         } else if self.model.code.is_some() {
             Scope::Code
         } else {
@@ -529,6 +531,10 @@ impl Attach<'_> {
             self.context_menu_action(action);
             return Flow::Continue;
         }
+        if self.model.architect.is_some() {
+            self.architect_action(action);
+            return Flow::Continue;
+        }
         if self.model.code.is_some() {
             self.code_action(action);
             return Flow::Continue;
@@ -573,6 +579,7 @@ impl Attach<'_> {
             }
             Action::ToggleChanges => open_code(&mut self.model, code::ContentMode::Diff),
             Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
+            Action::ToggleArchitect => open_architect(&mut self.model),
             Action::NextSpace => self.step_space(1, columns, rows),
             Action::PreviousSpace => self.step_space(-1, columns, rows),
             Action::NextAgent => self.step_agent(1, columns, rows),
@@ -1069,6 +1076,126 @@ impl Attach<'_> {
         }
     }
 
+    /// A press on the architect surface. A click on the diagram is
+    /// finished here, like the code surface's caret: the render knew which
+    /// row it drew, and only the pointer knows how far along it landed.
+    fn architect_press(&mut self, column: u16, row: u16) {
+        let hit = self.architect_hit_at(column, row);
+        let view_hit = hit.map(|(rect, hit)| match hit {
+            ViewHit::PlaceCaret { line, cell } => ViewHit::PlaceCaret {
+                line,
+                cell: cell + usize::from(column - rect.x),
+            },
+            other => other,
+        });
+        if let Some(click @ ViewHit::PlaceCaret { .. }) = view_hit {
+            self.model.architect_grab = Some(DiagramGrab {
+                last: (column, row),
+                moved: false,
+                click,
+            });
+        } else if view_hit == Some(ViewHit::DragContentScrollbar) {
+            let space = self.architect_space();
+            if let Some(bar) = self.model.code_scrollbars.content_bar
+                && let Some(view) = self.model.architect.as_mut()
+            {
+                architect::scroll_to(view, bar.first_at(row), space);
+            }
+        } else {
+            let space = self.architect_space();
+            let outcome = self
+                .model
+                .architect
+                .as_mut()
+                .map(|view| architect::handle_mouse(view, view_hit, space));
+            self.follow_architect(outcome);
+        }
+        self.model.dirty = true;
+    }
+
+    /// The architect's own hit under a pointer, resolved the way that
+    /// surface hands its hits down: **first** in the list is topmost, an
+    /// open list having been spliced in front of the board it covers.
+    /// The workspace's own `hit_at` reads the other way round — latest
+    /// drawn first — which is right for chrome it drew itself and wrong
+    /// for a list somebody else ordered. One resolver, so a press and a
+    /// hover cannot land on two different things.
+    fn architect_hit_at(&self, column: u16, row: u16) -> Option<(Rect, ViewHit)> {
+        self.model.hits.iter().find_map(|(rect, hit)| {
+            let inside = rect.x <= column
+                && column < rect.x + rect.width
+                && rect.y <= row
+                && row < rect.y + rect.height;
+            match hit {
+                WorkspaceHit::Extension(ExtensionHit::Architect(hit)) if inside => {
+                    Some((*rect, *hit))
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// How much room the code surface has, which depends on what it is
+    /// showing: the map takes the frame, everything else the column
+    /// beside the tree.
+    fn code_space(&self) -> uze_extensions::view::Size {
+        crate::ui::extension_view::code_space(
+            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
+            self.model.code_tree_width,
+            self.model.code.as_ref(),
+        )
+    }
+
+    fn architect_space(&self) -> uze_extensions::view::Size {
+        crate::ui::extension_view::board_space(Rect::new(
+            0,
+            0,
+            self.model.last_size.0,
+            self.model.last_size.1,
+        ))
+    }
+
+    fn drag_diagram(&mut self, column: u16, row: u16) {
+        let space = self.architect_space();
+        if let Some(grab) = self.model.architect_grab.as_mut()
+            && let Some(view) = self.model.architect.as_mut()
+        {
+            let columns = i32::from(column) - i32::from(grab.last.0);
+            let rows = i32::from(row) - i32::from(grab.last.1);
+            architect::drag_by(view, columns, rows, space);
+            grab.last = (column, row);
+            grab.moved = true;
+            self.model.dirty = true;
+        }
+    }
+
+    /// A press that never moved was a click on whatever was under it.
+    fn release_diagram(&mut self) {
+        let space = self.architect_space();
+        if let Some(grab) = self.model.architect_grab.take()
+            && !grab.moved
+        {
+            let outcome = self
+                .model
+                .architect
+                .as_mut()
+                .map(|view| architect::handle_mouse(view, Some(grab.click), space));
+            self.follow_architect(outcome);
+        }
+    }
+
+    /// What the architect surface asked for by answering: to stay, to be
+    /// closed, or to hand over to the code a box stands for.
+    fn follow_architect(&mut self, outcome: Option<architect::ArchitectOutcome>) {
+        match outcome {
+            Some(architect::ArchitectOutcome::Close) => self.model.architect = None,
+            Some(architect::ArchitectOutcome::OpenPath { project, target }) => {
+                open_code_at(&mut self.model, &project, &target);
+            }
+            Some(architect::ArchitectOutcome::Stay) | None => {}
+        }
+    }
+
     /// Shows the part of the list a point on its scrollbar names. The
     /// navigator's scroll is the host's — only it knows how many rows
     /// fit.
@@ -1098,6 +1225,10 @@ impl Attach<'_> {
     /// opening anything.
     fn code_action(&mut self, action: Action) {
         match action {
+            Action::ToggleArchitect => {
+                open_architect(&mut self.model);
+                return;
+            }
             // A *toggle*, which is what the action is called and what the
             // key that reaches it promises: pressed on the surface it
             // already opened, it closes. Pressed on the other one it
@@ -1129,12 +1260,30 @@ impl Attach<'_> {
         self.tell_the_code_surface(command);
     }
 
+    /// The architect surface: its own door closes it, the code surface's
+    /// doors lead there, and everything else is a command it answers.
+    fn architect_action(&mut self, action: Action) {
+        match action {
+            Action::ToggleArchitect => self.model.architect = None,
+            Action::ToggleChanges => open_code(&mut self.model, code::ContentMode::Diff),
+            Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
+            _ => {
+                let space = self.architect_space();
+                let outcome = crate::ui::extension_view::command_for(action).and_then(|command| {
+                    self.model
+                        .architect
+                        .as_mut()
+                        .map(|view| architect::handle_command(view, command, space))
+                });
+                self.follow_architect(outcome);
+            }
+        }
+        self.model.dirty = true;
+    }
+
     /// Hands one command down, and closes the surface if it says so.
     fn tell_the_code_surface(&mut self, command: Command) {
-        let space = crate::ui::extension_view::content_space(
-            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
-            self.model.code_tree_width,
-        );
+        let space = self.code_space();
         if let Some(view) = self.model.code.as_mut()
             && matches!(
                 code::handle_command(view, command, space),
@@ -1234,6 +1383,21 @@ impl Attach<'_> {
             MouseEventKind::Down(MouseButton::Right) => self.open_context_menu(mouse),
             MouseEventKind::Moved => self.hover(mouse),
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => self.wheel(mouse, viewport),
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+                if self.model.architect.is_some() =>
+            {
+                let space = self.architect_space();
+                let columns = if mouse.kind == MouseEventKind::ScrollLeft {
+                    -6
+                } else {
+                    6
+                };
+                if let Some(view) = self.model.architect.as_mut() {
+                    architect::pan(view, columns, space);
+                    self.model.dirty = true;
+                }
+                Flow::Continue
+            }
             _ => Flow::Continue,
         }
     }
@@ -1420,6 +1584,9 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
+            _ if self.model.architect.is_some() => {
+                self.architect_press(mouse.column, mouse.row);
+            }
             _ if self.model.code.is_some() => {
                 let hit = self
                     .model
@@ -1468,10 +1635,16 @@ impl Attach<'_> {
                 {
                     self.model.dragging_code_content = true;
                     self.scroll_code_content_to(mouse.row);
-                } else if let Some(view) = self.model.code.as_mut()
-                    && matches!(code::handle_mouse(view, view_hit), code::CodeOutcome::Close)
-                {
-                    self.model.close_code();
+                } else {
+                    let space = self.code_space();
+                    if let Some(view) = self.model.code.as_mut()
+                        && matches!(
+                            code::handle_mouse(view, view_hit, space),
+                            code::CodeOutcome::Close
+                        )
+                    {
+                        self.model.close_code();
+                    }
                 }
                 self.model.dirty = true;
             }
@@ -1511,6 +1684,9 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            _ if self.model.architect_grab.is_some() => {
+                self.drag_diagram(mouse.column, mouse.row);
+            }
             _ if self.model.dragging_code_content => {
                 self.scroll_code_content_to(mouse.row);
             }
@@ -1623,6 +1799,7 @@ impl Attach<'_> {
         {
             forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
         }
+        self.release_diagram();
         if let Some(dragging) = self.model.dragging_space.take() {
             if let Some(pending) = dragging.pending {
                 let _ = send_request(
@@ -1820,6 +1997,20 @@ impl Attach<'_> {
             // across the pane must not cost a frame a tick.
             _ => {
                 let hovered = hit_at(&self.model, mouse.column, mouse.row);
+                // An extension's own open list follows the pointer too,
+                // by the same rule — but resolved its way, not the
+                // chrome's, or the hover lands on the board beneath it.
+                let over = self
+                    .architect_hit_at(mouse.column, mouse.row)
+                    .map(|(_, hit)| hit);
+                if self
+                    .model
+                    .architect
+                    .as_mut()
+                    .is_some_and(|view| architect::handle_hover(view, over))
+                {
+                    self.model.dirty = true;
+                }
                 if self.model.hovered != hovered {
                     self.model.hovered = hovered;
                     self.model.dirty = true;
@@ -1837,6 +2028,18 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            _ if self.model.architect.is_some() => {
+                let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                    ScrollDirection::Up
+                } else {
+                    ScrollDirection::Down
+                };
+                let space = self.architect_space();
+                if let Some(view) = self.model.architect.as_mut() {
+                    architect::handle_scroll(view, direction, space);
+                }
+                self.model.dirty = true;
+            }
             _ if self.model.code.is_some() => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
@@ -2172,6 +2375,7 @@ impl Attach<'_> {
             WorkspaceHit::OpenFiles => {
                 open_code(&mut self.model, code::ContentMode::Contents);
             }
+            WorkspaceHit::OpenArchitect => open_architect(&mut self.model),
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
@@ -2238,7 +2442,7 @@ impl Attach<'_> {
             // other two overlays; the sidebar section's are answered
             // here, since it is drawn as part of the sidebar rather than
             // over it.
-            WorkspaceHit::Extension(ExtensionHit::Code(_)) => {}
+            WorkspaceHit::Extension(ExtensionHit::Code(_) | ExtensionHit::Architect(_)) => {}
             WorkspaceHit::Extension(ExtensionHit::CodeTimeline(hit)) => match hit {
                 ViewHit::ToggleSection => toggle_timeline(&mut self.model),
                 ViewHit::ResizeSection => self.model.dragging_timeline = true,
@@ -2250,6 +2454,9 @@ impl Attach<'_> {
                 ),
                 ViewHit::GrabNavigatorEdge
                 | ViewHit::ToggleGroup(_)
+                | ViewHit::ChooseGroup
+                | ViewHit::ChooseItem
+                | ViewHit::SelectTrail(_)
                 | ViewHit::PlaceCaret { .. }
                 | ViewHit::SelectMode(_)
                 | ViewHit::DragContentScrollbar
@@ -2727,6 +2934,12 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
+        while let Ok(resolution) = self.channels.code_measures.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_measure(resolution);
+        }
+        while let Ok(resolution) = self.channels.artifacts.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_artifacts(resolution);
+        }
         while let Ok(RootProfileResolution { root, profile }) =
             self.channels.root_profiles.receiver.try_recv()
         {
@@ -2742,6 +2955,10 @@ impl Attach<'_> {
             .schedule_changes_refresh(&self.channels.code_changes.sender);
         self.model
             .schedule_file_request(&self.channels.code_files.sender);
+        self.model
+            .schedule_code_measure(&self.channels.code_measures.sender);
+        self.model
+            .schedule_artifacts_read(&self.channels.artifacts.sender);
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }

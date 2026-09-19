@@ -91,6 +91,8 @@ naming them, and the absorbed records are listed under
 - [046 — The design vocabulary is a leaf crate, resolved at load](046-the-design-vocabulary-is-a-leaf-crate-resolved-at-load.md)
 - [047 — The launch boundary owns session continuity](047-the-launch-boundary-owns-session-continuity.md)
 - [048 — An extension may write only what it was shown](048-an-extension-may-write-only-what-it-was-shown.md)
+- [049 — Diagrams are drawn in cells, by an engine uze owns](049-diagrams-are-drawn-in-cells-by-an-engine-uze-owns.md)
+- [050 — A project's artifacts are described by the files themselves](050-a-projects-artifacts-are-described-by-the-files-themselves.md)
 
 ## Consolidated records
 
