@@ -202,6 +202,11 @@ worktrees:
   # `handoff` leaves it for you to integrate.
   completion: handoff
 
+  # in-place | isolated — where an agent launched here starts. In place,
+  # it shares the project's own checkout and is isolated when somebody
+  # asks; isolated, every agent gets a checkout of its own at launch.
+  # default: in-place
+
   # The branch finished work targets. Undeclared, it is the branch the
   # primary checkout is on when the task is created.
   # target: main
@@ -532,7 +537,7 @@ fn validate(manifest: &ProjectManifest, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worktree::CompletionBehavior;
+    use crate::worktree::{AgentPlacementDefault, CompletionBehavior};
 
     fn parsed(text: &str) -> Result<ProjectManifest> {
         parse(text, Path::new("/p/agents.yaml"))
@@ -827,11 +832,13 @@ mod tests {
     #[test]
     fn the_policy_round_trips_with_every_field() {
         let manifest = parsed(
-            "worktrees:\n  target: develop\n  completion: pr\n  link: [.env, .env.local]\n  \
-             setup: pnpm install\n  gate:\n    - cargo test\n    - cargo clippy\n  slots: 3\n",
+            "worktrees:\n  default: isolated\n  target: develop\n  completion: pr\n  \
+             link: [.env, .env.local]\n  setup: pnpm install\n  gate:\n    - cargo test\n    \
+             - cargo clippy\n  slots: 3\n",
         )
         .unwrap();
         let policy = manifest.worktrees.unwrap();
+        assert_eq!(policy.default, AgentPlacementDefault::Isolated);
         assert_eq!(policy.target.as_deref(), Some("develop"));
         assert_eq!(policy.completion, CompletionBehavior::Pr);
         assert_eq!(policy.link.len(), 2);
@@ -842,6 +849,46 @@ mod tests {
             "a list is what makes a failure say which step failed"
         );
         assert_eq!(policy.slots, Some(3));
+    }
+
+    /// Where an agent starts is the project's answer, not a person's, and
+    /// an undeclared one is the answer UZE has always given: in the
+    /// project's own root, isolated when somebody asks. A value nobody
+    /// can read is refused by name with the rest of the policy rather
+    /// than quietly falling back to that default — a project that meant
+    /// `isolated` and typed it wrong would otherwise put every agent in
+    /// the operator's own tree.
+    #[test]
+    fn where_an_agent_starts_is_declared_defaulted_or_refused_by_name() {
+        assert_eq!(
+            parsed("worktrees:\n  completion: handoff\n")
+                .unwrap()
+                .worktrees
+                .unwrap()
+                .default,
+            AgentPlacementDefault::InPlace,
+            "undeclared is what was already in force"
+        );
+        assert_eq!(
+            parsed("worktrees:\n  default: in-place\n")
+                .unwrap()
+                .worktrees
+                .unwrap()
+                .default,
+            AgentPlacementDefault::InPlace
+        );
+
+        let reason = parsed("worktrees:\n  default: worktree\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains("worktree"),
+            "names the value it read: {reason}"
+        );
+        assert!(
+            reason.contains("in-place") && reason.contains("isolated"),
+            "the refusal names both answers it would have taken: {reason}"
+        );
     }
 
     #[test]
@@ -887,6 +934,7 @@ mod tests {
         }
 
         let policy = WorktreePolicy {
+            default: Default::default(),
             branch: crate::worktree::BranchVocabulary::Unset,
             target: Some("main".to_owned()),
             completion: CompletionBehavior::Handoff,

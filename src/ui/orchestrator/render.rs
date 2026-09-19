@@ -415,8 +415,8 @@ pub(super) fn render_context_menu(
 }
 
 /// Whether `cwd` is outside any slot: no repository, no commit to branch
-/// from, Git absent or refusing, or a space of the workspace kind, whose
-/// agents stand in the operator's own directory. An agent there owes its
+/// from — or an agent that simply has not been isolated, standing in
+/// the operator's own directory. An agent there owes its
 /// upstream a pull or a push that an agent in a slot never does, which is
 /// the one thing its caption says beyond the harness.
 fn is_unisolated(cwd: &Path) -> bool {
@@ -713,7 +713,7 @@ pub(super) fn render_sidebar(
 
         // Every fact a row draws, resolved once per agent, so drawing only
         // decides where each goes.
-        let agent_tabs = agent_tabs_of(space, identities);
+        let agent_tabs = agents_in_drawing_order(model, space, identities);
         let agents: Vec<SidebarAgent<'_>> = agent_tabs
             .iter()
             .enumerate()
@@ -734,15 +734,7 @@ pub(super) fn render_sidebar(
                 .iter()
                 .map(|agent| TreeCaption::resolve(model, agent))
                 .collect();
-            draw_tree(
-                frame,
-                &mut rows,
-                hits,
-                is_active_space,
-                space.kind,
-                &agents,
-                &captions,
-            );
+            draw_tree(frame, &mut rows, hits, is_active_space, &agents, &captions);
         }
         // One blank row *between* spaces (not between a tab and its own
         // detail line, which stays tight per the comment above) — each
@@ -847,6 +839,52 @@ pub(super) fn agent_tabs_of<'a>(space: &'a Space, identities: &[AgentIdentity]) 
         .collect()
 }
 
+/// A space's agents in the order the column draws them: the ones working
+/// in its own root, then the isolated ones, each group keeping the order
+/// the operator dragged it into.
+///
+/// The keyboard walks this order rather than the tab order, because an
+/// agent that isolates moves between the groups and a walk that skipped
+/// past where the row *is* would be reading a column nobody sees.
+pub(super) fn agents_in_drawing_order<'a>(
+    model: &WorkspaceModel,
+    space: &'a Space,
+    identities: &[AgentIdentity],
+) -> Vec<&'a Tab> {
+    let mut tabs = agent_tabs_of(space, identities);
+    tabs.sort_by_key(|tab| agent_group(model, tab.id));
+    tabs
+}
+
+/// Which of a space's two groups the agent on `tab` belongs to — read
+/// off the record UZE wrote rather than the shape of the directory the
+/// pane happens to sit in.
+pub(super) fn agent_group(model: &WorkspaceModel, tab: TabId) -> AgentGroup {
+    if model
+        .tab_task(tab)
+        .is_some_and(|task| !task.branch.is_empty())
+    {
+        AgentGroup::Isolated
+    } else {
+        AgentGroup::InTheRoot
+    }
+}
+
+/// The two groups a space's column is drawn in, in the order it draws
+/// them: the agents sharing the space's own root, then the ones working
+/// in a checkout of their own.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum AgentGroup {
+    InTheRoot,
+    Isolated,
+}
+
+impl AgentGroup {
+    pub(super) fn is_isolated(self) -> bool {
+        self == Self::Isolated
+    }
+}
+
 /// The rows a space's agents take under its caption — the header, the
 /// caption and the blank row after the space are the caller's. Every kind draws the same
 /// two-row item, so one measure serves them all, and the scroll bound,
@@ -860,6 +898,10 @@ fn agent_rows(agents: u16) -> u16 {
 /// which of its states are on.
 struct SidebarAgent<'a> {
     tab: &'a Tab,
+    /// Whether this agent works in a checkout of its own. What decides
+    /// the group its row sits in, the hue it wears, and whether the tree
+    /// branches for it.
+    isolated: bool,
     /// The agent the space is about (see `space_context_agent`).
     selected: bool,
     /// Selected *and* in the active space: the one agent receiving
@@ -905,7 +947,7 @@ impl TreeCaption {
         // *derived* from its branch (`worktree::label_of`), so the caption
         // repeated the name above it minus the type — and a task nobody
         // named reads `agent/<id>` under a label that is the identifier
-        // itself. In a workspace space it was worse: every tenant shares
+        // itself. For an agent in the root it was worse: they all share
         // the operator's branch, so every caption said the same thing.
         // The branch belongs to the space, and the space's header and the
         // timeline are where it is said once.
@@ -964,10 +1006,15 @@ impl<'a> SidebarAgent<'a> {
         // A tab-reorder drag in this exact space, resolved to drop right
         // before (or, on the last row, at the end after) this one.
         let drop_target = model.dragging_tab.is_some_and(|dragging| {
-            dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
+            dragging.is_pending_drop_row(
+                TabDragGroup::Agents(space.id, agent_group(model, tab.id)),
+                tab.id,
+                is_last,
+            )
         });
         Self {
             tab,
+            isolated: agent_group(model, tab.id).is_isolated(),
             selected,
             is_current,
             status: model.agent_tab_status(tab.pane.id, is_current),
@@ -1037,7 +1084,7 @@ fn render_space_caption(
     // with its header.
     let mut spans = vec![space_gutter(
         header_is_current(space, session, identities, model.space_folded(space)),
-        space.kind,
+        false,
     )];
     let hue = theme::color(Token::TextDim);
     row::push_trailing(&mut spans, rect.width, caption, hue);
@@ -1060,53 +1107,80 @@ fn render_space_caption(
 /// during a drag is an accent bar down the item's leading column, on
 /// both of its rows so it reads as the whole item.
 ///
-/// A worktree space hangs its items on a tree, each on a branch of its
-/// own. A workspace space is `flat`: its tenants all run in the root, so
-/// there is no branching to draw. Either way the agent receiving
-/// keystrokes is the one stretch of the gutter in the accent.
+/// An isolated agent hangs off the tree on a branch of its own, because
+/// its work does. One in the root is `flat`: it shares the space's tree,
+/// so there is no branching to draw. Either way the agent receiving
+/// keystrokes is the one stretch of the gutter in its group's hue.
 fn draw_tree(
     frame: &mut ratatui::Frame<'_>,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     is_active_space: bool,
-    kind: SpaceKind,
     agents: &[SidebarAgent<'_>],
     captions: &[TreeCaption],
 ) {
+    // Two groups: the agents working in the space's own root, then the
+    // isolated ones. A blank row between them, and only when both have
+    // somebody in them — a separator between collections, never between
+    // siblings. Isolating an agent moves its row from the first group to
+    // the second, which is how the operator sees the action happened.
+    let mut previous: Option<bool> = None;
     for (agent, caption) in agents.iter().zip(captions) {
         let tab = agent.tab;
-        // The space's gutter is the tree's trunk: a worktree item branches
-        // straight off it; a flat item sits beside it. Either way the status
-        // glyph and the name land one column inside the header's fold and
-        // name, so the column reads space > agent at the cost of one column.
-        // The agent receiving keystrokes lights its stretch of the gutter,
-        // and so does the row a dragged agent would land before: the same
-        // line, in the accent, never a heavier one.
+        let isolated = agent.isolated;
+        if previous.is_some_and(|was| was != isolated)
+            && let Some(gap) = rows.slot(1).visible()
+        {
+            let mut spans = vec![space_gutter(false, false)];
+            if is_active_space {
+                row::pad_to(
+                    &mut spans,
+                    gap.width,
+                    theme::color(Token::SurfaceRaisedSubtle),
+                );
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), gap);
+        }
+        previous = Some(isolated);
+        // The space's gutter is the tree's trunk: an isolated item
+        // branches straight off it, because its work does; an agent in
+        // the root sits beside it. Either way the status glyph and the
+        // name land one column inside the header's fold and name, so the
+        // column reads space > agent at the cost of one column. The agent
+        // receiving keystrokes lights its stretch of the gutter, and so
+        // does the row a dragged agent would land before: the same line,
+        // in the accent, never a heavier one.
         let lit = agent.is_current || agent.drop_target;
-        let flat = kind == SpaceKind::Workspace;
-        // The row the keyboard is on carries a trace of its space's own
+        let flat = !isolated;
+        // The row the keyboard is on carries a trace of its own group's
         // hue over the panel every other row sits on — the item is two
         // rows and the status glyph is one cell, so the block is what
         // reads as "here" at a glance. Nothing outside the active space
         // is tinted: `is_current` is selected *and* receiving keystrokes.
         let surface = if agent.is_current {
-            Some(theme::tinted(kind_hue(kind), Token::SurfaceRaisedSubtle))
+            Some(theme::tinted(
+                group_hue(isolated),
+                Token::SurfaceRaisedSubtle,
+            ))
         } else {
             is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
         };
         // One blank column between the connector and the status glyph, in
-        // either kind, so the two land in the same place: the tree's line
-        // runs into the row rather than into the mark that answers for the
-        // agent.
+        // either group, so the two land in the same place: the tree's
+        // line runs into the row rather than into the mark that answers
+        // for the agent.
         let lead = || {
             if flat {
-                [space_gutter(lit, kind), Span::raw("  ")]
+                [space_gutter(lit, isolated), Span::raw("  ")]
             } else {
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
-                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit, kind)),
-                    Span::styled(format!("{} ", &branch[trunk..]), gutter_style(lit, kind)),
+                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit, isolated)),
+                    Span::styled(
+                        format!("{} ", &branch[trunk..]),
+                        gutter_style(lit, isolated),
+                    ),
                 ]
             }
         };
@@ -1152,7 +1226,7 @@ fn draw_tree(
         if let Some(detail_rect) = rows.slot(1).visible() {
             // Under the agent's name, past the connector's blank column
             // and the status column, in either kind.
-            let mut spans = vec![space_gutter(lit, kind), Span::raw("    ")];
+            let mut spans = vec![space_gutter(lit, isolated), Span::raw("    ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1545,7 +1619,7 @@ pub(super) fn render_space_header(
     let label_style = theme::fg(Token::TextInactive);
     let fold = mark::disclosure(!collapsed);
     let mut spans = vec![
-        space_gutter(is_current, space.kind),
+        space_gutter(is_current, false),
         Span::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
     ];
     // The fold and the space after it: a target two cells wide, pushed
@@ -1602,26 +1676,30 @@ pub(super) fn render_space_header(
 /// last row: the space as one block. Muted in every space, the one being
 /// worked in included; `lit`, in the hue of the space's own kind, only
 /// along what is selected in it.
-fn space_gutter(lit: bool, kind: SpaceKind) -> Span<'static> {
-    Span::styled(theme::glyph(Symbol::TreeVertical), gutter_style(lit, kind))
+fn space_gutter(lit: bool, isolated: bool) -> Span<'static> {
+    Span::styled(
+        theme::glyph(Symbol::TreeVertical),
+        gutter_style(lit, isolated),
+    )
 }
 
-fn gutter_style(lit: bool, kind: SpaceKind) -> Style {
+fn gutter_style(lit: bool, isolated: bool) -> Style {
     if lit {
-        theme::fg(kind_hue(kind))
+        theme::fg(group_hue(isolated))
     } else {
         theme::fg(Token::TextMuted)
     }
 }
 
-/// The hue a kind of space marks itself in, wherever it does: the gutter
-/// along what is selected in it, and the word the picker says it would
-/// create. Two kinds in one column are told apart by colour before they
+/// The hue an agent's group marks itself in, wherever it does: the
+/// gutter beside it, and the surface under the item the keyboard is on.
+/// The two groups of one space are told apart by colour before they
 /// are read.
-fn kind_hue(kind: SpaceKind) -> Token {
-    match kind {
-        SpaceKind::Worktree => Token::SpaceWorktree,
-        SpaceKind::Workspace => Token::SpaceWorkspace,
+fn group_hue(isolated: bool) -> Token {
+    if isolated {
+        Token::AgentIsolated
+    } else {
+        Token::AgentInPlace
     }
 }
 
@@ -1976,7 +2054,6 @@ fn render_root_picker(
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    render_kind_row(frame, picker, rows, hits);
     render_query_row(frame, picker, rows);
     if picker.match_count() == 0 {
         if let Some(rect) = rows.next(1) {
@@ -2085,56 +2162,6 @@ fn section_column(area: Rect) -> Rect {
 /// The width of that step.
 const SECTION_LEAD: u16 = 1;
 
-/// The row that says which kind of space the prompt would create: the one
-/// it is on, alone. Both words side by side asked to be read as a sentence
-/// and answered nothing; one word is the state, and the `⇄` at the row's
-/// end is how it changes — the same control a space's header carries for
-/// the same kind of flip. A kind the root cannot honour is never the one
-/// shown: `RootPicker::kind` answers with what the root allows.
-fn render_kind_row(
-    frame: &mut ratatui::Frame<'_>,
-    picker: &RootPicker,
-    rows: &mut Rows,
-    hits: &mut Vec<(Rect, WorkspaceHit)>,
-) {
-    let Some(rect) = rows.next(1) else { return };
-    let kind = picker.kind();
-    let name = match kind {
-        SpaceKind::Worktree => "worktree",
-        SpaceKind::Workspace => "workspace",
-    };
-    let mut spans = vec![
-        picker_lead(),
-        Span::styled(name, theme::fg_bold(kind_hue(kind))),
-    ];
-    // The other kind is what the control answers with, so the click target
-    // is the glyph rather than a word that is not on the row.
-    let toggle = match kind {
-        SpaceKind::Worktree => SpaceKind::Workspace,
-        SpaceKind::Workspace => SpaceKind::Worktree,
-    };
-    // Always a target, even where the root allows only the kind already
-    // shown: `RootPicker::choose_kind` refuses that flip on its own, and a
-    // control that is simply absent makes the click land on the picker's
-    // "clicked outside" rule and close it.
-    hits.push((
-        Rect::new(rect.right().saturating_sub(1 + TRAILING_PAD), rect.y, 1, 1),
-        WorkspaceHit::PickSpaceKind(toggle),
-    ));
-    row::push_trailing(
-        &mut spans,
-        rect.width,
-        theme::glyph(Symbol::ArrowSwap),
-        theme::color(Token::TextSecondary),
-    );
-    row::pad_to(
-        &mut spans,
-        rect.width,
-        theme::color(Token::SurfaceRaisedSubtle),
-    );
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-}
-
 /// The row being typed into: what is being looked for, with the directory
 /// it is being looked for in at the row's other end — a prompt that opened
 /// with that path already typed into it asked to be deleted before it could
@@ -2170,13 +2197,12 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
     }
     row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-    // In the hue of the kind it would create, like the gutter of a space
-    // already open: the mark says which of the two this row is answering
-    // for, not just that it is the row being typed into.
+    // The gutter a space already open wears, so the row being typed into
+    // reads as the space it is about to become.
     frame.render_widget(
         Paragraph::new(theme::glyph(Symbol::TreeVertical)).style(
             Style::default()
-                .fg(theme::color(kind_hue(picker.kind())))
+                .fg(theme::color(Token::Accent))
                 .bg(theme::color(Token::SurfaceRaised)),
         ),
         Rect::new(rect.x, rect.y, 1, 1),

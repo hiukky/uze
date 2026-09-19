@@ -79,23 +79,26 @@ printf '/.worktrees/\\n' >> .git/info/exclude
 mkdir -p {UZE_HOME}/state/tasks {UZE_HOME}/shims
 cat > {tasks} <<'UZE_EOF'
 {{
-  "schema_version": 2,
-  "tenants": [],
-  "tasks": [
+  "schema_version": 3,
+  "agents": [
     {{
       "id": "{SLOT_NAME}",
+      "harness": "{harness}",
       "label": "continuity",
-      "base": {{ "kind": "ref", "value": "main" }},
-      "base_commit": "",
-      "target": "main",
-      "branch": "agent/{SLOT_NAME}",
-      "checkout": "{SLOT_NAME}",
-      "state": {{ "state": "running" }},
-      "pushed": false,
-      "published_as": null,
-      "published_request": null,
-      "published_tip": null,
-      "created_at_unix": 1
+      "created_at_unix": 1,
+      "ended_at_unix": null,
+      "isolation": {{
+        "base": {{ "kind": "ref", "value": "main" }},
+        "base_commit": "",
+        "target": "main",
+        "branch": "agent/{SLOT_NAME}",
+        "checkout": "{SLOT_NAME}",
+        "state": {{ "state": "running" }},
+        "published_as": null,
+        "published_request": null,
+        "request_branch": null,
+        "request_asked_at_unix": null
+      }}
     }}
   ]
 }}

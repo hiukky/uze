@@ -2,6 +2,13 @@
 # agents.lock, which you never edit.
 
 worktrees:
+  # Every agent launched here gets a checkout of its own, which is what
+  # this repository has always done and what its own "Concurrent work
+  # isolation" section tells an agent to expect. Undeclared, an agent
+  # would start in the operator's checkout and be isolated only when
+  # somebody asked.
+  default: isolated
+
   # UZE rebases an agent's branch onto the target, runs the checks, pushes
   # it, and asks the agent to open the request. Projected into AGENTS.md's
   # "Concurrent work isolation" section by `uze context reconcile`.

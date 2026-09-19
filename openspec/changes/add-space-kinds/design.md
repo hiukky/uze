@@ -48,33 +48,54 @@ Facts that shape the approach:
 
 ## Decisions
 
-**A tenant is a record of its own, not a `Task` variant.** The first draft
-put `work: Work::Isolated | InPlace` inside `Task`. That makes
-`Task { work: InPlace, state: Ready }` representable and forces a match
-into every function that takes `&Task`. Instead:
-`Tenant { id: AgentId, harness, root, created_at_unix, ended_at_unix }` in
-`TaskStore.tenants`, under the same lock and the same per-repository
-sweep. `AgentId` is what `TaskId` is today, with `branch()` moved onto
-`Task`, so task and tenant share exactly identity and conversation and
-nothing else. `landing`, `checkout`, `evaluate_tasks`, `deliver`,
-`release` and `collect` are untouched. The name: "seat" was the rule
-`add-portable-worktree-policy` removed and would read as its return;
-"tenant" says what the agent is to the directory.
+**One record per agent, with the work nested inside its isolation.**
+
+The first round rejected `work: Work::Isolated | InPlace` inside `Task`
+for a good reason: it makes `Task { work: InPlace, state: Ready }`
+representable and forces a match into every function that takes a
+`&Task`. It answered with a second record, `Tenant`, beside `Task`.
+
+Isolation being an action rather than a property of the space breaks that
+answer: an agent has to keep its identity, its harness and its
+conversation while *acquiring* work, and moving a record between two
+collections mid-life is the one operation two types make hardest — the
+sweep can see the agent twice, and every reader has to ask which
+collection it came from.
+
+The shape that answers both objections is neither of the two drafts: one
+record, and the work nested *inside* the isolation rather than flattened
+beside a flag.
+
+```
+Agent     { id, harness, created_at, ended_at, isolation: Option<Isolation> }
+Isolation { checkout, branch, base, base_commit, target, state, published… }
+```
+
+`Ready` is then not representable without a checkout to be ready in, which
+is what the first round was protecting. Isolating is filling a field under
+the document's lock, not moving a row between lists. And the harness
+becomes a fact the record carries rather than one the sidebar infers from
+whatever process a pane happens to be running.
+
+What this deletes, rather than deprecates: `Tenant`, and `AgentRecord` —
+the enum that existed to answer "which kind of record is this identifier",
+which has no caller outside its own module.
 
 **`Option<CheckoutId>` stays.** With tenants out of `Task`, "never had a
 checkout" no longer needs representing; "lost its checkout" is what
 `None` plus the state already mean, and "lost while a pane still sits in
 it" is an observation (`slot_path(...).is_dir()`), not a record.
 
-**The kind lives on the terminal's `Space`, opaque to the server.** A
-space's identity is not its root — `create_space` allows several spaces
-per root by design — and the terminal mints space ids afresh on restore,
-so no stable key exists outside the terminal for a domain-side registry to
-hang on. `Space.kind` sits beside `label`, which the server also persists
-and never reads. The proof is a rule in `tests/architecture/layering.rs`:
-`crates/uze-terminal/src/runtime.rs` may not name the kind's vocabulary.
-`Session::open_space` looks a space up with `space_for(seat)`, a seat
-being a root and a kind together.
+**The kind is deleted, not kept as a field nobody reads.** The first round
+put it on the terminal's `Space`, opaque to the server, with an
+architecture rule proving the runtime never named its vocabulary. With one
+kind there is nothing to carry: `Space.kind` and `CreateSpace.kind` leave
+the protocol and the persisted workspace, a seat is a root, and
+`space_for` looks a space up by root alone. Keeping the field "for
+compatibility" would leave exactly the kind of dead weight this round is
+paid to remove — and the document it lives in is versioned, so an older
+workspace is read by the rule `upgrade-resilience` states rather than by a
+reader that tolerates both shapes.
 
 **Two vocabularies for the kind, translated once.** `uze-application`
 does not depend on `uze-terminal`, and `src/` may not name `uze_core`, so
@@ -177,6 +198,52 @@ profile refuses is refused with the reason rather than created. The
 keyboard reaches the picker first: `Action::NewSpace` gets a default
 chord and a `perform` arm that opens `RootPicker::opened_in` exactly as
 `WorkspaceHit::NewSpace` does, as its own PR before the picker changes.
+
+**Isolating a live agent is place, open, close — a flow that already
+runs.** A process cannot be moved between directories, so the agent is
+relaunched in the new checkout resuming its conversation. Every piece
+exists: `place_in_slot` acquires the slot, the launch carries the agent's
+identity, `--resume` continues the conversation, and
+`PlacementResolution.replacing` closes the tab the new one takes over
+from — which is how a task whose checkout was removed is resumed today.
+Isolation is that flow with the record updated instead of created.
+
+**The operator's tree is never moved, only copied from.** UZE cannot
+attribute an uncommitted change to an agent: the root's working tree is
+shared by the operator and every agent in the space. So "bring the
+agent's changes" is not implementable honestly — only "bring the tree's
+changes" is. Moving them would take the operator's own work out of their
+tree, which is the one thing `add-portable-worktree-policy`'s invariant
+forbids; discarding them is never an answer. What is left is copying,
+and only when there is something to copy: a clean root isolates with no
+question at all, which is the overwhelming case and the one this round
+exists for.
+
+**The isolated agent continues from where it stood.** Its branch is cut
+from the root's current `HEAD`, not from the target. Carrying a copy of
+the changes only means anything against the base they were made on, and
+"isolate" promises the same work somewhere of its own — not a fresh
+start. Starting from the target is the other answer the prompt offers
+when the tree is dirty.
+
+**The column groups by where an agent works, and the move is the
+feedback.** The space's own agents first, the isolated ones after, in two
+groups with a blank row between them *only when both exist* — a
+separator between collections, not between siblings, which is the gap
+this round's predecessor removed. Each group has its own colour, the two
+the kinds used to wear, so a row's group is read without reading the row.
+Isolating moves the row from the first group to the second: the agent
+really did move, the tab really was replaced, and a row that jumps says
+so better than a glyph that changes. Dragging to reorder stays inside a
+group, since crossing the boundary is the action, not a drag.
+
+**The default belongs to the project, not to the container.** Someone who
+always isolates should not pay a click per agent, and the first round
+answered that with a space they created by hand. `agents.yaml` already
+carries the `worktrees:` policy — target, slots, completion — so the
+default goes there: declared once, versioned with the project, the same
+for everyone who opens it. A container each person creates by hand is
+where that answer goes wrong.
 
 **The spec and the invariant narrow; the tests keep their words.** "Every
 agent is isolated" becomes "every agent launched into a worktree space".

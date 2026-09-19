@@ -131,6 +131,14 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     put(Action::NewAgent, Control("the tab strip's `✦`"));
     put(Action::NewSpace, Control("the sidebar's `+ new` row"));
     put(
+        Action::IsolateAgent,
+        Control("an agent row's actions, in a repository"),
+    );
+    put(
+        Action::IsolateAgentWithChanges,
+        Control("an agent row's actions, beside Isolate"),
+    );
+    put(
         Action::RenameSelection,
         Control("double-clicking the label, or the row's actions"),
     );

@@ -22,7 +22,7 @@
     "state.in-flight": "#f1fa8c",
     "state.landed": "#ff79c6",
     "state.published": "#6272a4",
-    "space.workspace": "#f1fa8c",
+    "agent.in-place": "#f1fa8c",
 
     "ansi.1": "#ff5555",
     "ansi.2": "#50fa7b",

@@ -145,6 +145,39 @@ pub fn write_within(root: &Path, args: &[&str], timeout: Duration) -> Result<Out
     run(base_command(root, args))
 }
 
+/// [`write`] for a command that reads its input rather than its
+/// arguments — `git apply` taking a patch, the one write whose subject is
+/// too big to be an argument at all.
+///
+/// The stdin every other entry point nulls on purpose (a command that
+/// stops to ask for a credential never gets an answer) is opened for
+/// exactly this, and closed the moment the input is written, so a Git
+/// that waits for more input meets the end of it rather than a terminal.
+pub fn write_with_stdin(root: &Path, args: &[&str], input: &str) -> Result<Output, SpawnError> {
+    use std::io::Write;
+
+    let _held = lock::acquire(root, DEFAULT_WRITE_TIMEOUT)?;
+    let mut command = base_command(root, args);
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(describe_spawn_failure)?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(describe_spawn_failure)?;
+    }
+    // Dropped before waiting: a `git apply` reads until end of input, and
+    // a pipe still open is an input that has not ended.
+    drop(child.stdin.take());
+    let output = child.wait_with_output().map_err(describe_spawn_failure)?;
+    Ok(Output {
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
 /// [`write`] with variables set for this one command. For a write whose
 /// result must not depend on the moment it ran — an object written only to
 /// be compared, which a pinned date makes the same object every time.

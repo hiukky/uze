@@ -710,16 +710,63 @@ fn classify_lock_refusal(error: io::Error) -> LockRefusal {
 
 #[derive(Serialize, serde::Deserialize)]
 struct PersistedWorkspace {
+    /// The shape this document is in. Read before the document, out of
+    /// the one field every version of it carries, so a workspace written
+    /// by another build is *named* rather than parsed into silence: the
+    /// spaces of version 1 carried a kind per space, which this build has
+    /// no field for and `serde` would drop without a word.
+    #[serde(default = "first_workspace_schema")]
+    schema_version: u32,
     spaces: Vec<SpaceSeed>,
 }
+
+/// A document with no version is the one written before this field
+/// existed — version 1 by definition, for every kind of document UZE
+/// owns.
+fn first_workspace_schema() -> u32 {
+    1
+}
+
+/// What this build writes, and the only version it restores.
+const WORKSPACE_SCHEMA_VERSION: u32 = 2;
 
 /// Best-effort: a workspace with nothing persisted yet (first run, or the
 /// file is missing/unreadable/corrupt) is not an error — [`Server::new`]
 /// falls back to its ordinary fresh-bootstrap path exactly as if this
 /// returned `None` from the start.
 fn load_persisted_workspace() -> Option<PersistedWorkspace> {
-    let bytes = fs::read(persisted_state_path()).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let path = persisted_state_path();
+    let bytes = fs::read(&path).ok()?;
+    let persisted: PersistedWorkspace = serde_json::from_slice(&bytes).ok()?;
+    if persisted.schema_version == WORKSPACE_SCHEMA_VERSION {
+        return Some(persisted);
+    }
+    // A workspace this build cannot read is rebuildable state: what is
+    // lost is the shape of spaces and tabs, never a checkout, a branch or
+    // a conversation. The bytes are kept beside it under a name nothing
+    // reads as a workspace, and the server starts from the seat it was
+    // given.
+    let moved = path.with_file_name(format!(
+        "{}.unreadable-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace.json"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default()
+    ));
+    match fs::rename(&path, &moved) {
+        Ok(()) => tracing::warn!(
+            workspace = %path.display(),
+            set_aside = %moved.display(),
+            found = persisted.schema_version,
+            expected = WORKSPACE_SCHEMA_VERSION,
+            "the persisted workspace was written by another build; set aside"
+        ),
+        Err(error) => tracing::warn!(%error, "the persisted workspace could not be set aside"),
+    }
+    None
 }
 
 /// Replaces `path`'s contents in one step, so a reader only ever sees the
@@ -847,7 +894,6 @@ fn start_server(seat: &SpaceSeat) -> Result<(), RuntimeError> {
     std::process::Command::new(executable)
         .args(["terminal", "serve", "--root"])
         .arg(&seat.root)
-        .args(["--kind", seat.kind.name()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -1168,6 +1214,7 @@ impl Server {
         let session = self.session.lock().expect("session poisoned");
         let workspace =
             PersistedWorkspace {
+                schema_version: WORKSPACE_SCHEMA_VERSION,
                 spaces: session
                     .workspace
                     .spaces
@@ -1175,7 +1222,6 @@ impl Server {
                     .map(|space| SpaceSeed {
                         label: space.label.clone(),
                         root: space.root.clone(),
-                        kind: space.kind,
                         tabs: space
                             .tabs
                             .iter()
@@ -2707,11 +2753,12 @@ fn identity_of(root: &Path) -> String {
 mod tests {
     use super::{
         ANSWERS_WITHIN, Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
-        PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server, WorkspaceLock,
-        arrival, bind_endpoint, held_by_a_server, identify, identity_of, listener_at,
-        persisted_state_path, read_event, read_message, relaunch_command_for_process, retire,
-        send_request, serves_this_build, signalable, snapshot, socket_path, view_for,
-        workspace_is_claimed, workspace_lock_path, write_atomically, write_message,
+        PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server,
+        WORKSPACE_SCHEMA_VERSION, WorkspaceLock, arrival, bind_endpoint, held_by_a_server,
+        identify, identity_of, listener_at, load_persisted_workspace, persisted_state_path,
+        read_event, read_message, relaunch_command_for_process, retire, send_request,
+        serves_this_build, signalable, snapshot, socket_path, view_for, workspace_is_claimed,
+        workspace_lock_path, write_atomically, write_message,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -2754,13 +2801,12 @@ mod tests {
     /// it does not — the rule that lets two terminals look at two agents.
     #[test]
     fn a_clients_view_overlays_its_own_selection_and_heals_a_stale_one() {
-        let mut session = Session::new(worktree_seat(Path::new("/tmp/a")), 80, 24);
+        let mut session = Session::new(seat_at(Path::new("/tmp/a")), 80, 24);
         let first_space = session.workspace.selected_space;
         session.create_space(
             Some("b".into()),
             crate::SpaceSeat {
                 root: "/tmp/b".into(),
-                kind: crate::SpaceKind::Worktree,
             },
             80,
             24,
@@ -3480,8 +3526,7 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
-        let (server, _damage) =
-            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket_path().unwrap()).unwrap();
         let server = Arc::new(server);
 
         let attach = |seating: crate::Seating| {
@@ -3526,7 +3571,7 @@ mod tests {
 
         assert_eq!(spaces(), 1, "the bootstrap space, and nothing else");
 
-        let landed = attach(crate::Seating::At(worktree_seat(&elsewhere)));
+        let landed = attach(crate::Seating::At(seat_at(&elsewhere)));
         assert_eq!(spaces(), 1, "landing somewhere unopened created a space");
         assert_eq!(
             landed, project,
@@ -3537,11 +3582,11 @@ mod tests {
         assert_eq!(spaces(), 1, "saying nothing created a space");
         assert_eq!(landed, project);
 
-        let landed = attach(crate::Seating::At(worktree_seat(&project)));
+        let landed = attach(crate::Seating::At(seat_at(&project)));
         assert_eq!(spaces(), 1, "a seat that is already open opens nothing");
         assert_eq!(landed, project, "and is what the client lands on");
 
-        let landed = attach(crate::Seating::Open(worktree_seat(&elsewhere)));
+        let landed = attach(crate::Seating::Open(seat_at(&elsewhere)));
         assert_eq!(spaces(), 2, "asking to open a space did not open one");
         assert_eq!(landed, elsewhere, "and the client lands in it");
     }
@@ -3627,8 +3672,7 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
-        let (server, _damage) =
-            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket_path().unwrap()).unwrap();
         let server = Arc::new(server);
 
         let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -3762,13 +3806,12 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let (server, damage) =
-            Server::new(worktree_seat(&project), socket_path().unwrap()).unwrap();
+        let (server, damage) = Server::new(seat_at(&project), socket_path().unwrap()).unwrap();
         let pane = server
             .session
             .lock()
             .expect("session poisoned")
-            .create_space(None, worktree_seat(&project), 80, 24)
+            .create_space(None, seat_at(&project), 80, 24)
             .pane;
         let silent = Launch::Program {
             argv: vec!["sleep".into(), "30".into()],
@@ -3805,7 +3848,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).unwrap();
         let server = Arc::new(server);
         // A second space, so closing the launch space leaves a survivor
         // rather than opening a replacement.
@@ -3817,7 +3860,6 @@ mod tests {
                 Some("other".into()),
                 crate::SpaceSeat {
                     root: other.clone(),
-                    kind: crate::SpaceKind::Worktree,
                 },
                 80,
                 24,
@@ -3827,11 +3869,10 @@ mod tests {
         let launch = {
             let mut session = server.session.lock().expect("session poisoned");
             let launch = session
-                .space_for(&worktree_seat(&project))
+                .space_for(&seat_at(&project))
                 .expect("the bootstrap space is rooted at the launch directory");
             let seat = crate::SpaceSeat {
                 root: other.clone(),
-                kind: crate::SpaceKind::Worktree,
             };
             assert!(
                 session.remove_space(launch, seat, 80, 24).is_some(),
@@ -3865,7 +3906,7 @@ mod tests {
             }
         };
         assert_eq!(
-            attached.space_for(&worktree_seat(&project)),
+            attached.space_for(&seat_at(&project)),
             None,
             "a rootless attach left the closed space closed"
         );
@@ -3906,7 +3947,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (first, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
+        let (first, _damage) = Server::new(seat_at(&project), socket.clone()).unwrap();
         let agent_pane = first
             .session
             .lock()
@@ -3915,7 +3956,6 @@ mod tests {
                 Some("frontend".into()),
                 crate::SpaceSeat {
                     root: project.clone(),
-                    kind: crate::SpaceKind::Worktree,
                 },
                 80,
                 24,
@@ -3933,7 +3973,7 @@ mod tests {
         // lock is there to refuse.
         drop(first);
 
-        let (second, _damage2) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (second, _damage2) = Server::new(seat_at(&project), socket).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             assert_eq!(session.workspace.spaces.len(), 2, "both spaces restored");
@@ -3974,7 +4014,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).unwrap();
         let pane = server
             .session
             .lock()
@@ -3983,7 +4023,6 @@ mod tests {
                 Some("agent".into()),
                 crate::SpaceSeat {
                     root: project.clone(),
-                    kind: crate::SpaceKind::Worktree,
                 },
                 80,
                 24,
@@ -4053,7 +4092,7 @@ mod tests {
         env.set("UZE_HOME", &uze_home);
 
         let socket = socket_path().unwrap();
-        let (first, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
+        let (first, _damage) = Server::new(seat_at(&project), socket.clone()).unwrap();
         let pane_id = first
             .session
             .lock()
@@ -4070,7 +4109,7 @@ mod tests {
         first.stop_panes();
         drop(first);
 
-        let (second, _damage2) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (second, _damage2) = Server::new(seat_at(&project), socket).unwrap();
         {
             let session = second.session.lock().expect("session poisoned");
             let tab = session.selected_tab();
@@ -4088,6 +4127,60 @@ mod tests {
             );
         }
         second.stop_panes();
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The previous release wrote a kind per space. This build has no
+    /// field for one, and `serde` would have dropped it without a word —
+    /// every space restored as something the operator never chose. The
+    /// version is read before the document, so the whole file is set
+    /// aside under a name nothing reads as a workspace and the operator
+    /// is told, rather than opening onto a workspace that lies.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_workspace_from_the_previous_release_is_set_aside_rather_than_half_read() {
+        let scratch = uze_testkit::temp::socket_scratch("persprev");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let path = persisted_state_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Version 1 as the previous release wrote it: a kind per space.
+        std::fs::write(
+            &path,
+            br#"{"spaces":[{"label":"demo","root":"/gone","kind":"worktree","tabs":[]}]}"#,
+        )
+        .unwrap();
+
+        assert!(
+            load_persisted_workspace().is_none(),
+            "a document of another version restores nothing"
+        );
+        assert!(!path.exists(), "and is moved off the name a workspace has");
+        let beside: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("unreadable"))
+            .collect();
+        assert_eq!(beside.len(), 1, "the bytes are kept beside it: {beside:?}");
+
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
+        {
+            let session = server.session.lock().expect("session poisoned");
+            assert_eq!(
+                session.workspace.spaces.len(),
+                1,
+                "the server starts from the seat it was given"
+            );
+            assert_eq!(session.workspace.spaces[0].root, project);
+        }
+        server.stop_panes();
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -4111,7 +4204,7 @@ mod tests {
         env.set("UZE_HOME", &uze_home);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).expect("server");
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
         {
             let mut session = server.session.lock().expect("session poisoned");
             let space = session.workspace.selected_space;
@@ -4146,10 +4239,10 @@ mod tests {
         let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let stale = PersistedWorkspace {
+            schema_version: WORKSPACE_SCHEMA_VERSION,
             spaces: vec![SpaceSeed {
                 label: "space 1".into(),
                 root: project.clone(),
-                kind: crate::SpaceKind::Worktree,
                 tabs: vec![TabSeed {
                     label: "shell".into(),
                     cwd: project.clone(),
@@ -4164,7 +4257,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&stale).unwrap()).unwrap();
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket)
+        let (server, _damage) = Server::new(seat_at(&project), socket)
             .expect("a stale persisted command must not fail server startup");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -4309,7 +4402,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).unwrap();
         let server = Arc::new(server);
         let pane = server
             .session
@@ -4472,10 +4565,9 @@ mod tests {
         ]
     }
 
-    fn worktree_seat(root: &Path) -> crate::SpaceSeat {
+    fn seat_at(root: &Path) -> crate::SpaceSeat {
         crate::SpaceSeat {
             root: root.to_path_buf(),
-            kind: crate::SpaceKind::Worktree,
         }
     }
 
@@ -4570,10 +4662,10 @@ mod tests {
         let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let persisted = PersistedWorkspace {
+            schema_version: WORKSPACE_SCHEMA_VERSION,
             spaces: vec![SpaceSeed {
                 label: "space 1".into(),
                 root: project.clone(),
-                kind: crate::SpaceKind::Worktree,
                 tabs: vec![TabSeed {
                     label: "agent 1".into(),
                     cwd: project.clone(),
@@ -4588,7 +4680,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).unwrap();
         assert_eq!(read_when_written(&report), "agent-restarted");
         let session = server.session.lock().expect("session poisoned");
         let tab = session.selected_tab();
@@ -4616,7 +4708,7 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&project), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).unwrap();
         let pane = server
             .session
             .lock()
@@ -4625,7 +4717,6 @@ mod tests {
                 Some("agent".into()),
                 crate::SpaceSeat {
                     root: project.clone(),
-                    kind: crate::SpaceKind::Worktree,
                 },
                 80,
                 24,
@@ -4846,15 +4937,15 @@ mod tests {
         );
 
         let first = ClaimHolder::spawn(&uze_home);
-        let second = Server::new(worktree_seat(&project), socket.clone());
+        let second = Server::new(seat_at(&project), socket.clone());
         assert!(
             matches!(second, Err(RuntimeError::Protocol(_))),
             "a workspace a live server holds must not be restored a second time"
         );
 
         first.release();
-        let (third, _damage3) = Server::new(worktree_seat(&project), socket)
-            .expect("the claim is released with its holder");
+        let (third, _damage3) =
+            Server::new(seat_at(&project), socket).expect("the claim is released with its holder");
         third.stop_panes();
 
         let _ = std::fs::remove_dir_all(&scratch);
@@ -5009,9 +5100,8 @@ mod tests {
         let _held = match std::env::var_os(SERVING_HOLDER) {
             Some(root) => {
                 let socket = socket_path().expect("the holder's endpoint");
-                let (server, _damage) =
-                    Server::new(worktree_seat(Path::new(&root)), socket.clone())
-                        .expect("the holder serves");
+                let (server, _damage) = Server::new(seat_at(Path::new(&root)), socket.clone())
+                    .expect("the holder serves");
                 let server = Arc::new(server);
                 let listener = bind_endpoint(&socket).expect("the holder binds its endpoint");
                 std::thread::spawn(move || {
@@ -5238,11 +5328,11 @@ mod tests {
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let socket = socket_path().unwrap();
-        let (server, _damage) = Server::new(worktree_seat(&roots[0]), socket).unwrap();
+        let (server, _damage) = Server::new(seat_at(&roots[0]), socket).unwrap();
         let server = Arc::new(server);
         for root in &roots[1..] {
             server
-                .ensure_space(&worktree_seat(root), PLACEHOLDER_PANE_SIZE)
+                .ensure_space(&seat_at(root), PLACEHOLDER_PANE_SIZE)
                 .expect("a space per root");
         }
 
@@ -5400,7 +5490,7 @@ mod tests {
         let (served, serving) = std::sync::mpsc::channel();
         let serve_root = project.clone();
         std::thread::spawn(move || {
-            let _ = served.send(super::serve(worktree_seat(&serve_root)));
+            let _ = served.send(super::serve(seat_at(&serve_root)));
         });
 
         let mut ready = false;
@@ -5507,7 +5597,7 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
         let socket = scratch.join("test.sock");
-        let (server, _damage) = Server::new(worktree_seat(&project), socket.clone()).unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket.clone()).unwrap();
         let server = Arc::new(server);
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         let serving = std::thread::spawn(move || {
@@ -5615,7 +5705,7 @@ mod tests {
             "the server at the endpoint was started from another image"
         );
 
-        let mut stream = super::attach(&worktree_seat(&project)).expect("the client attaches");
+        let mut stream = super::attach(&seat_at(&project)).expect("the client attaches");
 
         assert_eq!(
             super::claim_holder(),
@@ -5708,7 +5798,7 @@ mod tests {
             version: crate::PROTOCOL_VERSION,
             columns: 200,
             rows: 50,
-            seating: crate::Seating::Open(worktree_seat(Path::new("/some/ordinary/project/path"))),
+            seating: crate::Seating::Open(seat_at(Path::new("/some/ordinary/project/path"))),
         })
         .unwrap();
         assert!(

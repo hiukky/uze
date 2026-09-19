@@ -863,15 +863,14 @@ delivery that did not happen.
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
 
-### Every agent of a worktree space is isolated, and the primary checkout belongs to the operator
+### An isolated agent gets a checkout of its own, and the primary checkout belongs to the operator
 
-An agent UZE launches into a worktree space of a Git repository with a
-commit starts in a slot of its own, created before its harness does. The
-primary checkout is never
-assigned to an agent, so the operator's uncommitted work is exactly what they
-left after any number of agents have run. Where a slot cannot be acquired
-the agent is not started and the reason is said: the primary is never a
-fallback.
+An agent isolated in a Git repository with a commit runs in a slot of its
+own, created before its harness does. The primary checkout is never
+assigned to an agent, so the operator's uncommitted work is exactly what
+they left after any number of agents have run. Where a slot cannot be
+acquired the agent is not started and the reason is said: the primary is
+never a fallback.
 
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::the_first_agent_is_isolated`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
@@ -879,21 +878,36 @@ fallback.
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
 > `src/ui/orchestrator/tests.rs::workspace_tests::an_agent_in_a_slot_is_left_unmarked_and_says_where_nowhere`
 
-### A tenant never acquires a slot and never creates a branch (`add-space-kinds`)
+### An agent in the root never acquires a slot and never creates a branch (`add-space-kinds`)
 
-An agent launched into a workspace space is a tenant of the space's own
-directory, on whatever branch it is on: no directory under `.worktrees`, no
-`agent/` branch, no task. Two tenants share one tree and are told apart by
-identity alone. A slot asked for where none can be acquired — no repository,
-no commit, the cap reached — is refused and starts nothing: the operator's
-tree is never a fallback. A tenant ends when no live tab was launched for
-it, whether or not its root is a repository.
+An agent launched without isolation runs in the space's own directory, on
+whatever branch it is on: no directory under `.worktrees`, no `agent/`
+branch, no task. Two of them share one tree and are told apart by identity
+alone. A slot asked for where none can be acquired — no repository, no
+commit, the cap reached — is refused and starts nothing: the operator's
+tree is never a fallback. Such an agent ends when no live tab was launched
+for it, whether or not its root is a repository.
 
-> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_tenant_creates_no_checkout_and_no_branch_and_shares_the_tree`
-> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_directory_outside_any_repository_is_a_tenant_by_choice_never_a_fallback`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::an_agent_in_the_root_creates_no_checkout_and_no_branch_and_shares_the_tree`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_directory_outside_any_repository_refuses_isolation_and_never_falls_back`
 > `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_repository_without_a_commit_refuses_a_slot_and_starts_nothing`
-> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_tenant_ends_when_nothing_echoes_it_and_survives_while_something_does`
-> `crates/uze-terminal/src/state.rs::a_root_carries_one_space_per_kind`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::an_agent_in_the_root_ends_when_nothing_echoes_it_and_survives_while_something_does`
+
+### Isolation is asked of one agent, after it is running (`add-space-kinds`)
+
+A space is a directory and nothing more: every agent launched into one
+starts where the project's `worktrees.default` says, and `Isolate` moves a
+single agent into a checkout of its own without changing its identity, its
+tab or its conversation. It is offered only where a slot could actually be
+acquired, refused for an agent that already has one, and it may carry a
+copy of the operator's uncommitted changes across — a copy, so the
+operator's tree is exactly what they left.
+
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::isolating_an_agent_keeps_its_identity_and_gives_it_a_checkout`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::isolating_copies_the_operators_changes_and_leaves_their_tree_alone`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::isolating_without_carrying_leaves_both_trees_as_they_were`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::an_agent_that_cannot_be_isolated_is_left_where_it_is`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::isolating_an_isolated_agent_is_refused`
 
 ### A checkout is a slot; a task is what comes and goes
 

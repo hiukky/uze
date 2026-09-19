@@ -857,7 +857,7 @@ VERBS = (
     "json",
     "git",
     "tasks",
-    "tenants",
+    "agents",
     "process",
     "capture",
     "cmd",
@@ -869,15 +869,26 @@ class Checker:
         self.runner = runner
         self.world = runner.world
 
-    def tasks(self) -> list:
+    def agents(self) -> list:
         stores = sorted((self.world.uze_home / "state" / "tasks").glob("*.json"))
         out = []
         for store in stores:
             try:
-                out += json.loads(store.read_text()).get("tasks", [])
+                out += json.loads(store.read_text()).get("agents", [])
             except json.JSONDecodeError:
                 pass
-        return sorted(out, key=lambda task: task.get("created_at_unix", 0))
+        return sorted(out, key=lambda agent: agent.get("created_at_unix", 0))
+
+    def tasks(self) -> list:
+        """The isolated agents, each read as one record: the agent's own
+        fields with its isolation's on top, which is how every check below
+        asks about a branch or a checkout without knowing where the field
+        sits in the document."""
+        return [
+            {**agent, **agent["isolation"]}
+            for agent in self.agents()
+            if agent.get("isolation")
+        ]
 
     def git(self, where: Path, *args: str) -> str:
         return subprocess.run(
@@ -992,41 +1003,39 @@ class Checker:
                 )
         return True, ", ".join(detail) or "ok"
 
-    def tenants(self) -> list:
-        stores = sorted((self.world.uze_home / "state" / "tasks").glob("*.json"))
-        out = []
-        for store in stores:
-            try:
-                out += json.loads(store.read_text()).get("tenants", [])
-            except json.JSONDecodeError:
-                pass
-        return sorted(out, key=lambda tenant: tenant.get("created_at_unix", 0))
-
-    def _tenants(self, spec: dict) -> tuple[bool, str]:
-        """The tenants UZE recorded for the world's roots — agents of a
-        workspace space, which have no checkout and no task. `count` is
-        every tenant ever recorded, `live` those no reconciliation has
-        ended."""
-        wanted = spec["tenants"]
-        tenants = self.tenants()
+    def _agents(self, spec: dict) -> tuple[bool, str]:
+        """Every agent UZE recorded for the world's roots, isolated or
+        not. `count` is every agent ever recorded, `live` those no
+        reconciliation has ended, `isolated` those holding a checkout of
+        their own."""
+        wanted = spec["agents"]
+        agents = self.agents()
         shape = [
-            f"{tenant['id']}:{tenant['harness']}@{tenant.get('root')}"
-            + ("" if tenant.get("ended_at_unix") is None else ":ended")
-            for tenant in tenants
+            f"{agent['id']}:{agent['harness']}"
+            + ("@isolated" if agent.get("isolation") else "@root")
+            + ("" if agent.get("ended_at_unix") is None else ":ended")
+            for agent in agents
         ]
-        if "count" in wanted and len(tenants) != wanted["count"]:
+        if "count" in wanted and len(agents) != wanted["count"]:
             return (
                 False,
-                f"expected {wanted['count']} tenants, found {len(tenants)}: {shape}",
+                f"expected {wanted['count']} agents, found {len(agents)}: {shape}",
             )
         if "live" in wanted:
-            live = [tenant for tenant in tenants if tenant.get("ended_at_unix") is None]
+            live = [agent for agent in agents if agent.get("ended_at_unix") is None]
             if len(live) != wanted["live"]:
                 return (
                     False,
-                    f"expected {wanted['live']} live tenants, found {len(live)}: {shape}",
+                    f"expected {wanted['live']} live agents, found {len(live)}: {shape}",
                 )
-        return True, ", ".join(shape) or "no tenants"
+        if "isolated" in wanted:
+            isolated = [agent for agent in agents if agent.get("isolation")]
+            if len(isolated) != wanted["isolated"]:
+                return (
+                    False,
+                    f"expected {wanted['isolated']} isolated agents, found {len(isolated)}: {shape}",
+                )
+        return True, ", ".join(shape) or "no agents"
 
     def _tasks(self, spec: dict) -> tuple[bool, str]:
         wanted = spec["tasks"]

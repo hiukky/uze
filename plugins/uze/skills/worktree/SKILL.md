@@ -9,13 +9,17 @@ metadata:
 # UZE — working where UZE placed you
 
 You do not decide where to work: UZE places every agent it launches before
-you start, and the space you were launched into decided how. In a
-*worktree* space you have a checkout of your own under `.worktrees/<id>`,
-on branch `agent/<id>`, and the primary checkout belongs to the operator.
-In a *workspace* space you work in the operator's own checkout, on the
-branch they are on, beside them. Read the "Concurrent work isolation"
-section of `AGENTS.md` — it states the layout and what happens to finished
-work.
+you start. Either you were **isolated** — a checkout of your own under
+`.worktrees/<id>`, on branch `agent/<id>`, with the primary checkout left
+to the operator — or you are in the operator's own checkout, on the branch
+they are on, beside them. The project's `worktrees.default` decides which
+you got, and the operator can isolate you afterwards, in which case you
+are relaunched in the new checkout — with whatever their tree had
+uncommitted, if they said to carry it, and possibly with a conversation
+that starts over, because a harness that files a conversation under the
+directory it ran in cannot resume it elsewhere.
+Read the "Concurrent work isolation" section of `AGENTS.md` — it states
+the layout and what happens to finished work.
 
 This skill is what no harness does for you: the part of that arrangement
 you have to carry yourself.
@@ -38,7 +42,9 @@ operator's own checkout, on their branch. Commit there, as you go, and
 never switch, reset, stash, clean or move it: the operator's uncommitted
 work is theirs, and so is the branch's name. Nothing below about naming,
 delivery and rebases applies to you — there is nothing to deliver, because
-your commits already land where the operator is.
+your commits already land where the operator is. Ask again after the
+operator isolates you: the answer changes, and your own working directory
+is where it is written.
 
 ## Name the work before you do it
 

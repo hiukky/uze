@@ -6,11 +6,10 @@
 //! project begins ([`project_root`], [`workspace`]), the instruction
 //! context it carries ([`context`], [`project_context`]), the mechanism
 //! for owning a slice of a file UZE did not write ([`text_region`]), and
-//! the work UZE runs inside it: the tasks it launched ([`task`]), the
-//! checkouts they run in ([`checkout`]), the tenants it launched into the
-//! project's own directory ([`tenant`]), the conversation each agent is in
-//! ([`conversation`]), and how a task's work reaches the target
-//! ([`landing`]).
+//! the work UZE runs inside it: the agents it launched ([`task`]),
+//! the checkouts the isolated ones run in ([`checkout`]), the
+//! conversation each agent is in ([`conversation`]), and how an isolated
+//! agent's work reaches the target ([`landing`]).
 //!
 //! Module file names keep their full public spelling — `project/lock.rs`
 //! would read better in the tree but would no longer match
@@ -25,7 +24,6 @@ pub mod project_context;
 pub mod project_lock;
 pub mod project_root;
 pub mod task;
-pub mod tenant;
 pub mod text_region;
 pub mod workspace;
 pub mod worktree;

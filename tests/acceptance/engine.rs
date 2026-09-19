@@ -145,9 +145,14 @@ impl Engine {
         let placement = self
             .app()
             .workspace()
-            .place_new_agent(self.project(), PlacementKind::Slot, "claude-code", &[])
+            .place_new_agent(
+                self.project(),
+                Some(PlacementKind::Isolated),
+                "claude-code",
+                &[],
+            )
             .expect("a slot is acquired");
-        let Placement::Slot { task, .. } = &placement.placement else {
+        let Placement::Isolated { task, .. } = &placement.placement else {
             panic!("{placement:?}");
         };
         let slot = placement.cwd.clone();
@@ -339,7 +344,6 @@ fn connect(project: &Path) -> (UnixStream, UnixStream) {
             // the client asks for a space there.
             seating: uze_terminal::Seating::Open(uze_terminal::SpaceSeat {
                 root: project.to_path_buf(),
-                kind: uze_terminal::SpaceKind::Worktree,
             }),
         },
     )
@@ -688,7 +692,7 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
     let next = engine
         .app()
         .workspace()
-        .place_new_agent(&project, PlacementKind::Slot, "claude-code", &[])
+        .place_new_agent(&project, Some(PlacementKind::Isolated), "claude-code", &[])
         .expect("a slot is acquired");
     assert!(
         next.cwd != project.join(".worktrees/agent-2"),
@@ -834,7 +838,6 @@ fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
     fs::create_dir_all(&nested).unwrap();
     let label = open_space(uze_terminal::SpaceSeat {
         root: nested.clone(),
-        kind: uze_terminal::SpaceKind::Worktree,
     })
     .expect("the running server opens a space");
     assert_eq!(label, "nested-project");

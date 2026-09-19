@@ -28,7 +28,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    task::{AgentId, Base, Task, TaskState, TaskStore},
+    task::{Agent, AgentId, Base, Isolation, TaskState, TaskStore},
     worktree::{BRANCH_PREFIX, WORKTREES_DIRECTORY, label_of},
 };
 
@@ -159,7 +159,7 @@ enum Start<'a> {
 pub fn acquire(
     primary: &Path,
     store: &TaskStore,
-    task: &Task,
+    isolation: &Isolation,
     base_tip: &str,
     cap: Option<usize>,
     occupied: &[PathBuf],
@@ -167,7 +167,7 @@ pub fn acquire(
     take(
         primary,
         store,
-        &task.branch,
+        &isolation.branch,
         Start::Branching { base_tip },
         cap,
         occupied,
@@ -182,17 +182,24 @@ pub fn acquire(
 pub fn resume(
     primary: &Path,
     store: &TaskStore,
-    task: &Task,
+    isolation: &Isolation,
     cap: Option<usize>,
     occupied: &[PathBuf],
 ) -> Result<Acquired, AcquireError> {
-    if !branch_exists(primary, &task.branch) {
+    if !branch_exists(primary, &isolation.branch) {
         return Err(AcquireError::Git(format!(
             "branch {} no longer exists; there is nothing to resume",
-            task.branch
+            isolation.branch
         )));
     }
-    take(primary, store, &task.branch, Start::Existing, cap, occupied)
+    take(
+        primary,
+        store,
+        &isolation.branch,
+        Start::Existing,
+        cap,
+        occupied,
+    )
 }
 
 fn take(
@@ -374,25 +381,34 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
 
     for (path, branch) in &registered {
         let id = CheckoutId::adopted(&slot_name(path));
-        let owner = store.slot_owner(&id).map(|task| task.id.clone());
-        if let Some(task) = owner.and_then(|owner| store.get_mut(&owner)) {
-            // An agent that keeps working after a delivery is working
-            // again, and its slot is not free while it does: `Integrated`
-            // is only ever reached with the branch's commits already in
-            // the target (the one outcome `merge` completion produces;
-            // handoff and pr leave a task `Ready`), so a commit the target
-            // does not have, in a checkout Git still registers, is new
-            // work. Reading it here is what a slot is acquired against —
-            // `declared_done` otherwise hands the directory to the next
-            // agent while this one is still writing in it. Only the
-            // current owner revives; a slot already handed over answers
-            // for whoever holds it now.
-            if task.state == TaskState::Integrated && !is_integrated(primary, target, &task.branch)
-            {
-                task.state = TaskState::Running;
-                // The request was the delivered work's; this is new work.
-                task.forget_request();
-                report.revived.push(task.id.clone());
+        if let Some(owner_id) = store.slot_owner(&id).map(|agent| agent.id.clone()) {
+            let revived = store
+                .get_mut(&owner_id)
+                .and_then(Agent::isolation_mut)
+                .is_some_and(|isolation| {
+                    // An agent that keeps working after a delivery is working
+                    // again, and its slot is not free while it does: `Integrated`
+                    // is only ever reached with the branch's commits already in
+                    // the target (the one outcome `merge` completion produces;
+                    // handoff and pr leave a task `Ready`), so a commit the target
+                    // does not have, in a checkout Git still registers, is new
+                    // work. Reading it here is what a slot is acquired against —
+                    // `declared_done` otherwise hands the directory to the next
+                    // agent while this one is still writing in it. Only the
+                    // current owner revives; a slot already handed over answers
+                    // for whoever holds it now.
+                    if isolation.state != TaskState::Integrated
+                        || is_integrated(primary, target, &isolation.branch)
+                    {
+                        return false;
+                    }
+                    isolation.state = TaskState::Running;
+                    // The request was the delivered work's; this is new work.
+                    isolation.forget_request();
+                    true
+                });
+            if revived {
+                report.revived.push(owner_id);
             }
             continue;
         }
@@ -408,31 +424,39 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
                 .map_or_else(|| label_of(branch), str::to_owned),
             None => id.as_str().to_owned(),
         };
-        let mut task = Task::new(
-            None,
+        // Adopted, so nothing says which harness ran here: the directory
+        // is the only evidence, and it does not carry one.
+        let mut agent = Agent::in_the_root("");
+        let mut isolation = Isolation::cut(
+            &agent.id,
             Base::Ref(target.to_owned()),
             tip_of(primary, target),
             target.to_owned(),
         );
-        task.label = label;
+        agent.label = label;
         if let Some(branch) = branch {
-            task.branch = branch.clone();
+            isolation.branch = branch.clone();
         }
-        task.checkout = Some(id);
+        isolation.checkout = Some(id);
         // Nobody recorded this checkout, so nobody recorded a delivery
         // from it either: empty means it ended with nothing, not that its
         // work reached the target.
-        task.state = if holds_work {
+        isolation.state = if holds_work {
             TaskState::Parked
         } else {
             TaskState::Closed
         };
-        report.adopted.push(task.id.clone());
-        store.upsert(task);
+        agent.isolation = Some(isolation);
+        report.adopted.push(agent.id.clone());
+        store.upsert(agent);
     }
 
-    for task in &mut store.tasks {
-        let Some(checkout) = &task.checkout else {
+    for agent in store.agents.iter_mut() {
+        let id = agent.id.clone();
+        let Some(isolation) = agent.isolation_mut() else {
+            continue;
+        };
+        let Some(checkout) = &isolation.checkout else {
             continue;
         };
         if registered
@@ -441,8 +465,8 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
         {
             continue;
         }
-        end_without_checkout(primary, target, task);
-        report.orphaned.push(task.id.clone());
+        end_without_checkout(primary, target, isolation);
+        report.orphaned.push(id);
     }
 
     // A slot outlives the tasks that ran in it, and each went on naming it.
@@ -452,9 +476,13 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
     // task long gone carried the new agent's name, and discarding it would
     // have deleted the new agent's branch.
     let owners = store.slot_owners();
-    for task in &mut store.tasks {
-        if task.checkout.is_some() && !owners.contains(&task.id) {
-            end_without_checkout(primary, target, task);
+    for agent in store.agents.iter_mut() {
+        let handed_over = !owners.contains(&agent.id);
+        if let Some(isolation) = agent.isolation_mut()
+            && isolation.checkout.is_some()
+            && handed_over
+        {
+            end_without_checkout(primary, target, isolation);
         }
     }
 
@@ -464,15 +492,69 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
 
 /// Ends a task that no longer has a checkout of its own, by what its
 /// branch still holds.
-fn end_without_checkout(primary: &Path, target: &str, task: &mut Task) {
-    task.checkout = None;
+fn end_without_checkout(primary: &Path, target: &str, isolation: &mut Isolation) {
+    isolation.checkout = None;
     // A delivery already recorded stays recorded: its branch has nothing
     // of its own left precisely because the target has it all.
-    if branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch) {
-        task.state = TaskState::Parked;
-    } else if task.state != TaskState::Integrated {
-        task.state = TaskState::Closed;
+    if branch_exists(primary, &isolation.branch)
+        && !is_integrated(primary, target, &isolation.branch)
+    {
+        isolation.state = TaskState::Parked;
+    } else if isolation.state != TaskState::Integrated {
+        isolation.state = TaskState::Closed;
     }
+}
+
+/// Copies the changes `primary`'s working tree holds over its `HEAD`
+/// into `slot`, leaving `primary` exactly as it was.
+///
+/// Copied, never moved. UZE cannot say which uncommitted change belongs
+/// to which agent — the root's working tree is shared by the operator
+/// and every agent standing in it — so taking them would take the
+/// operator's own work out of their tree, which is the one thing
+/// `add-portable-worktree-policy`'s invariant forbids.
+///
+/// What travels is everything the repository would report as a change:
+/// the diff over `HEAD` for what it tracks, and a copy of each file it
+/// does not track but does not ignore. A new file is the commonest shape
+/// an agent's work has before its first commit, so leaving it behind
+/// would take the agent's own module out from under it. What the
+/// repository *ignores* stays where it is — a `target/` or a
+/// `node_modules/` is the slot's own to build, and `link`/`setup` is
+/// where a project says otherwise.
+pub fn carry_changes(primary: &Path, slot: &Path) -> Result<(), String> {
+    // Read rather than written, and taken *untrimmed*: a patch's final
+    // newline is part of it, and `git apply` refuses one that lost it.
+    let patch = uze_git::read(primary, &["diff", "HEAD"])
+        .map_err(|error| error.to_string())?
+        .successful()?;
+    if !patch.trim().is_empty() {
+        uze_git::write_with_stdin(slot, &["apply", "--"], &patch)
+            .map_err(|error| error.to_string())?
+            .successful()
+            .map_err(|error| {
+                format!("the changes could not be carried into the checkout: {error}")
+            })?;
+    }
+    for relative in uze_git::read(
+        primary,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .map_err(|error| error.to_string())?
+    .successful()?
+    .split('\0')
+    .filter(|entry| !entry.is_empty())
+    {
+        let from = primary.join(relative);
+        let to = slot.join(relative);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("the checkout could not take `{relative}`: {error}"))?;
+        }
+        std::fs::copy(&from, &to)
+            .map_err(|error| format!("`{relative}` could not be copied: {error}"))?;
+    }
+    Ok(())
 }
 
 /// What a collection removed, so a caller can say so.
@@ -522,10 +604,10 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
         .filter_map(|(_, branch)| branch)
         .collect();
     let live: Vec<&str> = store
-        .tasks
-        .iter()
-        .filter(|task| is_live(&task.state))
-        .map(|task| task.branch.as_str())
+        .isolated()
+        .filter_map(Agent::isolation)
+        .filter(|isolation| is_live(&isolation.state))
+        .map(|isolation| isolation.branch.as_str())
         .collect();
     let mut removed = Vec::new();
     // The prefix is no longer the whole answer: a named task's branch left
@@ -533,9 +615,9 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
     // find is a branch nobody collects. The store names what it knows; the
     // prefix still catches what the store has forgotten.
     let mut candidates = agent_branches(primary);
-    for task in &store.tasks {
-        if !candidates.contains(&task.branch) {
-            candidates.push(task.branch.clone());
+    for isolation in store.isolated().filter_map(Agent::isolation) {
+        if !candidates.contains(&isolation.branch) {
+            candidates.push(isolation.branch.clone());
         }
     }
     for branch in candidates {
@@ -587,16 +669,17 @@ pub fn remove_idle_slots(
 /// transition besides delivery that frees one. Without it a task stays live
 /// for as long as its record does — its slot occupied, its directory never
 /// reused, and every new agent paying for a working tree of its own.
-pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
-    let directory = task
+pub fn release(primary: &Path, isolation: &mut Isolation, target: &str) -> SlotState {
+    let directory = isolation
         .checkout
         .as_ref()
         .map(|checkout| checkout.directory(primary))
         .filter(|path| path.is_dir());
     let holds_work = directory.is_some_and(|path| is_dirty(&path))
-        || (branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch));
-    if is_live(&task.state) {
-        task.state = if holds_work {
+        || (branch_exists(primary, &isolation.branch)
+            && !is_integrated(primary, target, &isolation.branch));
+    if is_live(&isolation.state) {
+        isolation.state = if holds_work {
             TaskState::Parked
         } else {
             TaskState::Closed
@@ -605,7 +688,7 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
     // A task the operator declared done keeps its branch and frees its
     // slot, exactly as `slot_state` reads it: the commits are not lost,
     // they are simply nobody's turn any more.
-    if holds_work && task.state != TaskState::Integrated {
+    if holds_work && isolation.state != TaskState::Integrated {
         SlotState::Parked
     } else {
         SlotState::Free
@@ -614,9 +697,9 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
 
 /// The one removal that loses work, and therefore the one only an operator
 /// takes on a named task: the checkout directory, forced, and the branch.
-pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
+pub fn discard(primary: &Path, isolation: &Isolation) -> Result<(), String> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
-        if let Some(checkout) = &task.checkout {
+        if let Some(checkout) = &isolation.checkout {
             let path = checkout.directory(primary);
             if path.is_dir() {
                 git(
@@ -632,8 +715,8 @@ pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
             }
         }
-        if branch_exists(primary, &task.branch) {
-            git(primary, &["branch", "-D", "--", &task.branch])
+        if branch_exists(primary, &isolation.branch) {
+            git(primary, &["branch", "-D", "--", &isolation.branch])
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
@@ -927,22 +1010,23 @@ fn slot_state(
     store: &TaskStore,
     occupied: &[PathBuf],
 ) -> SlotState {
-    let task = store.slot_owner(id);
+    let owner = store.slot_owner(id);
+    let isolation = owner.and_then(Agent::isolation);
     let pane_inside = occupied.iter().any(|pane| pane.starts_with(path));
-    if let Some(task) = task
-        && (is_live(&task.state) || pane_inside)
+    if let Some(owner) = owner
+        && (isolation.is_some_and(|isolation| is_live(&isolation.state)) || pane_inside)
     {
         return SlotState::Occupied {
-            task: task.id.clone(),
+            task: owner.id.clone(),
         };
     }
-    // A pane in a directory no task ever claimed is still somebody at
+    // A pane in a directory no agent ever claimed is still somebody at
     // work there; only the operator moves it on.
     if pane_inside || is_dirty(path) {
         return SlotState::Parked;
     }
-    let declared_done = task.is_some_and(|task| task.state == TaskState::Integrated);
-    let target = task.map(|task| task.target.as_str());
+    let declared_done = isolation.is_some_and(|isolation| isolation.state == TaskState::Integrated);
+    let target = isolation.map(|isolation| isolation.target.as_str());
     let holds_commits = match (branch, target) {
         (Some(branch), Some(target)) => !is_integrated(primary, target, branch),
         (Some(branch), None) => !is_integrated(primary, "HEAD", branch),
@@ -1015,30 +1099,41 @@ mod tests {
         repository
     }
 
-    fn task(label: &str) -> Task {
-        let mut task = Task::new(
+    fn task(label: &str) -> Agent {
+        let mut agent = Agent::isolated(
+            "claude",
             Some(label),
             Base::Ref(TARGET.into()),
             String::new(),
             TARGET.into(),
         );
-        task.label = label.to_owned();
-        task
+        agent.label = label.to_owned();
+        agent
+    }
+
+    /// The branch half of an agent these tests built isolated.
+    fn isolation(agent: &mut Agent) -> &mut Isolation {
+        agent.isolation_mut().expect("the agent was built isolated")
     }
 
     /// Acquires a slot for a fresh task and records it as occupied.
-    fn launch(repository: &Repository, store: &mut TaskStore, label: &str) -> (Task, Acquired) {
+    fn launch(repository: &Repository, store: &mut TaskStore, label: &str) -> (Agent, Acquired) {
         let primary = repository.root();
-        let mut task = task(label);
-        task.base_commit = tip_of(primary, TARGET);
-        let acquired = acquire(primary, store, &task, &task.base_commit, None, &[]).unwrap();
-        task.checkout = Some(acquired.id.clone());
-        store.upsert(task.clone());
-        (task, acquired)
+        let mut agent = task(label);
+        let base = tip_of(primary, TARGET);
+        isolation(&mut agent).base_commit = base.clone();
+        let acquired = acquire(primary, store, isolation(&mut agent), &base, None, &[]).unwrap();
+        isolation(&mut agent).checkout = Some(acquired.id.clone());
+        store.upsert(agent.clone());
+        (agent, acquired)
     }
 
     fn set_state(store: &mut TaskStore, id: &AgentId, state: TaskState) {
-        store.get_mut(id).unwrap().state = state;
+        store
+            .get_mut(id)
+            .and_then(Agent::isolation_mut)
+            .unwrap()
+            .state = state;
     }
 
     /// The whole reason reuse ever happens: an agent that closed without
@@ -1052,12 +1147,15 @@ mod tests {
         let target = TARGET.to_owned();
         let state = release(
             repository.root(),
-            store.get_mut(&first.id).unwrap(),
+            store
+                .get_mut(&first.id)
+                .and_then(Agent::isolation_mut)
+                .unwrap(),
             &target,
         );
         assert_eq!(state, SlotState::Free);
         assert_eq!(
-            store.get(&first.id).unwrap().state,
+            store.get(&first.id).unwrap().isolation().unwrap().state,
             TaskState::Closed,
             "it ended with nothing; nothing of it reached the target"
         );
@@ -1084,8 +1182,11 @@ mod tests {
         assert_eq!(
             release(
                 repository.root(),
-                store.get_mut(&committed.id).unwrap(),
-                TARGET
+                store
+                    .get_mut(&committed.id)
+                    .and_then(Agent::isolation_mut)
+                    .unwrap(),
+                TARGET,
             ),
             SlotState::Parked
         );
@@ -1093,7 +1194,14 @@ mod tests {
         let (dirty, other) = launch(&repository, &mut store, "dirty");
         fs::write(other.path.join("draft.rs"), b"unsaved").unwrap();
         assert_eq!(
-            release(repository.root(), store.get_mut(&dirty.id).unwrap(), TARGET),
+            release(
+                repository.root(),
+                store
+                    .get_mut(&dirty.id)
+                    .and_then(Agent::isolation_mut)
+                    .unwrap(),
+                TARGET,
+            ),
             SlotState::Parked
         );
 
@@ -1127,18 +1235,21 @@ mod tests {
         repository.git_in(&slot.path, &["commit", "-qam", "and its fix"]);
         // What a forge's squash button leaves behind: one commit of the
         // target's own, carrying the branch's whole diff.
-        repository.git(&["merge", "--squash", &delivered.branch]);
+        repository.git(&["merge", "--squash", &delivered.isolation().unwrap().branch]);
         repository.git(&["commit", "-qm", "the feature (#7)"]);
         assert!(
-            commits_ahead(primary, TARGET, &delivered.branch) > 0,
+            commits_ahead(primary, TARGET, &delivered.isolation().unwrap().branch) > 0,
             "none of the branch's commits is reachable from the target"
         );
 
         assert_eq!(
             release(
                 repository.root(),
-                store.get_mut(&delivered.id).unwrap(),
-                TARGET
+                store
+                    .get_mut(&delivered.id)
+                    .and_then(Agent::isolation_mut)
+                    .unwrap(),
+                TARGET,
             ),
             SlotState::Free,
             "its work is in the target, under the forge's own commit"
@@ -1148,7 +1259,7 @@ mod tests {
         assert_eq!(reused.path, slot.path);
         assert_eq!(
             prune_integrated_branches(primary, &store, TARGET),
-            vec![delivered.branch],
+            vec![delivered.isolation().unwrap().branch.clone()],
             "and the branch it left behind is safe to remove"
         );
     }
@@ -1166,13 +1277,16 @@ mod tests {
         // The target moves first, so replaying the commit gives it a new
         // identity — exactly what a rebase merge does.
         repository.commit_file("unrelated.rs", "");
-        repository.git(&["cherry-pick", &delivered.branch]);
+        repository.git(&["cherry-pick", &delivered.isolation().unwrap().branch]);
 
         assert_eq!(
             release(
                 repository.root(),
-                store.get_mut(&delivered.id).unwrap(),
-                TARGET
+                store
+                    .get_mut(&delivered.id)
+                    .and_then(Agent::isolation_mut)
+                    .unwrap(),
+                TARGET,
             ),
             SlotState::Free,
             "the same patch is in the target under another commit"
@@ -1191,7 +1305,7 @@ mod tests {
         fs::write(slot.path.join("feature.rs"), b"fn f() {}").unwrap();
         repository.git_in(&slot.path, &["add", "."]);
         repository.git_in(&slot.path, &["commit", "-qm", "feature"]);
-        repository.git(&["merge", "--ff-only", &first.branch]);
+        repository.git(&["merge", "--ff-only", &first.isolation().unwrap().branch]);
         set_state(&mut store, &first.id, TaskState::Integrated);
 
         let (second, reused) = launch(&repository, &mut store, "second");
@@ -1200,7 +1314,10 @@ mod tests {
             "the free slot is taken before a directory is created"
         );
         assert_eq!(reused.path, slot.path);
-        assert_eq!(repository.branch_of(&reused.path), second.branch);
+        assert_eq!(
+            repository.branch_of(&reused.path),
+            second.isolation().unwrap().branch
+        );
         assert_eq!(
             fs::read(reused.path.join("target").join("cache")).unwrap(),
             b"warm",
@@ -1233,7 +1350,7 @@ mod tests {
             "the tree is at the base, not at the previous branch"
         );
         assert!(
-            commits_ahead(primary, TARGET, &first.branch) == 1,
+            commits_ahead(primary, TARGET, &first.isolation().unwrap().branch) == 1,
             "the previous branch keeps its commit"
         );
     }
@@ -1253,8 +1370,8 @@ mod tests {
         let report = reconcile(primary, &mut forgotten, TARGET);
         assert_eq!(report.adopted.len(), 1);
         let adopted = forgotten.get(&report.adopted[0]).unwrap();
-        assert_eq!(adopted.state, TaskState::Parked);
-        assert_eq!(adopted.checkout, Some(slot.id.clone()));
+        assert_eq!(adopted.isolation().unwrap().state, TaskState::Parked);
+        assert_eq!(adopted.isolation().unwrap().checkout, Some(slot.id.clone()));
         assert_eq!(
             fs::read(slot.path.join("half-done.rs")).unwrap(),
             b"unfinished"
@@ -1286,10 +1403,13 @@ mod tests {
         assert_eq!(removed, vec![slot.id]);
         assert!(!slot.path.exists());
         assert!(
-            branch_exists(primary, &first.branch),
+            branch_exists(primary, &first.isolation().unwrap().branch),
             "the branch is never the directory's cost"
         );
-        assert_eq!(commits_ahead(primary, TARGET, &first.branch), 1);
+        assert_eq!(
+            commits_ahead(primary, TARGET, &first.isolation().unwrap().branch),
+            1
+        );
     }
 
     #[test]
@@ -1315,7 +1435,7 @@ mod tests {
         fs::write(slot.path.join("a.rs"), b"").unwrap();
         repository.git_in(&slot.path, &["add", "."]);
         repository.git_in(&slot.path, &["commit", "-qm", "a"]);
-        repository.git(&["merge", "--ff-only", &delivered.branch]);
+        repository.git(&["merge", "--ff-only", &delivered.isolation().unwrap().branch]);
         set_state(&mut store, &delivered.id, TaskState::Integrated);
 
         let (kept, second) = launch(&repository, &mut store, "kept");
@@ -1329,10 +1449,13 @@ mod tests {
         assert_eq!(second.path, slot.path);
 
         let removed = prune_integrated_branches(primary, &store, TARGET);
-        assert_eq!(removed, vec![delivered.branch.clone()]);
-        assert!(!branch_exists(primary, &delivered.branch));
+        assert_eq!(removed, vec![delivered.isolation().unwrap().branch.clone()]);
+        assert!(!branch_exists(
+            primary,
+            &delivered.isolation().unwrap().branch
+        ));
         assert!(
-            branch_exists(primary, &kept.branch),
+            branch_exists(primary, &kept.isolation().unwrap().branch),
             "commits the target lacks are never deleted"
         );
     }
@@ -1354,14 +1477,14 @@ mod tests {
         repository.git_in(&slot.path, &["add", "."]);
         repository.git_in(&slot.path, &["commit", "-qm", "a"]);
         set_state(&mut store, &parked.id, TaskState::Parked);
-        for task in &mut store.tasks {
-            task.target = MISSING.to_owned();
+        for task in store.agents.iter_mut() {
+            task.isolation_mut().unwrap().target = MISSING.to_owned();
         }
         assert!(tip_of(primary, MISSING).is_empty(), "the target is absent");
 
         let collected = collect(primary, &store, MISSING, Duration::ZERO, &[]);
         assert_eq!(collected, Collected::default(), "nothing may be removed");
-        assert!(branch_exists(primary, &parked.branch));
+        assert!(branch_exists(primary, &parked.isolation().unwrap().branch));
         assert!(slot.path.join("a.rs").is_file());
         assert_eq!(
             slots(primary, &store, &[])[0].state,
@@ -1384,7 +1507,7 @@ mod tests {
         let error = acquire(
             primary,
             &store,
-            &blocked,
+            blocked.isolation().unwrap(),
             &tip_of(primary, TARGET),
             Some(2),
             &[],
@@ -1399,7 +1522,7 @@ mod tests {
         let reused = acquire(
             primary,
             &store,
-            &blocked,
+            blocked.isolation().unwrap(),
             &tip_of(primary, TARGET),
             Some(2),
             &[],
@@ -1423,20 +1546,20 @@ mod tests {
         assert!(
             repository
                 .git(&["worktree", "list", "--porcelain"])
-                .contains(&task.branch),
+                .contains(&task.isolation().unwrap().branch),
             "the registry entry is still there before reconciliation"
         );
 
         let report = reconcile(primary, &mut store, TARGET);
         assert_eq!(report.orphaned, vec![task.id.clone()]);
         let task = store.get(&task.id).unwrap();
-        assert_eq!(task.state, TaskState::Parked);
-        assert_eq!(task.checkout, None);
-        assert!(branch_exists(primary, &task.branch));
+        assert_eq!(task.isolation().unwrap().state, TaskState::Parked);
+        assert_eq!(task.isolation().unwrap().checkout, None);
+        assert!(branch_exists(primary, &task.isolation().unwrap().branch));
         assert!(
             !repository
                 .git(&["worktree", "list", "--porcelain"])
-                .contains(&task.branch),
+                .contains(&task.isolation().unwrap().branch),
             "the stale entry is pruned once every directory was looked at"
         );
     }
@@ -1456,14 +1579,17 @@ mod tests {
         fs::write(slot.path.join("delivered.rs"), b"fn a() {}").unwrap();
         repository.git_in(&slot.path, &["add", "."]);
         repository.git_in(&slot.path, &["commit", "-qm", "delivered"]);
-        repository.git(&["merge", "--ff-only", &first.branch]);
+        repository.git(&["merge", "--ff-only", &first.isolation().unwrap().branch]);
         set_state(&mut store, &first.id, TaskState::Integrated);
 
         // Nothing new yet: delivered is the truth, and the slot is free
         // for the next agent.
         let report = reconcile(primary, &mut store, TARGET);
         assert!(report.revived.is_empty(), "{report:?}");
-        assert_eq!(store.get(&first.id).unwrap().state, TaskState::Integrated);
+        assert_eq!(
+            store.get(&first.id).unwrap().isolation().unwrap().state,
+            TaskState::Integrated
+        );
         assert_eq!(slots(primary, &store, &[])[0].state, SlotState::Free);
 
         fs::write(slot.path.join("after.rs"), b"fn b() {}").unwrap();
@@ -1473,7 +1599,11 @@ mod tests {
         let report = reconcile(primary, &mut store, TARGET);
         assert_eq!(report.revived, vec![first.id.clone()]);
         let task = store.get(&first.id).unwrap();
-        assert_eq!(task.state, TaskState::Running, "live again, and re-read");
+        assert_eq!(
+            task.isolation().unwrap().state,
+            TaskState::Running,
+            "live again, and re-read"
+        );
         assert_eq!(
             slots(primary, &store, &[])[0].state,
             SlotState::Occupied {
@@ -1513,7 +1643,7 @@ mod tests {
         let acquired = acquire(
             primary,
             &store,
-            &second,
+            second.isolation().unwrap(),
             &tip_of(primary, TARGET),
             None,
             &inside,
@@ -1551,14 +1681,18 @@ mod tests {
         let report = reconcile(primary, &mut store, TARGET);
         assert_eq!(report.orphaned, vec![task.id.clone()]);
         task = store.get(&task.id).unwrap().clone();
-        assert_eq!(task.state, TaskState::Parked, "a commit the target lacks");
-        assert_eq!(task.checkout, None);
+        assert_eq!(
+            task.isolation().unwrap().state,
+            TaskState::Parked,
+            "a commit the target lacks"
+        );
+        assert_eq!(task.isolation().unwrap().checkout, None);
 
-        let resumed = resume(primary, &store, &task, None, &[]).unwrap();
-        assert_eq!(resumed.branch, task.branch);
+        let resumed = resume(primary, &store, task.isolation().unwrap(), None, &[]).unwrap();
+        assert_eq!(resumed.branch, task.isolation().unwrap().branch);
         assert_eq!(
             current_branch(&resumed.path).as_deref(),
-            Some(task.branch.as_str())
+            Some(task.isolation().unwrap().branch.as_str())
         );
         assert!(resumed.path.join("kept.rs").is_file(), "the commit is back");
         assert!(
@@ -1566,7 +1700,7 @@ mod tests {
             "the uncommitted file is not"
         );
         assert_eq!(
-            commits_ahead(primary, TARGET, &task.branch),
+            commits_ahead(primary, TARGET, &task.isolation().unwrap().branch),
             1,
             "nothing was reset past the branch's own tip"
         );
@@ -1591,12 +1725,16 @@ mod tests {
         let adopted = store.get(&report.adopted[0]).unwrap();
         assert_eq!(adopted.label, "agent-2");
         assert_eq!(
-            adopted.branch, "agent/agent-2",
+            adopted.isolation().unwrap().branch,
+            "agent/agent-2",
             "no branch is renamed: it may have been pushed"
         );
-        assert_eq!(adopted.checkout, Some(CheckoutId::adopted("agent-2")));
         assert_eq!(
-            adopted.state,
+            adopted.isolation().unwrap().checkout,
+            Some(CheckoutId::adopted("agent-2"))
+        );
+        assert_eq!(
+            adopted.isolation().unwrap().state,
             TaskState::Closed,
             "clean and nothing ahead: free to reuse, and no delivery to claim"
         );
@@ -1623,13 +1761,20 @@ mod tests {
         let report = reconcile(primary, &mut store, TARGET);
         assert_eq!(report.adopted.len(), 1);
         let adopted = store.get(&report.adopted[0]).unwrap();
-        assert_eq!(adopted.branch, "feat/keymap", "no branch is renamed");
+        assert_eq!(
+            adopted.isolation().unwrap().branch,
+            "feat/keymap",
+            "no branch is renamed"
+        );
         assert!(adopted.is_named(), "a name nobody generated stays final");
         assert_eq!(
             adopted.label, "keymap",
             "the label is the name, not the slot"
         );
-        assert_eq!(adopted.checkout, Some(CheckoutId::adopted("k3y4ap")));
+        assert_eq!(
+            adopted.isolation().unwrap().checkout,
+            Some(CheckoutId::adopted("k3y4ap"))
+        );
     }
 
     /// The squash probe is written only to be compared, and evaluation asks
@@ -1649,14 +1794,22 @@ mod tests {
         repository.git_in(&slot.path, &["commit", "-qm", "the feature"]);
         fs::write(slot.path.join("feature.rs"), b"fn f() -> u8 { 1 }").unwrap();
         repository.git_in(&slot.path, &["commit", "-qam", "and its fix"]);
-        repository.git(&["merge", "--squash", &task.branch]);
+        repository.git(&["merge", "--squash", &task.isolation().unwrap().branch]);
         repository.git(&["commit", "-qm", "the feature (#7)"]);
-        assert!(is_integrated(primary, TARGET, &task.branch));
+        assert!(is_integrated(
+            primary,
+            TARGET,
+            &task.isolation().unwrap().branch
+        ));
         let before = repository.git(&["count-objects"]);
 
         // Past the clock's resolution: a probe dated by it would differ.
         std::thread::sleep(Duration::from_millis(1100));
-        assert!(is_integrated(primary, TARGET, &task.branch));
+        assert!(is_integrated(
+            primary,
+            TARGET,
+            &task.isolation().unwrap().branch
+        ));
 
         assert_eq!(
             repository.git(&["count-objects"]),
@@ -1733,7 +1886,15 @@ mod tests {
     fn a_repository_without_a_commit_cannot_host_a_slot() {
         let repository = Repository::empty("slots-unborn");
         let store = TaskStore::default();
-        let error = acquire(repository.root(), &store, &task("x"), "HEAD", None, &[]).unwrap_err();
+        let error = acquire(
+            repository.root(),
+            &store,
+            task("x").isolation().unwrap(),
+            "HEAD",
+            None,
+            &[],
+        )
+        .unwrap_err();
         assert!(matches!(error, AcquireError::Git(_)), "{error}");
     }
 
@@ -1829,7 +1990,7 @@ mod tests {
 #[cfg(test)]
 mod naming_collection_tests {
     use super::*;
-    use crate::task::{Base, Task, TaskState, TaskStore};
+    use crate::task::{Agent, Base, TaskState, TaskStore};
 
     /// The prefix is no longer the whole answer. A named task's branch left
     /// `agent/` behind, and a branch nobody can find is a branch nobody
@@ -1840,11 +2001,22 @@ mod naming_collection_tests {
         let primary = repository.root();
         let base = repository.commit_file("seed.rs", "");
 
-        let mut task = Task::new(None, Base::Ref("main".into()), base.clone(), "main".into());
-        repository.git(&["branch", &task.branch]);
-        repository.git(&["branch", "--move", &task.branch, "fix/named-work"]);
+        let mut task = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            base.clone(),
+            "main".into(),
+        );
+        repository.git(&["branch", &task.isolation().unwrap().branch]);
+        repository.git(&[
+            "branch",
+            "--move",
+            &task.isolation().unwrap().branch,
+            "fix/named-work",
+        ]);
         task.take_name("fix/named-work".to_owned());
-        task.state = TaskState::Integrated;
+        task.isolation_mut().unwrap().state = TaskState::Integrated;
         let mut store = TaskStore::default();
         store.upsert(task);
 
@@ -1866,10 +2038,16 @@ mod naming_collection_tests {
         let primary = repository.root();
         let base = repository.commit_file("seed.rs", "");
 
-        let mut task = Task::new(None, Base::Ref("main".into()), base, "main".into());
+        let mut task = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".into()),
+            base,
+            "main".into(),
+        );
         repository.git(&["branch", "fix/still-working"]);
         task.take_name("fix/still-working".to_owned());
-        task.state = TaskState::Running;
+        task.isolation_mut().unwrap().state = TaskState::Running;
         let mut store = TaskStore::default();
         store.upsert(task);
 

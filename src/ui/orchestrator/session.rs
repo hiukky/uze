@@ -166,7 +166,6 @@ impl Attach<'_> {
             .and_then(std::path::Path::parent)
             .map_or_else(|| "~".to_owned(), |parent| parent.display().to_string());
         self.model.root_picker = Some(RootPicker::opened_in(&beside, standing_in.as_deref()));
-        self.ask_root_profile();
         self.model.dirty = true;
     }
 
@@ -452,7 +451,6 @@ impl Attach<'_> {
             self.tell_the_code_surface(Command::Type(character));
             return;
         }
-        self.ask_root_profile();
         self.model.dirty = true;
     }
 
@@ -695,9 +693,10 @@ impl Attach<'_> {
     /// first step lands on the nearest end rather than nowhere.
     fn step_agent(&mut self, delta: isize, columns: u16, rows: u16) {
         let identities = &self.identities;
-        let Some(target) = self.model.session.as_ref().and_then(|session| {
+        let model = &self.model;
+        let Some(target) = model.session.as_ref().and_then(|session| {
             let space = session.selected_space();
-            let agents: Vec<TabId> = agent_tabs_of(space, identities)
+            let agents: Vec<TabId> = agents_in_drawing_order(model, space, identities)
                 .iter()
                 .map(|tab| tab.id)
                 .collect();
@@ -784,15 +783,14 @@ impl Attach<'_> {
                 }
             }
             // Creates the space where the prompt is, and where it cannot
-            // — a worktree space wants a repository, and the row is a
-            // directory on the way to one — walks in instead. Enter
-            // used to do nothing at all there, which is a dead key on
-            // the row a person presses it on most.
+            // — nothing is chosen in the listing yet — walks into the
+            // row instead. Enter used to do nothing at all there, which
+            // is a dead key on the row a person presses it on most.
             Action::Activate => {
                 match self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
-                    Some((root, kind)) => {
+                    Some(root) => {
                         self.model.root_picker = None;
-                        self.open_space_at(root, kind, columns, rows);
+                        self.open_space_at(root, columns, rows);
                     }
                     None => {
                         if let Some(picker) = self.model.root_picker.as_mut() {
@@ -807,33 +805,9 @@ impl Attach<'_> {
                     picker.backspace();
                 }
             }
-            Action::FocusNext | Action::FocusPrevious => {
-                if let Some(picker) = self.model.root_picker.as_mut() {
-                    picker.toggle_kind();
-                }
-            }
             _ => {}
         }
-        self.ask_root_profile();
         self.model.dirty = true;
-    }
-
-    /// Asks a worker what the root the picker would choose allows, unless
-    /// it already answered for that root. The chips draw both kinds until
-    /// it does; a choice the answer forbids lands on the other kind.
-    fn ask_root_profile(&mut self) {
-        let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::landed) else {
-            return;
-        };
-        if let Some(profile) = self.model.root_profiles.get(&root).copied() {
-            if let Some(picker) = self.model.root_picker.as_mut() {
-                picker.absorb_profile(root, profile);
-            }
-            return;
-        }
-        if self.model.root_profile_pending.insert(root.clone()) {
-            spawn_root_profile(root, self.channels.root_profiles.sender.clone());
-        }
     }
 
     /// The inline rename buffer over a tab or a space label.
@@ -1027,13 +1001,7 @@ impl Attach<'_> {
                 if let Some(menu) = self.model.context_menu.take()
                     && let Some(action) = menu.items.get(menu.selected).copied()
                 {
-                    dispatch_menu_action(
-                        &mut self.stream,
-                        &mut self.model,
-                        &self.identities,
-                        menu.target,
-                        action,
-                    );
+                    self.perform_menu_action(menu.target, action);
                 }
             }
             // Anything else, dismissal included, closes without acting —
@@ -1347,7 +1315,6 @@ impl Attach<'_> {
                 if let Some(picker) = self.model.root_picker.as_mut() {
                     picker.pasted(text.trim_end_matches(['\r', '\n']));
                 }
-                self.ask_root_profile();
                 self.model.dirty = true;
             }
             _ if self.model.renaming.is_some() => {
@@ -1411,18 +1378,12 @@ impl Attach<'_> {
     /// the server numbers the repeated name rather than refusing (see
     /// `Session::create_space`), because one repository is routinely
     /// worth two spaces and the prompt is an explicit request for one.
-    fn open_space_at(
-        &mut self,
-        root: PathBuf,
-        kind: uze_terminal::SpaceKind,
-        columns: u16,
-        rows: u16,
-    ) {
+    fn open_space_at(&mut self, root: PathBuf, columns: u16, rows: u16) {
         let _ = send_request(
             &mut self.stream,
             &ClientRequest::CreateSpace {
                 label: None,
-                seat: uze_terminal::SpaceSeat { root, kind },
+                seat: uze_terminal::SpaceSeat { root },
                 columns,
                 rows,
             },
@@ -1472,19 +1433,12 @@ impl Attach<'_> {
             _ if self.model.root_picker.is_some() => {
                 match hit_at(&self.model, mouse.column, mouse.row) {
                     Some(WorkspaceHit::PickSpaceRoot(index)) => {
-                        if let Some((root, kind)) =
-                            self.model.root_picker.as_mut().and_then(|picker| {
-                                picker.select(index);
-                                picker.chosen()
-                            })
-                        {
+                        if let Some(root) = self.model.root_picker.as_mut().and_then(|picker| {
+                            picker.select(index);
+                            picker.chosen()
+                        }) {
                             self.model.root_picker = None;
-                            self.open_space_at(root, kind, columns, rows);
-                        }
-                    }
-                    Some(WorkspaceHit::PickSpaceKind(kind)) => {
-                        if let Some(picker) = self.model.root_picker.as_mut() {
-                            picker.choose_kind(kind);
+                            self.open_space_at(root, columns, rows);
                         }
                     }
                     // Click outside the picker's own rows discards it —
@@ -1576,13 +1530,7 @@ impl Attach<'_> {
                 // dismissed without acting instead of visibly no-oping.
                 let target = self.model.context_menu.take().map(|menu| menu.target);
                 if let (Some(target), Some(action)) = (target, action) {
-                    dispatch_menu_action(
-                        &mut self.stream,
-                        &mut self.model,
-                        &self.identities,
-                        target,
-                        action,
-                    );
+                    self.perform_menu_action(target, action);
                 }
                 self.model.dirty = true;
             }
@@ -1736,7 +1684,7 @@ impl Attach<'_> {
                     unreachable!("guarded by the match arm above");
                 };
                 let pointer = match dragging.group {
-                    TabDragGroup::Agents(_) => mouse.row,
+                    TabDragGroup::Agents(..) => mouse.row,
                     TabDragGroup::Strip(..) => mouse.column,
                 };
                 if !dragging.armed {
@@ -1907,6 +1855,21 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 } else if let Some(WorkspaceHit::SelectTab(tab)) = hit {
                     let mut items = vec![Action::RenameSelection];
+                    // Offered only where it can be honoured: an agent
+                    // already in a checkout of its own has nothing to be
+                    // given, and a directory that is no repository has
+                    // nothing to cut one from.
+                    if self.can_isolate(tab) {
+                        // Both rows, always. Whether the tree holds
+                        // uncommitted changes is a Git question, and
+                        // nothing the client draws waits on Git — a row
+                        // gated on the last evaluation's answer is absent
+                        // exactly when the operator has just edited
+                        // something, which is when they want it. On a
+                        // clean tree the two rows do the same thing.
+                        items.push(Action::IsolateAgent);
+                        items.push(Action::IsolateAgentWithChanges);
+                    }
                     if can_close_tab_from_menu(&self.model, &self.identities, tab) {
                         items.push(Action::CloseTab);
                     }
@@ -2286,7 +2249,7 @@ impl Attach<'_> {
                         tab_drag_group(&self.model, &self.identities, layout, hit_rect, tab)
                 {
                     let origin = match group {
-                        TabDragGroup::Agents(_) => mouse.row,
+                        TabDragGroup::Agents(..) => mouse.row,
                         TabDragGroup::Strip(..) => mouse.column,
                     };
                     self.model.dragging_tab = Some(DraggingTab {
@@ -2383,11 +2346,6 @@ impl Attach<'_> {
             }
             WorkspaceHit::NewSpace => self.open_root_picker(),
             WorkspaceHit::PickSpaceRoot(_) => {
-                // Only reachable while the root picker is open,
-                // which the guarded arm above already handles —
-                // same as `PickAgent` for the agent picker.
-            }
-            WorkspaceHit::PickSpaceKind(_) => {
                 // Only reachable while the root picker is open,
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
@@ -2529,7 +2487,6 @@ impl Attach<'_> {
                 };
                 PlacementRequest::New {
                     from: space_cwd(space, &self.identities),
-                    kind: space.kind,
                     harness,
                 }
             }
@@ -2553,6 +2510,115 @@ impl Attach<'_> {
             label,
             command,
             replacing,
+            self.channels.placements.sender.clone(),
+        );
+    }
+
+    /// Whether this tab's agent could be given a checkout of its own:
+    /// it is an agent UZE launched, it has no checkout yet, and the
+    /// space it stands in is a repository with a commit to branch from.
+    fn can_isolate(&self, tab: TabId) -> bool {
+        let Some(session) = self.model.session.as_ref() else {
+            return false;
+        };
+        let Some(space) = session
+            .workspace
+            .spaces
+            .iter()
+            .find(|space| space.tabs.iter().any(|candidate| candidate.id == tab))
+        else {
+            return false;
+        };
+        let Some(found) = space.tabs.iter().find(|candidate| candidate.id == tab) else {
+            return false;
+        };
+        if launched_agent_id(found).is_none() {
+            return false;
+        }
+        if self
+            .model
+            .tab_task(tab)
+            .is_some_and(|task| !task.branch.is_empty())
+        {
+            return false;
+        }
+        // Whether a slot can be cut here is a Git question, and nothing
+        // the client draws waits on Git: the evaluation already answers
+        // it off the frame, because a directory with a branch is a
+        // repository with a commit.
+        self.model
+            .remembered
+            .branches
+            .contains_key(&evaluation_key(&space_cwd(space, &self.identities)))
+    }
+
+    /// Gives one agent a checkout of its own and relaunches it there,
+    /// continuing the conversation it is in.
+    ///
+    /// The same three steps a resume takes — place, open the tab, close
+    /// the one it took over from — because that is what moving an agent
+    /// between directories is: a process cannot be told to stand
+    /// somewhere else.
+    fn perform_menu_action(&mut self, target: MenuTarget, action: Action) {
+        match action {
+            Action::IsolateAgent => self.isolate_agent(target, uze_application::Carry::Nothing),
+            Action::IsolateAgentWithChanges => {
+                self.isolate_agent(target, uze_application::Carry::CopyOfChanges)
+            }
+            _ => dispatch_menu_action(
+                &mut self.stream,
+                &mut self.model,
+                &self.identities,
+                target,
+                action,
+            ),
+        }
+        self.model.dirty = true;
+    }
+
+    fn isolate_agent(&mut self, target: MenuTarget, carry: uze_application::Carry) {
+        let MenuTarget::Tab(tab) = target else {
+            return;
+        };
+        let Some((agent, label, harness, from)) = self.model.session.as_ref().and_then(|session| {
+            let space = session
+                .workspace
+                .spaces
+                .iter()
+                .find(|space| space.tabs.iter().any(|candidate| candidate.id == tab))?;
+            let found = space.tabs.iter().find(|candidate| candidate.id == tab)?;
+            Some((
+                // The identity the launch stamped: the one thing that
+                // survives the agent moving, and what the isolation is
+                // recorded against.
+                launched_agent_id(found)?.to_owned(),
+                found.label.clone(),
+                agent_for_tab(&self.identities, found)?.launch.clone(),
+                space_cwd(space, &self.identities),
+            ))
+        }) else {
+            return;
+        };
+        let command = vec![harness.to_string_lossy().into_owned()];
+        if self.model.placement_pending {
+            return;
+        }
+        self.model.placement_pending = true;
+        self.model.set_busy_notice(format!("{label}: isolating"));
+        let occupied: Vec<PathBuf> = self
+            .model
+            .remembered
+            .occupied_checkouts
+            .iter()
+            .cloned()
+            .collect();
+        spawn_agent_placement(
+            self.home,
+            PlacementRequest::Isolate { from, agent, carry },
+            occupied,
+            label,
+            command,
+            Some(tab),
             self.channels.placements.sender.clone(),
         );
     }
@@ -2929,8 +2995,8 @@ impl Attach<'_> {
         }
         // A directory the sidebar names is read the moment it is known,
         // not when its pane next goes quiet or on the refresh clock: a
-        // folded space's root or a tenant nobody selected otherwise showed
-        // its path for as long as `TASK_REFRESH` before its branch.
+        // folded space's root or an agent nobody selected otherwise
+        // showed its path for as long as `TASK_REFRESH` before its branch.
         for cwd in self.model.unread_named_directories(&self.identities) {
             self.model
                 .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
@@ -3004,16 +3070,6 @@ impl Attach<'_> {
         }
         while let Ok(resolution) = self.channels.artifacts.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_artifacts(resolution);
-        }
-        while let Ok(RootProfileResolution { root, profile }) =
-            self.channels.root_profiles.receiver.try_recv()
-        {
-            self.model.root_profile_pending.remove(&root);
-            self.model.root_profiles.insert(root.clone(), profile);
-            if let Some(picker) = self.model.root_picker.as_mut() {
-                picker.absorb_profile(root, profile);
-            }
-            self.model.dirty = true;
         }
         self.model.schedule_git_read(&self.channels.git.sender);
         self.model
