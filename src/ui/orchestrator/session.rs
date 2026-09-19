@@ -2028,6 +2028,17 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            // The index is nothing but a long list, so the wheel walks it
+            // the way the arrows do. It sits ahead of every surface below
+            // because it is drawn over all of them.
+            _ if self.model.action_index.is_some() => {
+                let action = if mouse.kind == MouseEventKind::ScrollUp {
+                    Action::SelectPrevious
+                } else {
+                    Action::SelectNext
+                };
+                return self.action_index_action(action, viewport);
+            }
             _ if self.model.architect.is_some() => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up

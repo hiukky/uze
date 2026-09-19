@@ -6,8 +6,8 @@ use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use uze_theme::Token;
 
 use super::{
-    Align, Button, Chip, ChipState, Edge, RowState, Rule, Surface, action_index, button_row, mark,
-    row, surface::fill, text,
+    Align, Button, Chip, ChipState, Edge, Field, RowState, Rule, Surface, action_index, button_row,
+    field, mark, row, surface::fill, text,
 };
 use crate::ui::theme;
 
@@ -390,7 +390,7 @@ fn an_action_with_no_key_dims_the_column_it_would_have_filled() {
     let key_cell = |rows: &[action_index::Row]| {
         let mut at = None;
         let buffer = drawn(80, 24, |frame| {
-            at = action_index::render(frame, area, rows, "", 0, |_| ())
+            at = action_index::render(frame, area, rows, rows.len(), "", 0, |_| ())
                 .first()
                 .map(|(rect, ())| (rect.x, rect.y));
         });
@@ -406,5 +406,227 @@ fn an_action_with_no_key_dims_the_column_it_would_have_filled() {
         key_cell(&[(action, None)]),
         Some(theme::color(Token::TextDim)),
         "an unbound one is dimmed, never left reading as an empty binding"
+    );
+}
+
+/// The state that decides whether something reads as an input is the one
+/// with nothing in it. A field holding text is obvious; a field holding
+/// nothing is a caption unless the caret says otherwise.
+#[test]
+fn an_empty_focused_field_still_shows_where_typing_would_land() {
+    let empty = Field::new("", "type to narrow");
+    let spans = empty.spans();
+
+    assert_eq!(spans.len(), 2, "the caret, then the hint");
+    assert_eq!(spans[0].content, theme::glyph(theme::Symbol::CursorText));
+    assert_eq!(spans[1].content, "type to narrow");
+
+    let resting = empty.clone().focused(false).spans();
+    assert_eq!(resting.len(), 1, "unfocused: no claim about where keys go");
+    assert_eq!(resting[0].content, "type to narrow");
+}
+
+/// Typed, the caret follows the text — and only while the field has focus,
+/// because two carets on one screen are two claims about where typing goes.
+#[test]
+fn a_typed_field_carries_its_caret_only_while_focused() {
+    let typed = Field::new("harn", "type to narrow");
+
+    let focused = typed.spans();
+    assert_eq!(focused.len(), 2);
+    assert_eq!(focused[0].content, "harn");
+    assert_eq!(focused[1].content, theme::glyph(theme::Symbol::CursorText));
+
+    let resting = typed.focused(false).spans();
+    assert_eq!(resting.len(), 1);
+    assert_eq!(resting[0].content, "harn");
+}
+
+/// The theme names `cursor.text` "the caret in a text input"; `bar.thin`
+/// is one of the bars marking the edge of a row.
+///
+/// The built-in theme spells both `▏`, which is exactly how three inputs
+/// came to draw the bar and nobody saw it: the defect is invisible until a
+/// glyph set spells them apart, and then it appears in three places at
+/// once with nothing tying them together. So this asserts the *symbol*,
+/// which is the thing that was wrong, rather than the glyph, which was
+/// not.
+#[test]
+fn the_caret_is_the_carets_own_symbol() {
+    assert_eq!(
+        field::caret().content,
+        theme::glyph(theme::Symbol::CursorText)
+    );
+}
+
+/// The open index is always focused — it is open, so every key reaches it —
+/// and it was the one field that said nothing at all while empty.
+#[test]
+fn the_open_index_says_it_can_be_typed_into_before_anything_is() {
+    let area = Rect::new(0, 0, 80, 24);
+    let buffer = drawn(80, 24, |frame| {
+        action_index::render(frame, area, &[], 0, "", 0, |_| ());
+    });
+
+    let text: String = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+        .collect();
+    assert!(
+        text.contains(&theme::glyph(theme::Symbol::CursorText)),
+        "an empty index still shows its caret"
+    );
+    assert!(text.contains("type to narrow"));
+}
+
+/// The rule is what says "field" before anything is typed, and it is the
+/// same rule on every input: the list screens' filter and the open index
+/// answered this differently until the field owned it.
+#[test]
+fn a_field_wears_the_same_rule_wherever_it_is_drawn() {
+    let area = Rect::new(0, 0, 20, 2);
+    let focused = drawn(20, 2, |frame| {
+        let inner = Field::new("", "find").render(frame, area);
+        assert_eq!(
+            inner,
+            Rect::new(0, 0, 20, 1),
+            "the rule takes the row under"
+        );
+    });
+    let resting = drawn(20, 2, |frame| {
+        Field::new("", "find").focused(false).render(frame, area);
+    });
+
+    assert_eq!(
+        focused[(0, 1)].fg,
+        theme::color(Token::Accent),
+        "focused: the rule says keys land here"
+    );
+    assert_eq!(resting[(0, 1)].fg, theme::color(Token::BorderDefault));
+}
+
+/// A surface that resized under the typing that narrowed it moved the rows
+/// the reader was aiming at, on the keystroke where they could least
+/// follow. Its height is what is reachable here, not what is left.
+#[test]
+fn narrowing_the_index_does_not_resize_it() {
+    let area = Rect::new(0, 0, 80, 24);
+    let all = uze_keys::active().available(&[uze_keys::Scope::Global]);
+    if all.len() < 2 {
+        return;
+    }
+    // The surface's own bottom border is what is being measured, so find
+    // the row it lands on rather than trusting the arithmetic above it.
+    let bottom_border = |rows: &[action_index::Row]| {
+        let buffer = drawn(80, 24, |frame| {
+            action_index::render(frame, area, rows, all.len(), "x", 0, |_| ());
+        });
+        (0..24)
+            .rev()
+            .find(|&y| (0..80).any(|x| buffer[(x, y)].symbol() == "\u{2518}"))
+    };
+
+    assert!(bottom_border(&all).is_some(), "the surface was drawn");
+    assert_eq!(
+        bottom_border(&all),
+        bottom_border(&all[..1]),
+        "one match or all of them, the surface is the same size"
+    );
+}
+
+/// The title names the surface, and the mark that closes it sits on its
+/// border where a modal's own controls do.
+#[test]
+fn the_index_is_titled_help_and_says_how_to_close() {
+    let buffer = drawn(80, 24, |frame| {
+        action_index::render(frame, Rect::new(0, 0, 80, 24), &[], 4, "", 0, |_| ());
+    });
+    let text: String = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+        .collect();
+
+    assert!(text.contains("Help"), "titled for what it is");
+    assert!(!text.contains("Everything you can do"));
+    assert!(
+        text.contains(&theme::glyph(theme::Symbol::MarkClose)),
+        "the mark that closes it is drawn"
+    );
+    assert!(
+        !text.contains("close"),
+        "the glyph alone, not a second label"
+    );
+}
+
+/// The index grows with every action the product gains. Capped, it stays
+/// a surface somebody chose the size of, and scrolls past that.
+#[test]
+fn the_index_is_capped_and_scrolls_rather_than_growing_with_the_product() {
+    let area = Rect::new(0, 0, 80, 40);
+    let many: Vec<action_index::Row> = uze_keys::active()
+        .available(&[uze_keys::Scope::Global])
+        .into_iter()
+        .cycle()
+        .take(40)
+        .collect();
+    if many.len() < 40 {
+        return;
+    }
+
+    let buffer = drawn(80, 40, |frame| {
+        action_index::render(frame, area, &many, many.len(), "", 0, |_| ());
+    });
+    let bottom = (0..40)
+        .rev()
+        .find(|&y| (0..80).any(|x| buffer[(x, y)].symbol() == "\u{2518}"))
+        .expect("the surface was drawn");
+    let top = (0..40)
+        .find(|&y| (0..80).any(|x| buffer[(x, y)].symbol() == "\u{250c}"))
+        .expect("the surface was drawn");
+
+    assert!(
+        bottom - top < 19,
+        "twelve rows plus chrome, not forty: got {}",
+        bottom - top + 1
+    );
+}
+
+/// A cap that hid what the arrows had moved to would be worse than no cap:
+/// the window follows the selection, and the bar says where in the list it
+/// is.
+#[test]
+fn the_window_follows_the_selection_past_the_cap() {
+    let area = Rect::new(0, 0, 80, 40);
+    let many: Vec<action_index::Row> = uze_keys::active()
+        .available(&[uze_keys::Scope::Global])
+        .into_iter()
+        .cycle()
+        .take(40)
+        .collect();
+    if many.len() < 40 {
+        return;
+    }
+
+    let rows_for = |selected: usize| {
+        let mut placed = Vec::new();
+        drawn(80, 40, |frame| {
+            placed = action_index::render(frame, area, &many, many.len(), "", selected, |p| p);
+        });
+        placed
+    };
+
+    let top = rows_for(0);
+    assert!(
+        top.iter().any(|(_, position)| *position == 0),
+        "the chosen row is drawn"
+    );
+    assert!(top.len() <= 12, "no more than the cap: {}", top.len());
+
+    let deep = rows_for(35);
+    assert!(
+        deep.iter().any(|(_, position)| *position == 35),
+        "a selection past the window scrolled it into view"
+    );
+    assert!(
+        !deep.iter().any(|(_, position)| *position == 0),
+        "and the window actually moved"
     );
 }

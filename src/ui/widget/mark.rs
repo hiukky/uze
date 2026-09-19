@@ -1,5 +1,4 @@
-//! The small glyphs that annotate a line: where typing lands, and whether
-//! a group is open.
+//! The small glyphs that annotate a line.
 //!
 //! Each is one span or one string, which is exactly why they drift. A
 //! glyph set may spell any of them differently — that is what a glyph set
@@ -7,15 +6,7 @@
 //! with. Four files spelled the disclosure chevron themselves, two of them
 //! with the predicate inverted, and nothing said they were the same mark.
 
-use ratatui::text::Span;
-use uze_theme::Token;
-
 use crate::ui::theme::{self, Symbol};
-
-/// The caret: where typing would land.
-pub(crate) fn caret() -> Span<'static> {
-    Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent))
-}
 
 /// The chevron that says whether a group is open.
 ///

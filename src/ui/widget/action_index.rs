@@ -26,7 +26,7 @@ use ratatui::{
 };
 use uze_theme::Token;
 
-use super::{Surface, mark};
+use super::{Field, Scrollbar, Surface};
 use crate::ui::theme::{self, Symbol};
 
 /// One line of the index: an action, and the chord that runs it where one
@@ -58,6 +58,18 @@ pub(crate) fn narrowed(rows: Vec<Row>, filter: &str) -> Vec<Row> {
 const MIN_WIDTH: u16 = 30;
 const MAX_WIDTH: u16 = 72;
 
+/// The most actions the index shows at once.
+///
+/// A cap rather than the whole list, for the same reason there is a cap on
+/// the width: the index grows with every action the product gains, and a
+/// surface whose size is a function of that is one nobody chose. Past this
+/// it scrolls, which is what a list does.
+const MAX_ROWS: usize = 12;
+
+/// Rows the surface spends on something other than actions: its two
+/// borders, the field and its rule, and the row of air under them.
+const CHROME_ROWS: u16 = 6;
+
 /// Draws the index over `area`, answering with the rect each row took.
 ///
 /// `entry` turns a row's position into the caller's own hit, because the
@@ -69,6 +81,7 @@ pub(crate) fn render<H>(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     rows: &[Row],
+    reachable: usize,
     filter: &str,
     selected: usize,
     entry: impl Fn(usize) -> H,
@@ -80,35 +93,58 @@ pub(crate) fn render<H>(
         .unwrap_or(0)
         .max(4);
     let width = area.width.saturating_sub(8).clamp(MIN_WIDTH, MAX_WIDTH);
-    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
+    // Sized by what is reachable here, not by what the filter left: a
+    // surface that resizes under the typing that narrows it moves the rows
+    // the reader is aiming at, and the first keystroke is when they are
+    // least able to follow.
+    let shown = reachable.min(MAX_ROWS) as u16;
+    let height = (shown + CHROME_ROWS).min(area.height.saturating_sub(2));
     let rect = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, rect);
-    let inner = Surface::floating()
-        .title(" Everything you can do ")
-        .render(frame, rect);
+    let inner = Surface::floating().title(" Help ").render(frame, rect);
+    // On the border row, where a modal's own controls live. Clicking
+    // anywhere but a row already closes the index in both clients — this
+    // is the mark that says so, rather than a target that does something
+    // the rest of the surface does not.
+    close_mark(frame, rect);
 
-    let typed = if filter.is_empty() {
-        Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
-    } else {
-        Line::from(vec![
-            Span::styled(filter.to_owned(), theme::fg(Token::TextPrimary)),
-            mark::caret(),
-        ])
-    };
-    frame.render_widget(
-        Paragraph::new(typed),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
+    // Always focused: the index is open, so every key reaches this field.
+    // Under the same rule every other input in the product wears — it is
+    // what says "field" before anything has been typed into it.
+    Field::new(filter, "type to narrow").render(frame, Rect::new(inner.x, inner.y, inner.width, 2));
 
-    let list = Rect::new(
+    // Two rows for the field and its rule, then a row of air before the
+    // first action: the rule separates the query from what it narrowed.
+    let mut list = Rect::new(
         inner.x,
-        inner.y + 2,
+        inner.y + 3,
         inner.width,
-        inner.height.saturating_sub(2),
+        inner.height.saturating_sub(3),
     );
-    let mut entries = Vec::with_capacity(rows.len());
-    for (position, (action, chord)) in rows.iter().enumerate() {
-        let y = list.y + position as u16;
+    let visible = usize::from(list.height);
+    // The window is derived from the selection rather than kept as an
+    // offset of its own — moving with the arrows is the only way this list
+    // scrolls — so it holds the chosen row a little in from the edge it is
+    // approaching rather than pinned to it.
+    let first = selected
+        .saturating_sub(visible / 2)
+        .min(rows.len().saturating_sub(visible));
+    let bar = Scrollbar::measure(
+        Rect::new(
+            list.right().saturating_sub(Scrollbar::width()),
+            list.y,
+            Scrollbar::width(),
+            list.height,
+        ),
+        visible,
+        rows.len(),
+    );
+    if bar.is_some() {
+        list.width = list.width.saturating_sub(Scrollbar::width());
+    }
+    let mut entries = Vec::with_capacity(visible);
+    for (position, (action, chord)) in rows.iter().enumerate().skip(first).take(visible) {
+        let y = list.y + (position - first) as u16;
         if y >= list.bottom() {
             break;
         }
@@ -155,5 +191,32 @@ pub(crate) fn render<H>(
         );
         entries.push((row, entry(position)));
     }
+    if let Some(bar) = bar {
+        bar.render(frame, first);
+    }
     entries
+}
+
+/// The mark that closes the index, drawn on its top border.
+///
+/// The glyph alone: a modal titled `Help` with a word on the other corner
+/// reads as two labels rather than as a title and a control, and closing
+/// is the one thing every modal does — nobody needs it spelled.
+fn close_mark(frame: &mut ratatui::Frame<'_>, surface: Rect) {
+    let width = theme::width(Symbol::MarkClose) + 2;
+    if surface.width <= width + 2 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {} ", theme::glyph(Symbol::MarkClose)),
+            theme::fg(Token::StateDanger),
+        )),
+        Rect::new(
+            surface.right().saturating_sub(width + 1),
+            surface.y,
+            width,
+            1,
+        ),
+    );
 }

@@ -7899,3 +7899,59 @@ fn a_code_door_pressed_on_the_surface_it_opened_closes_it() {
     // own binding is what opens the surface.
     assert_eq!(code_door(None, ContentMode::Contents), CodeDoor::Nothing);
 }
+
+/// The picker measures itself: `height` budgets its two border rows and
+/// nothing else, because each row carries its own lead. Drawn on a surface
+/// that insets as well, the last option fell outside the box — and with
+/// one harness installed there was no option left to draw at all, which is
+/// what "never showed 'agent 1'" was.
+#[test]
+fn the_agent_picker_draws_every_option_it_sized_itself_for() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::ui::orchestrator::render;
+
+    let option = |name: &str| super::AgentOption {
+        display_name: name.to_owned(),
+        integration: "claude-code".to_owned(),
+        command: vec!["claude".to_owned()],
+        continuity_gap: None,
+    };
+    let drawn = |names: &[&str]| {
+        let picker = super::AgentPicker {
+            options: names.iter().map(|name| option(name)).collect(),
+            selected: 0,
+            anchor: Rect::new(2, 1, 3, 1),
+            resume: None,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                render::render_agent_picker(
+                    frame,
+                    Rect::new(0, 0, 60, 20),
+                    picker.anchor,
+                    &picker,
+                    &mut hits,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..20)
+            .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let one = drawn(&["Claude Code"]);
+    assert!(
+        one.contains("Claude Code"),
+        "the only harness installed is drawn:\n{one}"
+    );
+
+    let three = drawn(&["Claude Code", "Codex", "OpenCode"]);
+    for name in ["Claude Code", "Codex", "OpenCode"] {
+        assert!(three.contains(name), "{name} is drawn:\n{three}");
+    }
+}

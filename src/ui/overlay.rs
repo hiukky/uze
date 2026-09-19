@@ -13,7 +13,7 @@ use super::hit::Hit;
 use super::model::{Confirmation, Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Align, Button, Surface, action_index, button_row, hint, mark, text};
+use crate::ui::widget::{Align, Button, Field, Surface, action_index, button_row, hint, text};
 
 impl TuiModel {
     /// One action, answered by whichever overlay is open.
@@ -188,7 +188,16 @@ pub(crate) fn render_action_index(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let rows = model.action_index_rows(scopes, filter);
-    let entries = action_index::render(frame, area, &rows, filter, selected, Hit::ActionIndexEntry);
+    let reachable = model.action_index_rows(scopes, "").len();
+    let entries = action_index::render(
+        frame,
+        area,
+        &rows,
+        reachable,
+        filter,
+        selected,
+        Hit::ActionIndexEntry,
+    );
     // Prepended, so the list underneath cannot answer a click meant here.
     hits.splice(0..0, entries);
 }
@@ -368,12 +377,9 @@ pub(crate) fn render_text_prompt(
         )),
         rows[0],
     );
-    let field = Line::from(vec![
-        Span::raw(format!("{} ", theme::glyph(Symbol::Prompt))),
-        Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
-        mark::caret(),
-    ]);
-    frame.render_widget(Paragraph::new(field), rows[1]);
+    let mut field = vec![Span::raw(format!("{} ", theme::glyph(Symbol::Prompt)))];
+    field.extend(Field::new(input, "").ink(Token::Accent).spans());
+    frame.render_widget(Paragraph::new(Line::from(field)), rows[1]);
     frame.render_widget(
         Paragraph::new(Line::from(answer_spans(
             &[uze_keys::Scope::Global, uze_keys::Scope::TextPrompt],

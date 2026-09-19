@@ -11,7 +11,7 @@ use crate::ui::hit::Hit;
 use crate::ui::model::{ResizablePanel, TuiModel};
 use crate::ui::side_panel_area;
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Align, Button, Edge, Rule, button_row, mark};
+use crate::ui::widget::{Align, Button, Edge, Field, Rule, button_row};
 use uze_application::application::offers::ActionOffer;
 
 pub mod appearance;
@@ -100,28 +100,9 @@ pub(crate) fn filter_box(
     placeholder: &str,
     active: bool,
 ) {
-    // An input's underline is the field, so it carries the weight of an
-    // enclosing hairline rather than a divider's.
-    let inner = Rule::new(Edge::Bottom)
-        .tone(if active {
-            Token::Accent
-        } else {
-            Token::BorderDefault
-        })
+    Field::new(text, placeholder)
+        .focused(active)
         .render(frame, area);
-    let line = if text.is_empty() {
-        Line::from(Span::styled(
-            placeholder.to_owned(),
-            theme::fg(Token::TextMuted),
-        ))
-    } else {
-        let mut spans = vec![Span::styled(text.to_owned(), theme::fg(Token::TextPrimary))];
-        if active {
-            spans.push(mark::caret());
-        }
-        Line::from(spans)
-    };
-    frame.render_widget(Paragraph::new(line), inner);
 }
 
 /// Where a detail drawer's selected thing stands, in the words its footer

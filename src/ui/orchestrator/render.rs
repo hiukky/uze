@@ -302,9 +302,13 @@ pub(super) fn render_agent_picker(
         height,
     );
     frame.render_widget(Clear, popup);
-    let inner = Surface::floating()
-        .title(" new agent ")
-        .render(frame, popup);
+    // A card, not a floating surface: this menu is anchored to the control
+    // that opened it and measures itself — `height` budgets its two border
+    // rows and nothing else, and each row leads with its own inset (below).
+    // Given the floating inset on top of that, the last option fell
+    // outside the box, and with one harness installed there was nothing
+    // left to draw at all.
+    let inner = Surface::card().title(" new agent ").render(frame, popup);
 
     if picker.options.is_empty() {
         frame.render_widget(
@@ -2305,10 +2309,12 @@ pub(super) fn render_action_index(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let rows = action_index_rows(&index.scopes, &index.filter);
+    let reachable = action_index_rows(&index.scopes, "").len();
     let entries = action_index::render(
         frame,
         area,
         &rows,
+        reachable,
         &index.filter,
         index.selected,
         WorkspaceHit::ActionIndexEntry,

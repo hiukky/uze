@@ -86,6 +86,7 @@ pub(crate) const POPUP_V_PAD: u16 = 1;
 pub(crate) mod action_index;
 pub(crate) mod button;
 pub(crate) mod chip;
+pub(crate) mod field;
 pub(crate) mod hint;
 pub(crate) mod mark;
 pub(crate) mod row;
@@ -98,6 +99,7 @@ pub(crate) mod text;
 
 pub(crate) use button::{Align, Button, button_row};
 pub(crate) use chip::{Chip, ChipState};
+pub(crate) use field::Field;
 pub(crate) use row::RowState;
 pub(crate) use rule::{Edge, Rule};
 pub(crate) use scrollbar::Scrollbar;

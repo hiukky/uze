@@ -5063,3 +5063,48 @@ fn a_confirmation_dialog_reads_as_heading_subject_body_and_answers() {
         );
     }
 }
+
+/// The index is nothing but a long list, and the wheel was guarded on
+/// "no overlay" — so the one surface that most needed it was the one
+/// surface it did not reach.
+#[test]
+fn the_wheel_walks_the_open_index() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel::default();
+    model.act(uze_keys::Action::OpenActionIndex);
+    let rows = match &model.overlay {
+        Overlay::ActionIndex { scopes, filter, .. } => {
+            model.action_index_rows(scopes, filter).len()
+        }
+        _ => panic!("the index did not open"),
+    };
+    assert!(rows > 3, "the index has a list to walk");
+
+    let wheel = |model: &mut TuiModel, kind| {
+        model.apply_mouse(
+            MouseEvent {
+                kind,
+                column: 60,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+            Rect::new(0, 0, 100, 40),
+        );
+    };
+    let selected = |model: &TuiModel| match &model.overlay {
+        Overlay::ActionIndex { selected, .. } => *selected,
+        _ => panic!("the index closed"),
+    };
+
+    wheel(&mut model, MouseEventKind::ScrollDown);
+    wheel(&mut model, MouseEventKind::ScrollDown);
+    assert_eq!(selected(&model), 2, "down walks forward");
+
+    wheel(&mut model, MouseEventKind::ScrollUp);
+    assert_eq!(selected(&model), 1, "up walks back");
+
+    // The wheel is not a click: the index is still open.
+    assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
+}
