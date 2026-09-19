@@ -4,13 +4,14 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
 };
 
 use crate::ui::hit::Hit;
 use crate::ui::model::{ResizablePanel, TuiModel};
 use crate::ui::side_panel_area;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{Align, Button, Edge, Rule, button_row, mark};
 use uze_application::application::offers::ActionOffer;
 
 pub mod appearance;
@@ -56,13 +57,10 @@ pub(crate) fn drawer(
     } else {
         Token::SurfaceRecessed
     };
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(theme::fg(rule))
-            .style(theme::bg(Token::SurfaceRecessed)),
-        area,
-    );
+    Rule::new(Edge::Left)
+        .tone(rule)
+        .ground(Token::SurfaceRecessed)
+        .render(frame, area);
     // First, so the rule answers the pointer before the rows behind it do.
     hits.insert(
         0,
@@ -102,15 +100,15 @@ pub(crate) fn filter_box(
     placeholder: &str,
     active: bool,
 ) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(theme::fg(if active {
+    // An input's underline is the field, so it carries the weight of an
+    // enclosing hairline rather than a divider's.
+    let inner = Rule::new(Edge::Bottom)
+        .tone(if active {
             Token::Accent
         } else {
             Token::BorderDefault
-        }));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        })
+        .render(frame, area);
     let line = if text.is_empty() {
         Line::from(Span::styled(
             placeholder.to_owned(),
@@ -119,10 +117,7 @@ pub(crate) fn filter_box(
     } else {
         let mut spans = vec![Span::styled(text.to_owned(), theme::fg(Token::TextPrimary))];
         if active {
-            spans.push(Span::styled(
-                theme::glyph(Symbol::BarThin),
-                theme::fg(Token::Accent),
-            ));
+            spans.push(mark::caret());
         }
         Line::from(spans)
     };
@@ -195,11 +190,9 @@ pub(crate) fn render_drawer_footer(
     engaged: Option<uze_keys::Action>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(theme::fg(Token::BorderDefault));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rule::new(Edge::Top)
+        .tone(Token::BorderDefault)
+        .render(frame, area);
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -227,30 +220,27 @@ pub(crate) fn render_drawer_footer(
     if row_y >= area.bottom() {
         return;
     }
-    let mut x = inner.x;
-    for (index, action) in drawer_buttons(offers).into_iter().enumerate() {
-        let label = format!("  {}  ", action.label());
-        let width = label.chars().count() as u16;
-        if x + width > inner.right() {
-            break;
-        }
-        let hue = if engaged == Some(action) {
-            Token::StateWarning
-        } else if action.destructive() {
-            Token::StateDanger
-        } else if index == 0 {
-            Token::Accent
-        } else {
-            Token::TextSecondary
-        };
-        let style = button_style(
-            hue,
-            hovered == Some(action) || engaged == Some(action),
-            Token::SurfaceRecessed,
-        );
-        let rect = Rect::new(x, row_y, width, 1);
-        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
-        hits.push((rect, Hit::OfferedAction(action)));
-        x += width + 2;
-    }
+    let buttons: Vec<_> = drawer_buttons(offers)
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let hue = if engaged == Some(action) {
+                Token::StateWarning
+            } else if action.destructive() {
+                Token::StateDanger
+            } else if index == 0 {
+                Token::Accent
+            } else {
+                Token::TextSecondary
+            };
+            (
+                Button::new(action.label(), hue)
+                    .strong(hovered == Some(action) || engaged == Some(action))
+                    .ground(Token::SurfaceRecessed),
+                Hit::OfferedAction(action),
+            )
+        })
+        .collect();
+    let row = Rect::new(inner.x, row_y, inner.width, 1);
+    hits.extend(button_row(frame, row, &buttons, Align::Left));
 }

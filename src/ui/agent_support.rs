@@ -4,11 +4,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Clear, Padding, Paragraph},
 };
 use uze_application::{CapabilityKind, HarnessCapabilities};
 
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{Surface, text};
 use crate::ui::{POPUP_H_PAD, POPUP_V_PAD};
 use uze_application::application::{
     AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,
@@ -173,18 +174,16 @@ pub(super) fn render(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground))
+    // A row of air below as well as above: this popup's height is measured
+    // from its lines, so the bottom inset is content rather than slack.
+    let inner = Surface::floating()
         .padding(Padding::new(
             POPUP_H_PAD,
             POPUP_H_PAD,
             POPUP_V_PAD,
             POPUP_V_PAD,
-        ));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+        ))
+        .render(frame, popup);
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -214,7 +213,7 @@ fn styled_row(
     width: usize,
 ) -> Line<'static> {
     let (icon, icon_color) = icon_for(state);
-    let value = crate::ui::elide_tail(value, width.saturating_sub(3));
+    let value = text::elide(value, width.saturating_sub(3));
     let gap = width
         .saturating_sub(2 + label.chars().count() + value.chars().count())
         .max(1);
@@ -261,10 +260,7 @@ fn reason_line(support: &AgentSupport, capability: CapabilityKind, width: usize)
         capability_label(capability).to_lowercase()
     );
     Line::from(Span::styled(
-        format!(
-            "  {}",
-            crate::ui::elide_tail(&text, width.saturating_sub(2))
-        ),
+        format!("  {}", text::elide(&text, width.saturating_sub(2))),
         theme::fg(Token::TextMuted),
     ))
 }

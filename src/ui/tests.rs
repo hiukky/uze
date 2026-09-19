@@ -9,7 +9,7 @@ use uze_application::application::{
 };
 
 use super::hit::Hit;
-use super::management::{clip_line, render};
+use super::management::render;
 use super::model::{
     Confirmation, Focus, ListScreen, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES,
     RefreshData, Remembered, Route, Status, TrustedRetry, TuiModel, routes, scope_is_offered,
@@ -17,6 +17,7 @@ use super::model::{
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
 use crate::ui::theme::{self, Token};
+use crate::ui::widget::text;
 
 fn plugin(id: &str) -> PluginSummary {
     PluginSummary {
@@ -2550,13 +2551,13 @@ fn clip_line_truncates_long_status_with_ellipsis() {
 
     let mut line =
         Line::from("Installed plugin root: /home/user/.codex/plugins/cache/very/long/path");
-    clip_line(&mut line, 20);
+    text::clip(&mut line, 20);
     let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(content, "Installed plugin ro…");
     assert_eq!(ratatui::text::Span::raw(&content).width(), 20);
 
     let mut line = Line::from("Installed uze");
-    clip_line(&mut line, 20);
+    text::clip(&mut line, 20);
     let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(content, "Installed uze");
 }
@@ -3614,7 +3615,7 @@ fn eliding_reserves_the_active_themes_own_marker_width() {
     let marker = theme::glyph(theme::Symbol::Ellipsis);
     let marker_width = usize::from(theme::width(theme::Symbol::Ellipsis));
     for width in (marker_width + 1)..12usize {
-        let elided = super::elide_tail("a subject line long enough to be cut", width);
+        let elided = text::elide("a subject line long enough to be cut", width);
         let cells = elided.chars().count() - marker.chars().count() + marker_width;
         assert!(
             cells <= width,

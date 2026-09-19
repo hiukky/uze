@@ -6,15 +6,12 @@
 //! `&WorkspaceModel` and paint it, which is what makes them one module.
 
 use super::*;
+use crate::ui::Rows;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{
+    self, Chip, ChipState, Edge, Rule, Surface, action_index, chip, mark, row, text,
+};
 use crate::ui::{POPUP_H_PAD, POPUP_V_PAD, TRAILING_PAD};
-use crate::ui::{Rows, fill_row_bg};
-
-/// The columns of fill a control keeps on each side of its label. Part of
-/// the button, not a gap beside it: it is filled, hovered and pressed with
-/// the label, which is what gives a one-glyph control something to be a
-/// control *in*.
-const CHIP_PAD: u16 = 1;
 
 pub(super) fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
     PaneSnapshot {
@@ -141,14 +138,7 @@ pub(super) fn render(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     metrics: &mut FrameMetrics,
 ) {
-    frame.render_widget(
-        Block::default().style(
-            Style::default()
-                .bg(theme::color(Token::SurfaceBackground))
-                .fg(theme::color(Token::TextPrimary)),
-        ),
-        frame.area(),
-    );
+    widget::root(frame, frame.area());
     // The Git changes overlay covers the entire frame when open (see
     // `git::view`) — everything below would just be drawn and
     // immediately hidden underneath it, so skip it outright rather than
@@ -233,7 +223,7 @@ pub(super) fn render(
     // nothing else. Same placement as the management modal's: between
     // what was drawn and what is drawn over it.
     if model.preserved.is_some() || model.action_index.is_some() {
-        crate::ui::scrim::render(frame, frame.area());
+        crate::ui::widget::scrim::render(frame, frame.area());
     }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
@@ -264,7 +254,7 @@ pub(super) fn render(
     // client, so the whole frame recedes under it — the popups above
     // included, which is why it is not drawn among them.
     if let Some(manage) = &model.manage {
-        crate::ui::scrim::render(frame, frame.area());
+        crate::ui::widget::scrim::render(frame, frame.area());
         let mut manage_hits = Vec::new();
         let chrome =
             crate::ui::management::render_modal(frame, frame.area(), manage, &mut manage_hits);
@@ -312,18 +302,9 @@ pub(super) fn render_agent_picker(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    let inner = Surface::floating()
         .title(" new agent ")
-        .title_style(
-            Style::default()
-                .fg(theme::color(Token::Accent))
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+        .render(frame, popup);
 
     if picker.options.is_empty() {
         frame.render_widget(
@@ -399,12 +380,7 @@ pub(super) fn render_context_menu(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = Surface::card().render(frame, popup);
 
     for (index, action) in menu.items.iter().enumerate() {
         if index as u16 >= inner.height {
@@ -502,11 +478,6 @@ pub(super) fn render_sidebar(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     metrics: &mut FrameMetrics,
 ) {
-    let border_color = if model.dragging_sidebar {
-        theme::color(Token::Accent)
-    } else {
-        theme::color(Token::BorderFaint)
-    };
     // No padding at all. Top: the header must land on the exact row the tab
     // strip's own content does (that block has none either), or the two
     // panes' dividers drift out of alignment by one row. Right: the rows
@@ -514,11 +485,7 @@ pub(super) fn render_sidebar(
     // already leads with a column of its own — a space's gutter, a listing's
     // lead — and an inset under those read as a margin the column could not
     // afford.
-    let block = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rule::draggable(Edge::Right, model.dragging_sidebar).render(frame, area);
 
     let mut rows = Rows::over(inner);
 
@@ -1026,7 +993,7 @@ impl<'a> SidebarAgent<'a> {
                 if self.is_current {
                     style = style.add_modifier(Modifier::BOLD);
                 }
-                Span::styled(crate::ui::elide_tail(&self.tab.label, room as usize), style)
+                Span::styled(text::elide(&self.tab.label, room as usize), style)
             }
         }
     }
@@ -1067,7 +1034,7 @@ fn render_space_caption(
     let hue = theme::color(Token::TextDim);
     crate::ui::push_trailing(&mut spans, rect.width, caption, hue);
     if selected {
-        fill_row_bg(
+        row::pad_to(
             &mut spans,
             rect.width,
             theme::color(Token::SurfaceRaisedSubtle),
@@ -1168,7 +1135,7 @@ fn draw_tree(
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
             if let Some(surface) = surface {
-                fill_row_bg(&mut spans, label_rect.width, surface);
+                row::pad_to(&mut spans, label_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
@@ -1212,7 +1179,7 @@ fn draw_tree(
                     + crate::ui::TRAILING_PAD;
                 let room = detail_rect.width.saturating_sub(taken).max(1);
                 spans.push(Span::styled(
-                    crate::ui::elide_tail(&caption.detail, room as usize),
+                    text::elide(&caption.detail, room as usize),
                     Style::default().fg(caption.detail_color),
                 ));
             }
@@ -1238,7 +1205,7 @@ fn draw_tree(
                 spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             }
             if let Some(surface) = surface {
-                fill_row_bg(&mut spans, detail_rect.width, surface);
+                row::pad_to(&mut spans, detail_rect.width, surface);
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
             // The label and its dim branch/cwd caption read as one tree
@@ -1507,10 +1474,7 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
 }
 
 fn commit_detail_block() -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground))
+    Surface::card().into_block()
 }
 
 pub(super) fn render_commit_detail(
@@ -1571,11 +1535,7 @@ pub(super) fn render_space_header(
     // below already carries "this is where you are"; the label itself
     // stays out of the way of the agent name bolded underneath it.
     let label_style = theme::fg(Token::TextInactive);
-    let fold = theme::glyph(if collapsed {
-        Symbol::ChevronCollapsed
-    } else {
-        Symbol::ChevronExpanded
-    });
+    let fold = mark::disclosure(!collapsed);
     let mut spans = vec![
         space_gutter(is_current, space.kind),
         Span::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
@@ -1619,7 +1579,7 @@ pub(super) fn render_space_header(
         }
     }
     if selected {
-        fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+        row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
@@ -1924,19 +1884,12 @@ pub(super) fn render_status_catalog(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
+    // The catalog's own horizontal inset, and no row above: its first
+    // line is a heading the title already names.
+    let inner = Surface::floating()
         .title(" status ")
-        .title_style(
-            Style::default()
-                .fg(theme::color(Token::Accent))
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
         .padding(Padding::new(CATALOG_H_PAD, CATALOG_H_PAD, 0, 0))
-        .style(theme::bg(Token::SurfaceBackground));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+        .render(frame, popup);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -2023,7 +1976,7 @@ fn render_root_picker(
                 picker_lead(),
                 Span::styled("no directory matches", theme::fg(Token::TextFaint)),
             ];
-            fill_row_bg(
+            row::pad_to(
                 &mut spans,
                 rect.width,
                 theme::color(Token::SurfaceRaisedSubtle),
@@ -2055,7 +2008,7 @@ fn render_root_picker(
             Span::styled(matched, theme::fg(Token::Accent)),
             Span::styled(rest, theme::fg(rest_hue)),
         ];
-        fill_row_bg(
+        row::pad_to(
             &mut spans,
             rect.width,
             theme::color(if selected {
@@ -2075,7 +2028,7 @@ fn render_root_picker(
             picker_lead(),
             Span::styled(format!("+{hidden} more"), theme::fg(Token::TextFaint)),
         ];
-        fill_row_bg(
+        row::pad_to(
             &mut spans,
             rect.width,
             theme::color(Token::SurfaceRaisedSubtle),
@@ -2166,7 +2119,7 @@ fn render_kind_row(
         theme::glyph(Symbol::ArrowSwap),
         theme::color(Token::TextSecondary),
     );
-    fill_row_bg(
+    row::pad_to(
         &mut spans,
         rect.width,
         theme::color(Token::SurfaceRaisedSubtle),
@@ -2207,7 +2160,7 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
             theme::fg(Token::TextDim),
         ));
     }
-    fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+    row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     // In the hue of the kind it would create, like the gutter of a space
     // already open: the mark says which of the two this row is answering
@@ -2222,21 +2175,6 @@ fn render_query_row(frame: &mut ratatui::Frame<'_>, picker: &RootPicker, rows: &
     );
 }
 
-/// What the pointer is doing to a control. The same four answers for
-/// every control the header draws, so hovering one and hovering another
-/// mean the same thing on screen.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ChipState {
-    Resting,
-    Hovered,
-    Pressed,
-    /// Not a control at all: drawn in a control's shape because it stands
-    /// where one stands, and recessed rather than raised so the shape
-    /// alone never promises a press ("⣾ delivering" is a report; "⇧6 #20"
-    /// is a button).
-    Static,
-}
-
 fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
     let Some(hit) = hit else {
         return ChipState::Static;
@@ -2248,44 +2186,6 @@ fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
     } else {
         ChipState::Resting
     }
-}
-
-/// The label colour and the surface under it, for a chip of `hue` in
-/// `state`. A pressed chip inverts — the hue becomes the fill and the
-/// label drops to the backdrop — which is why this answers with both
-/// rather than leaving the label to whoever drew it: pressing is the one
-/// state that overrules a label's own colour.
-fn chip_skin(state: ChipState, hue: Color) -> (Color, Color) {
-    match state {
-        ChipState::Resting => (hue, theme::color(Token::SurfaceRaised)),
-        ChipState::Hovered => (hue, theme::color(Token::SurfaceHover)),
-        ChipState::Pressed => (theme::color(Token::SurfaceBackground), hue),
-        ChipState::Static => (hue, theme::color(Token::SurfaceRecessed)),
-    }
-}
-
-/// Where a chip carrying `text` sits when its right edge is `right`: the
-/// label with one column of padding on each side. The padding is part of
-/// the button — it is filled, hovered and clicked like the glyphs are —
-/// which is why the rect is measured here once and used for all three.
-fn chip_rect(text: &str, right: u16, row: u16) -> Rect {
-    let width = Span::raw(text).width() as u16 + 2 * CHIP_PAD;
-    Rect::new(right.saturating_sub(width), row, width, 1)
-}
-
-/// One header control: `text` in `hue`, padded and filled per `state`.
-fn draw_chip(frame: &mut ratatui::Frame<'_>, rect: Rect, text: &str, hue: Color, state: ChipState) {
-    let (label, surface) = chip_skin(state, hue);
-    let mut spans = vec![
-        Span::raw(" ".repeat(CHIP_PAD as usize)),
-        Span::styled(
-            text.to_owned(),
-            Style::default().fg(label).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" ".repeat(CHIP_PAD as usize)),
-    ];
-    fill_row_bg(&mut spans, rect.width, surface);
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 /// The header's delivery button for a task: text, hue, and whether it is a
@@ -2405,89 +2305,14 @@ pub(super) fn render_action_index(
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let rows = action_index_rows(&index.scopes, &index.filter);
-    let key_width = rows
-        .iter()
-        .filter_map(|(_, chord)| chord.map(|chord| chord.to_string().chars().count()))
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let width = area
-        .width
-        .saturating_sub(8)
-        .clamp(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH);
-    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
-    let rect = area.centered(Constraint::Length(width), Constraint::Length(height));
-    frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::fg(Token::Accent))
-            .title(Line::from(Span::styled(
-                " Everything you can do ",
-                theme::fg_bold(Token::Accent),
-            )))
-            .style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
-        rect,
+    let entries = action_index::render(
+        frame,
+        area,
+        &rows,
+        &index.filter,
+        index.selected,
+        WorkspaceHit::ActionIndexEntry,
     );
-    let inner = Rect::new(
-        rect.x + 2,
-        rect.y + 1,
-        rect.width.saturating_sub(4),
-        rect.height.saturating_sub(2),
-    );
-    frame.render_widget(
-        Paragraph::new(if index.filter.is_empty() {
-            Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
-        } else {
-            Line::from(vec![
-                Span::styled(index.filter.clone(), theme::fg(Token::TextPrimary)),
-                Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
-            ])
-        }),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-    let list = Rect::new(
-        inner.x,
-        inner.y + 2,
-        inner.width,
-        inner.height.saturating_sub(2),
-    );
-    let mut entries: Vec<(Rect, WorkspaceHit)> = Vec::new();
-    for (position, (action, chord)) in rows.iter().enumerate() {
-        let y = list.y + position as u16;
-        if y >= list.bottom() {
-            break;
-        }
-        let row = Rect::new(list.x, y, list.width, 1);
-        let chosen = position == index.selected;
-        let key = chord.map(|chord| chord.to_string()).unwrap_or_default();
-        let mut label = Style::default().fg(theme::color(if chosen {
-            Token::TextBright
-        } else if action.destructive() {
-            Token::StateDanger
-        } else {
-            Token::TextPrimary
-        }));
-        if chosen {
-            label = label.add_modifier(Modifier::BOLD);
-        }
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("{key:<key_width$}  "), theme::fg(Token::Accent)),
-                Span::styled(action.label(), label),
-                Span::styled(
-                    format!(
-                        "  {} {}",
-                        theme::glyph(Symbol::EmDash),
-                        action.description()
-                    ),
-                    theme::fg(Token::TextMuted),
-                ),
-            ])),
-            row,
-        );
-        entries.push((row, WorkspaceHit::ActionIndexEntry(position)));
-    }
     // Prepended: what is underneath must not answer a click meant here.
     hits.splice(0..0, entries);
 }
@@ -2611,10 +2436,10 @@ pub(super) fn render_preserved(
         .max(1);
     let text_width = width.saturating_sub(2 + 2 * POPUP_H_PAD);
     for line in &mut lines {
-        crate::ui::management::clip_line(line, text_width as usize);
+        text::clip(line, text_width as usize);
     }
     if let Some(index) = selected_line {
-        fill_row_bg(
+        row::pad_to(
             &mut lines[index].spans,
             text_width,
             theme::color(Token::SurfaceSelected),
@@ -2628,13 +2453,11 @@ pub(super) fn render_preserved(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground))
-        .padding(Padding::new(POPUP_H_PAD, POPUP_H_PAD, 0, 0));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    // No row above: these lines are a list, and the first of them is the
+    // one the popup exists to show.
+    let inner = Surface::floating()
+        .padding(Padding::new(POPUP_H_PAD, POPUP_H_PAD, 0, 0))
+        .render(frame, popup);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -2667,12 +2490,9 @@ pub(super) fn render_tab_strip(
     // either), so the first tab's marker has to start at that same column
     // or it reads as offset from whatever the pane shows directly under it
     // — a shell prompt in particular, which starts flush at column 0 too.
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(theme::fg(Token::BorderFaint))
-        .padding(Padding::new(0, 1, 0, 0));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Rule::new(Edge::Bottom)
+        .padding(Padding::new(0, 1, 0, 0))
+        .render(frame, area);
 
     let Some(session) = &model.session else {
         frame.render_widget(
@@ -2776,7 +2596,7 @@ pub(super) fn render_tab_strip(
         // moment selection moved past it, reading as the whole strip
         // "resizing" on every tab switch instead of just recoloring.
         let chip_start = x;
-        let chip_width = content_width + 2 * CHIP_PAD;
+        let chip_width = content_width + 2 * chip::PAD;
 
         let mut chip = vec![Span::raw(" ")];
         chip.push(marker);
@@ -2785,7 +2605,7 @@ pub(super) fn render_tab_strip(
             chip.push(Span::raw(" "));
             chip.push(Span::styled("×", theme::fg(Token::TextDim)));
             hits.push((
-                Rect::new(chip_start + CHIP_PAD + content_width - 1, inner.y, 1, 1),
+                Rect::new(chip_start + chip::PAD + content_width - 1, inner.y, 1, 1),
                 WorkspaceHit::CloseTab(tab.id),
             ));
         }
@@ -2794,9 +2614,9 @@ pub(super) fn render_tab_strip(
         // under the selected chip's own fill, so hovering an unselected
         // tab never reads as having already switched to it.
         if selected {
-            fill_row_bg(&mut chip, chip_width, theme::color(Token::SurfaceRaised));
+            row::pad_to(&mut chip, chip_width, theme::color(Token::SurfaceRaised));
         } else if model.hovered == Some(WorkspaceHit::SelectTab(tab.id)) {
-            fill_row_bg(
+            row::pad_to(
                 &mut chip,
                 chip_width,
                 theme::color(Token::SurfaceRaisedSubtle),
@@ -2863,7 +2683,7 @@ pub(super) fn render_tab_strip(
         // are the same skins every other control in this row wears.
         let half = |state: ChipState, hue: Color| match state {
             ChipState::Resting => (hue, theme::color(Token::SurfaceRaisedBright)),
-            other => chip_skin(other, hue),
+            other => other.skin(hue),
         };
         let (plus, plus_surface) = half(
             chip_state(model, Some(WorkspaceHit::NewTab)),
@@ -2924,7 +2744,7 @@ pub(super) fn render_tab_strip(
     // or one outside Git; when it is present, it remains the entry point to
     // the full changes overlay.
     //
-    // Every control in this zone is drawn by [`draw_chip`]: a filled,
+    // Every control in this zone is a [`Chip`]: a filled,
     // padded surface that lifts under the pointer and inverts while
     // pressed. Bare glyphs on the plain backdrop are what the message zone
     // beside them uses, and the whole point of that zone is that a message
@@ -2940,15 +2760,12 @@ pub(super) fn render_tab_strip(
         // rectangle the fill covers — pad included, since the padding is
         // as much of the button as the glyph is.
         let sparkle = theme::glyph(Symbol::MarkSparkle);
-        let rect = chip_rect(&sparkle, trailing_right, inner.y);
-        draw_chip(
-            frame,
-            rect,
-            &sparkle,
-            theme::color(Token::Accent),
-            chip_state(model, Some(WorkspaceHit::OpenAgentSupport(rect))),
-        );
-        hits.push((rect, WorkspaceHit::OpenAgentSupport(rect)));
+        let hue = theme::color(Token::Accent);
+        let rect =
+            Chip::new(&sparkle, hue, ChipState::Static).rect_ending_at(trailing_right, inner.y);
+        let hit = WorkspaceHit::OpenAgentSupport(rect);
+        Chip::new(&sparkle, hue, chip_state(model, Some(hit))).render(frame, rect);
+        hits.push((rect, hit));
         trailing_right = rect.x.saturating_sub(1);
     }
     // One verb — deliver — whose ending is the project's completion, not a
@@ -2962,9 +2779,10 @@ pub(super) fn render_tab_strip(
         && let Some((text, hue, clickable)) =
             deliver_button(task, &model.drawn_state(task), model.tick)
     {
-        let rect = chip_rect(&text, trailing_right, inner.y);
         let hit = clickable.then_some(WorkspaceHit::Deliver(tab));
-        draw_chip(frame, rect, &text, hue, chip_state(model, hit));
+        let chip = Chip::new(&text, hue, chip_state(model, hit));
+        let rect = chip.rect_ending_at(trailing_right, inner.y);
+        chip.render(frame, rect);
         if let Some(hit) = hit {
             hits.push((rect, hit));
         }
@@ -2986,7 +2804,7 @@ pub(super) fn render_tab_strip(
         // rather than taking a single colour: the additions and the
         // deletions are two numbers, not one label.
         let state = chip_state(model, Some(WorkspaceHit::OpenChanges));
-        let (label, background) = chip_skin(state, theme::color(Token::StateSuccess));
+        let (label, background) = state.skin(theme::color(Token::StateSuccess));
         let (additions, deletions) = match state {
             // Pressed, the chip is one solid hue: its numbers go dark with
             // everything else on it, or they vanish into the fill.
@@ -2997,7 +2815,7 @@ pub(super) fn render_tab_strip(
             ),
         };
         let text = format!("+{} -{}", summary.additions, summary.deletions);
-        let rect = chip_rect(&text, trailing_right, inner.y);
+        let rect = Chip::new(&text, background, state).rect_ending_at(trailing_right, inner.y);
         let mut badge = vec![
             Span::raw(" "),
             Span::styled(
@@ -3011,34 +2829,32 @@ pub(super) fn render_tab_strip(
             ),
             Span::raw(" "),
         ];
-        fill_row_bg(&mut badge, rect.width, background);
+        row::pad_to(&mut badge, rect.width, background);
         frame.render_widget(Paragraph::new(Line::from(badge)), rect);
         hits.push((rect, WorkspaceHit::OpenChanges));
         trailing_right = rect.x.saturating_sub(1);
     }
     {
         let label = theme::glyph(Symbol::Code);
-        let rect = chip_rect(&label, trailing_right, inner.y);
-        draw_chip(
-            frame,
-            rect,
+        let chip = Chip::new(
             &label,
             theme::color(Token::TextSecondary),
             chip_state(model, Some(WorkspaceHit::OpenFiles)),
         );
+        let rect = chip.rect_ending_at(trailing_right, inner.y);
+        chip.render(frame, rect);
         hits.push((rect, WorkspaceHit::OpenFiles));
         trailing_right = rect.x.saturating_sub(1);
     }
     {
         let label = theme::glyph(Symbol::Architect);
-        let rect = chip_rect(&label, trailing_right, inner.y);
-        draw_chip(
-            frame,
-            rect,
+        let chip = Chip::new(
             &label,
             theme::color(Token::TextSecondary),
             chip_state(model, Some(WorkspaceHit::OpenArchitect)),
         );
+        let rect = chip.rect_ending_at(trailing_right, inner.y);
+        chip.render(frame, rect);
         hits.push((rect, WorkspaceHit::OpenArchitect));
         trailing_right = rect.x.saturating_sub(1);
     }

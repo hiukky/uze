@@ -9,6 +9,7 @@ use crate::ui::extension_host::WorkspaceHost;
 use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{action_index, text};
 use crossterm::event::{
     self, Event, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -17,7 +18,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    widgets::{Block, Clear, Padding, Paragraph, Wrap},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -328,17 +329,7 @@ fn action_index_rows(
     scopes: &[uze_keys::Scope],
     filter: &str,
 ) -> Vec<(uze_keys::Action, Option<uze_keys::Chord>)> {
-    let rows = uze_keys::active().available(scopes);
-    let needle = filter.trim().to_lowercase();
-    if needle.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(|(action, _)| {
-            action.label().to_lowercase().contains(&needle)
-                || action.description().to_lowercase().contains(&needle)
-        })
-        .collect()
+    action_index::narrowed(uze_keys::active().available(scopes), filter)
 }
 
 /// The open index of everything, in the workspace client.
@@ -3244,7 +3235,7 @@ impl WorkspaceModel {
             _ => notice.text.clone(),
         };
         Some(NoticeChip {
-            text: crate::ui::elide_tail(&text, NOTICE_WIDTH),
+            text: text::elide(&text, NOTICE_WIDTH),
             busy: notice.busy,
         })
     }

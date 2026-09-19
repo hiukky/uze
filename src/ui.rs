@@ -61,12 +61,12 @@ mod model;
 mod orchestrator;
 mod overlay;
 mod root_picker;
-mod scrim;
-mod scrollbar;
 pub(crate) mod theme;
 
+use crate::ui::widget::text;
 use theme::{Symbol, Token};
 pub mod view;
+pub(crate) mod widget;
 mod worker;
 
 /// Forces every process the TUI spawns to run silently, regardless of
@@ -926,7 +926,7 @@ impl ReleaseNotice<'_> {
                 theme::fg(theme::Token::Accent),
             ),
             Span::styled(
-                elide_tail(
+                text::elide(
                     &format!("v{}", notice.version()),
                     room(Symbol::MarkClose, 0),
                 ),
@@ -950,7 +950,7 @@ impl ReleaseNotice<'_> {
             spans.push(Span::styled(joint, theme::fg(theme::Token::TextFaint)));
         }
         spans.push(Span::styled(
-            elide_tail(notice.action(), room(Symbol::ArrowExternal, used)),
+            text::elide(notice.action(), room(Symbol::ArrowExternal, used)),
             theme::fg(theme::Token::TextDim),
         ));
         push_trailing(
@@ -999,40 +999,12 @@ pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: Str
     // One column of gap between the leading spans and the caption, so the
     // two never read as one word.
     let room = width.saturating_sub(leading + TRAILING_PAD + 1).max(1);
-    let text = elide_tail(&text, room as usize);
+    let text = text::elide(&text, room as usize);
     let used = leading + text.chars().count() as u16 + TRAILING_PAD;
     let gap = width.saturating_sub(used).max(1);
     spans.push(Span::raw(" ".repeat(gap as usize)));
     spans.push(Span::styled(text, Style::default().fg(hue)));
     spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
-}
-
-/// `text` shortened from the right to `width`, keeping its head — a
-/// subject says what it did in its first words.
-pub(crate) fn elide_tail(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let Some(kept) = width.checked_sub(theme::width(Symbol::Ellipsis) as usize) else {
-        return String::new();
-    };
-    let mut kept: String = text.chars().take(kept).collect();
-    kept.push_str(&theme::glyph(Symbol::Ellipsis));
-    kept
-}
-
-/// Stamps `bg` onto every span already in the row, then appends a
-/// trailing background-filled run of spaces so the highlight spans the
-/// row's full width instead of stopping at the last glyph — same pattern
-/// the management views' `render_plugin_row`/`header_line` use for their
-/// own selected-row backgrounds.
-pub(crate) fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
-    for span in spans.iter_mut() {
-        span.style = span.style.bg(bg);
-    }
-    let used: usize = spans.iter().map(Span::width).sum();
-    let gap = (width as usize).saturating_sub(used);
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
 }
 
 #[cfg(test)]

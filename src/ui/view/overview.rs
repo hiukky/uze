@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use super::super::hit::Hit;
@@ -16,6 +16,7 @@ use super::super::model::{Focus, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
 use super::health::Severity;
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{self, Edge, Rule, text};
 use uze_application::{PromptAge, PromptClock};
 
 pub(crate) fn render_overview(
@@ -104,11 +105,7 @@ pub(crate) fn render_overview(
             ])
             .split(Rect::new(content.x, y, content.width, 2));
         for (cell, (label, value, color)) in columns.iter().zip(stats) {
-            let block = Block::default()
-                .borders(Borders::LEFT)
-                .border_style(theme::fg(Token::BorderFaint));
-            let inner = block.inner(*cell);
-            frame.render_widget(block, *cell);
+            let inner = Rule::new(Edge::Left).render(frame, *cell);
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -237,7 +234,7 @@ fn render_prompt_history(
             Rect::new(area.x, y, area.width, 1),
         );
     } else {
-        super::super::management::clip_line(&mut title, area.width as usize);
+        text::clip(&mut title, area.width as usize);
     }
     frame.render_widget(Paragraph::new(title), Rect::new(area.x, y, area.width, 1));
     y += 2;
@@ -277,7 +274,7 @@ fn render_prompt_history(
             "PROMPT",
             theme::fg(Token::TextMuted),
         );
-        super::super::management::clip_line(&mut header, area.width as usize);
+        text::clip(&mut header, area.width as usize);
         frame.render_widget(Paragraph::new(header), Rect::new(area.x, y, area.width, 1));
     }
     y += 2;
@@ -304,7 +301,7 @@ fn render_prompt_history(
                         theme::fg(Token::TextFaint),
                     ),
                 ]);
-                super::super::management::clip_line(&mut line, area.width as usize);
+                text::clip(&mut line, area.width as usize);
                 frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
                 y += 1;
             }
@@ -315,17 +312,14 @@ fn render_prompt_history(
                     && model.focus == Focus::Content
                     && model.route == Route::Overview;
                 let background = if selected {
-                    Some(theme::color(Token::SurfaceSelected))
+                    Some(Token::SurfaceSelected)
                 } else if model.overview_prompt_hovered == Some(index) {
-                    Some(theme::color(Token::SurfaceRaised))
+                    Some(Token::SurfaceRaised)
                 } else {
                     None
                 };
                 if let Some(background) = background {
-                    frame.render_widget(
-                        Block::default().style(Style::default().bg(background)),
-                        rect,
-                    );
+                    widget::fill(frame, rect, background);
                 }
                 let marker = if selected {
                     Span::styled(
@@ -367,7 +361,7 @@ fn render_prompt_history(
                 ]) {
                     span.style = style;
                 }
-                super::super::management::clip_line(&mut line, area.width as usize);
+                text::clip(&mut line, area.width as usize);
                 frame.render_widget(Paragraph::new(line), rect);
                 hits.push((rect, Hit::PromptHistory(index)));
                 y += 1;
@@ -444,7 +438,7 @@ impl PromptColumns {
         style: Style,
     ) -> Line<'static> {
         let gap = " ".repeat(COLUMN_GAP);
-        let workspace = crate::ui::elide_tail(workspace, self.workspace);
+        let workspace = text::elide(workspace, self.workspace);
         Line::from(vec![
             marker,
             Span::styled(

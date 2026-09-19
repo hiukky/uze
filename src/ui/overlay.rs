@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Clear, Padding, Paragraph},
 };
 
 use uze_keys::Action;
@@ -13,6 +13,7 @@ use super::hit::Hit;
 use super::model::{Confirmation, Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
 use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::widget::{Align, Button, Surface, action_index, button_row, mark};
 
 impl TuiModel {
     /// One action, answered by whichever overlay is open.
@@ -187,94 +188,7 @@ pub(crate) fn render_action_index(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let rows = model.action_index_rows(scopes, filter);
-    let key_width = rows
-        .iter()
-        .filter_map(|(_, chord)| chord.map(|chord| chord.to_string().chars().count()))
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let width = area.width.saturating_sub(8).clamp(30, 72);
-    let height = (rows.len() as u16 + 5).min(area.height.saturating_sub(2));
-    let rect = area.centered(Constraint::Length(width), Constraint::Length(height));
-    frame.render_widget(Clear, rect);
-    frame.render_widget(
-        modal_block(" Everything you can do ", theme::color(Token::Accent)),
-        rect,
-    );
-    let inner = Rect::new(
-        rect.x + 2,
-        rect.y + 1,
-        rect.width.saturating_sub(4),
-        rect.height.saturating_sub(2),
-    );
-
-    let typed = if filter.is_empty() {
-        Line::from(Span::styled("type to narrow", theme::fg(Token::TextMuted)))
-    } else {
-        Line::from(vec![
-            Span::styled(filter.to_owned(), theme::fg(Token::TextPrimary)),
-            Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
-        ])
-    };
-    frame.render_widget(
-        Paragraph::new(typed),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-
-    let list = Rect::new(
-        inner.x,
-        inner.y + 2,
-        inner.width,
-        inner.height.saturating_sub(2),
-    );
-    let mut entries: Vec<(Rect, Hit)> = Vec::new();
-    for (index, (action, chord)) in rows.iter().enumerate() {
-        let y = list.y + index as u16;
-        if y >= list.bottom() {
-            break;
-        }
-        let row = Rect::new(list.x, y, list.width, 1);
-        let chosen = index == selected;
-        let key = match chord {
-            Some(chord) => chord.to_string(),
-            // An action with no key is a finished design, not a gap — it
-            // is reached by pointer and from here.
-            None => String::new(),
-        };
-        let mut label = Style::default().fg(theme::color(if chosen {
-            Token::TextBright
-        } else if action.destructive() {
-            Token::StateDanger
-        } else {
-            Token::TextPrimary
-        }));
-        if chosen {
-            label = label.add_modifier(Modifier::BOLD);
-        }
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("{key:<key_width$}  "),
-                    theme::fg(if chord.is_some() {
-                        Token::Accent
-                    } else {
-                        Token::TextDim
-                    }),
-                ),
-                Span::styled(action.label(), label),
-                Span::styled(
-                    format!(
-                        "  {} {}",
-                        theme::glyph(Symbol::EmDash),
-                        action.description()
-                    ),
-                    theme::fg(Token::TextMuted),
-                ),
-            ])),
-            row,
-        );
-        entries.push((row, Hit::ActionIndexEntry(index)));
-    }
+    let entries = action_index::render(frame, area, &rows, filter, selected, Hit::ActionIndexEntry);
     // Prepended, so the list underneath cannot answer a click meant here.
     hits.splice(0..0, entries);
 }
@@ -417,7 +331,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(modal_block(" Harness status ", theme::color(Token::Accent)))
+            .block(modal(" Harness status ").into_block())
             .wrap(ratatui::widgets::Wrap { trim: true }),
         popup,
     );
@@ -437,9 +351,7 @@ pub(crate) fn render_text_prompt(
     let height = 7.min(area.height.saturating_sub(2));
     let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
-    let block = modal_block(format!(" {title} "), theme::color(Token::Accent));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = modal(format!(" {title} ")).render(frame, popup);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -459,7 +371,7 @@ pub(crate) fn render_text_prompt(
     let field = Line::from(vec![
         Span::raw(format!("{} ", theme::glyph(Symbol::Prompt))),
         Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
-        Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
+        mark::caret(),
     ]);
     frame.render_widget(Paragraph::new(field), rows[1]);
     frame.render_widget(
@@ -513,9 +425,7 @@ pub(crate) fn render_theme_picker(
     let height = (themes.len() as u16 + 4).min(area.height.saturating_sub(2));
     let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
-    let block = modal_block(" Theme ", theme::color(Token::Accent));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    let inner = modal(" Theme ").render(frame, popup);
 
     let mut lines: Vec<Line<'static>> = themes
         .iter()
@@ -786,14 +696,12 @@ fn render_dialog(
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground))
-        .title_bottom(dialog_hint(dialog).right_aligned())
-        .padding(Padding::horizontal(DIALOG_PAD_X));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    // Wider than a popup's own inset and with no row above: a dialog's
+    // first line is a question, and it is read across rather than down.
+    let inner = Surface::floating()
+        .hint(dialog_hint(dialog))
+        .padding(Padding::horizontal(DIALOG_PAD_X))
+        .render(frame, popup);
     frame.render_widget(Paragraph::new(lines), inner);
     if buttons_row < inner.height {
         render_dialog_buttons(
@@ -867,63 +775,38 @@ fn render_dialog_buttons(
     dialog: &Dialog<'_>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let cancel = if dialog.confirm.is_some() {
-        "  Cancel  "
-    } else {
-        "  Close  "
-    };
-    let confirm = dialog.confirm.map(|label| format!("  {label}  "));
     let on_cancel = dialog.focus == Some(CANCEL) || dialog.confirm.is_none();
-    let mut buttons: Vec<(String, Style, uze_keys::Action)> = vec![(
-        cancel.to_owned(),
-        crate::ui::view::button_style(Token::TextSecondary, on_cancel, Token::SurfaceBackground),
-        uze_keys::Action::ConfirmNo,
+    let mut buttons = vec![(
+        Button::new(
+            if dialog.confirm.is_some() {
+                "Cancel"
+            } else {
+                "Close"
+            },
+            Token::TextSecondary,
+        )
+        .strong(on_cancel),
+        Hit::OfferedAction(uze_keys::Action::ConfirmNo),
     )];
-    if let Some(label) = confirm {
+    if let Some(label) = dialog.confirm {
         buttons.push((
-            label,
-            crate::ui::view::button_style(
-                dialog.tone.token(),
-                !on_cancel,
-                Token::SurfaceBackground,
-            ),
-            uze_keys::Action::ConfirmYes,
+            Button::new(label, dialog.tone.token()).strong(!on_cancel),
+            Hit::OfferedAction(uze_keys::Action::ConfirmYes),
         ));
     }
-    let gap = 2;
-    let total: u16 = buttons
-        .iter()
-        .map(|(label, ..)| label.chars().count() as u16)
-        .sum::<u16>()
-        + gap * (buttons.len() as u16 - 1);
-    if row.width < total {
-        return;
-    }
-    let mut x = row.right() - total;
     // Prepended, because the dialog is drawn over whatever was behind it
     // and that is still in the hit list underneath.
-    let mut targets = Vec::new();
-    for (label, style, action) in buttons {
-        let rect = Rect::new(x, row.y, label.chars().count() as u16, 1);
-        frame.render_widget(Paragraph::new(Span::styled(label, style)), rect);
-        targets.push((rect, Hit::OfferedAction(action)));
-        x += rect.width + gap;
-    }
+    let targets = button_row(frame, row, &buttons, Align::Right);
     hits.splice(0..0, targets);
 }
 
-/// The modal dialog surface: `theme::color(Token::SurfaceBackground)`-colored (so it reads as "still part of
-/// this app", not a different layer) with a thin hairline border — the
-/// only place in the whole UI a content box gets a full border, since a
-/// dialog genuinely needs to visually separate from whatever is behind it.
-/// Callers must render `Clear` over `popup` first so leftover content
-/// underneath can't bleed through.
-fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> {
-    Block::default()
-        .title(title)
-        .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-        .borders(Borders::ALL)
-        .border_style(theme::fg(Token::BorderDefault))
-        .style(theme::bg(Token::SurfaceBackground))
-        .padding(Padding::new(1, 1, 1, 0))
+/// The titled modal surface. Callers must render `Clear` over the rect
+/// first so leftover content underneath cannot bleed through.
+///
+/// It carried its own `Padding::new(1, 1, 1, 0)` and took the title's
+/// colour as an argument. Every caller passed the accent, and the inset
+/// was the one in the UI that did not reach for [`POPUP_H_PAD`] — both are
+/// [`Surface`]'s now.
+fn modal(title: impl Into<Line<'static>>) -> Surface {
+    Surface::floating().title(title)
 }

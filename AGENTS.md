@@ -76,6 +76,10 @@ explains a non-obvious *why* — the rationale behind a decision, an invariant,
 a workaround, or a subtle constraint the code alone cannot convey. Never
 restate what the code already says; write intent, not implementation.
 
+When the change is in `src/ui/`, chrome comes from `src/ui/widget/` and
+colour from `theme` — neither is assembled at the call site. Both are
+enforced; see the two entries in Workspace layout.
+
 ## Dependencies
 
 The dependency surface is small on purpose: ~22 direct external crates
@@ -193,6 +197,31 @@ need to).
   genuinely comes from content rather than from the design system — a
   pane's own output, syntax highlighting an extension ships — goes through
   `theme::content`.
+- `src/ui/widget/` — the chrome vocabulary: `Surface` (a bordered box),
+  `Rule` (an edge hairline), `Button`/`button_row`, `Chip` (a filled
+  label standing where a control stands), `RowState`/`row` (what a list
+  line's ground says), `text` (fitting text to the room there is), `mark`
+  (the caret and the disclosure chevron), `Scrollbar`, `scrim`, and the
+  `fill`/`root` grounds. Where `theme` settles what a drawn thing may
+  *look* like, this settles what it is *made of*. **Nothing outside
+  `src/ui/widget/` may build chrome from ratatui's primitives** —
+  `chrome_is_built_from_the_widget_vocabulary` in
+  `tests/architecture/layering.rs` fails the build over a `Block::default()`
+  anywhere else. Name what it is (`Surface::floating()`, `Surface::card()`,
+  `Rule::new(Edge::Right)`) and let the widget decide the hairline, the
+  ground and the inset; add a constructor when none of the existing ones
+  says what yours means, and never rebuild one at the call site. A widget
+  owns none of hit-testing (a caller passes its `Hit` in and registers the
+  rects it gets back), no state (ratatui is immediate mode — there is
+  nothing to reconcile between frames), and no layout (it fills the rect it
+  is handed). It lives here rather than in a crate because `ratatui`
+  appears in exactly one manifest, the root's, and `uze-theme` and
+  `uze-extensions` deliberately name no rendering library.
+  Extract on the second *file*, not the second call: a helper three
+  callers in one screen share is that screen's, and moving it here only
+  makes the vocabulary harder to read. A primitive a screen exports is the
+  signal — `clip_line` lived in `management.rs` and four other screens
+  reached across for it as `super::super::management::clip_line`.
 - `crates/uze-extensions` — built-in TUI extensions. An extension answers
   with a `view::View` (a full-frame surface) or a `view::Section` (a
   collapsible block of one of the host's own columns) and never draws,

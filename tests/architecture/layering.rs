@@ -504,6 +504,67 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
     );
 }
 
+/// Chrome is assembled from the widget vocabulary, never from ratatui's
+/// primitives directly.
+///
+/// `theme` settled what a drawn thing may *look* like; this settles what
+/// it may be *made of*. Before `src/ui/widget/` existed, twenty-seven
+/// blocks were built by hand across nine files, and they had drifted in
+/// every way a hand-built thing can: one full-bordered surface wore
+/// `BorderFaint` where the other eight wore `BorderDefault`, one grounded
+/// itself with `theme::on` where the rest used `theme::bg`, the same
+/// accent-bold title was spelled out three times, and five different
+/// paddings stood in for the `POPUP_H_PAD`/`POPUP_V_PAD` pair that was
+/// already named in `ui.rs`.
+///
+/// None of that was a decision. It is what happens when the shared
+/// primitive exists — `modal_block` did, and was consistent inside the one
+/// file that held it — but nothing obliges a new screen to reach for it.
+/// This test is the obligation.
+#[test]
+fn chrome_is_built_from_the_widget_vocabulary() {
+    /// Where a ratatui primitive legitimately appears, and why.
+    const SANCTIONED: &[(&str, &str)] = &[(
+        "src/ui/widget",
+        "the vocabulary itself: the one place a surface, a rule or a \
+         button becomes a ratatui widget",
+    )];
+
+    let root = repository_root();
+    let mut raw = Vec::new();
+    for (path, contents) in production_sources(&root.join("src/ui")) {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if SANCTIONED
+            .iter()
+            .any(|(scope, _)| relative.starts_with(*scope))
+        {
+            continue;
+        }
+        for (number, line) in contents.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            if code.contains("Block::default()") || code.contains("Block::bordered()") {
+                raw.push(format!("  {relative}:{}", number + 1));
+            }
+        }
+    }
+
+    assert!(
+        raw.is_empty(),
+        "\n\nchrome built from ratatui directly:\n\n{}\n\n\
+         Name what it is instead — `Surface::floating()`, `Surface::card()`, \
+         `Rule::new(Edge::Right)`, `widget::fill(..)` — and let the widget \
+         decide its hairline, its ground and its inset. Add a constructor to \
+         `src/ui/widget/` if none of the existing ones says what yours \
+         means; never rebuild one at the call site, which is exactly how \
+         the twenty-seven drifted.\n",
+        raw.join("\n")
+    );
+}
+
 /// Every `.rs` file a crate carries is a file that crate compiles.
 ///
 /// `crates/uze-extensions/src/git.rs` was 2547 lines the compiler never
