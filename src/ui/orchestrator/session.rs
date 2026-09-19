@@ -2201,7 +2201,6 @@ impl Attach<'_> {
                     return self.click(answer, hit_rect, mouse, viewport);
                 }
             }
-            WorkspaceHit::DemoToasts => self.model.raise_demo_toasts(),
             WorkspaceHit::OpenReleaseNotes => {
                 if let Some(notice) = &self.model.release {
                     let url = notice.notes();

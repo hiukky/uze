@@ -7644,6 +7644,60 @@ mod workspace_tests {
             .collect();
         assert_eq!(inputs, vec![agent_pane], "only the agent is told");
     }
+
+    /// A toast ends at the column the tab strip's controls end at.
+    ///
+    /// The pane is already inset a column from the frame, and so is the
+    /// strip's own content — insetting the toast stack again put a second
+    /// margin on that side and left every box a column short of the chip
+    /// above it, which reads as the two belonging to different screens.
+    #[test]
+    fn a_toast_lines_up_with_the_controls_above_it() {
+        use crate::ui::widget::ToastKind;
+
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.raise_toast(ToastKind::Done, "synced", "to main", None);
+
+        let frame_area = Rect::new(0, 0, 120, 30);
+        let layout = compute_layout(frame_area, model.sidebar_width);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                render::render(
+                    frame,
+                    &model,
+                    &identities_fixture(),
+                    &mut hits,
+                    &mut Default::default(),
+                );
+            })
+            .unwrap();
+
+        // Two targets dismiss: the `✕` and the box behind it. The box is
+        // the one whose edge this is about.
+        let toast = hits
+            .iter()
+            .filter_map(|(rect, hit)| matches!(hit, WorkspaceHit::DismissToast(_)).then_some(*rect))
+            .max_by_key(|rect| rect.width)
+            .expect("the toast registered a target");
+        let chip = hits
+            .iter()
+            .find_map(|(rect, hit)| matches!(hit, WorkspaceHit::OpenFiles).then_some(*rect))
+            .expect("the strip drew its controls");
+
+        assert_eq!(
+            toast.right(),
+            layout.pane.right(),
+            "flush with the pane's own edge"
+        );
+        assert!(
+            toast.right() >= chip.right(),
+            "and no further in than the chip above it: toast {} vs chip {}",
+            toast.right(),
+            chip.right()
+        );
+    }
 }
 
 mod prompt_buffer_tests {

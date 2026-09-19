@@ -966,3 +966,73 @@ fn a_toast_never_draws_wider_than_the_room_it_was_given() {
         });
     }
 }
+
+/// One width for the whole column, whatever each toast has to say.
+///
+/// Sized to their own words, four boxes have four left edges, and the eye
+/// reads four things rather than one column of messages — the raggedness
+/// is the first thing it sees and it says nothing, because a message is
+/// not longer for being more important.
+#[test]
+fn every_toast_in_a_stack_is_the_same_width() {
+    let area = Rect::new(0, 0, 120, 20);
+    let stack = [
+        Toast::new(
+            ToastKind::Warned,
+            "the agent exited with status 1",
+            "its pane is still open",
+        ),
+        Toast::new(
+            ToastKind::Told,
+            "architect redrew 2 diagrams",
+            "the model changed",
+        ),
+        Toast::new(
+            ToastKind::Failed,
+            "could not sync",
+            "the remote rejected the push",
+        )
+        .action("try again"),
+        Toast::new(ToastKind::Done, "ok", "x").remaining(Some(4)),
+    ];
+
+    drawn(120, 20, |frame| {
+        let placed = toast::stack(frame, area, &stack);
+        assert_eq!(placed.len(), 4);
+        let first = placed[0].box_rect;
+        for one in &placed {
+            assert_eq!(one.box_rect.width, first.width, "one width");
+            assert_eq!(one.box_rect.x, first.x, "so one left edge");
+            assert_eq!(one.box_rect.right(), area.right(), "and one right edge");
+        }
+    });
+}
+
+/// The width is decided before the first box is drawn, so a toast
+/// arriving changes neither where the others sit nor how wide they are.
+#[test]
+fn an_arriving_toast_resizes_nothing() {
+    let area = Rect::new(0, 0, 120, 20);
+    let one = Toast::new(ToastKind::Done, "short", "x");
+    let long = Toast::new(
+        ToastKind::Failed,
+        "a much longer title than the first one carries",
+        "and a detail to match it",
+    )
+    .action("try again");
+
+    let mut alone = None;
+    drawn(120, 20, |frame| {
+        alone = toast::stack(frame, area, std::slice::from_ref(&one))
+            .first()
+            .map(|placed| placed.box_rect);
+    });
+    drawn(120, 20, |frame| {
+        let placed = toast::stack(frame, area, &[one.clone(), long]);
+        assert_eq!(
+            Some(placed[0].box_rect),
+            alone,
+            "the one already on screen did not move or resize"
+        );
+    });
+}

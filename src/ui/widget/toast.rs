@@ -37,11 +37,18 @@ use uze_theme::Token;
 use super::{row, text};
 use crate::ui::theme::{self, Symbol};
 
-/// The widest a toast draws, including its border. Past this its message
-/// is elided: a box wide enough to read comfortably is a box that has
-/// taken the pane, and the message is a summary — what it summarises is
-/// reachable where it is kept.
-const MAX_WIDTH: u16 = 54;
+/// The one width every toast draws at.
+///
+/// One, not each its own. A stack of four boxes sized to their own words
+/// has four left edges, and the eye reads four things rather than one
+/// column of messages — the raggedness is the first thing it sees and it
+/// says nothing, because a message is not longer for being more important.
+///
+/// A cap as well as a width: past this a box is wide enough to read a
+/// paragraph in, which is a box that has taken the pane, and the pane is
+/// why anybody is here. What a summary leaves out is reachable where it is
+/// kept; the toast is gone in seconds either way.
+const WIDTH: u16 = 54;
 
 /// The columns between the message and what follows it on the right.
 const GAP: u16 = 2;
@@ -154,15 +161,6 @@ impl Toast {
         self.remaining
             .map(|seconds| format!("{seconds}s"))
             .unwrap_or_default()
-    }
-
-    /// The columns this toast takes: the wider of its two rows, and one
-    /// of air each side. Capped by [`MAX_WIDTH`], past which the longer
-    /// line is elided.
-    fn wanted(&self) -> u16 {
-        let title = self.lead() + self.text.chars().count() as u16 + GAP + self.head_tail();
-        let under = self.lead() + self.detail.chars().count() as u16 + GAP + self.foot_tail();
-        (PAD + title.max(under) + PAD).min(MAX_WIDTH)
     }
 
     /// The mark and the space after it. The detail is indented by the same
@@ -343,13 +341,16 @@ pub(crate) struct Placed {
 /// of four hues reading as four messages; without it they meet and the
 /// stack is a block of colour.
 pub(crate) fn stack(frame: &mut ratatui::Frame<'_>, area: Rect, toasts: &[Toast]) -> Vec<Placed> {
+    // One width for the whole column, decided before the first box is
+    // drawn: a toast arriving changes neither where the others sit nor how
+    // wide they are.
+    let width = WIDTH.min(area.width);
     let mut placed = Vec::with_capacity(toasts.len());
     for (index, toast) in toasts.iter().enumerate() {
         let top = area.y + index as u16 * (ROWS + GAP_ROWS);
         if top + ROWS > area.bottom() {
             break;
         }
-        let width = toast.wanted().min(area.width);
         let box_rect = Rect::new(area.right() - width, top, width, ROWS);
         let marks = toast.render(frame, box_rect);
         placed.push(Placed {

@@ -1360,9 +1360,6 @@ pub(super) enum WorkspaceHit {
     ToastAction(usize),
     /// The mark that puts one toast away.
     DismissToast(usize),
-    /// The header control that raises one of each kind, for looking at
-    /// them. Present only while `UZE_TOAST_DEMO` is set.
-    DemoToasts,
     /// The mark on the modal's title that closes it.
     CloseManage,
     /// The first-steps section's header, which folds it.
@@ -3289,37 +3286,6 @@ impl WorkspaceModel {
             .nth(index)
             .and_then(|toast| toast.offer.as_ref())
             .map(|(_, hit)| *hit)
-    }
-
-    /// One of each kind, for looking at them side by side: the four hues,
-    /// the four marks, an offer that stays and three that do not.
-    fn raise_demo_toasts(&mut self) {
-        use crate::ui::widget::ToastKind;
-
-        self.raise_toast(
-            ToastKind::Done,
-            "request #412 synced",
-            "3 commits reached main",
-            None,
-        );
-        self.raise_toast(
-            ToastKind::Failed,
-            "could not sync",
-            "the remote rejected the push",
-            Some(("try again".to_owned(), WorkspaceHit::DemoToasts)),
-        );
-        self.raise_toast(
-            ToastKind::Told,
-            "architect redrew 2 diagrams",
-            "the project's own model changed",
-            None,
-        );
-        self.raise_toast(
-            ToastKind::Warned,
-            "the agent exited with status 1",
-            "its pane is still open",
-            None,
-        );
     }
 
     /// Whether any outcome is still counting down, which is what keeps the

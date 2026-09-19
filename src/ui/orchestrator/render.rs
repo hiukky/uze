@@ -2844,23 +2844,6 @@ pub(super) fn render_tab_strip(
         hits.push((rect, WorkspaceHit::OpenChanges));
         trailing_right = rect.x.saturating_sub(1);
     }
-    // A control for looking at the toasts, which only exists where
-    // somebody asked for it: this is a way to see the four kinds side by
-    // side, not a feature of the product. Behind an environment variable
-    // rather than a build flag so it can be turned on against the binary
-    // already installed.
-    if std::env::var_os("UZE_TOAST_DEMO").is_some() {
-        let label = theme::glyph(Symbol::MarkAttention);
-        let chip = Chip::new(
-            &label,
-            theme::color(Token::StateWarning),
-            chip_state(model, Some(WorkspaceHit::DemoToasts)),
-        );
-        let rect = chip.rect_ending_at(trailing_right, inner.y);
-        chip.render(frame, rect);
-        hits.push((rect, WorkspaceHit::DemoToasts));
-        trailing_right = rect.x.saturating_sub(1);
-    }
     {
         let label = theme::glyph(Symbol::Code);
         let chip = Chip::new(
@@ -3022,9 +3005,14 @@ pub(super) fn color(color: TerminalColor) -> Color {
 
 /// The stack of outcomes, against the top-right of the pane.
 ///
-/// Inset from the pane's right edge so the boxes do not touch the frame,
-/// and a row from its top so they read as sitting over the pane rather
-/// than hanging off the strip above it.
+/// Flush with the pane's own right edge, which is already inset a column
+/// from the frame (see `compute_layout`) and is the same column the tab
+/// strip's controls end at — so a toast lines up under the chip above it
+/// rather than a column short of it. Insetting again here is what put a
+/// second margin on that side.
+///
+/// A row down from the pane's top, so the stack reads as sitting over the
+/// pane rather than hanging off the strip.
 fn render_toasts(
     frame: &mut ratatui::Frame<'_>,
     pane: Rect,
@@ -3038,7 +3026,7 @@ fn render_toasts(
     let area = Rect::new(
         pane.x,
         pane.y + 1,
-        pane.width.saturating_sub(1),
+        pane.width,
         pane.height.saturating_sub(1),
     );
     let mut targets = Vec::new();
