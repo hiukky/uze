@@ -737,12 +737,21 @@ pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
     let root = uze_testkit::temp::scratch("doctor");
     let home = UzeHome::at(&root);
     home.ensure_layout().unwrap();
-    fs::write(home.state_dir().join("attachments.json"), "bad").unwrap();
-    fs::write(home.integrations_state_path(), "bad").unwrap();
+    fs::write(home.attachments_path(), "bad").unwrap();
+    fs::write(home.harnesses_cache_path(), "bad").unwrap();
     let app = UzeApplication::new(home, vec![Box::new(SymlinkIntegration)]);
     let report = app.health().report();
-    assert!(report.ledger_error.is_some());
-    assert!(report.integration_state_error.is_some());
+    assert!(
+        report.ledger_error.is_some(),
+        "ownership is a record: nothing else knows it, so an unreadable one \
+         is the operator's to hear about"
+    );
+    assert!(
+        report.provisioning_state_error.is_none(),
+        "and an unreadable harness cache is not an upgrade problem: what \
+         UZE last observed is remembered, not recorded, so one it cannot \
+         read costs a probe and is never reported"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

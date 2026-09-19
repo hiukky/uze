@@ -62,9 +62,15 @@
       `runtime/attachments/<harness>/`, and `logs/` to `cache/`.
 - [x] 5.2 Leave `shims/` at the root, with the reason in `home.rs`: it is
       the directory that goes on `PATH`.
-- [ ] 5.3 Merge `integrations.json` and `provisioning.json` into
-      `harnesses.json` under `cache/`, re-derived by probe, carrying no
-      shape.
+- [x] 5.3 Move `integrations.json` to `cache/harnesses.json`, carrying no
+      shape, and leave `provisioning.json` a record in `state/`. The merge
+      this change first proposed does not hold either: a `ProvisioningRecord`
+      is `action`, `status`, `method` and `recorded_at_unix_secs` — the
+      history of an attempt UZE made, which no probe re-derives. The two
+      `version` fields are not one fact duplicated: the integration's is
+      *what is there now*, the provisioning record's is *what this attempt
+      put there*. Different tiers may not share a document, and the tier is
+      the stronger rule.
 - [x] 5.4 Keep `install.json` and the updater's ledger apart, and route
       both through the map and the one writer. The merge this change first
       proposed does not hold: `install.json` is written by `install.sh`, so
@@ -72,8 +78,8 @@
       a different lifetime from UZE's own memory of its update checks. Two
       documents with two writers are two documents, for the same reason
       `marketplaces.json` and `packages.json` stay apart.
-- [ ] 5.5 Correct the tier reasoning in `home.rs`'s doc comments.
-- [ ] 5.6 Test that deleting `runtime/` and `cache/` costs nothing.
+- [x] 5.5 Correct the tier reasoning in `home.rs`'s doc comments.
+- [x] 5.6 Test that deleting `runtime/` and `cache/` costs nothing.
 
 ## 6. A project is one directory
 

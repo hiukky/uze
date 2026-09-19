@@ -755,7 +755,6 @@ pub struct DoctorReport {
     pub harnesses: Vec<HarnessHealth>,
     pub attachments: Vec<PackageManagedState>,
     pub ledger_error: Option<String>,
-    pub integration_state_error: Option<String>,
     pub provisioning_state_error: Option<String>,
     pub maintenance: MaintenanceReport,
 }

@@ -99,10 +99,12 @@ incoherence in what UZE persists:
   `project.json` (the canonical root, which makes the id reversible),
   `agents.json`, `conversations/` and `prompt-history`. Forgetting a
   project becomes one removal; sweeping the machine becomes a `readdir`.
-- **Fusions and removals:** `integrations.json` + `provisioning.json` →
-  `harnesses.json`, in `cache/`, because a probe re-derives every field
-  (`install.json` stays as it is: it is the installer's receipt, written by
-  `install.sh`, not a record of UZE's own); the attachment receipt
+- **Tiers and removals:** `integrations.json` becomes
+  `cache/harnesses.json` — a probe re-derives every field in it —
+  while `provisioning.json` stays a record, being the history of an attempt
+  nothing re-derives, and `install.json` stays as it is, being the
+  installer's receipt rather than a record of UZE's own; the attachment
+  receipt
   map key — `{package}:{integration}:{identity}`, unparseable because the
   identity carries colons of its own, and read by nobody — is removed and
   the ledger becomes a list.

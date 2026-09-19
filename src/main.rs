@@ -2400,9 +2400,6 @@ fn render_doctor(report: &DoctorReport) -> String {
     if let Some(error) = &report.ledger_error {
         text.push_str(&format!("\nLedger\n  blocked: {error}\n"));
     }
-    if let Some(error) = &report.integration_state_error {
-        text.push_str(&format!("\nIntegration state\n  blocked: {error}\n"));
-    }
     if let Some(error) = &report.provisioning_state_error {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
     }

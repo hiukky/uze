@@ -147,9 +147,10 @@ impl Health<'_> {
         let ledger_error = state::receipts(&self.0.home, None)
             .err()
             .map(|error| error.to_string());
-        let integration_state_error = state::load(&self.0.home)
-            .err()
-            .map(|error| error.to_string());
+        // What UZE last observed about each harness is remembered, not
+        // recorded: one it cannot read is discarded and observed again on
+        // the next command. There is nothing for the operator to do about
+        // it, so there is nothing to report.
         let provisioning_state_error = self
             .0
             .integrations
@@ -163,7 +164,6 @@ impl Health<'_> {
             harnesses,
             attachments: Vec::new(),
             ledger_error,
-            integration_state_error,
             provisioning_state_error,
             maintenance: MaintenanceReport::default(),
         }

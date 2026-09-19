@@ -648,7 +648,7 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         "the qualified fixture skill wrapper should be present alongside the default plugin"
     );
 
-    let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
+    let integrations = std::fs::read_to_string(uze_home.join("cache/harnesses.json")).unwrap();
     assert!(integrations.contains("\"opencode\""));
 
     let _ = std::fs::remove_dir_all(home);

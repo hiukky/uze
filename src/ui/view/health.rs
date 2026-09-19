@@ -28,10 +28,6 @@ pub(crate) fn actionable_alerts(doctor: Option<&DoctorReport>) -> Vec<Alert> {
     for (label, error) in [
         ("Attachment ledger unreadable", &doctor.ledger_error),
         (
-            "Integration state unreadable",
-            &doctor.integration_state_error,
-        ),
-        (
             "Provisioning state unreadable",
             &doctor.provisioning_state_error,
         ),

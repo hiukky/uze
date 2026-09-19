@@ -77,15 +77,29 @@ impl UzeHome {
             .join(format!("{task_id}.json"))
     }
 
-    /// Per-harness machine integration setup facts. Ownership of individual
-    /// package attachments lives exclusively in `attachments.json`.
-    pub fn integrations_state_path(&self) -> PathBuf {
-        self.state_dir().join("integrations.json")
+    /// What UZE last observed about each harness's machine-level setup:
+    /// the version it answered with, and the strategy UZE delivers to it
+    /// by.
+    ///
+    /// Remembered, not recorded. Every field comes back from probing the
+    /// harness again — every command records each detected harness on its
+    /// way in — so deleting it costs a probe and nothing else. Ownership of
+    /// individual package attachments is a different question entirely, and
+    /// lives in `attachments.json`, which nothing re-derives.
+    pub fn harnesses_cache_path(&self) -> PathBuf {
+        self.cache_dir().join("harnesses.json")
     }
 
     /// Secret-free record of an explicit vendor executable provisioning
     /// attempt. It is deliberately separate from integration preparation and
     /// package attachment ownership.
+    ///
+    /// A record, unlike [`Self::harnesses_cache_path`] beside it, and the
+    /// difference is worth stating because the two look alike: this is the
+    /// *history* of an attempt UZE made — what it did, whether it worked,
+    /// when — and no probe brings history back. The two `version` fields
+    /// are not one fact twice: that one is what is installed now, this one
+    /// is what this attempt put there.
     pub fn provisioning_state_path(&self) -> PathBuf {
         self.state_dir().join("provisioning.json")
     }
@@ -282,6 +296,17 @@ impl UzeHome {
         self.runtime_project_dir(project_id).join(integration)
     }
 
+    /// Everything UZE generates for another program to read, and
+    /// everything it remembered from observing. Deleting either costs
+    /// nothing: the first is produced again, the second observed again.
+    ///
+    /// Named together because that is the one question an operator staring
+    /// at `~/.uze` actually has — *can I delete this* — and the layout
+    /// answers it by which directory a thing is in.
+    pub fn rebuildable_dirs(&self) -> [PathBuf; 2] {
+        [self.runtime_dir(), self.cache_dir()]
+    }
+
     pub fn ensure_layout(&self) -> Result<()> {
         for directory in [
             self.plugins_dir(),
@@ -371,6 +396,67 @@ mod tests {
             UzeHome::from_values(None, Some("".into())),
             Err(UzeError::MissingHomeDirectory)
         ));
+    }
+
+    /// The tier a thing sits in is a promise about what deleting it costs,
+    /// and the promise is only worth making if the layout keeps it: every
+    /// path UZE owns lands in exactly one tier, and the two rebuildable
+    /// ones hold nothing a record needs.
+    #[test]
+    fn nothing_a_record_needs_sits_in_a_tier_that_can_be_deleted() {
+        let home = UzeHome::at("/tmp/uze-tiers");
+        let rebuildable = home.rebuildable_dirs();
+
+        let records = [
+            home.registry_path(),
+            home.marketplaces_path(),
+            home.attachments_path(),
+            home.profiles_path(),
+            home.client_layout_path(),
+            home.active_theme_path(),
+            home.provisioning_state_path(),
+            home.binary_path(),
+            home.tasks_path("abc"),
+            home.conversation_path("abc", "def"),
+            home.prompt_history_path("abc"),
+        ];
+        for record in records {
+            assert!(
+                record.starts_with(home.state_dir()),
+                "a record belongs with the records: {}",
+                record.display()
+            );
+            for tier in &rebuildable {
+                assert!(
+                    !record.starts_with(tier),
+                    "{} is a record and must not sit where deleting costs nothing",
+                    record.display()
+                );
+            }
+        }
+
+        // And the things that *are* rebuildable say so by where they are.
+        for rebuilt in [
+            home.harnesses_cache_path(),
+            home.harness_detection_cache_path(),
+            home.inspection_cache_path(),
+            home.marketplace_cache_dir(),
+            home.logs_dir(),
+            home.generated_attachments_dir("claude"),
+            home.runtime_project_dir("abc"),
+        ] {
+            assert!(
+                rebuildable.iter().any(|tier| rebuilt.starts_with(tier)),
+                "{} is produced or observed again, so it belongs in a tier \
+                 that says deleting it costs nothing",
+                rebuilt.display()
+            );
+        }
+
+        // The shims are the one exception, and it is about `PATH`, not
+        // about cost: `which claude` reading `~/.uze/shims/claude` says
+        // what it is where `~/.uze/runtime/shims/claude` says less.
+        assert_eq!(home.shims_dir(), home.root().join("shims"));
     }
 
     /// A relative root is the same failure spread over time: the same home

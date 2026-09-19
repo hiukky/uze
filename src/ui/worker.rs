@@ -1040,7 +1040,6 @@ mod tests {
                 harnesses: Vec::new(),
                 attachments: Vec::new(),
                 ledger_error: None,
-                integration_state_error: None,
                 provisioning_state_error: None,
                 maintenance: MaintenanceReport {
                     outcomes: vec![MaintenanceOutcome::Repaired {

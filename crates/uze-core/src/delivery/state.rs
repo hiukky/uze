@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     error::{Result, UzeError},
@@ -34,7 +34,7 @@ fn read_json_or_default<T: uze_document::Shaped + Default>(path: &Path) -> Resul
 /// any machine has to be touched for these to start obeying the rule. The
 /// field appears in the bytes on the release that first needs a rung.
 mod shapes {
-    use super::{AttachmentLedger, IntegrationRegistry, MarketplaceRegistry, ProvisioningRegistry};
+    use super::{AttachmentLedger, MarketplaceRegistry, ProvisioningRegistry};
 
     macro_rules! first_shape {
         ($($record:ty => $kind:literal),* $(,)?) => {
@@ -47,10 +47,22 @@ mod shapes {
 
     first_shape! {
         AttachmentLedger => "attachments",
-        IntegrationRegistry => "integrations",
         ProvisioningRegistry => "provisioning",
         MarketplaceRegistry => "marketplaces",
     }
+}
+
+/// Reads what UZE last observed, which is never carried across a version.
+///
+/// Remembered rather than recorded: one this build cannot read is
+/// discarded and observed again on the next command, in silence. Refusing
+/// it, or setting it aside and saying so, would report an upgrade as a
+/// problem when the answer costs one probe.
+fn read_cache<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    Ok(std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default())
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -117,7 +129,7 @@ struct IntegrationRegistry {
 
 /// All recorded integration state, keyed by harness id.
 pub fn load(home: &UzeHome) -> Result<BTreeMap<String, IntegrationRecord>> {
-    let registry: IntegrationRegistry = read_json_or_default(&home.integrations_state_path())?;
+    let registry: IntegrationRegistry = read_cache(&home.harnesses_cache_path())?;
     Ok(registry.integrations)
 }
 
@@ -137,8 +149,8 @@ pub fn is_installed(home: &UzeHome, harness: &str) -> bool {
 /// its entry.
 pub fn record(home: &UzeHome, harness: &str, entry: IntegrationRecord) -> Result<()> {
     home.ensure_layout()?;
-    let path = home.integrations_state_path();
-    let mut registry: IntegrationRegistry = read_json_or_default(&path)?;
+    let path = home.harnesses_cache_path();
+    let mut registry: IntegrationRegistry = read_cache(&path)?;
     // Every command records each detected harness on its way in; an
     // unchanged record must cost a read, not a synced rewrite of the file.
     if registry.integrations.get(harness) == Some(&entry) {
