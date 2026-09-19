@@ -12,6 +12,10 @@ publish = false
 # Spans on every process this crate runs; a no-op until the binary
 # subscribes (see `src/telemetry.rs`).
 tracing = "0.1"
+# The one rule for reading a record another build wrote. A leaf crate
+# naming no domain, so this crate still reaches nothing of UZE's: a
+# durability rule written in two places is what it exists to prevent.
+uze-document = { path = "../uze-document" }
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
 libc = "0.2"
