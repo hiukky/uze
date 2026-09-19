@@ -217,9 +217,14 @@ need to).
   owns none of hit-testing (a caller passes its `Hit` in and registers the
   rects it gets back), no state (ratatui is immediate mode — there is
   nothing to reconcile between frames), and no layout (it fills the rect it
-  is handed). It lives here rather than in a crate because `ratatui`
-  appears in exactly one manifest, the root's, and `uze-theme` and
-  `uze-extensions` deliberately name no rendering library.
+  is handed). Those three are guarded the other way by
+  `a_widget_knows_no_model_and_reaches_nothing`, which fails the build on a
+  widget naming `TuiModel`, `WorkspaceModel`, the filesystem, the
+  environment or a process — the pair keeps a screen from building its own
+  chrome and the vocabulary from growing into a screen. It lives here
+  rather than in a crate because `ratatui` appears in exactly one manifest,
+  the root's, and `uze-theme` and `uze-extensions` deliberately name no
+  rendering library.
   Extract on the second *file*, not the second call: a helper three
   callers in one screen share is that screen's, and moving it here only
   makes the vocabulary harder to read. A primitive a screen exports is the
