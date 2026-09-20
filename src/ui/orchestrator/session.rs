@@ -1197,7 +1197,7 @@ impl Attach<'_> {
     /// closed, or to hand over to the code a box stands for.
     fn follow_architect(&mut self, outcome: Option<architect::ArchitectOutcome>) {
         match outcome {
-            Some(architect::ArchitectOutcome::Close) => self.model.architect = None,
+            Some(architect::ArchitectOutcome::Close) => self.model.close_architect(),
             Some(architect::ArchitectOutcome::OpenPath { project, target }) => {
                 open_code_at(&mut self.model, &project, &target);
             }
@@ -1273,7 +1273,7 @@ impl Attach<'_> {
     /// doors lead there, and everything else is a command it answers.
     fn architect_action(&mut self, action: Action) {
         match action {
-            Action::ToggleArchitect => self.model.architect = None,
+            Action::ToggleArchitect => self.model.close_architect(),
             Action::ToggleChanges => open_code(&mut self.model, code::ContentMode::Diff),
             Action::ToggleFiles => open_code(&mut self.model, code::ContentMode::Contents),
             _ => {

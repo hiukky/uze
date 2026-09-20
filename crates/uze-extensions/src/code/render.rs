@@ -16,7 +16,7 @@ use super::{
     diff::content_line,
     editor::OpenFile,
 };
-use crate::shared::canvas::Glyphs;
+use crate::shared::{canvas::Glyphs, checkout};
 use crate::view::{
     Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
     Size, Span, TrailStep, View,
@@ -25,7 +25,8 @@ use crate::view::{
 /// `space` is advisory: it bounds how much content is worth producing,
 /// never where any of it goes.
 pub fn view(code: &CodeView, space: Size) -> View {
-    let title = title(code);
+    let title = checkout::name(super::CATALOG.name);
+    let caption = checkout::caption(&code.display_root, &code.branch);
     let footer = footer(code);
 
     // A surface-level failure — the tab's directory is gone, say — leaves
@@ -35,6 +36,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
     if let Some(message) = &code.error {
         return View {
             title,
+            caption,
             navigator: None,
             content: Content::Message {
                 text: message.clone(),
@@ -55,6 +57,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
     if code.content == ContentMode::Map {
         return View {
             title,
+            caption,
             navigator: None,
             content: map_content(code, space),
             footer,
@@ -66,6 +69,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
 
     View {
         title,
+        caption,
         navigator: Some(match code.navigator() {
             NavigatorMode::Changes => changes_navigator(code),
             NavigatorMode::Files => files_navigator(code),
@@ -179,32 +183,6 @@ fn mode_label(code: &CodeView, showing: Showing) -> String {
         Showing::Measured(MapShowing::Ascii) => "ASCII".to_owned(),
         Showing::Measured(MapShowing::Ranking) => "Ranking".to_owned(),
     }
-}
-
-/// What the surface is, which checkout it is on, and which branch that
-/// checkout is at — in that order, and told apart by weight.
-///
-/// The three are not equally interesting. The name is a label and is
-/// said once; the directories leading to the checkout are context; the
-/// checkout's own name and its branch are what identify it, and they are
-/// what the eye should land on. One run of text gave all three the same
-/// weight, which is how a title stops being read.
-fn title(code: &CodeView) -> Vec<Span> {
-    let (parent, name) = match code.display_root.rsplit_once('/') {
-        Some((parent, name)) => (format!("{parent}/"), name.to_owned()),
-        None => (String::new(), code.display_root.clone()),
-    };
-    let mut spans = vec![
-        Span::new("code", Role::Muted),
-        Span::new(" · ", Role::Faint),
-        Span::new(parent, Role::Dim),
-        Span::new(name, Role::Bright).bold(),
-    ];
-    if !code.branch.is_empty() {
-        spans.push(Span::new(" · ", Role::Faint));
-        spans.push(Span::new(code.branch.clone(), Role::Accent).bold());
-    }
-    spans
 }
 
 /// What this surface can be asked, in the order the footer should name

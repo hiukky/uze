@@ -75,12 +75,19 @@ fn styled(span: &Span) -> TextSpan<'static> {
         .color
         .map(|rgb| theme::content(rgb.0, rgb.1, rgb.2))
         .unwrap_or_else(|| color(span.role)));
-    if span.bold {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if span.italic {
-        style = style.add_modifier(Modifier::ITALIC);
-    }
+    // Emphasis is stated both ways round, never left to whatever the
+    // span is drawn inside. A ratatui title carries a style its spans
+    // are patched over, so a span that only *omits* bold comes out bold
+    // on a frame's edge and plain everywhere else — the same span
+    // meaning two things depending on where it landed.
+    style = match span.bold {
+        true => style.add_modifier(Modifier::BOLD),
+        false => style.remove_modifier(Modifier::BOLD),
+    };
+    style = match span.italic {
+        true => style.add_modifier(Modifier::ITALIC),
+        false => style.remove_modifier(Modifier::ITALIC),
+    };
     TextSpan::styled(span.text.clone(), style)
 }
 
@@ -128,6 +135,11 @@ pub(crate) fn content_columns(
 /// footer. The board gets everything the other two do not need — no
 /// navigator column, no blank row under the title, no reading margin, and
 /// one row of menu rather than one per level of it.
+///
+/// The menu sits straight under the title because there is nothing up
+/// there to crowd: the frame's top edge carries the surface's name and
+/// nothing else, and where it is open is written along the foot. A row
+/// of chips under one word is a row of chips, not a continuation.
 pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
@@ -277,15 +289,29 @@ pub(crate) fn render(
     let mut title: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
     title.extend(view.title.iter().map(styled));
     title.push(TextSpan::raw(" "));
-    Surface::card().title(Line::from(title)).render(frame, area);
-    // This closes the whole overlay, so make it an explicit, comfortably
-    // clickable control rather than the compact tab-close glyph.
-    let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
+    let mut surface = Surface::card().title(Line::from(title));
+    // What the surface is at the top, where it is open at the foot. The
+    // second is the one a reader comes back to, and it sits on the edge
+    // nothing else is written along.
+    if !view.caption.is_empty() {
+        let mut caption: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
+        caption.extend(view.caption.iter().map(styled));
+        caption.push(TextSpan::raw(" "));
+        surface = surface.caption(Line::from(caption));
+    }
+    surface.render(frame, area);
+    // The mark alone. It carried the word "close" beside it while the top
+    // edge was a whole sentence and the mark would have been lost in it;
+    // opposite one word it is the only other thing up there, and a
+    // control that says what every ✕ in every window says is a control
+    // spelling out its own glyph. The gap it punches in the hairline is
+    // as wide as the drawn mark and no wider: a hit larger than what is
+    // drawn closes the surface from a cell that looks like the frame.
+    let close = format!(" {} ", theme::glyph(Symbol::MarkClose));
+    let width = TextSpan::raw(close.as_str()).width() as u16;
+    let close_rect = Rect::new(area.right().saturating_sub(width + 1), area.y, width, 1);
     frame.render_widget(
-        Paragraph::new(TextSpan::styled(
-            format!(" {} close ", theme::glyph(Symbol::MarkClose)),
-            theme::fg(Token::StateDanger),
-        )),
+        Paragraph::new(TextSpan::styled(close, theme::fg(Token::StateDanger))),
         close_rect,
     );
     hits.push((close_rect, ViewHit::Close));
@@ -1659,9 +1685,14 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use uze_extensions::view::{ContentLine, LineTone, Rgb};
 
+    /// Which drawn row a board's menu lands on: the frame's own top edge
+    /// carrying the title, then the menu straight under it.
+    const MENU_ROW: usize = 1;
+
     fn sample() -> View {
         View {
             title: vec![Span::new("demo", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: "CHANGES".to_owned(),
                 badge: "2".to_owned(),
@@ -1789,6 +1820,7 @@ mod tests {
         }
         View {
             title: vec![Span::new("Board", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: String::new(),
                 badge: String::new(),
@@ -1820,7 +1852,7 @@ mod tests {
     fn a_selector_with_one_choice_neither_opens_nor_says_it_does() {
         let chevron = theme::glyph(Symbol::ChevronExpanded);
         let (drawn, hits) = draw_sized(&board(1, 1, &[]), 80, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(!menu.contains(&chevron), "no mark on either: {menu}");
         assert!(!menu.contains(" 1 "), "nor a count of one: {menu}");
         assert!(
@@ -1832,10 +1864,10 @@ mod tests {
 
         let (drawn, hits) = draw_sized(&board(2, 3, &[]), 80, 20);
         assert_eq!(
-            drawn[1].matches(chevron.as_str()).count(),
+            drawn[MENU_ROW].matches(chevron.as_str()).count(),
             2,
             "both open where there is a choice: {}",
-            drawn[1]
+            drawn[MENU_ROW]
         );
         assert!(
             hits.iter().any(|(_, h)| *h == ViewHit::ChooseGroup)
@@ -1851,10 +1883,10 @@ mod tests {
         let chevron = theme::glyph(Symbol::ChevronExpanded);
         let (drawn, hits) = draw_sized(&board(2, 3, &[]), 100, 20);
         assert_eq!(
-            drawn[1].matches(chevron.as_str()).count(),
+            drawn[MENU_ROW].matches(chevron.as_str()).count(),
             2,
             "a set is two lists: {}",
-            drawn[1]
+            drawn[MENU_ROW]
         );
         assert!(hits.iter().any(|(_, h)| *h == ViewHit::ChooseItem));
 
@@ -1870,7 +1902,7 @@ mod tests {
             ],
         );
         let (drawn, hits) = draw_sized(&ladder, 100, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(
             menu.contains("Context") && menu.contains("Containers") && menu.contains("Components"),
             "every level is on show at once: {menu}"
@@ -1907,7 +1939,7 @@ mod tests {
             .map(|(name, current)| (name.as_str(), *current))
             .collect();
         let (drawn, _) = draw_sized(&board(2, 3, &borrowed), 70, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(menu.contains("Level number 7"), "{menu}");
         assert!(
             menu.contains(&theme::glyph(Symbol::Ellipsis)),
@@ -1937,6 +1969,7 @@ mod tests {
         }));
         let view = View {
             title: vec![Span::new("Board", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: String::new(),
                 badge: String::new(),
@@ -1985,7 +2018,7 @@ mod tests {
         use uze_extensions::architect;
         let (width, height) = (150, 45);
         let space = board_space(Rect::new(0, 0, width, height));
-        let mut state = architect::ArchitectView::opening();
+        let mut state = architect::ArchitectView::opening("~/project".to_owned());
         let artifacts: Vec<architect::Artifact> = [
             (
                 "containers.mmd",
@@ -2010,9 +2043,12 @@ mod tests {
         ]
         .map(|(origin, source)| architect::Artifact::read(origin, source))
         .into();
-        state.absorb(architect::ArtifactsAnswer::Found {
-            artifacts,
-            project: std::path::PathBuf::from("/project"),
+        state.absorb(architect::ArtifactsAnswer {
+            branch: "main".to_owned(),
+            artifacts: architect::Artifacts::Found {
+                artifacts,
+                project: std::path::PathBuf::from("/project"),
+            },
         });
         // The catalog opens on the outermost view; the box this clicks is a
         // container, one level in.
@@ -2022,17 +2058,17 @@ mod tests {
             println!("{}", rows.join("\n"));
         }
         assert!(
-            rows[1].contains("C4")
-                && !rows[1].contains("C4 2")
-                && rows[1].contains("System context")
-                && rows[1].contains("Containers"),
+            rows[MENU_ROW].contains("C4")
+                && !rows[MENU_ROW].contains("C4 2")
+                && rows[MENU_ROW].contains("System context")
+                && rows[MENU_ROW].contains("Containers"),
             "one row: the area on show, then its levels, the one on show among them: {}",
-            rows[1]
+            rows[MENU_ROW]
         );
         assert!(
-            !rows[1].contains("Sequence") && !rows[1].contains("Install"),
+            !rows[MENU_ROW].contains("Sequence") && !rows[MENU_ROW].contains("Install"),
             "and nothing of any other area: {}",
-            rows[1]
+            rows[MENU_ROW]
         );
         let footer = rows[usize::from(height) - 3].as_str();
         assert!(

@@ -45,6 +45,7 @@ pub(crate) struct Surface {
     ground: Option<Token>,
     title: Option<Line<'static>>,
     hint: Option<Line<'static>>,
+    caption: Option<Line<'static>>,
     padding: Padding,
 }
 
@@ -63,6 +64,7 @@ impl Surface {
             ground: Some(Token::SurfaceBackground),
             title: None,
             hint: None,
+            caption: None,
             padding: FLOATING_PADDING,
         }
     }
@@ -110,6 +112,19 @@ impl Surface {
         self
     }
 
+    /// A line along the bottom edge, left-aligned, under the title's own
+    /// corner: *where* this surface is open, as against what it is.
+    ///
+    /// Its own slot rather than more of the title because the two answer
+    /// different questions and are read at different moments — the title
+    /// once, on arriving, and this one every time the reader loses track
+    /// of which checkout they are in. A frame has two edges; one question
+    /// each is what they are for.
+    pub(crate) fn caption(mut self, caption: impl Into<Line<'static>>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+
     /// Room around the content, when this surface needs other than its
     /// kind's own. Reach for it only with a reason worth a comment: the
     /// paddings that disagreed before this module existed all looked
@@ -152,6 +167,9 @@ impl Surface {
         }
         if let Some(hint) = self.hint {
             block = block.title_bottom(hint.right_aligned());
+        }
+        if let Some(caption) = self.caption {
+            block = block.title_bottom(caption.left_aligned());
         }
         block
     }

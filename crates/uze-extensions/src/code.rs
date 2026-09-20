@@ -67,6 +67,7 @@ use std::{
 
 use crate::{
     Host,
+    shared::checkout,
     view::{Caret, Command, ScrollDirection, Size, ViewHit},
 };
 
@@ -438,7 +439,7 @@ impl CodeView {
     /// It answers with a [`Changes`] rather than a whole view, because
     /// the view now holds a buffer — see the module doc.
     pub fn refresh(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> RefreshedChanges {
-        let branch = current_branch(host, &root);
+        let branch = checkout::branch_of(host, &root);
         let changes = match host.repository_root(&root) {
             Ok(resolved) => Changes::read(host, &resolved, placement.path.as_deref()),
             Err(message) => Changes::failed(message),
@@ -927,17 +928,6 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
-}
-
-/// The branch the checkout is on, for the title. Answers `detached HEAD`
-/// for a checkout with no branch, and nothing at all outside a
-/// repository.
-fn current_branch(host: &dyn Host, root: &Path) -> String {
-    match host.git(root, &["rev-parse", "--abbrev-ref", "HEAD"], &[]) {
-        Ok(name) if !name.trim().is_empty() && name.trim() != "HEAD" => name.trim().to_owned(),
-        Ok(_) => "detached HEAD".to_owned(),
-        Err(_) => String::new(),
-    }
 }
 
 /// The map answers the keys the tree answers, about tiles rather than

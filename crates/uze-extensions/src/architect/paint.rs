@@ -87,6 +87,12 @@ pub fn paint(scene: &Scene, glyphs: Glyphs, selected: Option<usize>, leads: &[Le
     };
     let mut fences = vec![0u8; size];
 
+    // The quietest thing drawn, under the routes rather than beside them:
+    // a wall at the routes' own weight is another line among them, which
+    // is the whole of what made a region hard to find. What delimits it
+    // is the ground it stands on — see `architect::grounded` — and the
+    // wall only has to be the frontier of that, not a rule competing for
+    // the eye. The title above it is what carries the region's weight.
     for (frame, cluster) in scene.placement.clusters.iter().zip(&scene.graph.clusters) {
         canvas.frame(*frame, Corners::Square, Role::Faint);
         canvas.text(

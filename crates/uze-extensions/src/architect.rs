@@ -28,7 +28,7 @@ mod paint;
 mod route;
 mod sequence;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     Host,
@@ -40,6 +40,7 @@ use crate::{
 };
 
 use crate::shared::canvas::{Canvas, Frame, Glyphs};
+use crate::shared::checkout;
 use catalog::Catalog;
 
 pub use catalog::Artifact;
@@ -99,6 +100,11 @@ enum Drawing {
 
 pub struct ArchitectView {
     catalog: Catalog,
+    /// The checkout this surface is open on and the branch it is at, as
+    /// the title says them — the same sentence the code surface's title
+    /// is, because a reader comparing the two is asking one question.
+    display_root: String,
+    branch: String,
     selected: usize,
     showing: Showing,
     /// The board cell at the screen's top-left corner, once the board has
@@ -124,10 +130,40 @@ pub struct ArchitectView {
     /// joins one level to the next is only this: the boundary `core` is
     /// the inside of the box `core`, wherever that box is drawn.
     insides: Vec<Vec<String>>,
+    /// What a box's link is relative to — where the artifacts were
+    /// declared, which is not necessarily the checkout the title names.
     project: PathBuf,
     /// What is the matter with the declared artifacts, kept to be said
     /// beside the code map when that is all there is to show.
     trouble: Option<String>,
+    /// Where the viewer was last time, waiting for the artifacts to be
+    /// read: a place names diagrams and boxes, and neither exists until
+    /// the host's answer lands.
+    resuming: Option<ArchitectPlace>,
+}
+
+/// Where a viewer was on a checkout's architect surface, for the host to
+/// hand back to [`ArchitectView::resuming`].
+///
+/// Named rather than numbered throughout. The artifacts are files in a
+/// directory somebody is working in: the fourth diagram is not the same
+/// diagram it was an hour ago, and the one called `crate-layering.mmd`
+/// is. A name that no longer resolves is simply not restored — coming
+/// back to a diagram that was deleted is the one case where starting at
+/// the top is right.
+///
+/// What it holds is navigation and nothing else: which diagram, the
+/// levels entered to reach it, the box that was selected and where the
+/// board was moved to. Not the notation — Unicode, ASCII and Source are
+/// how the drawing is being *read*, which is a question the viewer
+/// answers again each time they arrive.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ArchitectPlace {
+    artifact: String,
+    corner: Option<(i32, i32)>,
+    picked: Option<String>,
+    /// The levels entered, as the artifact left and the box left through.
+    trail: Vec<(String, String)>,
 }
 
 /// Where the host found the project's artifacts to be declared. The
@@ -147,10 +183,21 @@ pub enum ArtifactSource {
     Refused(String),
 }
 
-/// What reading a source produced — everything the surface needs to stop
-/// saying "reading".
+/// What reading a checkout produced — everything the surface needs to
+/// stop saying "reading".
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ArtifactsAnswer {
+pub struct ArtifactsAnswer {
+    /// The branch the checkout is at, for the title. Read with the
+    /// artifacts rather than asked for separately: it is one read of one
+    /// checkout, and a title filling its last part in a moment later
+    /// reads as a rendering fault rather than as an answer arriving.
+    pub branch: String,
+    pub artifacts: Artifacts,
+}
+
+/// Whether there is anything to draw, and what to say where there is not.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Artifacts {
     Found {
         artifacts: Vec<Artifact>,
         /// What a box's link is relative to.
@@ -160,11 +207,19 @@ pub enum ArtifactsAnswer {
     Nothing { text: String, hint: String },
 }
 
-/// Reads a source. Unbounded — a directory walk and a read per file — so
-/// the host runs it off the thread that draws and hands the answer to
-/// [`ArchitectView::absorb`].
-pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswer {
-    let nothing = |text: String, hint: &str| ArtifactsAnswer::Nothing {
+/// Reads a checkout: the artifacts its project declares, and the branch
+/// it is at. Unbounded — a directory walk, a read per file and a call to
+/// Git — so the host runs it off the thread that draws and hands the
+/// answer to [`ArchitectView::absorb`].
+pub fn read_artifacts(host: &dyn Host, checkout: &Path, source: ArtifactSource) -> ArtifactsAnswer {
+    ArtifactsAnswer {
+        branch: checkout::branch_of(host, checkout),
+        artifacts: read_the_directory(host, source),
+    }
+}
+
+fn read_the_directory(host: &dyn Host, source: ArtifactSource) -> Artifacts {
+    let nothing = |text: String, hint: &str| Artifacts::Nothing {
         text,
         hint: hint.to_owned(),
     };
@@ -188,7 +243,7 @@ pub fn read_artifacts(host: &dyn Host, source: ArtifactSource) -> ArtifactsAnswe
                 "Add a .mmd file there: a diagram that starts with `C4Context`, \
                  `sequenceDiagram` or `flowchart` is drawn here.",
             ),
-            Ok(artifacts) => ArtifactsAnswer::Found { artifacts, project },
+            Ok(artifacts) => Artifacts::Found { artifacts, project },
             Err(reason) => nothing(
                 format!("`{declared}` could not be read"),
                 &format!("{reason}. It is the `artifacts.path` agents.yaml declares."),
@@ -212,9 +267,16 @@ pub enum ArchitectOutcome {
 
 impl ArchitectView {
     /// The surface before its artifacts have been read.
-    pub fn opening() -> Self {
+    ///
+    /// `display_root` is the checkout as the host spells it for a reader,
+    /// the way [`crate::code::CodeView::opening`] takes it: the title
+    /// names the checkout from the first frame, because which checkout
+    /// is being looked at is not something to wait for a read to learn.
+    pub fn opening(display_root: String) -> Self {
         Self {
             catalog: Catalog::default(),
+            display_root,
+            branch: String::new(),
             selected: 0,
             showing: Showing::Unicode,
             corner: None,
@@ -227,12 +289,46 @@ impl ArchitectView {
             insides: Vec::new(),
             project: PathBuf::new(),
             trouble: None,
+            resuming: None,
+        }
+    }
+
+    /// The same surface, to be put back where [`ArchitectPlace`] says the
+    /// viewer left this checkout — once there is something to put back
+    /// into. Nothing is resolved here: the artifacts have not been read
+    /// yet, and a name can only be looked up among files that exist.
+    pub fn resuming(mut self, place: ArchitectPlace) -> Self {
+        self.resuming = Some(place);
+        self
+    }
+
+    /// Where the viewer is, for the host to keep.
+    pub fn place(&self) -> ArchitectPlace {
+        let named = |artifact: usize| {
+            self.catalog
+                .get(artifact)
+                .map(|artifact| artifact.origin.clone())
+        };
+        let picked = match (&self.drawing, self.picked) {
+            (Drawing::Graph(scene), Some(picked)) => Some(scene.graph.nodes[picked].id.clone()),
+            _ => None,
+        };
+        ArchitectPlace {
+            artifact: named(self.selected).unwrap_or_default(),
+            corner: self.corner,
+            picked,
+            trail: self
+                .trail
+                .iter()
+                .filter_map(|(artifact, through)| Some((named(*artifact)?, through.clone())))
+                .collect(),
         }
     }
 
     pub fn absorb(&mut self, answer: ArtifactsAnswer) {
-        match answer {
-            ArtifactsAnswer::Found { artifacts, project } => {
+        self.branch = answer.branch;
+        match answer.artifacts {
+            Artifacts::Found { artifacts, project } => {
                 self.catalog = Catalog::of(artifacts);
                 self.insides = self
                     .catalog
@@ -254,9 +350,9 @@ impl ArchitectView {
                 self.project = project;
                 self.nothing = None;
                 self.trouble = None;
-                self.open(0);
+                self.restore();
             }
-            ArtifactsAnswer::Nothing { text, hint } => {
+            Artifacts::Nothing { text, hint } => {
                 self.catalog = Catalog::default();
                 self.nothing = Some((text, Some(hint)));
             }
@@ -427,6 +523,38 @@ impl ArchitectView {
         };
         self.choosing = Some(moved);
         true
+    }
+
+    /// The first artifact, or wherever the viewer was when they left —
+    /// whichever of the two the host asked for and the catalogue still
+    /// answers to.
+    fn restore(&mut self) {
+        let Some(place) = self.resuming.take() else {
+            self.open(0);
+            return;
+        };
+        let named = |origin: &str| {
+            self.catalog
+                .artifacts()
+                .iter()
+                .position(|artifact| artifact.origin == origin)
+        };
+        let Some(artifact) = named(&place.artifact) else {
+            self.open(0);
+            return;
+        };
+        let trail: Vec<(usize, String)> = place
+            .trail
+            .iter()
+            .filter_map(|(origin, through)| Some((named(origin)?, through.clone())))
+            .collect();
+        self.open(artifact);
+        self.trail = trail;
+        if let (Drawing::Graph(scene), Some(id)) = (&self.drawing, &place.picked) {
+            self.picked = scene.graph.nodes.iter().position(|node| &node.id == id);
+        }
+        self.corner = place.corner;
+        self.repaint();
     }
 
     /// Shows an artifact chosen from the menu: a fresh start, so whatever
@@ -768,12 +896,17 @@ impl ArchitectView {
             Glyphs::Unicode => '·',
             Glyphs::Ascii => '.',
         };
+        let regions: &[Frame] = match &self.drawing {
+            Drawing::Graph(scene) => &scene.placement.clusters,
+            _ => &[],
+        };
         for y in 0..rows {
             for x in 0..columns {
                 let at = (x + corner.0, y + corner.1);
+                let on_the_grid = at.0.rem_euclid(GRID.0) == 0 && at.1.rem_euclid(GRID.1) == 0;
                 match board.cell(at.0, at.1) {
                     Some(cell) if cell.solid => screen.set(x, y, cell),
-                    _ if at.0.rem_euclid(GRID.0) == 0 && at.1.rem_euclid(GRID.1) == 0 => {
+                    _ if on_the_grid && grounded(regions, at) => {
                         screen.put(x, y, grid_dot, Role::Faint, false);
                     }
                     _ => {}
@@ -795,6 +928,22 @@ impl ArchitectView {
         }
         Some(screen)
     }
+}
+
+/// Whether the board's own grid shows through at this cell.
+///
+/// It does not inside a region: the grid is the texture of a board with
+/// nothing on it, and a region *is* something, so it stands on a ground
+/// of its own. Nesting alternates — a region inside a region takes its
+/// parent's ground back — which is what keeps two walls a cell apart
+/// telling apart without a second kind of line.
+fn grounded(regions: &[Frame], at: (i32, i32)) -> bool {
+    regions
+        .iter()
+        .filter(|region| region.contains(at.0, at.1))
+        .count()
+        % 2
+        == 0
 }
 
 pub fn view(state: &ArchitectView, space: Size) -> View {
@@ -821,7 +970,8 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         });
     }
     View {
-        title: title(state),
+        title: checkout::name(CATALOG.name),
+        caption: checkout::caption(&state.display_root, &state.branch),
         navigator: Some(Navigator {
             heading: "ARTIFACTS".to_owned(),
             badge: state.catalog.artifacts().len().to_string(),
@@ -854,25 +1004,6 @@ fn footer(state: &ArchitectView) -> Vec<Command> {
     }
     commands.extend([Command::ChooseItem, Command::NextView, Command::NextMode]);
     commands
-}
-
-/// What the surface is and which project it is about — told apart by
-/// weight, the way the code surface's title is: the name is a label said
-/// once, and what the eye should land on is the project.
-fn title(state: &ArchitectView) -> Vec<Span> {
-    // The declaration says which project this is; where there is none,
-    // the checkout the map was measured from says the same thing.
-    let project = state
-        .project
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let mut spans = vec![Span::new("architect", Role::Muted)];
-    if !project.is_empty() {
-        spans.push(Span::new(" · ", Role::Faint));
-        spans.push(Span::new(project, Role::Bright).bold());
-    }
-    spans
 }
 
 fn content(state: &ArchitectView, space: Size) -> Content {
