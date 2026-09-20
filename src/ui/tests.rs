@@ -5129,3 +5129,81 @@ fn the_wheel_walks_the_open_index() {
     // The wheel is not a click: the index is still open.
     assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
 }
+
+/// The drawer's own shape: the plugin's name is the heading rather than a
+/// value under a `PLUGIN` label, and no row is folded flush against the
+/// border — folding at the full width is what made a drawer with rows to
+/// spare read as crowded.
+#[test]
+fn the_drawer_leads_with_the_name_and_leaves_a_gutter() {
+    use uze_application::application::{MarketplacePluginDetail, Revision};
+
+    let summary = MarketplacePluginSummary {
+        marketplace: "ai".to_owned(),
+        name: "git".to_owned(),
+        description: Some(
+            "Personal git workflow conventions: a Conventional Commits skill and a \
+             pull/merge request skill."
+                .to_owned(),
+        ),
+        keywords: vec!["git".to_owned(), "conventional-commits".to_owned()],
+        installed: false,
+        freshness: uze_application::application::Freshness::not_checked(),
+        is_default: false,
+    };
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        marketplace_detail: Some(MarketplacePluginDetail {
+            revision: Some(Revision::Commit {
+                short: "f1f00f7".to_owned(),
+                age: "79 minutes ago".to_owned(),
+                subject: "feat(git): require technical descriptions in the commit and pr skills"
+                    .to_owned(),
+            }),
+            summary: summary.clone(),
+            capabilities: Vec::new(),
+        }),
+        remembered: Remembered {
+            plugin_screen: ListScreen::default(),
+            marketplace_plugins: vec![summary],
+            ..TuiModel::default().remembered
+        },
+        ..TuiModel::default()
+    };
+    let width = 52;
+    model.remembered.plugin_screen.drawer_width = Some(width);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+
+    assert!(
+        !rows.iter().any(|row| row.contains("PLUGIN")),
+        "the name is the heading, not a value under a label: {rows:#?}"
+    );
+    let revision = rows
+        .iter()
+        .position(|row| row.contains("REVISION"))
+        .unwrap_or_else(|| panic!("the revision block is drawn: {rows:#?}"));
+    assert!(
+        rows[revision + 1].contains("f1f00f7") && rows[revision + 1].contains("79 minutes ago"),
+        "the commit and its age share a row: {rows:#?}"
+    );
+
+    // Every drawer row stops short of the border. Measured against the
+    // widest row the drawer drew, since the panel's own edge is what the
+    // gutter is relative to.
+    let widest = rows
+        .iter()
+        .filter(|row| row.contains("git") || row.contains("feat("))
+        .map(|row| row.trim_end().chars().count())
+        .max()
+        .unwrap_or_default();
+    assert!(
+        widest > 0 && widest < 120,
+        "no row runs to the terminal's edge: {widest}"
+    );
+}

@@ -434,11 +434,14 @@ fn render_plugin_drawer(
     let offers = plugin.offers();
     let (body, status_area) = super::drawer_body_and_footer(inner, &offers);
 
-    let room = body.width as usize;
-    let mut lines = vec![Line::from(Span::styled(
-        "PLUGIN",
-        theme::fg_bold(Token::TextMuted),
-    ))];
+    // One cell short of the edge. Folding at the full width put every row
+    // flush against the border, which is what made a drawer with rows to
+    // spare read as crowded.
+    let room = body.width.saturating_sub(crate::ui::widget::TRAILING_PAD) as usize;
+    // No `PLUGIN` label: this drawer is about a plugin, so the name is the
+    // heading rather than a value under one. Every other label here says
+    // something its value would be ambiguous without.
+    let mut lines: Vec<Line<'static>> = Vec::new();
     lines.extend(text::fold(&plugin.name, room).into_iter().map(|row| {
         Line::from(Span::styled(
             row,
@@ -588,7 +591,7 @@ fn render_plugin_drawer(
                 lines.extend(
                     text::fold(subject, room)
                         .into_iter()
-                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextMuted)))),
+                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextDim)))),
                 );
             }
             // Shipped inside the binary: there is no repository to ask,
