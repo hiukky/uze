@@ -588,29 +588,22 @@ fn render_plugin_drawer(
                 headline: "Updated",
                 subtitle: "Brought up to date automatically when uze started",
             }
+        // Only an actionable freshness state takes this slot. It carries
+        // attachment health — whether the plugin is actually delivered —
+        // and "nobody has compared this against its marketplace" says
+        // nothing about that. The row's own status column is where every
+        // freshness state is reported.
         } else if plugin.freshness.behind() {
             DrawerStatus {
                 color: theme::color(Token::StateWarning),
                 headline: "Update available",
                 subtitle: "Needs your confirmation to apply",
             }
-        } else if matches!(plugin.freshness.state, FreshnessState::NotChecked) {
-            DrawerStatus {
-                color: theme::color(Token::TextDim),
-                headline: "Not checked",
-                subtitle: "Nothing has compared this against its marketplace yet",
-            }
         } else if matches!(plugin.freshness.state, FreshnessState::Linked { .. }) {
             DrawerStatus {
                 color: theme::color(Token::Accent),
                 headline: "Linked",
                 subtitle: "Follows a checkout on this machine",
-            }
-        } else if matches!(plugin.freshness.state, FreshnessState::Unpinned) {
-            DrawerStatus {
-                color: theme::color(Token::TextDim),
-                headline: "Installed",
-                subtitle: "From a source no marketplace tracks",
             }
         } else {
             DrawerStatus {

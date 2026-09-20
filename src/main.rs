@@ -48,6 +48,21 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Move this project's pins to where its declared refs point now
+    ///
+    /// `install` reproduces what `agents.lock` records, which is what lets
+    /// a clone reach the bytes the project was locked at. Moving a pin is
+    /// this command. Machine-wide package bytes are `uze plugin update`.
+    Update {
+        /// One plugin. Omit to consider every plugin the manifest declares.
+        plugin: Option<String>,
+        path: Option<PathBuf>,
+        /// Authorize executable capabilities
+        #[arg(long)]
+        trust: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Remove a plugin from this project
     ///
     /// Never touches the machine Store — see `uze plugin remove` for that.
@@ -767,6 +782,23 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 },
             )?;
             emit(format, &report, render_install);
+        }
+        Command::Update {
+            plugin,
+            path,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report = with_spinner(
+                "Moving this project's pins...",
+                "Failed to update the project",
+                || {
+                    app.project()
+                        .update(&context_path(path), plugin.as_deref(), authority.as_ref())
+                },
+            )?;
+            emit(format, &report, render_update_report);
         }
         Command::Remove { plugin, format } => {
             let current_dir = cwd()?;
@@ -2098,6 +2130,41 @@ fn freshness_label(freshness: &uze_application::application::Freshness) -> Strin
         FreshnessState::Unpinned => "unpinned".to_owned(),
         FreshnessState::NotChecked => "not checked".to_owned(),
     }
+}
+
+/// What `uze update` moved, and what it deliberately did not.
+///
+/// A plugin already at its ref's head is said out loud rather than left
+/// out: "nothing moved" and "this plugin was not considered" are different
+/// answers, and a report that shows only what changed cannot tell them
+/// apart.
+fn render_update_report(report: &uze_application::application::UpdateReport) -> String {
+    use uze_application::application::UpdateOutcome;
+    let title = progress::report_title("Update", Some("This project's pins"));
+    if report.outcomes.is_empty() {
+        return format!("{title}\n  This project declares no plugins\n");
+    }
+    let rows = report
+        .outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            UpdateOutcome::Moved { plugin, revision } => vec![
+                progress::title(plugin),
+                progress::label(format!("moved to {}", &revision[..revision.len().min(12)])),
+            ],
+            UpdateOutcome::AlreadyCurrent { plugin } => {
+                vec![progress::title(plugin), progress::label("already current")]
+            }
+            UpdateOutcome::Held { plugin, reason } => {
+                vec![progress::title(plugin), progress::label(reason)]
+            }
+        })
+        .collect();
+    let mut text = format!("{title}\n{}\n", progress::aligned_rows(rows));
+    if report.reconciled {
+        text.push_str("  Project context reconciled\n");
+    }
+    text
 }
 
 fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -> String {

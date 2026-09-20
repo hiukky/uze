@@ -74,15 +74,15 @@
       and answers offline (`tests/cli/`)
 ## 4. `uze update`
 
-- [ ] 4.1 `Project::update(root, plugin: Option<&str>, authority)` —
+- [x] 4.1 `Project::update(root, plugin: Option<&str>, authority)` —
       re-resolve the declared ref through `resolve_into_lock`, rewrite
       `agents.lock`, reconcile the context, per-plugin trust
       (`application/project_environment.rs`)
-- [ ] 4.2 `uze update [plugin]` in the CLI, project-scoped per ADR-019, with
+- [x] 4.2 `uze update [plugin]` in the CLI, project-scoped per ADR-019, with
       text and JSON output (`src/main.rs`)
-- [ ] 4.3 Classify it in `src/command_performance.rs` — `JustifiedSlow`,
+- [x] 4.3 Classify it in `src/command_performance.rs` — `JustifiedSlow`,
       with the reason
-- [ ] 4.4 Tests: install leaves a moved ref pinned; update moves it and
+- [x] 4.4 Tests: install leaves a moved ref pinned; update moves it and
       records where it landed; updating one plugin leaves every other lock
       entry byte-identical; a revision introducing execution is refused and
       the rest proceed (`tests/lifecycle/`)

@@ -74,6 +74,12 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "reconstructs the project's agent environment from agents.yaml, acquiring packages",
         ),
     ),
+    (
+        "update",
+        PerformanceClass::JustifiedSlow(
+            "re-resolves each declared marketplace ref, which reaches its remote, and reinstalls              what moved",
+        ),
+    ),
     // Machine scope: theme. Every one of these is a small JSON read plus a
     // directory listing under `$UZE_HOME` — no harness is probed, and no
     // theme is resolved that is not the one being asked about.

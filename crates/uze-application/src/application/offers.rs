@@ -172,6 +172,7 @@ pub fn key_offers(customised: bool) -> Vec<ActionOffer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::read_models::Freshness;
 
     fn plugin(
         installed: bool,
@@ -185,15 +186,15 @@ mod tests {
             keywords: Vec::new(),
             installed,
             freshness: match update {
-                Some(true) => super::read_models::Freshness {
+                Some(true) => Freshness {
                     state: FreshnessState::Behind { commits: None },
                     established_at_unix: Some(0),
                 },
-                Some(false) => super::read_models::Freshness {
+                Some(false) => Freshness {
                     state: FreshnessState::UpToDate,
                     established_at_unix: Some(0),
                 },
-                None => super::read_models::Freshness::not_checked(),
+                None => Freshness::not_checked(),
             },
             is_default: false,
         }

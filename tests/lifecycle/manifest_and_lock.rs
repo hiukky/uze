@@ -390,3 +390,130 @@ mod policy_scope {
         );
     }
 }
+
+/// A marketplace repository beside `under`, driven through *its* Git
+/// guard.
+///
+/// Deliberately not a second `uze_testkit::git::Repository`: that takes a
+/// process-wide env lock which is not reentrant, so two of them on one
+/// thread deadlock. `git_in` runs Git somewhere else under the guard the
+/// caller already holds, which is what this needs.
+fn marketplace_beside(
+    under: &uze_testkit::git::Repository,
+    at: &std::path::Path,
+    body: &str,
+) -> String {
+    fs::create_dir_all(at.join("plugins/flow/skills/one")).unwrap();
+    fs::write(
+        at.join("plugins/flow/plugin.json"),
+        r#"{"name":"flow","description":"d"}"#,
+    )
+    .unwrap();
+    write_skill(at, body);
+    fs::write(
+        at.join("marketplace.json"),
+        r#"{"name":"mkt","plugins":[{"name":"flow","source":"./plugins/flow"}]}"#,
+    )
+    .unwrap();
+    under.git_in(at, &["init", "--quiet", "-b", "main", "."]);
+    under.git_in(at, &["config", "user.name", "Test"]);
+    under.git_in(at, &["config", "user.email", "t@example.invalid"]);
+    under.git_in(at, &["add", "-A"]);
+    under.git_in(at, &["commit", "-m", "first"]);
+    under.git_in(at, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+fn write_skill(at: &std::path::Path, body: &str) {
+    fs::write(
+        at.join("plugins/flow/skills/one/SKILL.md"),
+        format!("---\nname: one\ndescription: d\n---\n\n{body}\n"),
+    )
+    .unwrap();
+}
+
+fn move_marketplace(
+    under: &uze_testkit::git::Repository,
+    at: &std::path::Path,
+    body: &str,
+) -> String {
+    write_skill(at, body);
+    under.git_in(at, &["add", "-A"]);
+    under.git_in(at, &["commit", "-m", "second"]);
+    under.git_in(at, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+/// `install` reproduces what the lock records. That guarantee is what lets
+/// a clone of a project reach the bytes the project was locked at, whatever
+/// has been pushed since — so a ref that moved must not move it, and
+/// `update` is what does.
+#[test]
+fn install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it() {
+    let (application, repository) = project("update-project");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    let locked_first = fs::read_to_string(root.join("agents.lock")).unwrap();
+    let head_after_move = move_marketplace(&repository, &market, "second body");
+    assert!(!locked_first.contains(&head_after_move));
+
+    // Install: the pin stands.
+    application.project().install(&root, &AlwaysTrust).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        locked_first,
+        "install must not move a pin the declared ref has moved past"
+    );
+
+    // Update: the pin moves, to exactly where Git says the ref points now.
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+    assert!(report.moved(), "{report:?}");
+    let locked_second = fs::read_to_string(root.join("agents.lock")).unwrap();
+    assert!(
+        locked_second.contains(&head_after_move),
+        "the lock records the revision the ref resolves to now: {locked_second}"
+    );
+}
+
+/// A refused update writes nothing: naming a plugin this project does not
+/// declare is a mistake to report, not a lock to rewrite.
+#[test]
+fn updating_a_plugin_this_project_does_not_declare_writes_nothing() {
+    let (application, repository) = project("update-unknown");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "a first");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+    let before = fs::read_to_string(root.join("agents.lock")).unwrap();
+
+    let refused = application
+        .project()
+        .update(&root, Some("not-declared"), &AlwaysTrust);
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        before,
+        "a refused update writes nothing"
+    );
+}

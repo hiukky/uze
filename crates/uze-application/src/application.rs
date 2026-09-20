@@ -61,7 +61,9 @@ pub use overview::{
     ProjectEnvironmentState, ProjectOverview,
 };
 use project_environment::ProjectEnvironmentPlan;
-pub use project_environment::{InstallReport, ProjectLockStatus, RemoveProjectPluginReport};
+pub use project_environment::{
+    InstallReport, ProjectLockStatus, RemoveProjectPluginReport, UpdateOutcome, UpdateReport,
+};
 pub use uze_core::workspace::WorkspaceKind;
 
 /// `PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
