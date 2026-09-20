@@ -198,7 +198,7 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.support_refresh").entered();
+        let _span = tracing::debug_span!("tui.support_refresh").entered();
         let support = answered_or(
             || {
                 super::tui_application(support_home).ok().and_then(|app| {
@@ -238,7 +238,7 @@ fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<LaunchedAgent>) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.conversation_refresh").entered();
+        let _span = tracing::debug_span!("tui.conversation_refresh").entered();
         let Ok(app) = tui_application(home) else {
             return;
         };
@@ -399,7 +399,7 @@ fn spawn_preserved_sweep(home: &UzeHome, sender: mpsc::Sender<PreservedResolutio
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.preserved_sweep").entered();
+        let _span = tracing::debug_span!("tui.preserved_sweep").entered();
         let work = answered_or(
             || {
                 super::tui_application(home)
@@ -424,7 +424,7 @@ fn spawn_task_evaluation(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.task_evaluation").entered();
+        let _span = tracing::debug_span!("tui.task_evaluation").entered();
         // Every path out of here answers, including the ones that found
         // nothing: a request that returns in silence never releases its
         // key, and the directory is then never evaluated again.
@@ -652,7 +652,7 @@ fn spawn_git_read(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.git_read").entered();
+        let _span = tracing::debug_span!("tui.git_read").entered();
         let answer = answered_or(
             || {
                 let summary = code::change_summary(&WorkspaceHost, &cwd);
@@ -860,7 +860,7 @@ fn spawn_occupancy_reconcile(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.occupancy_reconcile").entered();
+        let _span = tracing::debug_span!("tui.occupancy_reconcile").entered();
         let reconciliation = answered_or(
             || {
                 tui_application(home)
@@ -913,7 +913,7 @@ fn spawn_file_request(
     sender: mpsc::Sender<FileResolution>,
 ) {
     thread::spawn(move || {
-        let _span = tracing::info_span!("tui.code_file_request").entered();
+        let _span = tracing::debug_span!("tui.code_file_request").entered();
         // Highlighting runs syntect over whatever the tree listed, which
         // is the one read here whose input nobody controls.
         let silence = code::unanswered(&request, "reading it failed");
@@ -930,7 +930,7 @@ fn spawn_changes_refresh(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.code_changes_refresh").entered();
+        let _span = tracing::debug_span!("tui.code_changes_refresh").entered();
         let silence =
             code::RefreshedChanges::failed(placement.clone(), "reading the changes".to_owned());
         let refreshed = answered_or(
@@ -964,7 +964,7 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.architect_artifacts").entered();
+        let _span = tracing::debug_span!("tui.architect_artifacts").entered();
         let silence = architect::ArtifactsAnswer {
             branch: String::new(),
             artifacts: architect::Artifacts::Nothing {
@@ -1005,7 +1005,7 @@ fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<MeasureResolution>) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.code_measure").entered();
+        let _span = tracing::debug_span!("tui.code_measure").entered();
         let measure = answered_or(|| code::measure(&WorkspaceHost, &root).ok(), None);
         let _ = sender.send(MeasureResolution { root, measure });
     });
@@ -4303,10 +4303,12 @@ fn dispatch_menu_action<W: io::Write>(
     }
 }
 
-/// Closes `tab`, first opening a shell of the space's own in its place when
-/// closing it would leave the space with none — the same rule that replaces
-/// a closed last space with one at home. The space's own shell is what its
-/// header lands on; without one a click there reached nothing.
+/// Closes `tab` — and, when it is an agent, the shells opened alongside it,
+/// which the server removes with it — first opening a shell of the space's
+/// own in its place when closing it would leave the space with none: the
+/// same rule that replaces a closed last space with one at home. The
+/// space's own shell is what its header lands on; without one a click
+/// there reached nothing.
 ///
 /// Every way a tab is closed goes through here: the strip's close mark,
 /// the keyboard, and the sidebar's menu.
@@ -4331,13 +4333,32 @@ fn close_tab_keeping_a_shell<W: io::Write>(
                 agent: None,
                 columns,
                 rows,
-                cwd: tab_cwd(model, tab),
+                // Where the *space* is, never where the closing tab stands.
+                // An agent stands in its own checkout, and opening the
+                // space's own shell there left a live pane inside a slot on
+                // its way back to the pool — which is what kept the slot
+                // from ever being handed on. A space with a shell of its
+                // own is never replaced, so this answers that shell's own
+                // directory in the one case it is not an agent's.
+                cwd: tab_space(model, tab).map(|space| space_cwd(space, identities)),
                 command: None,
                 env: Vec::new(),
             },
         );
     }
     let _ = send_request(stream, &ClientRequest::CloseTab { tab });
+}
+
+/// The space `tab` lives in, searched for across every space the way every
+/// other tab lookup here is.
+fn tab_space(model: &WorkspaceModel, tab: TabId) -> Option<&Space> {
+    model
+        .session
+        .as_ref()?
+        .workspace
+        .spaces
+        .iter()
+        .find(|space| space.tabs.iter().any(|candidate| candidate.id == tab))
 }
 
 /// A normal tab can close when it has a sibling. A lone recognized agent is
@@ -4357,8 +4378,9 @@ fn can_close_tab_from_menu(
 }
 
 /// Whether closing `tab` would leave its space without a shell of its own:
-/// no other tab that is one, nor a shell of `tab`'s that becomes one when
-/// `tab` goes (see `Session::remove_tab`). A space's only tab, when that tab
+/// no other tab that is one. A shell of `tab`'s is not one — it goes with
+/// its agent (see `Session::remove_tab`), so counting it left the space
+/// with nothing of its own to land on. A space's only tab, when that tab
 /// is already its own shell, is not replaced — the runtime keeps it.
 fn tab_needs_replacement_shell(
     model: &WorkspaceModel,
@@ -4374,9 +4396,10 @@ fn tab_needs_replacement_shell(
                 return false;
             };
             let lone_own_shell = space.tabs.len() == 1 && own(closing);
-            let another_remains = space.tabs.iter().any(|candidate| {
-                candidate.id != tab && (own(candidate) || candidate.agent == Some(tab))
-            });
+            let another_remains = space
+                .tabs
+                .iter()
+                .any(|candidate| candidate.id != tab && own(candidate));
             !lone_own_shell && !another_remains
         })
     })

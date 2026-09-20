@@ -221,7 +221,12 @@ fn run(mut command: Command) -> Result<Output, SpawnError> {
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    let span = tracing::info_span!("git", args = %arguments, exit = tracing::field::Empty);
+    // Debug, not info: this is *how* an operation was carried out, and at
+    // the TUI's refresh cadences it is carried out tens of thousands of
+    // times an hour. A journal recording each one buries the thing that
+    // asked — which is what the journal is for — under its own machinery.
+    // The operation's own span still carries what it cost; `UZE_LOG=    // uze_git=debug` brings every invocation back.
+    let span = tracing::debug_span!("git", args = %arguments, exit = tracing::field::Empty);
     let _entered = span.enter();
     let output = command.output().map_err(|error| {
         let failure = describe_spawn_failure(error);

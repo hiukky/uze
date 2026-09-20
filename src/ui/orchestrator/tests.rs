@@ -6393,7 +6393,8 @@ mod workspace_tests {
 
     /// A space always keeps a shell of its own: closing the last one beside
     /// its agents opens another first, while a shell with a sibling of its
-    /// kind, or an agent whose own shells become the space's, needs none.
+    /// kind needs none — and an agent whose only company is its own shells
+    /// does, because those go with it.
     #[test]
     fn closing_a_spaces_last_own_shell_is_replaced_and_no_other_close_is() {
         let session_of_one_agent = || {
@@ -6430,8 +6431,53 @@ mod workspace_tests {
         solo.add_tab(space, "shell 2".into(), Some(lone), 80, 24, "/tmp".into());
         let model = model_of(solo);
         assert!(
-            !tab_needs_replacement_shell(&model, &identities(), lone),
-            "the agent's own shell becomes the space's when it goes"
+            tab_needs_replacement_shell(&model, &identities(), lone),
+            "the agent's own shell goes with it, leaving the space none"
+        );
+    }
+
+    /// The shell that stands in for a closed agent is the *space's*, so it
+    /// opens where the space is — never in the agent's own checkout, which
+    /// is the slot on its way back to the pool.
+    #[test]
+    fn the_shell_replacing_an_agent_opens_where_the_space_is() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-replacement-cwd"));
+        let mut session = session("/repo");
+        let space = session.workspace.selected_space;
+        let bootstrap = session.workspace.spaces[0].tabs[0].id;
+        let pane = session.add_tab(space, "agent 1".into(), None, 80, 24, "/repo".into());
+        session.update_pane_status(pane, "/repo/.worktrees/abc".into(), "agent".into());
+        let agent = session.workspace.spaces[0].tabs[1].id;
+        session.add_tab(
+            space,
+            "shell 2".into(),
+            Some(agent),
+            80,
+            24,
+            "/repo/.worktrees/abc".into(),
+        );
+        // The space keeps no shell of its own, so closing the agent has to
+        // open one — the case this is about.
+        session.remove_tab(bootstrap).expect("the bootstrap goes");
+        session.workspace.spaces[0].selected_tab = agent;
+        let mut driven = driven(model_of(session), &home);
+        let close = uze_keys::active()
+            .chord_for(uze_keys::Action::CloseTab, &[uze_keys::Scope::Workspace])
+            .expect("closing a tab is reachable from the keyboard");
+
+        driven.press_key(key_event(close));
+
+        let sent = driven.sent();
+        let opened = sent.iter().find_map(|request| match request {
+            ClientRequest::CreateTab {
+                agent: None, cwd, ..
+            } => Some(cwd.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            opened,
+            Some(Some("/repo".into())),
+            "the space's root, not the checkout that is going: {sent:?}"
         );
     }
 

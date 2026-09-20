@@ -91,10 +91,11 @@ pub struct Tab {
     pub label: String,
     /// The agent tab this one was born from — a shell opened while an agent
     /// was in front of the person, which therefore starts in that agent's
-    /// own directory and is shown with it. `None` is a tab that belongs to
-    /// the space itself: its bootstrap shell, a shell opened with no agent
-    /// selected, and every agent tab (an agent *is* a context; it does not
-    /// sit inside one).
+    /// own directory, is shown with it, and ends with it (see
+    /// [`Session::remove_tab`]). `None` is a tab that belongs to the space
+    /// itself: its bootstrap shell, a shell opened with no agent selected,
+    /// and every agent tab (an agent *is* a context; it does not sit inside
+    /// one). A space's own shells are untouched by an agent closing.
     pub agent: Option<TabId>,
     /// What the tab's launch put into its first process's environment
     /// beyond the pane's own — the server's record of the launch it made,
@@ -500,27 +501,43 @@ impl Session {
     }
 
     /// Removes `tab` (found by searching every space, not just the selected
-    /// one) and returns the panes it owned, so the caller can stop their
-    /// processes. Refuses to remove a space's only remaining tab — a space
+    /// one) **together with the shells opened alongside it**, and returns
+    /// the panes they owned, so the caller can stop their processes.
+    /// Refuses a removal that would leave a space with nothing — a space
     /// always has somewhere to focus.
+    ///
+    /// A shell belongs to the agent it was opened next to, not to the
+    /// space: it was born in that agent's own directory, which is the
+    /// checkout released when the agent goes. Handing it back to the space
+    /// instead left a live pane standing inside a slot nobody could give
+    /// away, and made the space itself read as living in the checkout of an
+    /// agent that was gone — the space's context is the agent's, so it ends
+    /// with it.
     pub fn remove_tab(&mut self, tab: TabId) -> Option<Vec<PaneId>> {
         let space = space_containing_tab_mut(&mut self.workspace.spaces, tab)?;
-        if space.tabs.len() <= 1 {
+        let leaving = |candidate: &Tab| candidate.id == tab || candidate.agent == Some(tab);
+        if !space.tabs.iter().any(|candidate| candidate.id == tab) || space.tabs.iter().all(leaving)
+        {
             return None;
         }
         let index = space.tabs.iter().position(|t| t.id == tab)?;
-        let removed = space.tabs.remove(index);
-        if space.selected_tab == tab {
+        let selected_leaves = space
+            .tabs
+            .iter()
+            .any(|candidate| candidate.id == space.selected_tab && leaving(candidate));
+        let mut removed = Vec::new();
+        space.tabs.retain(|candidate| {
+            let goes = leaving(candidate);
+            if goes {
+                removed.push(candidate.pane.id);
+            }
+            !goes
+        });
+        if selected_leaves {
             let next = index.min(space.tabs.len() - 1);
             space.selected_tab = space.tabs[next].id;
         }
-        // Closing an agent never closes the shells opened alongside it —
-        // they carry a person's work and outlive the agent. They become
-        // the space's own instead of pointing at a tab that is gone.
-        for orphan in space.tabs.iter_mut().filter(|t| t.agent == Some(tab)) {
-            orphan.agent = None;
-        }
-        Some(vec![removed.pane.id])
+        Some(removed)
     }
 
     /// Renames `tab` (found by searching every space), trimming the given
@@ -976,13 +993,14 @@ mod tests {
         );
     }
 
-    /// A shell holds a person's own work and outlives the agent it was
-    /// opened next to — closing the agent hands it to the space rather
-    /// than leaving it pointing at a tab that is gone.
+    /// A shell belongs to the agent it was opened next to — it stands in
+    /// that agent's checkout — so closing the agent closes it too, panes
+    /// and all, rather than leaving it behind for the space to accumulate.
     #[test]
-    fn closing_an_agent_hands_its_shells_back_to_the_space() {
+    fn closing_an_agent_closes_the_shells_opened_alongside_it() {
         let mut session = Session::new(seat("/tmp/a"), 80, 24);
         let space = session.workspace.selected_space;
+        let own = session.selected_tab().id;
         session.add_tab(space, "agent".into(), None, 80, 24, PathBuf::from("/tmp/a"));
         let agent = session.selected_tab().id;
         session.add_tab(
@@ -994,14 +1012,58 @@ mod tests {
             PathBuf::from("/tmp/a"),
         );
         let shell = session.selected_tab().id;
+        let shell_pane = session.selected_tab().pane.id;
 
-        session.remove_tab(agent).expect("the agent is removable");
+        let stopped = session.remove_tab(agent).expect("the agent is removable");
 
-        let space = session.selected_space();
-        assert!(space.tabs.iter().any(|tab| tab.id == shell), "it survives");
         assert!(
-            space.tabs.iter().all(|tab| tab.agent.is_none()),
-            "and belongs to the space now"
+            stopped.contains(&shell_pane),
+            "the shell's pane is handed back to be stopped"
+        );
+        let space = session.selected_space();
+        assert!(
+            !space.tabs.iter().any(|tab| tab.id == shell),
+            "the shell goes with its agent"
+        );
+        assert_eq!(
+            space.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            vec![own],
+            "and the space is left with its own"
+        );
+        assert_eq!(space.selected_tab, own);
+    }
+
+    /// The same removal is refused when it would empty the space: an agent
+    /// and its own shells are one context, and a space always has somewhere
+    /// to focus. The client opens the space's replacement shell first,
+    /// which is what makes the close go through.
+    #[test]
+    fn closing_an_agent_that_is_the_whole_space_is_refused() {
+        let mut session = Session::new(seat("/tmp/a"), 80, 24);
+        let space = session.workspace.selected_space;
+        let bootstrap = session.selected_tab().id;
+        session.add_tab(space, "agent".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+        let agent = session.selected_tab().id;
+        session.add_tab(
+            space,
+            "shell".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        session
+            .remove_tab(bootstrap)
+            .expect("the space's own shell is removable");
+
+        assert!(
+            session.remove_tab(agent).is_none(),
+            "an agent and its shells are all the space has left"
+        );
+        assert_eq!(
+            session.selected_space().tabs.len(),
+            2,
+            "nothing was removed"
         );
     }
 
