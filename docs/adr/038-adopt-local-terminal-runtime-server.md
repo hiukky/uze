@@ -64,8 +64,8 @@ and live server handoff.
 - Add root CLI composition in `src/main.rs` and a global context switch in
   `src/ui.rs` that only attaches or detaches clients.
 - Add synthetic-process integration tests under `tests/terminal_runtime/` and
-  extend LikeC4 under `docs/architecture/likec4/` with terminal server and
-  workspace client containers.
+  extend the Mermaid diagrams under `docs/architecture/` with terminal
+  server and workspace client containers.
 
 ## Verification
 
@@ -77,6 +77,6 @@ and live server handoff.
       transitions are verified through terminal transcripts.
 - [ ] Unix-socket permissions reject access from a different operating-system user.
 - [ ] `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-      and LikeC4 validation pass.
+      and architecture validation (`cargo test -p uze-extensions`) pass.
 
-Source change: openspec/changes/add-terminal-runtime/
+Source change: openspec/changes/archive/2026-09-20-add-terminal-runtime/

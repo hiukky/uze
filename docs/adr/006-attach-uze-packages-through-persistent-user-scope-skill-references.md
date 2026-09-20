@@ -123,7 +123,7 @@ token.
       `BLOCKED_BY_ENVIRONMENT`, never as incompatibility.
 - [x] Rust, OpenSpec, and LikeC4 validation pass.
 
-Source change: openspec/changes/enable-transparent-harness-attachment/
+Source change: openspec/changes/archive/2026-08-26-enable-transparent-harness-attachment/
 
 ## More Information
 

@@ -68,7 +68,8 @@ does not add Cursor, profiles, memory, marketplaces, or cloud state.
 - **Affected paths:** replace core harness rules in `src/capability.rs` and
   `src/project.rs`; add core router and integration-contract modules; add peer
   Claude/Codex integration modules; move Claude plugin recognition from the
-  generic bundle boundary; update report, tests, LikeC4, and OpenSpec tasks.
+  generic bundle boundary; update report, tests, the architecture diagrams,
+  and OpenSpec tasks.
 - **Patterns to follow:** core accepts generic capability descriptions; foreign
   importer and runtime integration are distinct modules; UzeHome is resolved in
   the CLI composition root; Engine composes project and Store sources; tests
@@ -86,4 +87,4 @@ does not add Cursor, profiles, memory, marketplaces, or cloud state.
 - [ ] Router and contract tests pass without real harness executables.
 - [ ] Removing the Claude integration does not break compilation of UZE Core.
 - [ ] Adding a fake Cursor integration requires no core modification.
-- [ ] Rust, OpenSpec, and LikeC4 validation pass.
+- [ ] Rust, OpenSpec, and architecture validation pass.

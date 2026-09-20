@@ -14,15 +14,16 @@
       `conformance/tests/` (stdlib unittest — no new dependency):
       unregistered ADAPTED fails, registered escalation fails, version-range
       mismatch fails, cross-harness isolation.
-- [ ] 1.4 Run each vertical once locally with the gate live; investigate
+- [x] 1.4 Run each vertical once locally with the gate live; investigate
       every unexpected ADAPTED instead of registering it blindly.
-      (Findings so far: claude 18/18 gate-clean with probe 2.1.247. The
-      antigravity run surfaced a real channel bump — probe recorded 1.1.22
-      vs the 1.1.21 evidence baseline — with a NEW CLI survey dialog
-      ("How's the CLI experience? [0] Skip") that blocks hook turns; the
-      dismiss list was adapted and the rerun is in flight. The settle
-      contract also caught its first genuine non-settling run (hard-fail,
-      not silent pass) during an infrastructure-collision run.)
+      (Evidence 2026-09-20, this worktree, gate live: claude 38/38 asserted 0 ADAPTED (2.1.278); codex 50/50 asserted 0 ADAPTED (0.155.1); opencode 44/44 asserted 6 registered ADAPTED (v2.0.11); antigravity 48/48 asserted 0 ADAPTED (1.2.7). Every summary in `conformance/evidence/` carries `failures: []`.)
+      The investigation this demanded was real: the settled-absence
+      contract failed two claude `hooks > order` checks on a turn that had
+      settled correctly, and the cause was this file's own measurement, not
+      the vendor — `settle_and_quiet` timed the window on `time.time()`, and
+      a WSL guest re-syncing with its Windows host stepped the wall clock
+      mid-window so the budget expired on its first comparison. Durations
+      are now `time.monotonic()`, covered by `conformance/tests/test_settle.py`.
 
 ## 2. Version provenance
 
@@ -49,17 +50,29 @@
       the settled contract; the model-request absence checks
       (`user-only-skill-hidden`) were already settle-guarded by the
       `if struct:` branch and stay as-is.
-- [ ] 3.4 Verify a full claude vertical passes with the migrated checks
-      (covered by the in-progress live runs).
+- [x] 3.4 Verify a full claude vertical passes with the migrated checks.
+      38/38 asserted, 0 ADAPTED on 2.1.278 (2026-09-20) — after fixing the
+      wall-clock measurement in 1.4, which is what the migrated checks were
+      failing on.
 
 ## 4. Committed evidence summaries
 
 - [x] 4.1 Implement `lab.py --write-summary` writing
       `conformance/evidence/<harness>.json` (versions, uze sha, per-kind
       counts, gate verdict incl. failures + retry).
-- [x] 4.2 Add the CI evidence-commit step (bot identity, only when changed,
+- [~] 4.2 Add the CI evidence-commit step (bot identity, only when changed,
       on push-to-main/schedule with `[skip ci]`; skipped on PRs) and the
-      `make lab-evidence` local alias.
+      `make lab-evidence` local alias. Built, run, and withdrawn inside the
+      same day: the four matrix legs run in parallel and raced each other
+      pushing to `main`. Evidence moved to Actions artifacts
+      (`retention-days: 90`), CI never pushes, and `conformance/evidence/`
+      is a local baseline a maintainer records with `make lab-evidence` —
+      which shipped and is the part of this task that stands. ADR-035's
+      Consequences records the revision. Known consequence, left open
+      deliberately: nothing advances that baseline on its own, so it can go
+      stale or stay red without the gate objecting (`opencode.json` sat at
+      3/24 for twenty-two days). Closing that is its own change; see the
+      note in `conformance/README.md`.
 
 ## 5. CI gate
 

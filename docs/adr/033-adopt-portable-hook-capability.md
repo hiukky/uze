@@ -120,4 +120,4 @@ as a tool callback.
       OpenSpec strict 15/15. The conformance matrix awaits its completed
       clean 3x run.)
 
-Source change: openspec/changes/add-portable-hooks/
+Source change: openspec/changes/archive/2026-09-20-add-portable-hooks/

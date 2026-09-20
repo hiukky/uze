@@ -212,7 +212,7 @@
       agents and checkouts; this build opens on the same machine; the
       spaces, branches and commits are still there and an agent can be
       created with no intervening step.
-- [ ] 13.4 Journey: the released binary leaves a server running; this build
+- [~] 13.4 Journey: the released binary leaves a server running; this build
       meets it and neither hangs up in silence nor needs a reboot. Left for
       a follow-up: the retire-and-replace path it would exercise is already
       held by five runtime tests, and driving two live servers from one

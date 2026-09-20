@@ -101,4 +101,4 @@ with the binary, and the enhancement protocol is enabled with
 disambiguation only — uze forgoes the release and repeat events it could
 otherwise ask for, rather than risk changing what a pane receives.
 
-Source change: openspec/changes/make-shortcuts-optional/
+Source change: openspec/changes/archive/2026-09-08-make-shortcuts-optional/

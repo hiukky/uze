@@ -73,4 +73,4 @@ rather than an error.
 The operator's own invocation is never rewritten — only a bare launch of
 an agent UZE created is touched.
 
-Source change: openspec/changes/add-agent-session-continuity/
+Source change: openspec/changes/archive/2026-09-08-add-agent-session-continuity/

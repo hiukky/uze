@@ -70,9 +70,10 @@
 
 ## 6. Architecture model
 
-- [x] 6.1 Run `bunx likec4@latest validate docs/architecture/likec4` (or the
-      project's `arch:validate` script, once one exists) after implementation
-      changes to the composition layer, runtime integration, or relationships.
+- [x] 6.1 Run the repository's architecture validation
+      (`cargo test -p uze-extensions`, which draws the real
+      `docs/architecture/*.mmd`) after implementation changes to the
+      composition layer, runtime integration, or relationships.
 
 ## 7. Peer-integration boundary correction
 
@@ -92,9 +93,9 @@
       harness capabilities; keep them independent of real executables.
 - [x] 7.7 Preserve and update CLI tests to confirm inspection remains
       read-only and standard resources are not copied.
-- [x] 7.8 Update LikeC4 to show a harness-agnostic UZE Core and peer Claude /
-      Codex integrations; validate the model.
-- [x] 7.9 Run Rust, OpenSpec, and LikeC4 validation and document which claims
+- [x] 7.8 Update the architecture diagrams to show a harness-agnostic UZE
+      Core and peer Claude / Codex integrations; validate them.
+- [x] 7.9 Run Rust, OpenSpec, and architecture validation and document which claims
       remain unverified until opt-in real-harness conformance tests exist.
 
 ## 8. Real-harness conformance

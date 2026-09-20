@@ -92,4 +92,30 @@ background covers every derived colour that exists; anything more is a
 language, and a language in a config file needs a stronger reason than
 six shades.
 
-Source change: openspec/changes/tokenize-ui-theme-and-symbols/
+## More Information
+
+### 2026-09-20 — Appearance is two axes, and neither is inferred
+
+This record put `Token → Rgb` and `Symbol → SymbolDef` in one resolved
+theme, which left the glyph set looking like something a theme owns
+outright. It is not. **Appearance is two independent axes: the palette,
+which a theme owns, and the glyph set, which the machine owns** — because
+whether a glyph renders depends on the font that is installed, and a theme
+author cannot know that. A theme may still claim a glyph deliberately; what
+it may not do is decide the set on the reader's behalf.
+
+**UZE never detects the terminal's font.** Every mechanism for it is a
+guess — probing widths, matching emulator names, reading environment
+variables the emulator does not promise — and a wrong guess renders
+mojibake in the one surface a person cannot work around. The set is chosen,
+not sniffed, and the layer that won is named by `uze theme show`.
+
+The consequence to watch: a third-party theme declaring a full `symbols`
+block silently defeats the chosen set. The layer order is documented and
+`theme-overrides.json` overrides both, but it is a real sharp edge on a
+public format.
+
+Source change (this section):
+openspec/changes/archive/2026-09-20-separate-glyphs-from-the-palette/
+
+Source change: openspec/changes/archive/2026-09-08-tokenize-ui-theme-and-symbols/

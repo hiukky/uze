@@ -47,4 +47,4 @@ Alternatives considered:
   to make then, not one this ADR forecloses — `syntect` here is scoped to
   one view.
 
-Source change: openspec/changes/add-git-diff-overlay/
+Source change: openspec/changes/archive/2026-09-11-add-git-diff-overlay/

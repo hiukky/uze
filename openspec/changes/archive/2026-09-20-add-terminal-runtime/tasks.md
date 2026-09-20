@@ -20,19 +20,30 @@
       startup, liveness checks, and safe stale-endpoint recovery.
 - [x] 2.4 Implement PTY ownership, child-process lifecycle, reader/writer
       loops, terminal replies, and resize propagation for each pane.
-- [ ] 2.5 Implement explicit session stop with inspect-before-destructive
+- [x] 2.5 Implement explicit session stop with inspect-before-destructive
       cleanup and tests covering orphaned clients and process termination.
+      `runtime.rs` `stop()` and `ClientRequest::Stop`; inspect-before-
+      destructive in `a_claim_this_build_cannot_name_is_reported_rather_than_called_stopped`,
+      termination in `a_stopped_pane_takes_its_process_group_with_it`, and
+      orphaned clients in `a_client_that_stops_reading_is_bounded_and_resynchronized`.
 
 ## 3. Terminal rendering and workspace client
 
-- [ ] 3.1 Adapt terminal-emulator cells, attributes, cursor, scrollback, and
-      alternate-screen state into a Ratatui workspace renderer.
+- [x] 3.1 Adapt terminal-emulator cells, attributes, cursor, scrollback, and
+      alternate-screen state into a Ratatui workspace renderer
+      (`src/ui/orchestrator/render.rs`, fed by `uze-terminal`'s snapshots).
 - [x] 3.2 Implement sidebar, tab header, tab creation/selection, focused
       pane input, and workspace resize behavior.
-- [ ] 3.3 Add transcript-driven tests for styled output, cursor movement,
-      resize, terminal replies, and alternate-screen transitions.
-- [ ] 3.4 Add process-lifecycle tests proving tab switches preserve pane PID
-      and output while a client is detached.
+- [x] 3.3 Add transcript-driven tests for styled output, cursor movement,
+      resize, terminal replies, and alternate-screen transitions:
+      `transcript_preserves_style_cursor_and_alternate_screen`,
+      `resize_changes_snapshot_dimensions`,
+      `snapshot_renders_the_scrollback_viewport`, and
+      `a_resize_to_the_largest_number_on_the_wire_leaves_the_server_answering`.
+- [x] 3.4 Add process-lifecycle tests proving tab switches preserve pane PID
+      and output while a client is detached
+      (`pane_process_keeps_output_until_explicit_stop`, plus
+      `process_probe.rs` for identifying the pane's process).
 
 ## 4. UZE composition and lifecycle
 
@@ -42,18 +53,27 @@
       after preserving the established management-TUI compatibility path.
 - [x] 4.3 Implement the global workspace-to-management context switch as
       client detach/attach, with no server-side pane mutation.
-- [ ] 4.4 Add integration tests for attach, detach, reattach, management
-      switching, and explicit stop using synthetic agent processes.
+- [x] 4.4 Add integration tests for attach, detach, reattach, management
+      switching, and explicit stop using synthetic agent processes:
+      `an_attach_replaces_only_a_server_it_can_name`,
+      `a_second_client_attaches_to_a_live_server_of_another_build`,
+      `stop_is_heard_as_a_first_frame_by_a_server_nobody_attached_to`, and
+      `tests/acceptance/engine.rs`'s
+      `two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`.
 
 ## 5. Architecture and verification
 
 - [x] 5.1 Confirm `docs/adr/038-adopt-local-terminal-runtime-server.md`
       exists and link the terminal-runtime entry point to it in code.
-- [x] 5.2 Update `docs/architecture/likec4/` with the terminal server and
-      workspace client containers, then run the repository's architecture
-      validation command.
-- [ ] 5.3 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] 5.2 Update the Mermaid diagrams under `docs/architecture/` with the
+      terminal server and workspace client containers, then run the
+      repository's architecture validation (`cargo test -p uze-extensions`).
+      Both appear in `containers.mmd` and `crate-layering.mmd`. (This task
+      originally named `docs/architecture/likec4/`, retired since.)
+- [x] 5.3 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
       `cargo test --no-fail-fast`, and the applicable terminal-runtime tests.
+      Green on 2026-09-20: fmt and clippy clean, 2144 passed / 0 failed /
+      8 ignored across 36 test binaries.
 - [x] 5.4 Document Windows named-pipe and ConPTY support as a future backend
       without making it a release blocker for the initial Linux/macOS runtime.
 

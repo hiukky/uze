@@ -48,4 +48,4 @@ trade-off accepted so that a silent change can never pass. Pinning exact
 harness versions was considered and rejected: it would protect against
 drift by hiding the moving vendor surface instead of measuring it.
 
-Source change: openspec/changes/harden-conformance-gate/
+Source change: openspec/changes/archive/2026-09-20-harden-conformance-gate/

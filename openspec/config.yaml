@@ -67,6 +67,17 @@ operations:
         the approach changed along the way, a flagged decision may no
         longer apply, and an unflagged one may now qualify.
       - >-
+        The default is no ADR, and that is the expected outcome: the
+        archived change is already the record of what was done and why.
+        A decision earns one only when all four are yes - reversing it is
+        expensive, a real alternative was rejected, it binds code not yet
+        written, and it is not already held by a test, by AGENTS.md or by
+        a diagram. Naming, module layout, refactors, bug fixes,
+        performance tuning, dependency version bumps, test strategy and UI
+        arrangement never clear that bar however long they were debated;
+        their reasoning belongs in the change's own design.md, which is
+        archived with it. See docs/adr/README.md for the full rule.
+      - >-
         For each qualifying decision, write one ADR: list existing
         `docs/adr/NNN-*.md` files, take the next sequential number
         (3 digits, zero-padded, continuing the existing sequence), and
@@ -78,8 +89,14 @@ operations:
         permanent record - it is not moved or deleted when the change is
         archived.
       - >-
-        If nothing clears the bar, create no ADR files and say so - most
-        changes don't warrant one.
+        If nothing clears the bar, create no ADR files and say so. This is
+        the common case, not a shortfall - do not reach for a record to
+        make an archive feel complete.
+      - >-
+        Prefer extending an existing ADR over opening a number. When the
+        decision continues, refines or adds a level to one already
+        recorded, fold it into that record with a dated note under More
+        Information, so one topic stays one ADR.
       - >-
         If a decision here reverses or supersedes an existing ADR, do not
         edit that file's Decision retroactively - write a new ADR instead

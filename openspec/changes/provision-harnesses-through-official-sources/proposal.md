@@ -45,6 +45,6 @@ provisioning.
   attachment ownership.
 - Tests need a fake official-command runner and isolated process contracts;
   no real vendor installer runs in ordinary `cargo test`.
-- README, LikeC4, ADRs, and this OpenSpec change describe UZE as a
+- README, the architecture diagrams, ADRs, and this OpenSpec change describe UZE as a
   compatibility/distribution layer with an explicit harness bootstrap layer,
   not a general SDK/version manager.

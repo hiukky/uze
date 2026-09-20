@@ -85,4 +85,4 @@ automatic repair, `--force`, public removal, application services, or a TUI.
 - [x] Reconciliation and removal planning block drift, conflicts, blocked
       inspection, and corrupt ownership state.
 
-Source change: openspec/changes/consolidate-plugin-first-v0-experience/
+Source change: openspec/changes/archive/2026-08-21-consolidate-plugin-first-v0-experience/
