@@ -2857,7 +2857,16 @@ fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
             .map(|market| {
                 vec![
                     progress::title(&market.name),
-                    progress::label(&market.source),
+                    // A linked marketplace is read from somewhere other
+                    // than where it is registered, and every answer about
+                    // it means something different because of that — so it
+                    // takes the column that says where it comes from.
+                    match &market.linked_to {
+                        Some(checkout) => {
+                            progress::label(format!("linked to {}", checkout.display()))
+                        }
+                        None => progress::label(&market.source),
+                    },
                     format!("{} plugins", market.plugin_count),
                 ]
             })
@@ -3044,6 +3053,16 @@ fn render_drift(drift: &uze_application::application::EnvironmentDrift) -> Strin
         text.push_str(&format!(
             "  {} AGENTS.md is behind the declared worktree policy\n",
             progress::warning_icon()
+        ));
+    }
+    // Not a fault here — it works on this machine — but somebody has to be
+    // told before they hand the repository to a teammate.
+    if !drift.unreproducible_marketplaces.is_empty() {
+        text.push_str(&format!(
+            "  {} declared from a path only this machine has, so this project does not \
+             reproduce elsewhere: {}\n",
+            progress::warning_icon(),
+            drift.unreproducible_marketplaces.join(", ")
         ));
     }
     text.push_str(&format!(

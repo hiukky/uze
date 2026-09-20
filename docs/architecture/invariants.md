@@ -715,6 +715,58 @@ included — stays on the reporting side of that line.
 
 > `crates/uze-application/src/application/tests.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
 
+### A managed reference that resolves to nothing is adopted, not preserved
+
+A reference occupying the name a capability needs is judged by whether it
+resolves. One that resolves to nothing carries no capability into the
+harness, so preserving it protects no work and blocks the attachment
+permanently — which is what a UZE-owned target that moved leaves behind on
+every machine that had one. Absence is the only ground: a target that
+cannot be read for any other reason is preserved, because UZE cannot tell it
+apart from one that resolves.
+
+A name something else still holds stops that capability and no other. The
+package is installed before delivery begins, so raising it as the command's
+failure reported total failure over partial work.
+
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_adopts_a_reference_whose_target_no_longer_exists`
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_preserves_a_reference_somebody_repointed_at_their_own_content`
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_preserves_a_reference_whose_target_cannot_be_read`
+> `tests/projection/shared_roots.rs::a_name_somebody_else_holds_blocks_its_own_capability_and_no_other`
+
+### A linked marketplace follows a working tree and pins nothing
+
+A marketplace linked to a checkout on this machine is read from that
+checkout: its content is what Git does not ignore — tracked, plus written
+and not yet committed — so an edit reaches every harness with no commit
+behind it, and an editor's temporary file never does.
+
+`agents.lock` is not written from it. Such a package's provenance resolves
+to a path rather than a commit, and recording reports that it recorded
+nothing instead of failing, so a revision taken from unpublished work never
+becomes a pin a collaborator cannot reach. UZE performs no Git on the
+checkout: the operator's branch and uncommitted work stay theirs.
+
+> `tests/lifecycle/manifest_and_lock.rs::a_linked_marketplace_follows_the_checkout_and_pins_nothing`
+> `crates/uze-core/src/package/acquisition/mirror.rs::linked_tests::a_file_the_checkout_ignores_is_not_package_content`
+> `crates/uze-core/src/package/acquisition/mirror.rs::linked_tests::a_file_written_and_not_yet_committed_is_package_content`
+
+### Install reproduces a pin; only update moves one
+
+`uze install` installs what `agents.lock` records, whatever the declared ref
+points at now — that is what lets a clone reach the bytes the project was
+locked at. `uze update` is the only command that moves a pin, and it
+replaces rather than installs again, because the Store is idempotent by
+origin and a marketplace's url and ref do not change between revisions.
+
+A marketplace this machine cannot reach by declaration is skipped and named
+rather than failing the command, so a contributor gets the half that is
+reachable.
+
+> `tests/lifecycle/manifest_and_lock.rs::install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it`
+> `tests/lifecycle/manifest_and_lock.rs::an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs`
+> `tests/lifecycle/manifest_and_lock.rs::updating_a_plugin_this_project_does_not_declare_writes_nothing`
+
 ### Automatic update never asks a remote whether to act, and never grants trust
 
 `auto_update` — the one caller of `Plugins::update` that no person typed,

@@ -59,6 +59,16 @@ impl Project<'_> {
             .map(|(name, _)| name.to_owned())
             .collect();
 
+        // A marketplace declared as a path is a directory on one machine.
+        // It resolves here and nowhere else — including for the person who
+        // wrote it, on their next machine.
+        let unreproducible_marketplaces: Vec<String> = manifest
+            .marketplaces
+            .iter()
+            .filter(|(_, declared)| declared.git.is_none() && declared.path.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+
         let has_changes = !missing.is_empty()
             || !unresolved.is_empty()
             || !surplus.is_empty()
@@ -69,6 +79,7 @@ impl Project<'_> {
             unresolved,
             surplus,
             stale_projection,
+            unreproducible_marketplaces,
             has_changes,
         })
     }
@@ -824,6 +835,12 @@ pub struct ProjectEnvironmentPlan {
     pub surplus: Vec<String>,
     /// The projected instruction region has fallen behind the policy.
     pub stale_projection: Option<StaleProjection>,
+    /// Marketplaces this project declares that resolve nowhere but the
+    /// machine that declared them. Not a fault here — they work where they
+    /// are — but a project depending on one cannot be reproduced
+    /// elsewhere, and silence about that is what lets somebody find out by
+    /// handing a teammate a repository that does not work.
+    pub unreproducible_marketplaces: Vec<String>,
     pub has_changes: bool,
 }
 

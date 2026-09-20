@@ -78,6 +78,7 @@ fn model_with_data() -> TuiModel {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1859,6 +1860,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1915,6 +1917,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1971,6 +1974,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),

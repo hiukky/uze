@@ -3,9 +3,14 @@ title: Install pipeline
 ---
 flowchart LR
   install([uze install]) --> manifest[agents.yaml]
+  update([uze update]) -->|the declared ref, not the locked revision| resolve
   manifest --> resolve[Resolve marketplaces]
-  resolve -->|commit + digest| lock[agents.lock]
-  resolve --> acquire[Acquire bytes]
+  resolve -->|unreachable by declaration| skip[Skip it, and name it]
+  resolve --> mirror[(Marketplace mirror<br/>bare, no blobs, fetched not re-cloned)]
+  mirror -->|commit + digest| lock[agents.lock]
+  mirror --> acquire[Acquire the plugin's subdirectory]
+  linked[/Linked to a checkout<br/>this machine develops/] -->|tracked and new, minus ignored| acquire
+  linked -.->|pins nothing| lock
   acquire --> trust{Trusted?}
   trust -- no --> refuse[Refuse]
   trust -- yes --> store[(Store)]

@@ -176,6 +176,12 @@ pub struct MarketplaceSummary {
     /// open, and inventing a link is worse than admitting there is none.
     pub homepage: Option<String>,
     pub plugin_count: usize,
+    /// The checkout this machine reads it from, when its operator
+    /// develops it. Said out loud because it changes what every answer
+    /// about this marketplace means: its plugins follow a working tree,
+    /// and nothing pins from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -746,6 +752,11 @@ pub struct EnvironmentDrift {
     pub missing: Vec<String>,
     /// The projected instruction region is behind the declared policy.
     pub stale_projection: bool,
+    /// Marketplaces that resolve nowhere but the machine that declared
+    /// them. Carried here so `uze status` and the overview say the same
+    /// thing about it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreproducible_marketplaces: Vec<String>,
 }
 
 /// The plan's answer, as `uze status` and the overview carry it: both read
@@ -756,6 +767,7 @@ impl From<&ProjectEnvironmentPlan> for EnvironmentDrift {
             unresolved: plan.unresolved.clone(),
             surplus: plan.surplus.clone(),
             missing: plan.missing.clone(),
+            unreproducible_marketplaces: plan.unreproducible_marketplaces.clone(),
             stale_projection: plan.stale_projection.is_some(),
         }
     }

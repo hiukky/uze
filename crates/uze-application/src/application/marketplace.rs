@@ -323,6 +323,7 @@ impl Marketplace<'_> {
             source: format!("embedded:{BUILT_IN_MARKETPLACE}"),
             homepage: official.homepage,
             plugin_count: official.plugins.len(),
+            linked_to: None,
         });
         for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
             let manifest = self
@@ -346,6 +347,7 @@ impl Marketplace<'_> {
                 source,
                 homepage,
                 plugin_count,
+                linked_to: record.link,
             });
         }
         Ok(out)

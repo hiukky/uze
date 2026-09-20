@@ -110,7 +110,7 @@
       reads (`digest.rs:54-90`)
 - [x] 5.4 `install` and `update` never write a lock entry resolved from a
       linked checkout, and say why the pin did not move
-- [ ] 5.5 `market list`, `market inspect` and the plugins screen say a
+- [x] 5.5 `market list`, `market inspect` and the plugins screen say a
       marketplace is linked and to where
 - [x] 5.6 Tests: an edit in the checkout reaches the Store with no commit;
       the lock is byte-identical across an update while linked; linking to a
@@ -122,7 +122,7 @@
       machine cannot reach, name every skip in their own report, and succeed;
       a reachable marketplace that fails is still an error
       (`application/project_environment.rs`)
-- [ ] 6.1b `uze status` reports a project declaring a marketplace with no
+- [x] 6.1b `uze status` reports a project declaring a marketplace with no
       resolvable remote as not fully reproducible elsewhere, naming the
       marketplace and its plugins
 - [x] 6.2 Classify an acquisition refused on credentials and report the
@@ -172,18 +172,18 @@ assertion.
 - [ ] 8.1 `journeys/worlds/`: a verb for "this fixture is a repository with N
       commits". Three of the journeys below need it, which is the project's
       own threshold for lifting a world
-- [ ] 9.2 `02-packages/05-the-author-edits-and-the-harness-follows.yml` —
+- [ ] 8.2 `02-packages/05-the-author-edits-and-the-harness-follows.yml` —
       linking adopts the checkout (and UZE runs no Git on it: `git status
       --porcelain` stays empty) · an edit reaches the harness with `rev-parse
       HEAD` unchanged · `uze update` leaves `agents.lock` byte-identical
-- [ ] 9.3 `02-packages/06-a-pin-the-ref-moved-past.yml` — `install`
+- [ ] 8.3 `02-packages/06-a-pin-the-ref-moved-past.yml` — `install`
       reproduces commit A after the marketplace moved to B · `update` moves
       it, checked against `git rev-parse` · updating one plugin leaves the
       other lock entries byte-identical
-- [ ] 9.4 `02-packages/07-a-marketplace-this-machine-cannot-reach.yml` — the
+- [ ] 8.4 `02-packages/07-a-marketplace-this-machine-cannot-reach.yml` — the
       reachable half installs, the unreachable is named, exit 0 · `status`
       says the project does not fully reproduce
-- [ ] 9.5 `06-recovery/08-a-reference-into-a-path-that-moved.yml` — **the
+- [ ] 8.5 `06-recovery/08-a-reference-into-a-path-that-moved.yml` — **the
       reported bug**: a reference repointed by hand at a path that does not
       exist is adopted and the install succeeds · one repointed at content
       that exists is preserved untouched
@@ -197,13 +197,13 @@ assertion.
 
 ## 9. Diagrams and gate
 
-- [ ] 9.1 `docs/architecture/attachment-lifecycle.mmd` — split the DRIFTED
+- [x] 9.1 `docs/architecture/attachment-lifecycle.mmd` — split the DRIFTED
       branch into adopted (resolves to nothing) and refused (still resolves)
-- [ ] 8.2 `docs/architecture/install-pipeline.mmd` — `uze update` entering at
+- [x] 9.2 `docs/architecture/install-pipeline.mmd` — `uze update` entering at
       resolution with the declared ref, and a linked marketplace re-ingesting
       without touching `agents.lock`
-- [ ] 8.3 `cargo test -p uze-extensions` passes, so both diagrams still route
-- [ ] 8.4 `docs/architecture/invariants.md` — record the adoption rule and
+- [x] 9.3 `cargo test -p uze-extensions` passes, so both diagrams still route
+- [x] 9.4 `docs/architecture/invariants.md` — record the adoption rule and
       the linked-marketplace pin refusal, each naming the test that holds it
-- [ ] 8.5 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
+- [x] 9.5 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
       tests, coverage floor, `cargo deny`, `openspec validate --all --strict`)
