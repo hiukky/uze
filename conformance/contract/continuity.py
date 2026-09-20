@@ -92,7 +92,7 @@ cat > {records}/project.json <<'UZE_EOF'
 UZE_EOF
 cat > {records}/agents.json <<'UZE_EOF'
 {{
-  "schema_version": 3,
+  "schema_version": 4,
   "agents": [
     {{
       "id": "{SLOT_NAME}",
@@ -100,13 +100,13 @@ cat > {records}/agents.json <<'UZE_EOF'
       "label": "continuity",
       "created_at_unix": 1,
       "ended_at_unix": null,
+      "state": {{ "state": "running" }},
       "isolation": {{
         "base": {{ "kind": "ref", "value": "main" }},
         "base_commit": "",
         "target": "main",
         "branch": "agent/{SLOT_NAME}",
         "checkout": "{SLOT_NAME}",
-        "state": {{ "state": "running" }},
         "published_as": null,
         "published_request": null,
         "request_branch": null,
