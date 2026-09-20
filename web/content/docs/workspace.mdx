@@ -27,6 +27,13 @@ Three levels, and no more:
 | **Tab** | One session inside a space — a plain shell, or an agent. |
 | **Pane** | The live terminal a tab draws. Owned by the runtime server, not by the client. |
 
+A shell opened while an agent is in front of you belongs to that agent: it
+starts in the agent's own checkout, is shown with it, and **closes with it**.
+A space keeps its own shells — the one it opened with, and any opened with no
+agent selected — and closing an agent never touches those. This is what keeps
+a closed agent's slot from being held open by a pane standing inside a
+checkout on its way back to the pool.
+
 The panes belong to a local server, not to the window you are looking at
 (ADR-038). Closing the client — switching to management, detaching, quitting the
 terminal emulator — leaves every process running; the next attach finds them

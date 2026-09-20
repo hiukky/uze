@@ -1,18 +1,24 @@
-journey: a slot a pane is still sitting in is never handed to the next agent
+journey: a shell opened beside an agent goes when the agent goes
 tags: [gate, tui, workspace]
 proves: web/content/docs/workspace.mdx
 about: |
-  The negative of the slot claim, and the one that was got wrong in practice.
-  A task can read as ended while somebody is still standing in its checkout:
-  open a second tab in an agent's space and it lands in that agent's
-  worktree, with its own shell, its own history, possibly its own uncommitted
-  work. Close the agent and the task ends — but the person in the tab does
-  not disappear with it.
+  Open a second tab while an agent is in front of you and it lands in that
+  agent's worktree, with its own shell and its own history. It belongs to
+  the agent, not to the space: the directory it stands in is the agent's
+  checkout, and that checkout is what ends when the agent does.
 
-  A slot is free when its task ended *and* nobody is in it. Only the first
-  half is written down anywhere, which is exactly why handing the slot on is
-  an easy mistake to make and a bad one to live with: a second agent
-  branching, resetting and working on top of a live pane.
+  This file used to prove the opposite, and the opposite is what was got
+  wrong in practice. Leaving the shell behind handed it to the space, which
+  then accumulated shells — and, because a slot is only free when nobody is
+  standing in it, left a live pane inside a checkout that could never be
+  given to the next agent. The space also took the dead agent's directory as
+  its own, which is where its caption, its `⇄` and the next placement all
+  read from.
+
+  So: the agent's shells go with it, the space's own are untouched, the task
+  ends, and the slot is free — *because* nothing is left in it. That last
+  word is the claim; a slot freed while somebody is still there would be the
+  worse bug, and `tests/acceptance/engine.rs` holds that half.
 
 world:
   project: demo-app
@@ -64,10 +70,10 @@ scenes:
       - capture: { name: occupied_slot, dirs: "{project}/.worktrees/*" }
       - process: { matching: claude, cwd: "/.worktrees/", alive: true }
         about: the agent's own process is running, in its own checkout
-      - process: { matching: "bash", alive: true }
-        about: and a shell of its own is running
+      - process: { matching: bash, cwd: "/.worktrees/", alive: true, count: 1 }
+        about: and a shell of the agent's is running inside the same checkout
 
-  - scene: closing the agent does not end the task, because somebody is still there
+  - scene: closing the agent takes its shell with it, and the task ends
     when:
       - rclick: agent 1
         say: right-click the agent's row
@@ -80,21 +86,24 @@ scenes:
         # agent item being left on the tree.
         expect: '\A(?![\s\S]*├─)'
         expect_timeout: 25
-        pause: 2.5
+        pause: 3.0
     then:
-      - tasks: { count: 1, newest_state: running }
+      - process: { matching: bash, cwd: "/.worktrees/", alive: false }
         about: |
-          the task stays live even though its agent's tab is gone — "ended"
-          would be a lie while a pane is in the checkout, and the slot model
-          reads occupancy from who is standing there, not only from what was
-          recorded
+          nothing of the agent's is left standing in the checkout — the
+          shell was the agent's context, not the space's, and a pane left
+          behind here is what would hold the slot open forever
+      - tasks: { count: 1, newest_state: closed }
+        about: |
+          so the task ends rather than staying live under a pane nobody
+          could see the point of
       - dir: "{project}/.worktrees/*"
         same_as: occupied_slot
-        about: and the checkout is untouched
-      - process: { matching: bash, cwd: "/.worktrees/", alive: true, count: 1 }
-        about: with exactly one shell still standing inside it
+        about: the slot survives its agent — a checkout is reused, not destroyed
+      - git: { worktrees: 2 }
+        about: and Git still registers the freed checkout
 
-  - scene: the next agent gets a slot of its own, because that one is occupied
+  - scene: the next agent takes the freed slot rather than a new directory
     when:
       - click: "+  ✦"
         say: open the picker again
@@ -116,14 +125,10 @@ scenes:
     then:
       - process: { matching: codex, cwd: "/.worktrees/", alive: true }
         about: the second agent's own process is running, in a checkout
-      - tasks: { count: 2, any_state: running }
-        about: a second task exists and is live
-      - tasks: { checkouts: 2 }
-        about: two tasks, two distinct slots — the occupied one was not recycled
-      - process: { matching: bash, cwd: "/.worktrees/", alive: true, count: 1 }
-        about: and the shell that was standing there was never landed on
       - dir: "{project}/.worktrees/*"
-        count: 2
-        about: a second checkout was created rather than the shell being landed on
-      - git: { worktrees: 3 }
-        about: and Git registers both checkouts alongside the primary
+        same_as: occupied_slot
+        about: |
+          the same directory, reused — which is only safe because the close
+          took everything that was standing in it
+      - git: { worktrees: 2 }
+        about: and no second checkout was needed
