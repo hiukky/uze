@@ -107,6 +107,13 @@ workaround.
 
 - No package-level delivery exists or is planned; every capability is
   decomposed individually.
+- `permission.ask` does not fire
+  ([anomalyco/opencode#7006](https://github.com/anomalyco/opencode/issues/7006)),
+  so an `ask` effect is never claimed here; `tool.execute.before` does not
+  cover subagent-issued tool calls
+  ([sst/opencode#5894](https://github.com/sst/opencode/issues/5894)), a gap
+  the bridge inherits. Both are why this harness's effect set stops at
+  `observe`/`allow`.
 - MCP attachment writes the vendor config file directly instead of through
   an OpenCode CLI verb — collision-safe by construction, but the "no CLI
   exists" premise behind that choice is undocumented (see Lifecycle above).

@@ -2,8 +2,8 @@
 
 Implements [ADR-030](../adr/030-skill-plus-invocation-policy.md), which
 replaced the earlier Command-as-capability model (ADR-025/ADR-028,
-consolidated into it). See [overview.md](overview.md) for the capability
-map.
+consolidated into it). The capability map is the site's
+[Capabilities](../../web/content/docs/concepts/capabilities.mdx) page.
 
 ## Model
 
