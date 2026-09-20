@@ -386,13 +386,24 @@ holding the pipe open is swept once before the reader is given up on.
 
 `~/.uze/cache` holds three caches, each reconstructable from a live read:
 harness detection (`harness_detection.json`), attachment inspection
-(`inspection.json`) and the catalogue of every marketplace registered by
-URL (`marketplaces/<name>/`). Deleting the directory costs one probe, one
-inspection or one clone; nothing installed depends on it, and no mutating
-path trusts it — removal planning re-inspects live, and a mutation
-invalidates the entries it touched.
+(`inspection.json`) and, for every marketplace registered by URL, a mirror
+of its repository (`marketplaces/<name>/repo`) with whatever plugins have
+been asked about written out beside it (`marketplaces/<name>/plugins`).
+Deleting the directory costs one probe, one inspection or one clone;
+nothing installed depends on it, and no mutating path trusts it — removal
+planning re-inspects live, and a mutation invalidates the entries it
+touched.
 
-> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_stored_catalogue_answers_without_the_source_being_reachable`
+The mirror is the cache tier's one piece of real machinery rather than a
+copy: bare and blobless, it answers what a marketplace offers, at which
+commit, and how far a pinned revision is behind — none of which a copied
+tree can answer, and all of which cost a clone to rebuild and nothing else.
+A package's bytes are never read from it: they are ingested into the Store,
+which is what every harness reads and what must stand with this gone.
+
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_mirrored_catalogue_answers_without_the_source_being_reachable`
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::nothing_is_materialized_until_a_plugin_is_asked_about`
+> `crates/uze-core/src/package/acquisition/mirror.rs::tests::a_mirror_of_another_repository_is_replaced_not_fetched_into`
 > `crates/uze-application/src/application/doctor.rs::tests::installation_invalidates_the_inspection_cache`
 
 ---

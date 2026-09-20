@@ -22,29 +22,33 @@
 
 ## 2. The marketplace cache becomes a repository
 
-- [ ] 2.1 Clone a Git marketplace into `cache/` with `--filter=blob:none
+- [x] 2.1 Clone a Git marketplace into `cache/` with `--filter=blob:none
       --no-checkout`, keeping the repository; `Meta` records the resolved
       commit (`marketplace_catalogue.rs`)
-- [ ] 2.2 Acquisition from a cached marketplace is `fetch` + sparse checkout
+- [x] 2.2 Acquisition from a cached marketplace is `fetch` + sparse checkout
       of the plugin's `source` subdirectory, never a second clone
       (`marketplace.rs::materialize_plugin`, `acquisition/git.rs`)
-- [ ] 2.3 The cache stops materializing a working tree: `copy_tree` into
+- [x] 2.3 The cache stops materializing a working tree: `copy_tree` into
       `<name>/checkout/` goes away, and `marketplace.json` is read from the
       repository at the resolved commit rather than from a copied file
       (`marketplace_catalogue.rs:168-226`). A local `path:` marketplace is
       still read in place and still caches nothing
-- [ ] 2.3b An existing `<name>/checkout/` is deleted, never migrated — the
+- [x] 2.3b An existing `<name>/checkout/` is deleted, never migrated — the
       cache tier declares no shape and is observed again (AGENTS.md, "Only
       records declare a shape"). Measured on the operator's machine today:
       756 KB per marketplace, of which 684 KB is content no install touches
       and 36 KB is a second copy of the installed plugin
-- [ ] 2.3c Test: after installing a plugin, its bytes exist materialized in
+- [x] 2.3c Test: after installing a plugin, its bytes exist materialized in
       exactly one place — the Store
-- [ ] 2.4 What enters the Store still carries no `.git`; a stored package
+- [x] 2.4 What enters the Store still carries no `.git`; a stored package
       reads with the cache deleted (test)
-- [ ] 2.5 A source refusing the filter, and a commit that is not the head,
-      both still work (tests); `sparse-checkout --no-cone` availability is
-      reported by `doctor`, not assumed
+- [x] 2.5a A commit that is not the head still resolves and materializes, and
+      one the mirror already holds needs no network at all — which is what
+      makes reproducing `agents.lock` work offline
+      (`mirror::a_commit_the_mirror_already_holds_needs_no_network`)
+- [ ] 2.5b A source refusing `--filter` still works end to end (a server
+      without `uploadpack.allowFilter` ignores it); Git version floor for
+      the mirror reported by `doctor` rather than assumed
 - [ ] 2.6 Measure: `market add` + two installs from one marketplace opens one
       connection, not three (`performance_tests.rs`)
 

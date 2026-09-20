@@ -145,6 +145,46 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<MarketplaceManifest> {
     Ok(manifest)
 }
 
+/// The repository-relative directory `plugin_name` occupies, judged
+/// without a filesystem.
+///
+/// [`resolve_plugin_source`] answers the same question against a directory
+/// that exists, by canonicalizing and comparing. A mirror has no directory
+/// to canonicalize against — the point of asking is to decide what to write
+/// out — so containment is enforced lexically instead: no component may be
+/// `..`, and the path may not be absolute. Both are what would let a
+/// manifest name a directory outside the repository it belongs to.
+pub fn plugin_subdirectory(manifest: &MarketplaceManifest, plugin_name: &str) -> Result<String> {
+    let entry = manifest
+        .plugins
+        .iter()
+        .find(|entry| entry.name == plugin_name)
+        .ok_or_else(|| UzeError::UnknownPackage(plugin_name.to_owned()))?;
+    let source = Path::new(&entry.source);
+    let unsafe_reference = || UzeError::UnsafePathReference {
+        path: PathBuf::from("marketplace.json"),
+        reference: entry.source.clone(),
+    };
+    if source.is_absolute() {
+        return Err(unsafe_reference());
+    }
+    let mut parts = Vec::new();
+    for component in source.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                parts.push(part.to_str().ok_or_else(unsafe_reference)?)
+            }
+            std::path::Component::CurDir => {}
+            _ => return Err(unsafe_reference()),
+        }
+    }
+    if parts.is_empty() {
+        // The marketplace root itself: the whole repository is the plugin.
+        return Ok(".".to_owned());
+    }
+    Ok(parts.join("/"))
+}
+
 /// Resolves `plugin_name` against `manifest` to an absolute, canonicalized
 /// directory under `marketplace_root`. Rejects a `source` that does not
 /// exist and one that escapes `marketplace_root` (a `../` or an absolute
@@ -177,6 +217,60 @@ pub fn resolve_plugin_source(
         });
     }
     Ok(canonical_source)
+}
+
+#[cfg(test)]
+mod subdirectory_tests {
+    use super::*;
+
+    fn manifest(source: &str) -> MarketplaceManifest {
+        parse_manifest(
+            format!(r#"{{"name":"m","plugins":[{{"name":"flow","source":"{source}"}}]}}"#)
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plain_subdirectory_is_returned_as_a_repository_relative_path() {
+        assert_eq!(
+            plugin_subdirectory(&manifest("./plugins/flow"), "flow").unwrap(),
+            "plugins/flow"
+        );
+    }
+
+    #[test]
+    fn the_marketplace_root_itself_is_the_whole_repository() {
+        assert_eq!(plugin_subdirectory(&manifest("."), "flow").unwrap(), ".");
+    }
+
+    #[test]
+    fn a_source_climbing_out_of_the_repository_is_refused() {
+        assert!(matches!(
+            plugin_subdirectory(&manifest("../elsewhere"), "flow"),
+            Err(UzeError::UnsafePathReference { .. })
+        ));
+        assert!(matches!(
+            plugin_subdirectory(&manifest("plugins/../../elsewhere"), "flow"),
+            Err(UzeError::UnsafePathReference { .. })
+        ));
+    }
+
+    #[test]
+    fn an_absolute_source_is_refused() {
+        assert!(matches!(
+            plugin_subdirectory(&manifest("/etc"), "flow"),
+            Err(UzeError::UnsafePathReference { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unknown_plugin_is_not_a_containment_failure() {
+        assert!(matches!(
+            plugin_subdirectory(&manifest("plugins/flow"), "other"),
+            Err(UzeError::UnknownPackage(_))
+        ));
+    }
 }
 
 #[cfg(test)]

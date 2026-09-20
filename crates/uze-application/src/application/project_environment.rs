@@ -128,7 +128,13 @@ impl Project<'_> {
             reference: Some(locked.revision.clone()),
             subdirectory: locked.subdirectory.clone(),
         }
-        .materialize_plugin(plugin)
+        .materialize_plugin(
+            plugin,
+            super::marketplace::MirrorAt {
+                home: &self.0.home,
+                marketplace,
+            },
+        )
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
@@ -473,7 +479,13 @@ impl Project<'_> {
         request: &MarketplaceRequest,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        let materialized = request.materialize_plugin(plugin)?;
+        let materialized = request.materialize_plugin(
+            plugin,
+            super::marketplace::MirrorAt {
+                home: &self.0.home,
+                marketplace,
+            },
+        )?;
         let report = self.0.plugins().install_materialized(
             materialized,
             marketplace,

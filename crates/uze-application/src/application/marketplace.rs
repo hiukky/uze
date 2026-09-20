@@ -1,7 +1,7 @@
 //! Marketplaces: registering one, reading what it offers, and installing
 //! from it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use uze_core::{
     PackageSource, Result, UzeError,
@@ -24,6 +24,16 @@ pub(crate) struct MarketplaceRequest {
     pub(crate) repository: marketplace::MarketplaceRepository,
     pub(crate) reference: Option<String>,
     pub(crate) subdirectory: Option<PathBuf>,
+}
+
+/// Where a plugin's bytes are fetched from and written to.
+///
+/// A mirror is per marketplace, so installing needs the name the machine
+/// registered it under — the same key its catalogue is filled under, which
+/// is what lets one connection serve both.
+pub(crate) struct MirrorAt<'a> {
+    pub(crate) home: &'a uze_core::UzeHome,
+    pub(crate) marketplace: &'a str,
 }
 
 impl MarketplaceRequest {
@@ -53,8 +63,14 @@ impl MarketplaceRequest {
     /// what made a local marketplace unpinnable: the bytes on disk are
     /// whatever their author last saved, so nothing could say they are the
     /// bytes that were installed, and nothing could say whether something
-    /// newer exists. A clone at a commit answers both, and a local clone
-    /// is cheap (Git hardlinks it).
+    /// newer exists. A commit answers both.
+    ///
+    /// Read from the marketplace's mirror rather than by cloning the
+    /// repository again. The clone this replaces was paid per plugin — a
+    /// `market add` plus one install was two of them, and each further
+    /// plugin another — and then discarded everything but one directory.
+    /// The mirror is filled once and fetched after that, and only the
+    /// plugin's own subdirectory is ever written out.
     ///
     /// The provenance records the repository's `identity` — the URL
     /// another machine resolves it by — which is not always where these
@@ -62,42 +78,60 @@ impl MarketplaceRequest {
     /// narrowed to the plugin's directory, so cleanup still owns the whole
     /// checkout (`MaterializedPackage::retarget`) and the bytes live until
     /// the Store has ingested them.
-    pub(crate) fn materialize_plugin(&self, plugin: &str) -> Result<MaterializedPackage> {
-        let fetch = PackageSource::Git {
-            url: self.repository.fetch.clone(),
-            reference: self.reference.clone(),
-            subdirectory: self.subdirectory.clone(),
-        };
-        let mut checkout = acquisition::acquire(&fetch)?;
-        let ResolvedSource::Git { commit, .. } = checkout.provenance().resolved.clone() else {
-            return Err(UzeError::AcquisitionFailed(
-                "a marketplace clone must resolve to a commit".to_owned(),
-            ));
-        };
-        let catalogue = read_in_place(checkout.root())?;
-        let plugin_root =
-            marketplace::resolve_plugin_source(&catalogue.manifest, plugin, checkout.root())?;
-        let within_marketplace = plugin_root
-            .strip_prefix(checkout.root())
-            .map(Path::to_path_buf)
-            .ok();
+    pub(crate) fn materialize_plugin(
+        &self,
+        plugin: &str,
+        at: MirrorAt<'_>,
+    ) -> Result<MaterializedPackage> {
+        let repository = super::marketplace_catalogue::mirror_dir(at.home, at.marketplace);
+        acquisition::mirror::ensure_for(
+            &self.repository.fetch,
+            &repository,
+            self.reference.as_deref(),
+        )?;
+        let commit = acquisition::mirror::resolve(&repository, self.reference.as_deref())?;
+
+        let manifest_bytes = acquisition::mirror::read_file(
+            &repository,
+            &commit,
+            uze_core::workspace::MARKETPLACE_MANIFEST_NAME,
+        )?;
+        let manifest = marketplace::parse_manifest(&manifest_bytes)?;
+        let within = marketplace::plugin_subdirectory(&manifest, plugin)?;
+
+        // Scratch the package owns: the bytes live until the Store has
+        // ingested them and go with it afterwards. Only the plugin's own
+        // directory is written out, never the repository.
+        let scratch = acquisition::scratch_directory()?;
+        let within_marketplace = (within != ".").then(|| PathBuf::from(&within));
         let identity = self.repository.identity.clone();
-        checkout.retarget(
-            plugin_root,
-            Provenance {
-                requested: PackageSource::Git {
-                    url: identity.clone(),
-                    reference: self.reference.clone(),
-                    subdirectory: within_marketplace.clone(),
-                },
-                resolved: ResolvedSource::Git {
-                    url: identity,
-                    commit,
-                    subdirectory: within_marketplace,
-                },
+        let provenance = Provenance {
+            requested: PackageSource::Git {
+                url: identity.clone(),
+                reference: self.reference.clone(),
+                subdirectory: within_marketplace.clone(),
             },
-        );
-        Ok(checkout)
+            resolved: ResolvedSource::Git {
+                url: identity,
+                commit: commit.clone(),
+                subdirectory: within_marketplace.clone(),
+            },
+        };
+        // Owned before anything is written into it, so a failure below
+        // still takes the directory with it.
+        let mut package = MaterializedPackage::owned(scratch.clone(), provenance.clone());
+        acquisition::mirror::materialize_subdirectory(
+            &repository,
+            &commit,
+            Some(&within),
+            &scratch,
+        )?;
+        let plugin_root = match &within_marketplace {
+            Some(within) => scratch.join(within),
+            None => scratch,
+        };
+        package.retarget(plugin_root, provenance);
+        Ok(package)
     }
 }
 
@@ -152,20 +186,21 @@ impl Marketplace<'_> {
     #[tracing::instrument(name = "marketplace.add", skip_all, fields(source_str = %source_str), err)]
     pub fn add(&self, source_str: &str) -> Result<bool> {
         let source = parse_marketplace_source(source_str)?;
-        // A Git checkout is scratch its own `Drop` removes: held here until
-        // the catalogue cache has copied what it needs.
-        let checkout = acquisition::acquire(&source)?;
-        let name = read_in_place(checkout.root())?.manifest.name;
+        // A Git source is mirrored rather than cloned: the mirror is what
+        // answers the name, and it is also what every later read and every
+        // install of one of its plugins works from. A local source is read
+        // where it is — its author is editing it.
+        let name = match &source {
+            PackageSource::Git { .. } => self.0.marketplace_catalogues.adopt(&source)?.0,
+            _ => {
+                let checkout = acquisition::acquire(&source)?;
+                read_in_place(checkout.root())?.manifest.name
+            }
+        };
         if name == BUILT_IN_MARKETPLACE {
             return Err(UzeError::ReservedMarketplace(name));
         }
-        let added = uze_core::state::marketplace_add(&self.0.home, &name, source.clone())?;
-        if matches!(source, PackageSource::Git { .. }) {
-            self.0
-                .marketplace_catalogues
-                .store_from(&name, &source, checkout.root())?;
-        }
-        Ok(added)
+        uze_core::state::marketplace_add(&self.0.home, &name, source.clone())
     }
 
     #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]
@@ -258,7 +293,13 @@ impl Marketplace<'_> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let materialized = match source {
             None => bootstrap::materialize(&plugin_name)?,
-            Some(source) => MarketplaceRequest::of(&source)?.materialize_plugin(&plugin_name)?,
+            Some(source) => MarketplaceRequest::of(&source)?.materialize_plugin(
+                &plugin_name,
+                MirrorAt {
+                    home: &self.0.home,
+                    marketplace: &marketplace_name,
+                },
+            )?,
         };
         self.0.plugins().install_materialized(
             materialized,
@@ -347,11 +388,7 @@ impl Marketplace<'_> {
             let record = uze_core::state::marketplace_get(&self.0.home, marketplace)?
                 .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
             let catalogue = self.0.catalogue(marketplace, &record.source)?;
-            let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
-                &catalogue.manifest,
-                name,
-                &catalogue.root,
-            )?;
+            let plugin_root = catalogue.plugin_root(name)?;
             uze_core::MaterializedPackage::borrowed(
                 plugin_root.clone(),
                 uze_core::Provenance {
@@ -373,5 +410,146 @@ impl Marketplace<'_> {
                 .collect(),
             summary,
         })
+    }
+}
+
+#[cfg(test)]
+mod mirror_tests {
+    use super::super::marketplace_catalogue::mirror_dir;
+    use crate::UzeApplication;
+    use std::fs;
+    use uze_core::UzeHome;
+
+    /// A marketplace repository with two plugins, and the commit each of
+    /// its two revisions landed on.
+    fn marketplace(label: &str) -> (uze_testkit::git::Repository, String) {
+        let repository = uze_testkit::git::Repository::empty(label);
+        let root = repository.root().to_path_buf();
+        for plugin in ["flow", "review"] {
+            fs::create_dir_all(root.join("plugins").join(plugin).join("skills/one")).unwrap();
+            fs::write(
+                root.join("plugins").join(plugin).join("plugin.json"),
+                format!(r#"{{"name":"{plugin}","description":"d"}}"#),
+            )
+            .unwrap();
+            fs::write(
+                root.join("plugins")
+                    .join(plugin)
+                    .join("skills/one/SKILL.md"),
+                format!("---\nname: one\ndescription: d\n---\n\n{plugin} first.\n"),
+            )
+            .unwrap();
+        }
+        fs::write(
+            root.join("marketplace.json"),
+            r#"{"name":"mkt","plugins":[
+                {"name":"flow","source":"./plugins/flow"},
+                {"name":"review","source":"./plugins/review"}
+            ]}"#,
+        )
+        .unwrap();
+        repository.git(&["add", "-A"]);
+        repository.git(&["commit", "-m", "first"]);
+        let first = repository.head();
+        (repository, first)
+    }
+
+    #[test]
+    fn a_plugins_bytes_are_materialized_in_exactly_one_place() {
+        let home_root = uze_testkit::temp::scratch("mirror-one-place");
+        let (repository, _first) = marketplace("mirror-one-place-src");
+        let home = UzeHome::at(home_root.join("uze"));
+        let application = UzeApplication::new(home.clone(), Vec::new());
+
+        application
+            .marketplace()
+            .add(&repository.root().to_string_lossy())
+            .unwrap();
+        let report = application
+            .marketplace()
+            .install_plugin("flow@mkt", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+
+        let stored = report.plugin.store_path;
+        assert!(
+            stored.join("skills/one/SKILL.md").is_file(),
+            "the Store has the plugin"
+        );
+        assert!(
+            !stored.join(".git").exists(),
+            "no repository metadata travels into the Store"
+        );
+
+        // The cache holds a repository, not a copy: nothing under it is a
+        // second materialized copy of what the Store now has.
+        let entry = home.marketplace_cache_dir().join("mkt");
+        assert!(mirror_dir(&home, "mkt").join("HEAD").is_file());
+        assert!(
+            !entry.join("checkout").exists(),
+            "the cache keeps no working tree"
+        );
+        assert!(
+            !entry.join("plugins/flow").exists(),
+            "installing writes the plugin into the Store, not into the cache"
+        );
+
+        fs::remove_dir_all(&home_root).unwrap();
+    }
+
+    #[test]
+    fn two_plugins_from_one_marketplace_share_one_mirror() {
+        let home_root = uze_testkit::temp::scratch("mirror-second");
+        let (repository, _first) = marketplace("mirror-second-src");
+        let home = UzeHome::at(home_root.join("uze"));
+        let application = UzeApplication::new(home.clone(), Vec::new());
+        application
+            .marketplace()
+            .add(&format!("file://{}", repository.root().display()))
+            .unwrap();
+
+        let first = application
+            .marketplace()
+            .install_plugin("flow@mkt", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+        let second = application
+            .marketplace()
+            .install_plugin("review@mkt", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+
+        // One mirror, whatever was installed from it. The clone this
+        // replaces was paid per plugin.
+        let entries: Vec<_> = fs::read_dir(home.marketplace_cache_dir())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "one cache entry per marketplace: {entries:?}"
+        );
+        assert!(mirror_dir(&home, "mkt").join("HEAD").is_file());
+
+        // And the Store stands on its own once the cache is gone: nothing
+        // a harness reads depends on the mirror existing.
+        fs::remove_dir_all(home.cache_dir()).unwrap();
+        assert!(
+            first
+                .plugin
+                .store_path
+                .join("skills/one/SKILL.md")
+                .is_file(),
+            "the first plugin still reads"
+        );
+        assert!(
+            second
+                .plugin
+                .store_path
+                .join("skills/one/SKILL.md")
+                .is_file(),
+            "the second plugin still reads"
+        );
+
+        fs::remove_dir_all(&home_root).unwrap();
     }
 }

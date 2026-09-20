@@ -41,13 +41,28 @@ pub fn ensure(url: &str, directory: &Path) -> Result<()> {
     reject_option_shaped(url, "repository url")?;
 
     if directory.join("HEAD").exists() {
-        // `--prune` so a ref deleted upstream stops being resolvable here,
-        // which is the honest answer to "does this ref still exist".
-        run(
-            &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
-            Some(directory),
-        )?;
-        return Ok(());
+        // A directory that is a mirror of *something else* is not this
+        // marketplace's, whatever it is called on disk. Fetching into it
+        // would answer questions about one repository with another's
+        // history — which is exactly what a name registered against a new
+        // source must not get.
+        let origin = run(&["remote", "get-url", "origin"], Some(directory))
+            .map(|answer| answer.trim().to_owned())
+            .unwrap_or_default();
+        if origin == url {
+            // `--prune` so a ref deleted upstream stops being resolvable
+            // here, which is the honest answer to "does this ref still
+            // exist".
+            run(
+                &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
+                Some(directory),
+            )?;
+            return Ok(());
+        }
+        std::fs::remove_dir_all(directory).map_err(|source| UzeError::Write {
+            path: directory.to_path_buf(),
+            source,
+        })?;
     }
 
     if let Some(parent) = directory.parent() {
@@ -71,6 +86,34 @@ pub fn ensure(url: &str, directory: &Path) -> Result<()> {
         None,
     )?;
     Ok(())
+}
+
+/// Makes `directory` able to answer about `reference`, fetching only when
+/// it cannot already.
+///
+/// A reference that is a full commit id the mirror already holds is
+/// immutable: nothing a fetch could bring would change what it names, so
+/// the fetch is skipped. That is what a project reproducing its
+/// `agents.lock` asks for, and it makes doing so cost no network at all on
+/// a machine that has seen that commit before.
+///
+/// Everything else — a branch, a tag, no reference at all — names whatever
+/// it names *now*, and only the remote knows that.
+pub fn ensure_for(url: &str, directory: &Path, reference: Option<&str>) -> Result<()> {
+    if let Some(reference) = reference
+        && is_full_commit_id(reference)
+        && directory.join("HEAD").exists()
+        && resolve(directory, Some(reference)).is_ok()
+    {
+        return Ok(());
+    }
+    ensure(url, directory)
+}
+
+/// Whether `reference` is a full 40-character commit id, which is the only
+/// shape that cannot come to mean something else.
+fn is_full_commit_id(reference: &str) -> bool {
+    reference.len() == 40 && reference.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// The commit `reference` names — a branch, a tag, a commit — or the
@@ -176,6 +219,11 @@ mod tests {
         git(&["init", "--initial-branch=main"]);
         git(&["config", "user.email", "t@example.invalid"]);
         git(&["config", "user.name", "Test"]);
+        // The label goes into the tree: two fixtures with identical
+        // content, author and message in the same second produce the same
+        // commit, which would let a test comparing two repositories pass
+        // for the wrong reason.
+        fs::write(origin.join("who.txt"), label).unwrap();
         fs::write(
             origin.join("marketplace.json"),
             r#"{"name":"m","plugins":[]}"#,
@@ -262,6 +310,53 @@ mod tests {
             "only the plugin's own directory travels"
         );
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_commit_the_mirror_already_holds_needs_no_network() {
+        let (root, first, second) = origin("mirror-offline");
+        let origin_dir = root.join("origin");
+        let mirror = root.join("mirror");
+        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+
+        // The remote goes away entirely.
+        fs::remove_dir_all(&origin_dir).unwrap();
+
+        // A pinned commit still answers, because it cannot come to mean
+        // anything else than what the mirror already holds.
+        ensure_for("does-not-resolve", &mirror, Some(&first)).unwrap();
+        assert_eq!(resolve(&mirror, Some(&first)).unwrap(), first);
+        ensure_for("does-not-resolve", &mirror, Some(&second)).unwrap();
+
+        // A branch does not: only the remote knows where it points now.
+        assert!(ensure_for("does-not-resolve", &mirror, Some("main")).is_err());
+        assert!(ensure_for("does-not-resolve", &mirror, None).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_mirror_of_another_repository_is_replaced_not_fetched_into() {
+        let (root, _first, second) = origin("mirror-foreign");
+        let mirror = root.join("mirror");
+        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        assert_eq!(resolve(&mirror, Some("main")).unwrap(), second);
+
+        // A different repository, registered under the same directory.
+        let (other_root, _, other_head) = origin("mirror-foreign-other");
+        ensure(&other_root.join("origin").to_string_lossy(), &mirror).unwrap();
+
+        assert_eq!(
+            resolve(&mirror, Some("main")).unwrap(),
+            other_head,
+            "the mirror answers about the repository it was last pointed at"
+        );
+        assert_eq!(
+            distance(&mirror, &second, &other_head),
+            None,
+            "the previous repository's history is gone, not silently merged"
+        );
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&other_root).unwrap();
     }
 
     #[test]
