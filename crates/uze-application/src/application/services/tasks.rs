@@ -178,8 +178,9 @@ impl Workspace<'_> {
         // The project decides, unless the caller asked for one kind by
         // name: `Isolate` is an action on an agent, and a launch is not
         // where that question is asked any more.
-        let declared = self
-            .repository_context(pane_cwd)
+        let context = self.repository_context(pane_cwd);
+        let declared = context
+            .as_ref()
             .map(|(_, policy)| policy.default)
             .unwrap_or_default();
         let kind = kind.unwrap_or(if declared.is_isolated() {
@@ -192,11 +193,15 @@ impl Workspace<'_> {
             PlacementKind::InPlace => {
                 let root = canonical(pane_cwd);
                 let agent = self.record_in_the_root(&root, harness)?;
+                let view = context.as_ref().and_then(|(primary, policy)| {
+                    self.placed_view(primary, agent.id.as_str(), policy)
+                });
                 Ok(AgentPlacement {
                     project: root.clone(),
                     cwd: root,
                     placement: Placement::InPlace { id: agent.id },
                     warnings: Vec::new(),
+                    view,
                 })
             }
         }
@@ -299,6 +304,7 @@ impl Workspace<'_> {
             &policy.link,
             &policy.setup,
         ));
+        let view = self.placed_view(&primary, task.id.as_str(), &policy);
         Ok(AgentPlacement {
             project: primary.clone(),
             cwd: acquired.path,
@@ -309,6 +315,7 @@ impl Workspace<'_> {
                 reused: !acquired.created,
             },
             warnings,
+            view,
         })
     }
 
@@ -411,6 +418,7 @@ impl Workspace<'_> {
         {
             warnings.push(reason);
         }
+        let view = self.placed_view(&primary, id.as_str(), &policy);
         Ok(AgentPlacement {
             project: primary.clone(),
             cwd: acquired.path,
@@ -421,6 +429,7 @@ impl Workspace<'_> {
                 reused: !acquired.created,
             },
             warnings,
+            view,
         })
     }
 
@@ -466,6 +475,7 @@ impl Workspace<'_> {
                         reused: true,
                     },
                     warnings: Vec::new(),
+                    view: None,
                 });
             }
             let acquired = checkout::resume(&primary, &snapshot, task, policy.slots, occupied)
@@ -484,6 +494,7 @@ impl Workspace<'_> {
                 cwd: acquired.path,
                 placement,
                 warnings: Vec::new(),
+                view: None,
             })
         })?;
         // Preparing the checkout runs the project's `setup`; it waits for
@@ -492,6 +503,7 @@ impl Workspace<'_> {
             placement.warnings =
                 checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
         }
+        placement.view = self.placed_view(&primary, placement.placement.agent().as_str(), &policy);
         Ok(placement)
     }
 
@@ -568,6 +580,21 @@ impl Workspace<'_> {
     /// A malformed manifest is an error rather than a silent default.
     fn policy(&self, primary: &Path) -> Result<WorktreePolicy> {
         manifest::worktree_policy(primary)
+    }
+
+    /// The row a placement answers with: the agent just recorded, read
+    /// back and derived exactly as an evaluation derives every other row.
+    ///
+    /// One derivation, so the row a launch draws and the row the first
+    /// evaluation replaces it with can never disagree about which group
+    /// the agent is in. Without it a client has only the directory to go
+    /// on until that evaluation lands — a Git pass over the whole
+    /// repository — and draws a freshly isolated agent among the ones
+    /// sharing the operator's checkout for as long as it takes.
+    fn placed_view(&self, primary: &Path, id: &str, policy: &WorktreePolicy) -> Option<AgentView> {
+        let target = target_of(primary, policy);
+        let store = task::load(&self.0.home, primary).ok()?;
+        AgentView::from_agent(primary, store.agent(id)?, policy.completion, &target)
     }
 
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
@@ -2058,6 +2085,11 @@ pub struct AgentPlacement {
     /// What preparing the checkout could not do — a missing link target, a
     /// failed setup — none of which stops the launch.
     pub warnings: Vec<String>,
+    /// The agent's row as it stands the instant it exists, so a client can
+    /// draw it before an evaluation has run. `None` only where the record
+    /// could not be read back — never a reason to draw the agent as
+    /// something else.
+    pub view: Option<AgentView>,
 }
 
 /// What an agent was placed as. There is no third case: a placement that
@@ -3250,6 +3282,39 @@ mod task_service_tests {
         assert!(
             root.join("notes.md").exists(),
             "and nothing was taken from the operator"
+        );
+    }
+
+    /// Every placement answers with the agent's own row, so a client has
+    /// something true to draw the instant the agent exists rather than
+    /// whatever the directory it stands in suggests.
+    #[test]
+    fn a_placement_answers_with_the_row_the_agent_starts_as() {
+        let repository = repository("svc-placed-row");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-placed-row-home");
+
+        let isolated = app
+            .workspace()
+            .place_new_agent(&root, Some(PlacementKind::Isolated), "claude-code", &[])
+            .expect("the agent is placed in a slot");
+        let view = isolated.view.clone().expect("the placement carries a row");
+        assert_eq!(view.id, isolated.placement.agent().as_str());
+        assert!(view.isolated, "it says where the agent is: {view:?}");
+        assert_eq!(
+            view.checkout.as_deref(),
+            Some(isolated.cwd.as_path()),
+            "and names the checkout it was just given"
+        );
+
+        let in_place = app
+            .workspace()
+            .place_new_agent(&root, Some(PlacementKind::InPlace), "claude-code", &[])
+            .expect("the agent is placed in the root");
+        let view = in_place.view.clone().expect("the placement carries a row");
+        assert!(
+            !view.isolated,
+            "an agent in the operator's own checkout says so from the start: {view:?}"
         );
     }
 

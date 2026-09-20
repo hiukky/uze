@@ -3147,6 +3147,27 @@ impl WorkspaceModel {
         })
     }
 
+    /// Puts the row a placement answered with on the column, before any
+    /// evaluation has run.
+    ///
+    /// Not a stand-in: it is the record UZE has just written, derived the
+    /// way the evaluation that replaces it derives every row. What it
+    /// spares the operator is the second in which a freshly isolated
+    /// agent is drawn among the ones sharing their own checkout — the one
+    /// thing about a new agent nobody should have to watch settle.
+    pub(super) fn seed_task(&mut self, project: &Path, view: AgentView) {
+        let tasks = self
+            .remembered
+            .tasks
+            .entry(project.to_path_buf())
+            .or_default();
+        match tasks.iter_mut().find(|task| task.id == view.id) {
+            Some(known) => *known = view,
+            None => tasks.push(view),
+        }
+        self.dirty = true;
+    }
+
     /// The task a tab is for: the one the launch named, once an evaluation
     /// lists it. Nothing stands in for it before that — a slot's previous
     /// occupant is not this agent's task, whatever the directory says.

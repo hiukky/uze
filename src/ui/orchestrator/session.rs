@@ -2788,6 +2788,12 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
+        // Before the evaluation is even asked for: it is a Git pass over
+        // the whole repository, and until it answers the column would
+        // draw this agent in the group it is not in.
+        if let Some(view) = placement.view.clone() {
+            self.model.seed_task(&placement.project, view);
+        }
         self.model.schedule_evaluation(
             self.home,
             placement.cwd.clone(),

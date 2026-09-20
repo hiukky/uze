@@ -863,11 +863,25 @@ pub(super) fn agent_group(model: &WorkspaceModel, tab: TabId) -> AgentGroup {
     // The record's own answer, not the branch: every agent is on one now,
     // and an agent in the space's root would have grouped itself with the
     // isolated ones the moment its row learnt what branch that was.
-    if model.tab_task(tab).is_some_and(|task| task.isolated) {
-        AgentGroup::Isolated
-    } else {
-        AgentGroup::InTheRoot
+    if let Some(task) = model.tab_task(tab) {
+        return if task.isolated {
+            AgentGroup::Isolated
+        } else {
+            AgentGroup::InTheRoot
+        };
     }
+    // Until there is one — the first frames of an attach, where the panes
+    // arrive from the runtime and the records are still being read — the
+    // directory the pane stands in is the only fact there is, and it is a
+    // fact rather than a guess: `.worktrees/<id>` is a layout UZE owns,
+    // and a slot is never a space of its own, so a pane in one was put
+    // there by a placement. Drawing every agent in the root's group until
+    // a Git pass answers says something untrue about where they are, and
+    // says it to an operator who just opened the client.
+    model
+        .tab(tab)
+        .filter(|tab| uze_application::is_isolated_checkout(&tab.pane.cwd))
+        .map_or(AgentGroup::InTheRoot, |_| AgentGroup::Isolated)
 }
 
 /// The two groups a space's column is drawn in, in the order it draws

@@ -741,7 +741,7 @@ mod workspace_tests {
             .expect("the agent's own sidebar row");
         assert_eq!(
             tab_drag_group(&model, &identities_fixture(), &layout, sidebar_rect, first),
-            Some(TabDragGroup::Agents(space, AgentGroup::InTheRoot))
+            Some(TabDragGroup::Agents(space, AgentGroup::Isolated))
         );
 
         let strip_rect = model
@@ -777,7 +777,7 @@ mod workspace_tests {
             &model,
             &identities_fixture(),
             &layout,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
         );
         assert_eq!(
             agents.iter().map(|(_, tab)| *tab).collect::<Vec<_>>(),
@@ -831,7 +831,7 @@ mod workspace_tests {
             &model,
             &identities_fixture(),
             &layout,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
         );
         let origin = all
             .iter()
@@ -849,7 +849,7 @@ mod workspace_tests {
 
         let pending = pending_tab_drop(
             &members,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
             second_label_row,
             origin,
         );
@@ -1027,7 +1027,7 @@ mod workspace_tests {
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.dragging_tab = Some(DraggingTab {
             tab: first,
-            group: TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            group: TabDragGroup::Agents(space, AgentGroup::Isolated),
             origin: 0,
             armed: true,
             pending: Some(PendingDrop::Before(second)),
@@ -1043,7 +1043,7 @@ mod workspace_tests {
             .expect("the drop target's own row");
         let column = gutter_column(&hits);
         assert!(
-            lit_gutter_rows(&buffer, column, false).contains(&second_row),
+            lit_gutter_rows(&buffer, column, true).contains(&second_row),
             "indicator on the target row: {rows:?}"
         );
 
@@ -1052,7 +1052,7 @@ mod workspace_tests {
             .map(|d| DraggingTab { armed: false, ..d });
         let buffer = sidebar(&model, &identities_fixture()).buffer;
         assert!(
-            !lit_gutter_rows(&buffer, column, false).contains(&second_row),
+            !lit_gutter_rows(&buffer, column, true).contains(&second_row),
             "no indicator before the drag is armed"
         );
     }
@@ -7484,6 +7484,74 @@ mod workspace_tests {
 
         let shape = recorded.try_recv().expect("the release is recorded");
         assert_eq!(shape.sidebar.width, dragged);
+    }
+
+    /// An attach draws the agents it finds before any evaluation has run,
+    /// and a slot is a fact the client already holds: the row belongs to
+    /// the isolated group from the first frame, not a Git pass later.
+    #[test]
+    fn an_agent_in_a_slot_is_drawn_isolated_before_its_record_is_read() {
+        let slot = "/repo/.worktrees/abc123";
+        let model = agent_session_in(slot);
+        let tab = model.tabs().next().expect("the agent has a tab").id;
+        assert!(
+            model.tab_task(tab).is_none(),
+            "no evaluation has answered yet"
+        );
+
+        assert_eq!(
+            render::agent_group(&model, tab),
+            render::AgentGroup::Isolated,
+            "the pane stands in a slot, so the row is in the slots' group"
+        );
+        assert_eq!(
+            render::agent_group(&agent_session_in("/repo"), TabId(1)),
+            render::AgentGroup::InTheRoot,
+            "and a pane in the project's own root is not"
+        );
+    }
+
+    /// The row a new agent is drawn as comes from the placement, not from
+    /// the evaluation that follows it.
+    ///
+    /// The evaluation is a Git pass over the whole repository; until it
+    /// answers, the column had only the record it could not see yet, and
+    /// drew a freshly isolated agent among the ones sharing the
+    /// operator's own checkout — a group it was never in.
+    #[test]
+    fn a_placed_agent_is_drawn_isolated_before_any_evaluation_answers() {
+        let repository = uze_testkit::git::Repository::new("orchestrator-placed-row");
+        let root = repository.root().to_path_buf();
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-placed-row-home"));
+        let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
+        let placement = app
+            .workspace()
+            .place_new_agent(
+                &root,
+                Some(uze_application::PlacementKind::Isolated),
+                "claude-code",
+                &[],
+            )
+            .expect("the agent is placed");
+        let agent = placement.placement.agent().as_str().to_owned();
+        let mut driven = driven(agent_session_in(&root.to_string_lossy()), &home);
+
+        driven.placements_answered(PlacementResolution {
+            label: "agent 2".to_owned(),
+            command: vec!["claude".to_owned()],
+            placement: Ok(placement),
+            replacing: None,
+        });
+
+        let (_, task) = driven
+            .attach
+            .model
+            .task_with_id(&agent)
+            .expect("the column knows the agent the instant it exists");
+        assert!(
+            task.isolated,
+            "and knows it has a checkout of its own: {task:?}"
+        );
     }
 
     /// An agent that could not be placed as the space asked is not started
