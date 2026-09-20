@@ -156,9 +156,9 @@ accepts, which is why the table sums to more than the number of crates.
 | `cfg-if` | 1.0.4 | MIT OR Apache-2.0 |
 | `cfg_aliases` | 0.1.1 | MIT |
 | `chrono` | 0.4.45 | MIT OR Apache-2.0 |
-| `clap` | 4.6.6 | MIT OR Apache-2.0 |
-| `clap_builder` | 4.6.6 | MIT OR Apache-2.0 |
-| `clap_derive` | 4.6.4 | MIT OR Apache-2.0 |
+| `clap` | 4.6.7 | MIT OR Apache-2.0 |
+| `clap_builder` | 4.6.7 | MIT OR Apache-2.0 |
+| `clap_derive` | 4.6.7 | MIT OR Apache-2.0 |
 | `clap_lex` | 1.1.0 | MIT OR Apache-2.0 |
 | `colorchoice` | 1.0.5 | MIT OR Apache-2.0 |
 | `comfy-table` | 8.0.0 | MIT |
@@ -242,7 +242,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `mio` | 1.2.3 | MIT |
 | `miow` | 0.6.1 | MIT OR Apache-2.0 |
 | `nix` | 0.28.0 | MIT |
-| `noyalib` | 0.0.41 | MIT OR Apache-2.0 |
+| `noyalib` | 0.0.43 | MIT OR Apache-2.0 |
 | `nu-ansi-term` | 0.50.3 | MIT |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
@@ -274,8 +274,8 @@ accepts, which is why the table sums to more than the number of crates.
 | `ref-cast-impl` | 1.0.27 | MIT OR Apache-2.0 |
 | `regex-automata` | 0.4.18 | MIT OR Apache-2.0 |
 | `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 |
-| `rmcp` | 3.2.0 | Apache-2.0 |
-| `rmcp-macros` | 3.2.0 | Apache-2.0 |
+| `rmcp` | 3.3.0 | Apache-2.0 |
+| `rmcp-macros` | 3.4.0 | Apache-2.0 |
 | `rustc-hash` | 2.1.3 | Apache-2.0 OR MIT |
 | `rustc_version` | 0.4.1 | MIT OR Apache-2.0 |
 | `rustix` | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
@@ -325,7 +325,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `tokio-macros` | 2.7.2 | MIT |
 | `tokio-util` | 0.7.19 | MIT |
 | `toml_datetime` | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
-| `toml_edit` | 0.25.13+spec-1.1.0 | MIT OR Apache-2.0 |
+| `toml_edit` | 0.25.15+spec-1.1.0 | MIT OR Apache-2.0 |
 | `toml_parser` | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | `toml_writer` | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | `tracing` | 0.1.44 | MIT |
