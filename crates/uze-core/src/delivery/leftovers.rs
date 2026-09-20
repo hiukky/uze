@@ -232,7 +232,7 @@ mod dangling_tests {
             .join("runtime/attachments/a-harness/skills/git/pr");
         crate::persistence::create_symlink(&gone, &discovery.join("git:pr")).unwrap();
 
-        let found = dangling_references(&home, &[discovery.clone()], &BTreeSet::new());
+        let found = dangling_references(&home, std::slice::from_ref(&discovery), &BTreeSet::new());
 
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].path, discovery.join("git:pr"));
@@ -283,7 +283,7 @@ mod dangling_tests {
             .join("runtime/attachments/a-harness/skills/git/pr");
         let link = discovery.join("git:pr");
         crate::persistence::create_symlink(&gone, &link).unwrap();
-        let found = dangling_references(&home, &[discovery.clone()], &BTreeSet::new());
+        let found = dangling_references(&home, std::slice::from_ref(&discovery), &BTreeSet::new());
 
         // The world changes under the answer: the target comes back.
         fs::create_dir_all(&gone).unwrap();

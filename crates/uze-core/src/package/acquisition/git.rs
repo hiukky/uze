@@ -88,7 +88,7 @@ pub fn reject_inline_credentials(url: &str) -> Result<()> {
 /// each call site are the second half of the same rule; this half is what
 /// holds for `git checkout`, which offers no such marker, and it refuses
 /// before any process is spawned.
-fn reject_option_shaped(value: &str, what: &str) -> Result<()> {
+pub(super) fn reject_option_shaped(value: &str, what: &str) -> Result<()> {
     if value.starts_with('-') {
         return Err(UzeError::AcquisitionFailed(format!(
             "{what} `{value}` starts with `-`, which git reads as an option"
@@ -279,7 +279,7 @@ fn assert_within_size_budget(root: &Path) -> Result<()> {
 ///   fails immediately rather than blocking on a credential prompt.
 /// - `protocol.file.allow=always`: needed so a local bare repository — the
 ///   only kind the deterministic tests use — remains reachable.
-fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
+pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
     let span = tracing::info_span!(
         "acquisition.git",
         args = %arguments.join(" "),

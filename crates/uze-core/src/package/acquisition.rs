@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod git;
 pub mod marketplace;
+pub mod mirror;
 
 use crate::error::{Result, UzeError};
 
