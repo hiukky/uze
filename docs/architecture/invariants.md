@@ -715,17 +715,26 @@ included — stays on the reporting side of that line.
 
 > `crates/uze-application/src/application/tests.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
 
-### Automatic update is local-only, and never grants trust
+### Automatic update never asks a remote whether to act, and never grants trust
 
-`auto_update_plugins` — the one caller of `update_plugin` that no person
-typed, run when the TUI opens — touches only `PackageSource::Embedded`
-packages (bytes already inside the running binary; no network, no
-re-resolution of a Git or path source) and runs under `NoTrustAuthority`,
-so a revision introducing new executable capability is reported and left
-for an explicit confirmation rather than applied.
+`auto_update` — the one caller of `Plugins::update` that no person typed,
+run when the client opens — acts only on a package *already established* as
+behind. Establishing that is a local read: the commit a package was
+installed at against the head its marketplace's mirror last recorded. So no
+package is ever fetched to find out whether it needs fetching, and the
+CLI's read-only dispatch path, which never calls this, still reaches no
+remote.
+
+It runs under `NoTrustAuthority`, so a revision introducing executable
+capability the installed one did not have is reported and left for an
+explicit confirmation rather than applied.
+
+Acquisition happens outside the mutation lock, which covers only the write:
+held across a remote, one background update would refuse the operator's own
+command — and every mutating action inside the client itself.
 
 > `crates/uze-application/src/application/tests.rs::auto_update_applies_a_pending_official_snapshot_update`
-> `crates/uze-application/src/application/tests.rs::auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
+> `crates/uze-application/src/application/tests.rs::auto_update_never_fetches_to_find_out_whether_there_is_an_update`
 
 ### A default plugin crossing the trust boundary is never installed silently
 

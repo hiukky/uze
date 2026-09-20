@@ -142,26 +142,26 @@
 
 ## 7. The client's freshness worker
 
-- [ ] 7.1 `Plugins::update` resolves *outside* `MutationLock`; the lock
+- [x] 7.1 `Plugins::update` resolves *outside* `MutationLock`; the lock
       covers ingest and attach only (`lifecycle/update.rs:17,29`)
-- [ ] 7.2 Split `spawn_startup`: `Refreshed` is sent before any freshness
+- [x] 7.2 Split `spawn_startup`: `Refreshed` is sent before any freshness
       work, which arrives as its own later message
       (`src/ui/worker.rs:560-590`)
 - [ ] 7.3 `spawn_*`/`absorb_*` pair for the freshness refresh; every answer
       carries its question, a late one is dropped
-- [ ] 7.4 Widen `auto_update` past `Embedded`, and rewrite
+- [x] 7.4 Widen `auto_update` past `Embedded`, and rewrite
       `auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
       (`application/tests.rs:1104`) to hold what still stands: no CLI
       dispatch path re-resolves a network source
-- [ ] 7.5 Apply only a revision introducing no executable capability the
+- [x] 7.5 Apply only a revision introducing no executable capability the
       installed one lacked; anything crossing the trust boundary is reported
       and never applied; no `agents.yaml`/`agents.lock` is written
 - [ ] 7.6 A mutating operator action during a background update is not
       refused (test)
 - [ ] 7.7 Outcomes arrive as toasts, never in the header
-- [ ] 7.8 Plugins screen reads each row's state; "not checked", "unpinned"
+- [x] 7.8 Plugins screen reads each row's state; "not checked", "unpinned"
       and "up to date" read differently (`TestBackend` tests)
-- [ ] 7.9 The architecture suite still passes
+- [x] 7.9 The architecture suite still passes
 
 ## 8. Journeys
 

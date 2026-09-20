@@ -1110,7 +1110,15 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
 }
 
 #[test]
-pub(crate) fn auto_update_never_re_resolves_a_source_it_would_have_to_fetch() {
+/// What still stands of the old rule: a package nothing has established as
+/// behind is never fetched to find out. Deciding costs a local read, so a
+/// path- or Git-sourced plugin whose freshness was never established is
+/// left alone — the CLI's read-only dispatch path still reaches no remote.
+///
+/// What changed: the restriction is now about *what is known* rather than
+/// about the kind of source. The client opening is an explicit interactive
+/// act, and a plugin known to be behind is updated there.
+pub(crate) fn auto_update_never_fetches_to_find_out_whether_there_is_an_update() {
     let root = uze_testkit::temp::scratch("auto-update-local-only");
     let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
     app.plugins()
@@ -1125,7 +1133,7 @@ pub(crate) fn auto_update_never_re_resolves_a_source_it_would_have_to_fetch() {
 
     assert!(
         app.plugins().auto_update().is_empty(),
-        "a path/Git-sourced plugin is only ever updated by an explicit request"
+        "a plugin nothing established as behind is never fetched to find out"
     );
     fs::remove_dir_all(root).unwrap();
 }
