@@ -117,8 +117,8 @@ accepts, which is why the table sums to more than the number of crates.
 
 | Licence | Crates |
 | --- | --- |
-| Apache License 2.0 (`Apache-2.0`) | 190 |
-| MIT License (`MIT`) | 65 |
+| Apache License 2.0 (`Apache-2.0`) | 192 |
+| MIT License (`MIT`) | 66 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
 
@@ -171,6 +171,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `cpufeatures` | 0.3.1 | MIT OR Apache-2.0 |
 | `crc32fast` | 1.5.1 | MIT OR Apache-2.0 |
 | `critical-section` | 1.2.0 | MIT OR Apache-2.0 |
+| `crossbeam-channel` | 0.5.17 | MIT OR Apache-2.0 |
 | `crossbeam-utils` | 0.8.23 | MIT OR Apache-2.0 |
 | `crossterm` | 0.29.0 | MIT |
 | `crossterm_winapi` | 0.9.1 | MIT |
@@ -310,6 +311,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `strsim` | 0.11.1 | MIT |
 | `strum` | 0.28.0 | MIT |
 | `strum_macros` | 0.28.0 | MIT |
+| `symlink` | 0.1.0 | MIT OR Apache-2.0 |
 | `syn` | 2.0.119 | MIT OR Apache-2.0 |
 | `syn` | 3.0.5 | MIT OR Apache-2.0 |
 | `syntect` | 5.3.0 | MIT |
@@ -329,6 +331,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `toml_parser` | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | `toml_writer` | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | `tracing` | 0.1.44 | MIT |
+| `tracing-appender` | 0.2.5 | MIT |
 | `tracing-attributes` | 0.1.31 | MIT |
 | `tracing-core` | 0.1.36 | MIT |
 | `tracing-log` | 0.2.0 | MIT |

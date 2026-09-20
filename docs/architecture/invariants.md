@@ -455,7 +455,7 @@ argument that is not UTF-8 is clap's error to report — neither is an exit
 ### No credential reaches the trace
 
 A marketplace or plugin source may carry userinfo (`https://user:token@…`),
-and the command span is appended to `uze.log` and exported over OTLP. The
+and the command span is appended to the journal and exported over OTLP. The
 argument line is redacted before it is recorded.
 
 > `src/telemetry.rs::tests::a_credential_in_the_argument_line_never_reaches_the_trace`

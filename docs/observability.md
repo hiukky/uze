@@ -38,16 +38,42 @@ is a child of the key that asked for it. `tests/architecture/
 instrumentation.rs` fails by name for an application entry point without
 a span.
 
+## The journal
+
+The two processes that outlive the gesture that started them keep one
+without being asked:
+
+```
+~/.uze/cache/logs/uze.<date>.log         # the TUI
+~/.uze/cache/logs/terminal.<date>.log    # the terminal server
+```
+
+Rolled daily and pruned to seven days, at `info` — every action, every
+Git call with its exit code, every integration call, and every failure.
+Written from a thread of its own (`tracing-appender`'s non-blocking
+writer, never lossy), so a render loop never waits on a disk, and flushed
+by the `Telemetry` guard when the process ends.
+
+It is on by default because the run worth reading is the one nobody
+expected to have to read: a switch turned on after the fact is a switch
+that was off when it mattered. It sits under `cache/` because that is the
+tier it belongs to — deleting it costs nothing.
+
+Neither process could use stderr anyway: it is the screen the TUI draws
+on, and `/dev/null` for the server, which is started detached.
+
 ## Reading it as text
 
 ```sh
 UZE_LOG=info uze status            # spans and events on stderr
 UZE_LOG=uze_git=debug uze status   # tracing_subscriber filter syntax
-uze                                # the TUI writes to ~/.uze/state/logs/uze.log
+tail -f ~/.uze/cache/logs/uze.*.log
 ```
 
-`UZE_LOG` is both the switch and the filter, for the text layer and for
-the exporter below. Unset, nothing subscribes and a span costs a branch.
+`UZE_LOG` is both the switch and the filter: it is what puts a *command's*
+text on stderr, and it raises or narrows the journal's own level along
+with the exporter's. For a one-shot command with it unset, nothing
+subscribes and a span costs a branch.
 
 ## Reading it on a dashboard
 
@@ -90,10 +116,10 @@ Put the export outside any block a tool owns — UZE rewrites its own
 `# >>> uze shims path >>>` block on `uze setup`, keeping only the PATH
 line it wrote.
 
-One variable covers all three entry points, because all three call the
-same `telemetry::init`: the CLI, the TUI (which also writes its text to
-`state/logs/uze.log`) and the shim, whose trace continues into every `uze`
-the harness it launched runs. The endpoint alone switches the exporter
+One variable covers all four entry points, because all four call the same
+`telemetry::init`: the CLI, the TUI and the terminal server (which journal
+as well), and the shim, whose trace continues into every `uze` the harness
+it launched runs. The endpoint alone switches the exporter
 on — `UZE_LOG` stays a separate switch, for the text layer.
 
 Leaving it exported is safe when Jaeger is down: the export fails on the
@@ -116,8 +142,9 @@ request's span records which client asked.
 
 ## What a span costs
 
-Nothing subscribed: a branch per span. Text layer: formatting on the
-calling thread. OTLP: a clone of each span's fields onto the exporter's
+Nothing subscribed — every one-shot command, unless asked: a branch per
+span. Journal: formatting on the calling thread, and a move onto the
+writer's. OTLP: a clone of each span's fields onto the exporter's
 thread. The budget tests in `crates/uze-application/src/application/
 performance_tests.rs` run with no subscriber, which is the release
 configuration.

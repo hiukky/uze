@@ -594,16 +594,28 @@ fn print_command_help(command: &clap::Command) {
 fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
     let argv: Vec<String> = argv_lossy().into_iter().skip(1).collect();
-    // The TUI owns the terminal, so its trace goes to a file; everything
-    // else may write to stderr like any other diagnostic.
+    // The two processes that outlive the gesture that started them keep a
+    // journal; everything else may write to stderr like any other
+    // diagnostic. Neither of these two could use stderr anyway — it is the
+    // screen the TUI draws on, and `/dev/null` for the server, which is
+    // started detached — but that is not why they have one. They have one
+    // because they are where a person is working when something goes
+    // wrong, and a switch nobody turned on beforehand is a switch that was
+    // off when it mattered.
     let opens_the_tui = cli.command.is_none()
         && std::env::var_os("UZE_PANE").is_none()
         && std::io::stdout().is_terminal()
         && std::io::stdin().is_terminal();
-    let sink = if opens_the_tui {
-        uze::telemetry::Sink::File(home.logs_dir().join("uze.log"))
-    } else {
-        uze::telemetry::Sink::Stderr
+    let serves_the_terminal = matches!(
+        cli.command,
+        Some(Command::Terminal {
+            action: TerminalAction::Serve { .. }
+        })
+    );
+    let sink = match (opens_the_tui, serves_the_terminal) {
+        (true, _) => uze::telemetry::Sink::journal(home.logs_dir(), "uze"),
+        (_, true) => uze::telemetry::Sink::journal(home.logs_dir(), "terminal"),
+        _ => uze::telemetry::Sink::Stderr,
     };
     let _telemetry = uze::telemetry::init(sink);
     let span = uze::telemetry::command_span(&leaf_command_of(&argv), &argv);

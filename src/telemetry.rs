@@ -4,16 +4,20 @@
 //! none of them knows whether anything is listening. This module is the
 //! one place that decides, once per process, in `main`:
 //!
-//! - **`UZE_LOG=<filter>`** subscribes a text layer — stderr for a
-//!   command, a file under `UZE_HOME`'s logs for the TUI, which owns the
-//!   terminal — using `tracing_subscriber`'s filter syntax (`info`,
-//!   `uze_git=debug`, …).
+//! - **A journal**, for the two processes that outlive the gesture that
+//!   started them: the TUI and the terminal server. Always on, whatever
+//!   the environment says, because the thing worth reading afterwards is
+//!   the run nobody expected to have to read — see [`Sink::Journal`].
+//! - **`UZE_LOG=<filter>`** subscribes a text layer on stderr for a
+//!   command, and raises the journal's own level, using
+//!   `tracing_subscriber`'s filter syntax (`info`, `uze_git=debug`, …).
 //! - **`OTEL_EXPORTER_OTLP_ENDPOINT`**, in a binary built with the
 //!   `telemetry` feature, subscribes an OTLP exporter as well; the guard
 //!   [`Telemetry`] flushes it before the process exits, so a command that
 //!   ran for five milliseconds still reports its whole trace.
 //!
-//! With neither set, nothing subscribes and a span costs a branch.
+//! For a one-shot command with none of them set, nothing subscribes and a
+//! span costs a branch.
 //!
 //! The trace crosses one process boundary: the runtime shim `exec`s a
 //! harness, and the harness runs `uze` again — an agent inside it asking
@@ -23,7 +27,7 @@
 //! one trace. Both halves are no-ops without the feature: there is no
 //! trace id to carry.
 
-use std::{fs, path::PathBuf, process::Command, sync::Mutex};
+use std::{path::PathBuf, process::Command};
 
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -34,12 +38,43 @@ pub const LOG_FILTER: &str = "UZE_LOG";
 /// The OpenTelemetry-standard endpoint variable the exporter reads.
 pub const OTLP_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
+/// How many days of journal are kept. A week is the distance between a
+/// thing going wrong and somebody sitting down to look at it; past that
+/// the file answers about a build nobody is running any more.
+const JOURNAL_DAYS: usize = 7;
+
 /// Where the text layer writes.
 pub enum Sink {
+    /// A command's diagnostics, where the person who typed it is looking.
+    /// Only with `UZE_LOG`: an unasked-for line on stderr is output a
+    /// caller has to parse around.
     Stderr,
-    /// Appended to; created with its parents when missing. The TUI's
-    /// choice, since stderr is the screen it draws on.
-    File(PathBuf),
+    /// The journal a long-lived process keeps whether anybody asked or
+    /// not: `<dir>/<name>.<date>.log`, rolled daily and pruned to
+    /// [`JOURNAL_DAYS`].
+    ///
+    /// Kept without being asked because the alternative is what this
+    /// exists to end: an operator describes something the product did,
+    /// and the only record of it is the screen they were looking at. The
+    /// two processes that get one — the TUI and the terminal server —
+    /// also cannot use stderr, which is a screen in one and `/dev/null`
+    /// in the other.
+    ///
+    /// Written from a thread of its own, so a render loop never waits on
+    /// a disk, and never lossy: a journal that drops the lines around a
+    /// burst drops exactly the ones worth having.
+    Journal { dir: PathBuf, name: String },
+}
+
+impl Sink {
+    /// The journal `name` keeps under `dir` — `UzeHome::logs_dir`, which
+    /// sits with the caches because losing it costs nothing.
+    pub fn journal(dir: PathBuf, name: &str) -> Self {
+        Self::Journal {
+            dir,
+            name: name.to_owned(),
+        }
+    }
 }
 
 /// Holds the exporter for the life of the process. Dropping it — or
@@ -50,6 +85,10 @@ pub enum Sink {
 pub struct Telemetry {
     #[cfg(feature = "telemetry")]
     provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    /// The journal's writer thread. Dropping it flushes what it still
+    /// holds — which is the last thing written before a crash, and the
+    /// reason this is a field rather than a `let _`.
+    journal: Option<tracing_appender::non_blocking::WorkerGuard>,
 }
 
 impl Telemetry {
@@ -64,6 +103,7 @@ impl Telemetry {
         if let Some(provider) = self.provider.take() {
             let _ = provider.shutdown();
         }
+        drop(self.journal.take());
     }
 }
 
@@ -78,14 +118,26 @@ impl Drop for Telemetry {
 pub fn init(sink: Sink) -> Telemetry {
     let filter = std::env::var(LOG_FILTER).ok();
     let endpoint = otlp_endpoint();
-    if filter.is_none() && endpoint.is_none() {
+    let journals = matches!(sink, Sink::Journal { .. });
+    if filter.is_none() && endpoint.is_none() && !journals {
         return Telemetry::default();
     }
+    // `info` is what a journal nobody configured carries: the actions, the
+    // Git calls, the integration calls and every failure, which is the
+    // level this trace was instrumented at. `UZE_LOG` raises or narrows
+    // it for both the journal and stderr — one switch, so a person cannot
+    // be reading one level and telling somebody about another.
     let env_filter = filter
         .as_deref()
         .and_then(|directives| EnvFilter::try_new(directives).ok())
         .unwrap_or_else(|| EnvFilter::new("info"));
-    let text = filter.is_some().then(|| text_layer(sink));
+    let (text, journal) = match (journals, filter.is_some()) {
+        (false, false) => (None, None),
+        _ => {
+            let (layer, guard) = text_layer(sink);
+            (Some(layer), guard)
+        }
+    };
     let registry = tracing_subscriber::registry().with(env_filter).with(text);
     #[cfg(feature = "telemetry")]
     if let Some(endpoint) = endpoint {
@@ -95,46 +147,71 @@ pub fn init(sink: Sink) -> Telemetry {
         let _ = registry.with(layer).try_init();
         return Telemetry {
             provider: Some(provider),
+            journal,
         };
     }
     let _ = registry.try_init();
-    Telemetry::default()
+    #[cfg(feature = "telemetry")]
+    return Telemetry {
+        provider: None,
+        journal,
+    };
+    #[cfg(not(feature = "telemetry"))]
+    Telemetry { journal }
 }
 
-fn text_layer<S>(sink: Sink) -> Box<dyn Layer<S> + Send + Sync>
+/// The text layer, and the writer thread it is to be kept alive by.
+fn text_layer<S>(
+    sink: Sink,
+) -> (
+    Box<dyn Layer<S> + Send + Sync>,
+    Option<tracing_appender::non_blocking::WorkerGuard>,
+)
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    let file = match sink {
-        Sink::Stderr => None,
-        Sink::File(path) => {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .ok()
-        }
-    };
     // A span's close is what the text is for: it carries the busy and idle
     // time, which is the "where did the milliseconds go" a person reads
     // this for. Events alone would show nothing for a warm command.
     let span_close = tracing_subscriber::fmt::format::FmtSpan::CLOSE;
-    match file {
-        Some(file) => tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_span_events(span_close)
-            .with_writer(Mutex::new(file))
-            .boxed(),
-        None => tracing_subscriber::fmt::layer()
+    let Sink::Journal { dir, name } = sink else {
+        let layer = tracing_subscriber::fmt::layer()
             .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
             .with_span_events(span_close)
             .with_writer(std::io::stderr)
-            .boxed(),
-    }
+            .boxed();
+        return (layer, None);
+    };
+    // A journal that cannot be opened is not a reason to fail the run the
+    // journal is about: the process goes on with nothing written, exactly
+    // as it did before there was one.
+    let appender = match tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(&name)
+        .filename_suffix("log")
+        .max_log_files(JOURNAL_DAYS)
+        .build(&dir)
+    {
+        Ok(appender) => appender,
+        Err(_) => return (Box::new(NoLayer), None),
+    };
+    let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(false)
+        .finish(appender);
+    let layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_span_events(span_close)
+        .with_writer(writer)
+        .boxed();
+    (layer, Some(guard))
 }
+
+/// A layer that subscribes to nothing — what is installed when the journal
+/// could not be opened, so `init`'s one return shape does not have to
+/// carry "and also there is no layer".
+struct NoLayer;
+
+impl<S: tracing::Subscriber> Layer<S> for NoLayer {}
 
 /// The root span of a CLI invocation: the leaf command a person typed and
 /// the argument line, less anything that looks like a secret.
@@ -144,8 +221,8 @@ pub fn command_span(command: &str, argv: &[String]) -> tracing::Span {
 
 /// What is left of `argv` once nothing in it is worth stealing.
 ///
-/// This line is appended to `~/.uze/state/logs/uze.log`, which is never
-/// rotated, and exported to whatever collector `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// This line is appended to the journal under `~/.uze/cache/logs`, which
+/// an operator attaches to a report, and exported to whatever collector `OTEL_EXPORTER_OTLP_ENDPOINT`
 /// names. `uze market add https://user:token@host/market` is a supported,
 /// documented shape, so a credential arriving here is an ordinary input,
 /// not a mistake — and a log is exactly the place it must not survive.
@@ -305,6 +382,31 @@ mod otlp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The point of the journal: it is written because the process is one
+    /// that keeps one, not because anybody set `UZE_LOG` beforehand. The
+    /// incident it exists for is always described after the fact.
+    #[test]
+    fn a_journal_is_written_without_anybody_asking_for_one() {
+        let scratch = uze_testkit::temp::scratch("telemetry-journal");
+        let (layer, guard) = text_layer(Sink::journal(scratch.clone(), "probe"));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(root = "/somewhere", "a space was created");
+        });
+        // The writer's thread holds the line until the guard goes.
+        drop(guard);
+
+        let written: String = std::fs::read_dir(&scratch)
+            .expect("the journal directory")
+            .filter_map(|entry| std::fs::read_to_string(entry.ok()?.path()).ok())
+            .collect();
+        assert!(
+            written.contains("a space was created") && written.contains("/somewhere"),
+            "the event and its fields are in the journal: {written:?}"
+        );
+        let _ = std::fs::remove_dir_all(scratch);
+    }
 
     #[test]
     fn a_credential_in_the_argument_line_never_reaches_the_trace() {
