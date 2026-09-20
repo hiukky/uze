@@ -1096,15 +1096,19 @@ fn render_space_caption(
     // header's own name leads stays the space's, and what it is about reads
     // as a caption to it rather than as another row of the tree. Lit along
     // with its header.
-    let mut spans = vec![space_gutter(header_is_current(
-        space,
-        session,
-        identities,
-        model.space_folded(space),
-    ))];
+    let is_current = header_is_current(space, session, identities, model.space_folded(space));
+    let mut spans = vec![space_gutter(is_current)];
     let hue = theme::color(Token::TextDim);
     row::push_trailing(&mut spans, rect.width, caption, hue);
-    row::pad_to(&mut spans, rect.width, block_ground(selected));
+    // A minimized space is its header and this row, and the two are one
+    // item: the trace the header wears when it is the row in front runs
+    // through this row too, or the item would be lit down half its height.
+    let ground = if is_current {
+        theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle)
+    } else {
+        block_ground(selected)
+    };
+    row::pad_to(&mut spans, rect.width, ground);
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
@@ -1674,7 +1678,10 @@ pub(super) fn render_space_header(
     // about the header is unchanged — the trace says "this row", not
     // "this block", which is what the fill underneath already says.
     let ground = if is_current {
-        theme::tinted(Token::Accent, Token::SurfaceRaised)
+        // The one overlay: exactly what an agent row in front wears, and
+        // what the caption under a minimized header wears with it. A
+        // second tone for the same meaning would read as two states.
+        theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle)
     } else {
         theme::color(Token::SurfaceRaised)
     };

@@ -6552,8 +6552,8 @@ mod workspace_tests {
         let header = space_header(&hits, SpaceId(1));
         assert_eq!(
             buffer[(header.x + 2, header.y)].bg,
-            crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaised),
-            "the space's own row is the one selected: {rows:?}"
+            crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle),
+            "the space's own row is the one selected, in the one overlay: {rows:?}"
         );
 
         let behind = agents_in_the_root_session();
@@ -6565,6 +6565,36 @@ mod workspace_tests {
             buffer[(header.x + 2, header.y)].bg,
             theme::color(Token::SurfaceRaised),
             "an agent is in front, so the header is the plain surface: {rows:?}"
+        );
+    }
+
+    /// A minimized space is two rows — its header and the caption saying
+    /// where its work is — and they are one item: when that item is the
+    /// one in front, the trace runs through both rows rather than
+    /// stopping halfway down it.
+    #[test]
+    fn a_minimized_space_in_front_is_lit_down_both_of_its_rows() {
+        let mut model = agents_in_the_root_session();
+        let root = model.session.as_ref().expect("session").workspace.spaces[0]
+            .root
+            .clone();
+        model.collapsed_space_roots.insert(root);
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_in_the_root());
+        let header = space_header(&hits, SpaceId(1));
+
+        let overlay = crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle);
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            overlay,
+            "the header is the row in front: {rows:?}"
+        );
+        assert_eq!(
+            buffer[(header.x + 2, header.y + 1)].bg,
+            overlay,
+            "and the caption under it carries the same one, with no step \
+             between the two rows of one item: {rows:?}"
         );
     }
 

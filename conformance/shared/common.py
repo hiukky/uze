@@ -607,14 +607,30 @@ def observed_markers(struct, field):
 
 
 def provider_struct(cfg):
+    """Every request the provider has recorded so far.
+
+    An empty answer means "the provider has recorded nothing", and a
+    caller turns that into a failed check — so a read that *could not be
+    made* says so on the run's own output instead of passing for one.
+    The provider writes the file atomically, so a partial read here is a
+    fault worth seeing rather than a race to be absorbed.
+    """
+    out = subprocess.run(
+        ["docker", "exec", cfg.prov_name, "cat", "/app/struct.json"],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        print(
+            f"[lab] the provider's request log could not be read: "
+            f"{out.stderr.strip()[:160]}",
+            flush=True,
+        )
+        return []
     try:
-        out = subprocess.run(
-            ["docker", "exec", cfg.prov_name, "cat", "/app/struct.json"],
-            capture_output=True,
-            text=True,
-        ).stdout
-        return json.loads(out) or []
-    except Exception:
+        return json.loads(out.stdout) or []
+    except ValueError as error:
+        print(f"[lab] the provider's request log did not parse: {error}", flush=True)
         return []
 
 
