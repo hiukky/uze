@@ -1043,7 +1043,7 @@ mod workspace_tests {
             .expect("the drop target's own row");
         let column = gutter_column(&hits);
         assert!(
-            lit_gutter_rows(&buffer, column, true).contains(&second_row),
+            lit_gutter_rows(&buffer, column).contains(&second_row),
             "indicator on the target row: {rows:?}"
         );
 
@@ -1052,7 +1052,7 @@ mod workspace_tests {
             .map(|d| DraggingTab { armed: false, ..d });
         let buffer = sidebar(&model, &identities_fixture()).buffer;
         assert!(
-            !lit_gutter_rows(&buffer, column, true).contains(&second_row),
+            !lit_gutter_rows(&buffer, column).contains(&second_row),
             "no indicator before the drag is armed"
         );
     }
@@ -1907,19 +1907,18 @@ mod workspace_tests {
 
     /// Two rows per agent and no gap between them, so what says which
     /// item the keyboard is on has to be the item itself: its two rows
-    /// carry a trace of the space's own hue over the panel every other
-    /// row sits on. Light enough to be read through — it is a selection,
-    /// not a highlight — and the kind's, so the tint says what the space
-    /// is as well as where you are.
+    /// carry a trace of the accent over the panel every other row sits
+    /// on. Light enough to be read through — it is a selection, not a
+    /// highlight.
     #[test]
-    fn the_agent_receiving_keystrokes_wears_its_kinds_hue_over_the_space() {
+    fn the_agent_receiving_keystrokes_wears_the_accent_over_the_space() {
         let model = agents_in_the_root_session();
         let Sidebar {
             buffer, hits, rows, ..
         } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
         let plain = theme::color(Token::SurfaceRaisedSubtle);
-        let tinted = crate::ui::theme::tinted(Token::AgentInPlace, Token::SurfaceRaisedSubtle);
+        let tinted = crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle);
         assert_ne!(tinted, plain, "the tint is a surface of its own");
 
         // `agent 2` is the space's context agent (see `agents_in_the_root_session`).
@@ -1976,7 +1975,7 @@ mod workspace_tests {
         } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits), false),
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
             vec![agents[2], agents[3]],
             "an agent in the root lights the hue of its group: {rows:?}"
         );
@@ -1987,7 +1986,7 @@ mod workspace_tests {
         } = sidebar(&tree, &identities_fixture());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits), true),
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
             vec![agents[0], agents[1]],
             "and an isolated one the other: {rows:?}"
         );
@@ -4755,12 +4754,8 @@ mod workspace_tests {
     /// The rows whose gutter is lit — drawn in the hue of the space's own
     /// kind, in the sidebar's leading column `column`, which every space's
     /// gutter runs down.
-    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16, isolated: bool) -> Vec<u16> {
-        let hue = theme::color(if isolated {
-            Token::AgentIsolated
-        } else {
-            Token::AgentInPlace
-        });
+    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16) -> Vec<u16> {
+        let hue = theme::color(Token::Accent);
         (0..buffer.area.height)
             .filter(|row| {
                 let cell = &buffer[(column, *row)];
@@ -6530,9 +6525,9 @@ mod workspace_tests {
 
     /// Every row of a space hangs off one muted gutter down its leading
     /// column, at no level of indent; only the selected agent's stretch of
-    /// it is heavier and in its own group's hue. An agent in the root sits
-    /// beside the trunk, so both of its rows are the trunk itself — the
-    /// group that branches off it is covered where the two groups are.
+    /// it is heavier and in the accent, whichever group it is in. An agent
+    /// in the root sits beside the trunk, so both of its rows are the
+    /// trunk itself.
     #[test]
     fn a_space_is_one_block_down_its_gutter() {
         let mut model = three_spaces();
@@ -6543,7 +6538,7 @@ mod workspace_tests {
         } = sidebar(&model, &identities_fixture());
         use crate::ui::theme::{Symbol, Token};
         let muted = theme::color(Token::TextMuted);
-        let in_place = theme::color(Token::AgentInPlace);
+        let lit = theme::color(Token::Accent);
         // Space 1 is in the background; space 3 is selected, on its agent.
         for (space, branch, caption, hues) in [
             (
@@ -6556,7 +6551,7 @@ mod workspace_tests {
                 SpaceId(3),
                 Symbol::TreeVertical,
                 Symbol::TreeVertical,
-                [muted, in_place, in_place],
+                [muted, lit, lit],
             ),
         ] {
             let header = space_header(&hits, space);
@@ -6782,7 +6777,7 @@ mod workspace_tests {
                 rows, hits, buffer, ..
             } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, three).y;
-            let lit = lit_gutter_rows(&buffer, gutter_column(&hits), false).contains(&header);
+            let lit = lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header);
             (rows[header as usize].clone(), lit)
         };
         let (open, lit) = header_row(&model);
@@ -6989,7 +6984,7 @@ mod workspace_tests {
                 .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
                 .map(|(rect, _)| rect.y)
                 .expect("the space header");
-            lit_gutter_rows(&buffer, gutter_column(&hits), false).contains(&header)
+            lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header)
         };
         let mut on_shell = session("/repo");
         let space = on_shell.selected_space().id;

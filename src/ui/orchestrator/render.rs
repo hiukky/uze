@@ -1096,10 +1096,12 @@ fn render_space_caption(
     // header's own name leads stays the space's, and what it is about reads
     // as a caption to it rather than as another row of the tree. Lit along
     // with its header.
-    let mut spans = vec![space_gutter(
-        header_is_current(space, session, identities, model.space_folded(space)),
-        false,
-    )];
+    let mut spans = vec![space_gutter(header_is_current(
+        space,
+        session,
+        identities,
+        model.space_folded(space),
+    ))];
     let hue = theme::color(Token::TextDim);
     row::push_trailing(&mut spans, rect.width, caption, hue);
     if selected {
@@ -1145,7 +1147,7 @@ fn draw_tree(
         if previous.is_some_and(|was| was != isolated)
             && let Some(gap) = rows.slot(1).visible()
         {
-            let mut spans = vec![space_gutter(false, false)];
+            let mut spans = vec![space_gutter(false)];
             if is_active_space {
                 row::pad_to(
                     &mut spans,
@@ -1172,10 +1174,7 @@ fn draw_tree(
         // reads as "here" at a glance. Nothing outside the active space
         // is tinted: `is_current` is selected *and* receiving keystrokes.
         let surface = if agent.is_current {
-            Some(theme::tinted(
-                group_hue(isolated),
-                Token::SurfaceRaisedSubtle,
-            ))
+            Some(theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle))
         } else {
             is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
         };
@@ -1185,16 +1184,13 @@ fn draw_tree(
         // for the agent.
         let lead = || {
             if flat {
-                [space_gutter(lit, isolated), Span::raw("  ")]
+                [space_gutter(lit), Span::raw("  ")]
             } else {
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
-                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit, isolated)),
-                    Span::styled(
-                        format!("{} ", &branch[trunk..]),
-                        gutter_style(lit, isolated),
-                    ),
+                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit)),
+                    Span::styled(format!("{} ", &branch[trunk..]), gutter_style(lit)),
                 ]
             }
         };
@@ -1240,7 +1236,7 @@ fn draw_tree(
         if let Some(detail_rect) = rows.slot(1).visible() {
             // Under the agent's name, past the connector's blank column
             // and the status column, in either kind.
-            let mut spans = vec![space_gutter(lit, isolated), Span::raw("    ")];
+            let mut spans = vec![space_gutter(lit), Span::raw("    ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1633,7 +1629,7 @@ pub(super) fn render_space_header(
     let label_style = theme::fg(Token::TextInactive);
     let fold = mark::disclosure(!collapsed);
     let mut spans = vec![
-        space_gutter(is_current, false),
+        space_gutter(is_current),
         Span::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
     ];
     // The fold and the space after it: a target two cells wide, pushed
@@ -1688,32 +1684,22 @@ pub(super) fn render_space_header(
 /// behind it, louder.
 /// The vertical line down a space's leading column, from its header to its
 /// last row: the space as one block. Muted in every space, the one being
-/// worked in included; `lit`, in the hue of the space's own kind, only
-/// along what is selected in it.
-fn space_gutter(lit: bool, isolated: bool) -> Span<'static> {
-    Span::styled(
-        theme::glyph(Symbol::TreeVertical),
-        gutter_style(lit, isolated),
-    )
+/// worked in included; `lit`, in the theme's accent, only along what is
+/// selected in it.
+///
+/// One hue for every agent, whichever group it sits in: the groups are
+/// already told apart by where they stand in the column and by the
+/// connector on the isolated ones, and a second axis saying the same
+/// thing costs a colour that then means nothing else.
+fn space_gutter(lit: bool) -> Span<'static> {
+    Span::styled(theme::glyph(Symbol::TreeVertical), gutter_style(lit))
 }
 
-fn gutter_style(lit: bool, isolated: bool) -> Style {
+fn gutter_style(lit: bool) -> Style {
     if lit {
-        theme::fg(group_hue(isolated))
+        theme::fg(Token::Accent)
     } else {
         theme::fg(Token::TextMuted)
-    }
-}
-
-/// The hue an agent's group marks itself in, wherever it does: the
-/// gutter beside it, and the surface under the item the keyboard is on.
-/// The two groups of one space are told apart by colour before they
-/// are read.
-fn group_hue(isolated: bool) -> Token {
-    if isolated {
-        Token::AgentIsolated
-    } else {
-        Token::AgentInPlace
     }
 }
 

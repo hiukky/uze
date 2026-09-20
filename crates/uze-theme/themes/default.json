@@ -35,9 +35,6 @@
     "state.diff-added": "@state.success/1a",
     "state.diff-removed": "@state.danger/1a",
 
-    "agent.isolated": "@accent",
-    "agent.in-place": "#e6c07b",
-
     "ansi.0": "@surface.background",
     "ansi.1": "#e0765f",
     "ansi.2": "#8fd19e",
