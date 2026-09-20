@@ -626,6 +626,43 @@ impl Workspace<'_> {
         })
     }
 
+    /// Every piece of work on this machine that no live agent is in front
+    /// of, whichever project it belongs to.
+    ///
+    /// Answers from UZE's own records of every project it has recorded an
+    /// agent for — not from the projects this session happens to have
+    /// opened — so a space closed by accident does not take its agents'
+    /// work out of the one surface that exists to find it again.
+    ///
+    /// Liveness is not asked here. Which agents a client is in front of is
+    /// the client's own question, and it answers it by launch stamp; this
+    /// hands over everything still preserved and lets the caller subtract.
+    ///
+    /// A project whose records cannot be read is skipped rather than
+    /// refused: withholding every other project's work because one
+    /// document is unreadable is the failure this list exists to prevent.
+    #[tracing::instrument(name = "workspace.preserved_work", skip_all)]
+    pub fn preserved_work(&self) -> Vec<PreservedWork> {
+        let mut preserved: Vec<PreservedWork> = uze_core::record::roots(&self.0.home)
+            .into_iter()
+            .flat_map(|project| {
+                let agents = task::load(&self.0.home, &project)
+                    .map(|store| store.agents)
+                    .unwrap_or_default();
+                agents.into_iter().filter_map({
+                    let project = project.clone();
+                    move |agent| PreservedWork::from_agent(&project, &agent)
+                })
+            })
+            .collect();
+        preserved.sort_by(|left, right| {
+            left.created_at_unix
+                .cmp(&right.created_at_unix)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        preserved
+    }
+
     /// Every task recorded for `cwd`'s repository, as last evaluated.
     #[tracing::instrument(name = "workspace.tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
@@ -1554,6 +1591,29 @@ pub struct UpstreamSync {
     pub push: usize,
 }
 
+/// One piece of preserved work, as the list that crosses projects sees it.
+///
+/// Deliberately thinner than a [`TaskView`]. Readiness, publication and how
+/// far a branch is ahead are questions about the project you are *in*, and
+/// answering them here would put one Git read per project on the machine
+/// behind a keystroke. Everything below comes from the record alone, which
+/// is what keeps the list instant however many projects accumulate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedWork {
+    /// The repository this work belongs to. A list that crosses projects
+    /// has to say, or two agents on a branch of the same name in two
+    /// projects are one row twice.
+    pub project: PathBuf,
+    pub id: String,
+    pub label: String,
+    pub branch: String,
+    pub checkout: Option<PathBuf>,
+    /// The state the record itself carries — never `Integrated` or
+    /// `Closed`, which is what "preserved" means.
+    pub state: TaskStateView,
+    pub created_at_unix: u64,
+}
+
 /// One task as presentation sees it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskView {
@@ -1585,6 +1645,32 @@ pub struct TaskView {
     /// branch still is from the target, which only a merge closes.
     pub unsynced: Option<usize>,
     pub created_at_unix: u64,
+}
+
+impl PreservedWork {
+    /// `None` for an agent that has nothing preserved: one working in the
+    /// project's own root, which has no branch to hold work on, and one
+    /// whose work the target already carries or that never had any.
+    ///
+    /// Read from the record alone — the state is the one the record
+    /// carries, not the one a Git read would draw — because this is what
+    /// lets the list answer for a machine without asking a repository
+    /// anything.
+    fn from_agent(project: &Path, agent: &Agent) -> Option<Self> {
+        let isolation = agent.isolation()?;
+        if matches!(isolation.state, TaskState::Integrated | TaskState::Closed) {
+            return None;
+        }
+        Some(Self {
+            project: project.to_path_buf(),
+            id: agent.id.as_str().to_owned(),
+            label: agent.label.clone(),
+            branch: isolation.branch.clone(),
+            checkout: landing::slot_path(project, isolation),
+            state: TaskStateView::from(&isolation.state),
+            created_at_unix: agent.created_at_unix,
+        })
+    }
 }
 
 impl TaskView {
@@ -2753,6 +2839,113 @@ mod placement_tests {
 
 #[cfg(test)]
 mod task_service_tests {
+    /// Records what a launch would have recorded, without the checkout a
+    /// launch would also have cut. `preserved_work` answers from the record
+    /// alone, so the record is what a test of it should set up — and a
+    /// worktree per case would buy nothing but Git.
+    fn record_an_agent(
+        app: &UzeApplication,
+        project: &Path,
+        state: TaskState,
+        branch: Option<&str>,
+    ) -> String {
+        uze_core::record::ensure(&app.home, project).unwrap();
+        let mut agent = Agent::isolated(
+            "claude",
+            None,
+            Base::Ref("main".to_owned()),
+            "0".repeat(40),
+            "main".to_owned(),
+        );
+        if let Some(branch) = branch {
+            agent.take_name(branch.to_owned());
+        }
+        agent.isolation_mut().expect("isolated").state = state;
+        let id = agent.id.as_str().to_owned();
+        task::locked(&app.home, project, |store| {
+            store.upsert(agent);
+            Ok(())
+        })
+        .unwrap();
+        id
+    }
+
+    /// The list exists for the moment a space was closed: the project has
+    /// no space open, and the work is still there. It must be found
+    /// without having opened it.
+    #[test]
+    fn work_is_found_in_a_project_this_session_never_opened() {
+        let app = application("preserved-unopened-home");
+        let project = uze_testkit::temp::scratch("preserved-unopened");
+        std::fs::create_dir_all(&project).unwrap();
+        record_an_agent(&app, &project, TaskState::Running, None);
+
+        // A second application over the same home: a fresh session that
+        // has opened nothing.
+        let fresh = UzeApplication::new(app.home.clone(), Vec::new());
+        let preserved = fresh.workspace().preserved_work();
+
+        assert_eq!(preserved.len(), 1, "the work is listed: {preserved:?}");
+        assert_eq!(
+            preserved[0].project,
+            project.canonicalize().unwrap(),
+            "and the row names the repository it belongs to, which is what \
+             makes its checkout locatable at all"
+        );
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    /// Two projects, one branch name. Without the project on the row they
+    /// are one entry twice.
+    #[test]
+    fn two_projects_sharing_a_branch_name_stay_distinguishable() {
+        let app = application("preserved-two-home");
+        let projects = ["preserved-one", "preserved-two"].map(|label| {
+            let project = uze_testkit::temp::scratch(label);
+            std::fs::create_dir_all(&project).unwrap();
+            record_an_agent(&app, &project, TaskState::Running, Some("fix/login"));
+            project
+        });
+
+        let preserved = app.workspace().preserved_work();
+        let named: std::collections::BTreeSet<_> =
+            preserved.iter().map(|work| work.project.clone()).collect();
+        assert_eq!(preserved.len(), 2);
+        assert!(
+            preserved.iter().all(|work| work.branch == "fix/login"),
+            "the case is two agents carrying the same branch name"
+        );
+        assert_eq!(
+            named.len(),
+            2,
+            "and the project on each row is the only thing telling them apart"
+        );
+        for project in projects {
+            let _ = std::fs::remove_dir_all(project);
+        }
+    }
+
+    /// A record whose work the target already carries is not preserved
+    /// work — it is delivered — and neither is one that never had any.
+    #[test]
+    fn delivered_and_closed_work_is_not_listed() {
+        let app = application("preserved-delivered-home");
+        let project = uze_testkit::temp::scratch("preserved-delivered");
+        std::fs::create_dir_all(&project).unwrap();
+        record_an_agent(&app, &project, TaskState::Running, None);
+        assert_eq!(app.workspace().preserved_work().len(), 1);
+
+        record_an_agent(&app, &project, TaskState::Integrated, None);
+        record_an_agent(&app, &project, TaskState::Closed, None);
+
+        assert_eq!(
+            app.workspace().preserved_work().len(),
+            1,
+            "delivered work is not work waiting to be found again"
+        );
+        let _ = std::fs::remove_dir_all(project);
+    }
+
     use super::*;
     use uze_core::UzeHome;
 

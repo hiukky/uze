@@ -137,13 +137,13 @@
 
 ## 11. Preserved work answers for the machine
 
-- [ ] 11.1 Add the reader that sweeps `state/projects/`, answering each
+- [x] 11.1 Add the reader that sweeps `state/projects/`, answering each
       project's agents with the root its `project.json` names, and
       reporting an unreadable project without withholding the rest.
-- [ ] 11.2 Filter to preserved work from the record alone — stored state
+- [x] 11.2 Filter to preserved work from the record alone — stored state
       neither integrated nor closed, isolation present — with no Git read
       per project.
-- [ ] 11.3 Add the read model and the `UzeApplication` method presentation
+- [x] 11.3 Add the read model and the `UzeApplication` method presentation
       consumes; nothing in `src/` reaches past it.
 - [ ] 11.4 Draw `preserved_tasks` from it instead of `remembered.tasks`,
       scheduling the read off the UI thread and keeping the last answer
