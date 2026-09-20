@@ -103,15 +103,32 @@
 
 ## 8. Located resources stay addressable
 
-- [ ] 8.1 Close the gaps 1.2 found, following the claim-names-its-holder
-      shape: the claim records its holder, the endpoint lives beside the
-      workspace it serves.
-- [ ] 8.2 Decide what a generated projection does when the generator
-      changed: regenerate, or report.
-- [ ] 8.3 Decide whether the self-updater may replace the binary while a
-      client runs, and never start a server from an image that is gone.
-- [ ] 8.4 Test per resource: a previous build's artifact at a location this
-      build does not compute is still found, reported and ended.
+- [x] 8.1 Nothing to do: the inventory found no open gaps. The claim
+      already records its holder (`record_claimant`), the endpoint is
+      already computed from the workspace's own directory with fallbacks
+      (`socket_path`), and a server is already never started from a
+      replaced image (`server_executable`). These are the three incidents
+      the absorbed change was written from, each fixed where it was found
+      before this one began.
+- [x] 8.2 Decided: regenerate, and say nothing. A projection whose root is
+      gone, or whose marker cannot be read, is swept and rebuilt on the next
+      launch in that project — `prune_projections` already held that, and it
+      is the generated tier's rule. Moving generated harness content under
+      `runtime/` made the sweep's one-tenant assumption wrong, which would
+      have deleted a live delivery on the next `doctor`; `attachments` is
+      now a tenant of its own, because its lifetime is the attachment's and
+      the receipt ledger is what answers for it.
+- [x] 8.3 Decided, and already holding: it may. `server_executable`
+      falls back to `uze` as `PATH` resolves it when `current_exe` no
+      longer exists — which is the binary the operator just installed, and
+      the one they want serving anyway — and says so plainly when neither
+      exists.
+- [x] 8.4 Already covered, one test per resource:
+      `a_server_answering_at_no_endpoint_this_build_names_is_still_stopped`,
+      `a_claim_this_build_cannot_name_is_reported_rather_than_called_stopped`,
+      `a_server_of_another_build_is_retired_and_lets_go_of_the_workspace`,
+      `two_terminals_that_disagree_about_the_environment_share_one_endpoint`
+      and `a_stale_socket_is_reclaimed_by_the_server_that_binds`.
 
 ## 9. The runtime can reach the screen
 

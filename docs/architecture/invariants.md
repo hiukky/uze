@@ -1467,14 +1467,17 @@ same terms, and rebuilt by the next launch that needs it.
 > `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_directory_that_names_no_root_is_swept`
 > `tests/integrations/runtime_projection.rs::a_swept_projection_is_rebuilt_by_the_next_launch`
 
-### The runtime tree has one tenant, and the sweep owns the rest
+### The runtime tree has two tenants, and the sweep owns the rest
 
 `runtime/projects/` holds derived projections that outlive every invocation
-and die with their project root. Anything else directly under `runtime/` is
-UZE's own output at a path nothing writes any more, so the sweep removes it,
-and nothing project-owned is reached through a projection it collects.
+and die with their project root. `runtime/attachments/` holds what UZE
+generates for a harness to read, whose lifetime is the attachment's rather
+than any project's — the receipt ledger is what answers for it. Anything
+else directly under `runtime/` is UZE's own output at a path nothing writes
+any more, so the sweep removes it, and nothing project-owned is reached
+through a projection it collects.
 
-> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenant_and_nothing_else`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenants_and_nothing_else`
 > `tests/integrations/runtime_projection.rs::sweeping_a_dead_projection_never_touches_the_project_it_pointed_at`
 > `tests/packages/store.rs::uze_home_derives_every_owned_path_from_one_root`
 
