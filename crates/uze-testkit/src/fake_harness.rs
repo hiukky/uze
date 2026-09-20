@@ -112,7 +112,7 @@ while IFS= read -r line; do
       fi
       : > "$dir/$slot.fixed"
       ;;
-    *"Open a pull request"*)
+    *"Open a pull request"*|*"Open a merge request"*)
       if [ -f "$dir/$slot.request.sh" ]; then
         sh "$dir/$slot.request.sh" >>"$log" 2>&1
       fi
