@@ -2248,96 +2248,92 @@ fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
     }
 }
 
-/// The header's delivery button for a task: text, hue, and whether it is a
-/// button at all rather than a state the header only reports.
+/// The small notification for a task: what the delivery is about, and
+/// where it stands.
 ///
-/// A ready task names its ending, not just its size. One verb over three
-/// completions left the button saying the same thing whether it was about
-/// to fast-forward the target under you, open a pull request, or do
-/// nothing to anything but the branch — the one question an operator has
-/// before pressing it (see [`delivery_ending`]).
-fn deliver_button(
+/// Two parts and no forge's word for either. The subject is the request's
+/// own number, or the ending for a completion that is not a request at
+/// all (see [`delivery_subject`]); the standing is [`task_mark`]'s own
+/// mark, so the strip, the sidebar row and the status legend cannot come
+/// to say different things about one state.
+///
+/// One verb over three completions read the same whether it was about to
+/// fast-forward the target under you, open a request against it, or touch
+/// nothing outside the branch — which is why the subject is the half that
+/// is always there, and the count rides the mark rather than standing
+/// alone in front of it.
+fn delivery_notification(
     task: &AgentView,
     state: &WorkStateView,
     tick: usize,
 ) -> Option<(String, Color, bool)> {
-    match state {
-        // Level with what was published: pressing sends nothing new, so
-        // the button reports the sync instead of counting commits the
-        // request already carries. It stays pressable — the target moves,
-        // and a re-sync is how the branch follows it.
-        WorkStateView::Published => Some((
-            format!("{} {}", theme::glyph(Symbol::MarkOk), delivery_ending(task)),
-            theme::color(Token::TextMuted),
-            true,
-        )),
-        WorkStateView::Ready => Some(match task.unsynced {
-            // What a press would send, which is not how far the branch is
-            // from the target: that distance is the merge's question and
-            // stays open until the request lands.
-            // The count and the ending, no mark: the words already say
-            // what a press does, and an icon in front of them only made the
-            // button read as a badge.
-            Some(unsynced) => (
-                format!("{unsynced} {}", delivery_ending(task)),
-                theme::color(Token::Accent),
-                true,
-            ),
-            None => (
-                format!("{} {}", task.ahead, delivery_ending(task)),
-                theme::color(Token::Accent),
-                true,
-            ),
-        }),
-        // The hue is the state's own (see `task_mark`), not the button's
-        // mood: one meaning, one color, wherever the state is drawn.
-        WorkStateView::GateFailed => Some((
-            format!("{} retry", theme::glyph(Symbol::TaskRetry)),
-            theme::color(Token::StateDanger),
-            true,
-        )),
-        WorkStateView::Conflicted { .. } => Some((
-            "! conflict".to_owned(),
-            theme::color(Token::StateWarning),
-            false,
-        )),
+    // Which states put a notification in this zone: the ones handing work
+    // over passes through. `Uncommitted` and `Parked` carry marks of
+    // their own in the sidebar, but they are facts about a checkout
+    // rather than steps of a delivery, and this zone is the second.
+    // Conditioned, not disabled: a state that cannot be delivered is
+    // still reported, and the report simply is not a button.
+    let pressable = match state {
+        WorkStateView::Ready | WorkStateView::Published | WorkStateView::GateFailed => true,
+        WorkStateView::Conflicted { .. }
+        | WorkStateView::Integrating
+        | WorkStateView::Integrated => false,
+        _ => return None,
+    };
+    let (mark, hue) = task_mark(state)?;
+    let standing = match state {
+        // The one state `task_mark` cannot lend its glyph to. Its mark is
+        // the vocabulary's "there is work to hand over", and the patched
+        // set draws that as a create-a-request icon — true for the
+        // completion that opens one, a lie in front of a button about to
+        // fast-forward the target or to touch nothing outside the branch.
+        // What a press sends is commits, whatever the ending, so the
+        // count wears the arrow that means exactly that and nothing about
+        // a forge.
+        //
+        // The count is what a press would send, which is not how far the
+        // branch is from the target: that distance is the merge's
+        // question and stays open until the request lands.
+        WorkStateView::Ready => format!(
+            "{}{}",
+            theme::glyph(Symbol::SyncAhead),
+            task.unsynced.unwrap_or(task.ahead)
+        ),
         // The one report in this row that is also work in progress, so it
         // is the one that moves: a rebase, a gate and a push take as long
-        // as the project's checks do, and a still word for that many
+        // as the project's checks do, and a still mark for that many
         // seconds reads as a screen that has stopped. The sidebar's mark
         // keeps `Symbol::Ellipsis` — a single cell has no room to turn.
-        WorkStateView::Integrating => Some((
-            format!("{} delivering", agent_activity_frame(tick)),
-            theme::color(Token::StateInFlight),
-            false,
-        )),
-        _ => None,
-    }
+        WorkStateView::Integrating => agent_activity_frame(tick),
+        _ => mark,
+    };
+    Some((
+        format!("{} {standing}", delivery_subject(task)),
+        hue,
+        pressable,
+    ))
 }
 
-/// What delivering a task does, in the words its outcome will use: the
-/// two completions that touch something outside the branch name what they
-/// touch, and the one that does not says so instead of naming a target it
-/// will never write to.
+/// What a delivery is *about*, in the fewest characters that name it: the
+/// request's own number once the forge has one, an unnumbered request
+/// before that, and — for the two completions that are not a request at
+/// all — where the work is going instead.
 ///
-/// `pr` says two different things over a task's life, because it *is* two
-/// different actions: an errand the first time — publish, and ask the
-/// agent to open the request — and a sync from then on, pushing new
-/// commits onto a request that already exists. Naming the request is how
-/// the button says which of the two it has become.
-fn delivery_ending(task: &AgentView) -> String {
+/// Never "PR" or "MR". Those are two forges' names for one thing, and a
+/// strip that picks one takes a side its reader may not be on; `#` is the
+/// idiom both of them already write. The branch's published name is not
+/// here either: it is the one part of this that has no bound on its
+/// length, and a zone that changes width with a branch name moves every
+/// button left of it.
+fn delivery_subject(task: &AgentView) -> String {
     match task.completion {
-        CompletionBehavior::Merge => {
-            format!("merge {} {}", theme::glyph(Symbol::ArrowTo), task.target)
-        }
-        CompletionBehavior::Pr => match (task.published_request, &task.published_as) {
-            (Some(request), _) => format!("#{request}"),
-            // Published, and the forge publishes no ref this one could be
-            // read from: the branch on the remote is then the only name
-            // the ending has, and it is still not "open a request".
-            (None, Some(branch)) => branch.clone(),
-            (None, None) => format!("pr {} {}", theme::glyph(Symbol::ArrowTo), task.target),
+        CompletionBehavior::Pr => match task.published_request {
+            Some(request) => format!("#{request}"),
+            None => "#".to_owned(),
         },
+        CompletionBehavior::Merge => {
+            format!("{} {}", theme::glyph(Symbol::ArrowTo), task.target)
+        }
         CompletionBehavior::Handoff => "hand off".to_owned(),
     }
 }
@@ -2569,6 +2565,187 @@ pub(super) fn render_tab_strip(
     // against every tab in the selected space, not just the ones this
     // strip goes on to show.
     let can_close = space.tabs.len() > 1;
+
+    // The header's right end goes down first — before a tab is measured,
+    // let alone drawn — and that order is the whole arrangement. The
+    // controls take the columns they need from the right edge inward, and
+    // what they leave is the room the tab side then has: neither what the
+    // workspace *says* nor how many shells are open can move something
+    // the operator is about to *press*, and no tab can be laid over one.
+    // A message takes whatever is left after both, ending in a divider
+    // that keeps it apart from the controls.
+    //
+    // Three zones, in one order, reading left to right: what the work is
+    // *doing* (the delivery notification), what it has *changed*, and
+    // what can be *done* to it. Muted hairlines between them, because
+    // they answer three different questions and a reader looking for one
+    // of them should not have to sort the row out first. Each hairline
+    // belongs to the zone on its left and goes when that zone does, so
+    // the strip never draws a divider with nothing on one side of it.
+    let mut trailing_right = inner.right();
+    // Outside every zone, on the strip's own edge: it is not about this
+    // checkout the way the other three are, and the one thing at the end
+    // of a row is the one thing nothing else can push around. No fill —
+    // it wears the plain backdrop, white at rest and the accent under the
+    // pointer, so a single glyph out here never reads as a fourth zone of
+    // one button.
+    //
+    // Its rect is what the dropdown hangs off, so it is measured before
+    // it is drawn and the hit carries the same rectangle the glyph is
+    // centred in — pad included, since the padding is as much of the
+    // target as the glyph is.
+    if selected_agent_context(model, identities).is_some() {
+        // Air on the leading side only. The strip already insets its own
+        // right edge by a column (see `inner`), and a trailing pad on top
+        // of that left the one glyph at the end of the row floating two
+        // columns off the margin every other row is measured against.
+        let sparkle = theme::glyph(Symbol::MarkSparkle);
+        let width = Span::raw(&sparkle).width() as u16 + chip::PAD;
+        let rect = Rect::new(trailing_right.saturating_sub(width), inner.y, width, 1);
+        let hit = WorkspaceHit::OpenAgentSupport(rect);
+        let hue = match chip_state(model, Some(hit)) {
+            ChipState::Resting => theme::color(Token::TextBright),
+            _ => theme::color(Token::Accent),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(sparkle, Style::default().fg(hue)),
+            ])),
+            rect,
+        );
+        hits.push((rect, hit));
+        trailing_right = ZoneEdge::Bare.left_of(rect.x);
+    }
+
+    // ── actions ────────────────────────────────────────────────────────
+    // The two extensions are one group of buttons, not two chips with air
+    // between them: each opens a full-frame surface over the pane — the
+    // same kind of errand — and one continuous ground says that, where
+    // two detached chips read as two unrelated controls.
+    //
+    // Both are always there — a checkout always has a shape and files —
+    // which is what lets them be the fixed pair the eye learns, with
+    // every zone that comes and goes sitting to the left of them.
+    //
+    // No bold: two words side by side at the same weight read as one
+    // strip of controls, and bold made each of them claim the row on its
+    // own. The pair of glyphs at the tab side's end is the other way
+    // round, and says why in its own place.
+    {
+        let buttons = [
+            (WorkspaceHit::OpenArchitect, Symbol::Architect, "architect"),
+            (WorkspaceHit::OpenFiles, Symbol::Code, "code"),
+        ]
+        .map(|(hit, symbol, name)| GroupButton {
+            hit,
+            label: surface_label(symbol, name),
+            hue: theme::color(Token::TextSecondary),
+            strong: false,
+        });
+        let width = group_width(&buttons);
+        let rect = Rect::new(trailing_right.saturating_sub(width), inner.y, width, 1);
+        let (spans, group_hits) =
+            button_group(model, &buttons, Token::SurfaceRaised, (rect.x, rect.y));
+        hits.extend(group_hits);
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        trailing_right = ZoneEdge::Filled.left_of(rect.x);
+    }
+
+    // ── git changes ────────────────────────────────────────────────────
+    // What changed, in the two numbers and nothing else — its own zone
+    // and never a ground of its own. There are two extensions, so there
+    // are two dedicated buttons; a third filled thing beside them read as
+    // a third surface to open rather than as a count of the work sitting
+    // next to the ways in, and a plate sliding in under the pointer put
+    // the button back the moment anyone went near it.
+    //
+    // It is still a door, and the hue is what says so: the counts sit at
+    // their muted strength and come up to full under the pointer. The
+    // colour is the badge's whole message — green is additions, red is
+    // deletions — so it cannot be given up at rest the way a grey label
+    // could; holding it back and letting the pointer restore it says
+    // "this answers you" without anything being drawn.
+    //
+    // Absent for a clean checkout, hairline and all. It is a badge as
+    // much as a door, and a badge with nothing to say says nothing rather
+    // than zero — which costs no reachability, because the diff is one
+    // mode switch away inside the surface `code` opens.
+    if let Some(summary) = model
+        .remembered
+        .git_badge
+        .as_ref()
+        .and_then(|badge| badge.summary)
+    {
+        trailing_right = render_zone_hairline(frame, inner, trailing_right, ZoneEdge::Bare);
+        let hit = WorkspaceHit::OpenChanges;
+        let (additions, deletions) = match chip_state(model, Some(hit)) {
+            ChipState::Resting | ChipState::Static => (
+                theme::color(Token::StateSuccessMuted),
+                theme::color(Token::StateDangerMuted),
+            ),
+            ChipState::Hovered | ChipState::Pressed => (
+                theme::color(Token::StateSuccess),
+                theme::color(Token::StateDanger),
+            ),
+        };
+        let text = format!("+{} -{}", summary.additions, summary.deletions);
+        let width = Span::raw(&text).width() as u16 + 2 * chip::PAD;
+        let rect = Rect::new(trailing_right.saturating_sub(width), inner.y, width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!("+{}", summary.additions),
+                    Style::default().fg(additions),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("-{}", summary.deletions),
+                    Style::default().fg(deletions),
+                ),
+                Span::raw(" "),
+            ])),
+            rect,
+        );
+        hits.push((rect, hit));
+        trailing_right = ZoneEdge::Bare.left_of(rect.x);
+    }
+
+    // ── small notifications ────────────────────────────────────────────
+    // Where the delivery stands, as a chip: this one keeps a control's
+    // filled shape because in most of its states it *is* one, and a
+    // report wearing the same shape sits on the recessed ground that says
+    // it is not (see [`ChipState::Static`]).
+    //
+    // Only what UZE cut. An agent in the project's own root is on the
+    // operator's branch, and rebasing it onto the target, running the
+    // gate over it and pushing it is theirs to ask for. Its state is
+    // still drawn in the sidebar — where the work stands is a fact either
+    // way — but this zone is about a delivery UZE performs.
+    if let Some(tab) = model.selected_tab()
+        && let Some(task) = model.tab_task(tab)
+        && task.isolated
+        && let Some((text, hue, pressable)) =
+            delivery_notification(task, &model.drawn_state(task), model.tick)
+    {
+        trailing_right = render_zone_hairline(frame, inner, trailing_right, ZoneEdge::Filled);
+        let hit = pressable.then_some(WorkspaceHit::Deliver(tab));
+        let chip = Chip::new(&text, hue, chip_state(model, hit));
+        let rect = chip.rect_ending_at(trailing_right, inner.y);
+        chip.render(frame, rect);
+        if let Some(hit) = hit {
+            hits.push((rect, hit));
+        }
+        trailing_right = ZoneEdge::Filled.left_of(rect.x);
+    }
+
+    // Where the tab side must stop. The controls at the right end are
+    // laid out before a single tab is drawn, so the strip's own buttons
+    // can never end up under one of them: a strip too narrow for both
+    // loses a tab's tail, which the strip can scroll back to, rather than
+    // the button that makes the next tab, which nothing else offers.
+    let limit = trailing_right;
     let mut spans = Vec::new();
     let mut x = inner.x;
     let strip_len = strip.len();
@@ -2579,7 +2756,7 @@ pub(super) fn render_tab_strip(
     // sidebar's per-row renders, every chip here shares that one `Line`).
     let mut drop_indicator: Option<Rect> = None;
     for (strip_index, tab) in strip.into_iter().enumerate() {
-        if x >= inner.right() {
+        if x >= limit {
             break;
         }
         let is_last = strip_index + 1 == strip_len;
@@ -2706,78 +2883,56 @@ pub(super) fn render_tab_strip(
     // `theme::color(Token::BorderFaint)` — sitting on the plain backdrop out here (not a
     // filled chip the way the "│" below does), `theme::color(Token::BorderFaint)` read as a
     // near-invisible hairline.
-    if x < inner.right() {
+    if x < limit {
         spans.push(Span::styled("/", theme::fg(Token::TextMuted)));
         spans.push(Span::raw(" "));
         x += 2;
     }
-    // One button, split by a divider — not two separate chips: a bold "+"
-    // creates a new shell tab directly (the fast, default action), a "✦"
-    // beside it opens the agent picker for anything else. "✦" carries the
-    // accent (it's the one that summons an agent); "+" stays neutral,
-    // just bolder, since it's the plain/default action. The divider stays
-    // `theme::color(Token::BorderFaint)`, unlike the "/" above — it sits on this button's own
-    // `theme::color(Token::SurfaceRaisedBright)` fill, not the plain backdrop, so it already
-    // has contrast `theme::color(Token::BorderFaint)` alone doesn't get out on the strip;
-    // `theme::color(Token::TextMuted)` here read as too bright against that lighter background,
-    // clashing with the plain "+"/"✦" glyphs it separates.
-    // `theme::color(Token::SurfaceRaisedBright)` backs the whole pair: at the plain
-    // `theme::color(Token::SurfaceRaised)` strength the icons read as barely there, since
-    // unlike the sidebar's filled rows this pair has no bold/color weight
-    // of its own otherwise carrying it.
-    let button_width: u16 = 7; // " + │ ✦ "
-    if x + button_width <= inner.right() {
-        let action_start = x;
-        // Each half answers the pointer on its own — one button split by a
-        // divider is still two things to press, and a fill that lit both
-        // at once would say the pointer is on either. The resting fill
-        // stays the pair's own brighter surface (above); hover and press
-        // are the same skins every other control in this row wears.
-        let half = |state: ChipState, hue: Color| match state {
-            ChipState::Resting => (hue, theme::color(Token::SurfaceRaisedBright)),
-            other => other.skin(hue),
-        };
-        let (plus, plus_surface) = half(
-            chip_state(model, Some(WorkspaceHit::NewTab)),
-            theme::color(Token::TextInactive),
-        );
-        let (star, star_surface) = half(
-            chip_state(model, Some(WorkspaceHit::NewAgentMenu)),
-            theme::color(Token::Accent),
-        );
-        let actions = vec![
-            Span::styled(" ", Style::default().bg(plus_surface)),
-            Span::styled(
-                "+",
-                Style::default()
-                    .fg(plus)
-                    .bg(plus_surface)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default().bg(plus_surface)),
-            Span::styled(
-                theme::glyph(Symbol::TreeColumnDivider),
-                Style::default()
-                    .fg(theme::color(Token::BorderFaint))
-                    .bg(theme::color(Token::SurfaceRaisedBright)),
-            ),
-            Span::styled(" ", Style::default().bg(star_surface)),
-            Span::styled(
-                theme::glyph(Symbol::MarkSparkle),
-                Style::default().fg(star).bg(star_surface),
-            ),
-            Span::styled(" ", Style::default().bg(star_surface)),
-        ];
-        // Each half is its own three columns, so what lights up under the
-        // pointer is exactly what a click lands on.
-        hits.push((Rect::new(action_start, inner.y, 3, 1), WorkspaceHit::NewTab));
-        hits.push((
-            Rect::new(action_start + 4, inner.y, 3, 1),
-            WorkspaceHit::NewAgentMenu,
-        ));
+    // One group of two, the same construction as the actions at the other
+    // end of the row: a bold "+" creates a new shell tab directly (the
+    // fast, default action), a "✦" beside it opens the agent picker for
+    // anything else. "✦" carries the accent — it is the one that summons
+    // an agent — and "+" stays neutral, just bolder, being the plain
+    // action.
+    //
+    // A divider used to stand between them, and it was the same orphan
+    // column the actions group has none of: it belonged to neither half,
+    // so hovering one left it wearing the resting fill, a sliver of a
+    // third material between two buttons. The two fills meeting is the
+    // divider.
+    //
+    // `SurfaceRaisedBright` backs this pair where the actions take the
+    // plain `SurfaceRaised`: two bare glyphs have no word's weight
+    // carrying them, and at the plain strength they read as barely there.
+    let buttons = [
+        GroupButton {
+            hit: WorkspaceHit::NewTab,
+            label: "+".to_owned(),
+            hue: theme::color(Token::TextInactive),
+            strong: true,
+        },
+        GroupButton {
+            hit: WorkspaceHit::NewAgentMenu,
+            label: theme::glyph(Symbol::MarkSparkle),
+            hue: theme::color(Token::Accent),
+            strong: false,
+        },
+    ];
+    if x + group_width(&buttons) <= limit {
+        let (actions, group_hits) =
+            button_group(model, &buttons, Token::SurfaceRaisedBright, (x, inner.y));
+        hits.extend(group_hits);
         spans.extend(actions);
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect::new(
+            inner.x,
+            inner.y,
+            limit.saturating_sub(inner.x),
+            inner.height,
+        ),
+    );
     if let Some(rect) = drop_indicator {
         frame.render_widget(
             Paragraph::new(theme::glyph(Symbol::BarThick)).style(theme::fg(Token::Accent)),
@@ -2785,137 +2940,158 @@ pub(super) fn render_tab_strip(
         );
     }
 
-    // The header's right end is two zones, and they are laid out in this
-    // order for a reason: the actions first, from the right edge, so that
-    // nothing the workspace *says* can move something the operator is
-    // about to *press*. A message then takes whatever is left of them,
-    // ending in a divider that keeps the two apart.
-    //
-    // The status badge belongs to the active agent/shell tab's `cwd`, not
-    // the workspace root. It is intentionally absent for a clean directory
-    // or one outside Git; when it is present, it remains the entry point to
-    // the full changes overlay.
-    //
-    // Every control in this zone is a [`Chip`]: a filled,
-    // padded surface that lifts under the pointer and inverts while
-    // pressed. Bare glyphs on the plain backdrop are what the message zone
-    // beside them uses, and the whole point of that zone is that a message
-    // is not a control — so the controls cannot look like one too.
-    // The way into the index used to sit here. It is at the foot of the
-    // sidebar now, with the other chrome that belongs to uze rather than
-    // to a tab — one place in both modes, and the place a reader who does
-    // not know where to look already looks.
-    let mut trailing_right = inner.right();
-    if selected_agent_context(model, identities).is_some() {
-        // Its own rect is what the dropdown hangs off, so the chip is
-        // measured before it is drawn and the hit carries the same
-        // rectangle the fill covers — pad included, since the padding is
-        // as much of the button as the glyph is.
-        let sparkle = theme::glyph(Symbol::MarkSparkle);
-        let hue = theme::color(Token::Accent);
-        let rect =
-            Chip::new(&sparkle, hue, ChipState::Static).rect_ending_at(trailing_right, inner.y);
-        let hit = WorkspaceHit::OpenAgentSupport(rect);
-        Chip::new(&sparkle, hue, chip_state(model, Some(hit))).render(frame, rect);
-        hits.push((rect, hit));
-        trailing_right = rect.x.saturating_sub(1);
-    }
-    // One verb — deliver — whose ending is the project's completion, not a
-    // choice made here. Conditioned, not disabled: when the task cannot be
-    // delivered the button is absent, and the sidebar mark says why. What
-    // is happening to that task is said beside this button, never in place
-    // of it: a button that a message can take away is one the operator has
-    // to find again.
-    if let Some(tab) = model.selected_tab()
-        && let Some(task) = model.tab_task(tab)
-        // Only what UZE cut. An agent in the project's own root is on the
-        // operator's branch, and rebasing it onto the target, running the
-        // gate over it and pushing it is theirs to ask for. Its state is
-        // still drawn — where the work stands is a fact either way.
-        && task.isolated
-        && let Some((text, hue, clickable)) =
-            deliver_button(task, &model.drawn_state(task), model.tick)
-    {
-        let hit = clickable.then_some(WorkspaceHit::Deliver(tab));
-        let chip = Chip::new(&text, hue, chip_state(model, hit));
-        let rect = chip.rect_ending_at(trailing_right, inner.y);
-        chip.render(frame, rect);
-        if let Some(hit) = hit {
-            hits.push((rect, hit));
-        }
-        trailing_right = rect.x.saturating_sub(1);
-    }
-    // Two doors into one surface. The code chip is always drawn — a
-    // checkout always has files — and the changes chip is a badge that is
-    // also a door: it says how much changed, so with nothing to say it
-    // says nothing rather than saying zero. That costs no reachability,
-    // because the diff is one mode switch away inside the surface the
-    // other chip opens, and the shortcut that lands on it never moves.
-    if let Some(summary) = model
-        .remembered
-        .git_badge
-        .as_ref()
-        .and_then(|badge| badge.summary)
-    {
-        // The one chip whose label is two-hued, so it draws its own spans
-        // rather than taking a single colour: the additions and the
-        // deletions are two numbers, not one label.
-        let state = chip_state(model, Some(WorkspaceHit::OpenChanges));
-        let (label, background) = state.skin(theme::color(Token::StateSuccess));
-        let (additions, deletions) = match state {
-            // Pressed, the chip is one solid hue: its numbers go dark with
-            // everything else on it, or they vanish into the fill.
-            ChipState::Pressed => (label, label),
-            _ => (
-                theme::color(Token::StateSuccess),
-                theme::color(Token::StateDanger),
-            ),
-        };
-        let text = format!("+{} -{}", summary.additions, summary.deletions);
-        let rect = Chip::new(&text, background, state).rect_ending_at(trailing_right, inner.y);
-        let mut badge = vec![
-            Span::raw(" "),
-            Span::styled(
-                format!("+{}", summary.additions),
-                Style::default().fg(additions),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                format!("-{}", summary.deletions),
-                Style::default().fg(deletions),
-            ),
-            Span::raw(" "),
-        ];
-        row::pad_to(&mut badge, rect.width, background);
-        frame.render_widget(Paragraph::new(Line::from(badge)), rect);
-        hits.push((rect, WorkspaceHit::OpenChanges));
-        trailing_right = rect.x.saturating_sub(1);
-    }
-    {
-        let label = theme::glyph(Symbol::Code);
-        let chip = Chip::new(
-            &label,
-            theme::color(Token::TextSecondary),
-            chip_state(model, Some(WorkspaceHit::OpenFiles)),
-        );
-        let rect = chip.rect_ending_at(trailing_right, inner.y);
-        chip.render(frame, rect);
-        hits.push((rect, WorkspaceHit::OpenFiles));
-        trailing_right = rect.x.saturating_sub(1);
-    }
-    {
-        let label = theme::glyph(Symbol::Architect);
-        let chip = Chip::new(
-            &label,
-            theme::color(Token::TextSecondary),
-            chip_state(model, Some(WorkspaceHit::OpenArchitect)),
-        );
-        let rect = chip.rect_ending_at(trailing_right, inner.y);
-        chip.render(frame, rect);
-        hits.push((rect, WorkspaceHit::OpenArchitect));
-        trailing_right = rect.x.saturating_sub(1);
-    }
     render_notice_chip(frame, model, inner, trailing_right);
+}
+
+/// A surface chip's label: the word, and the glyph standing for it in a
+/// glyph set that actually carries one.
+///
+/// Two of the three shipped sets deliberately carry none. A surface is an
+/// idea — the code of a checkout, the shape of a project, what changed —
+/// and plain Unicode has no sign for any of them, so what a set without
+/// icons can offer is a box or an arrow that means nothing here. The word
+/// already says it; the glyph joins it only where there is a real one.
+fn surface_label(symbol: Symbol, name: &str) -> String {
+    match theme::glyph(symbol) {
+        glyph if glyph.is_empty() => name.to_string(),
+        glyph => format!("{glyph} {name}"),
+    }
+}
+
+/// One member of a button group: what a click on it means, the label it
+/// wears, and the hue that label takes.
+struct GroupButton {
+    hit: WorkspaceHit,
+    label: String,
+    hue: Color,
+    /// Bold, for a member whose label is a bare glyph. A word carries
+    /// itself at any weight; a lone "+" on a lifted fill reads as barely
+    /// there beside one.
+    strong: bool,
+}
+
+/// The columns one member of a group claims: its label, and the air each
+/// side of it that is as much of the control as the label is.
+fn group_member_width(label: &str) -> u16 {
+    Span::raw(label).width() as u16 + 2 * chip::PAD
+}
+
+fn group_width(buttons: &[GroupButton]) -> u16 {
+    buttons
+        .iter()
+        .map(|button| group_member_width(&button.label))
+        .sum()
+}
+
+/// A group of buttons: one continuous ground, the members meeting on
+/// their own padding, each answering the pointer alone — so what lifts
+/// under it is exactly what a click lands on.
+///
+/// Nothing is drawn between them. A divider glyph inside a group is a
+/// column belonging to no member, and a group like this is only ever one
+/// ground or another: the moment one member is hovered, that orphan
+/// column keeps the resting fill and the seam reads as a sliver of a
+/// third thing wedged between two buttons. With nothing there, the
+/// members meet on their padding and the boundary *is* where the fill
+/// changes — visible exactly when there is something to see, and nowhere
+/// at rest. A drawn divider belongs on the flat backdrop (the zone
+/// hairlines, the "/" before the tab buttons), where there is no fill for
+/// it to disagree with.
+///
+/// `resting` is the group's own fill, which is the one thing that differs
+/// between the two groups on this strip: a pair of bare glyphs needs a
+/// brighter one than a pair of words, having no weight or hue of its own
+/// otherwise carrying it. Hover and press are the skins every other
+/// control in this row wears.
+///
+/// It answers with spans and rects rather than drawing, because the two
+/// callers place a group differently: one lays it at the strip's right
+/// end in a rect of its own, the other appends it to the single line the
+/// tab side is already building.
+///
+/// Local to this screen, not in `src/ui/widget/`, by that module's own
+/// threshold: the second *file* is what moves a helper into the
+/// vocabulary, and both groups are drawn by this function's own caller.
+fn button_group(
+    model: &WorkspaceModel,
+    buttons: &[GroupButton],
+    resting: Token,
+    origin: (u16, u16),
+) -> (Vec<Span<'static>>, Vec<(Rect, WorkspaceHit)>) {
+    let (mut x, y) = origin;
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
+    for button in buttons {
+        let (hue, ground) = match chip_state(model, Some(button.hit)) {
+            ChipState::Resting => (button.hue, theme::color(resting)),
+            other => other.skin(button.hue),
+        };
+        let mut label = Style::default().fg(hue).bg(ground);
+        if button.strong {
+            label = label.add_modifier(Modifier::BOLD);
+        }
+        let taken = group_member_width(&button.label);
+        spans.push(Span::styled(" ", Style::default().bg(ground)));
+        spans.push(Span::styled(button.label.clone(), label));
+        spans.push(Span::styled(" ", Style::default().bg(ground)));
+        hits.push((Rect::new(x, y, taken, 1), button.hit));
+        x += taken;
+    }
+    (spans, hits)
+}
+
+/// Whether a zone's edge is a filled surface or bare text on the strip's
+/// own backdrop.
+///
+/// It decides one column, and that column is the whole of the alignment.
+/// A filled chip's padding belongs to the control — it is lit, hovered
+/// and clicked with the glyphs — so the air beside a hairline has to be a
+/// column of its own. Bare text's padding *is* that air already, and
+/// adding a second column put the hairline one off centre between two
+/// zones: two blank columns against the unfilled side, one against the
+/// filled one.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ZoneEdge {
+    Filled,
+    Bare,
+}
+
+impl ZoneEdge {
+    /// Where the next thing to the left may end, given this zone starts at
+    /// `x`.
+    fn left_of(self, x: u16) -> u16 {
+        match self {
+            Self::Filled => x.saturating_sub(1),
+            Self::Bare => x,
+        }
+    }
+}
+
+/// The hairline between two zones of the strip's right end, drawn ending
+/// at `right` and answering with the column the zone to its left may end
+/// at — which `next` decides, since that zone's own edge is what the air
+/// beside the mark is measured against.
+///
+/// On the plain backdrop, where a drawn divider has no fill to disagree
+/// with, and in the faintest text hue there is: it separates two things
+/// that are already far apart in meaning, so it has only to be found when
+/// looked for, never read. It sits outside every rect a pointer can land
+/// on, and a zone draws its own before itself, so a zone with nothing to
+/// say takes its divider with it.
+fn render_zone_hairline(
+    frame: &mut ratatui::Frame<'_>,
+    inner: Rect,
+    right: u16,
+    next: ZoneEdge,
+) -> u16 {
+    let divider = theme::glyph(Symbol::TreeColumnDivider);
+    let width = Span::raw(&divider).width() as u16;
+    let rect = Rect::new(right.saturating_sub(width), inner.y, width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(divider, theme::fg(Token::TextFaint))),
+        rect,
+    );
+    next.left_of(rect.x)
 }
 
 /// Everything the workspace has to say, in the one place it says it: the

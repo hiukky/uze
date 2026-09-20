@@ -70,8 +70,8 @@
     "prompt": ">",
     "menu": "=",
     "manage": "=",
-    "code": "<>",
-    "architect": "[#]",
+    "code": "",
+    "architect": "",
 
     "text.ellipsis": "...",
     "text.em-dash": "--",
