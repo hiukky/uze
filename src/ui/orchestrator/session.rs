@@ -2655,6 +2655,80 @@ impl Attach<'_> {
         );
     }
 
+    /// Opens an agent's tab in a space rooted at its own project, opening
+    /// that space when none is.
+    ///
+    /// Work is bound to a *project* and never to a space: an agent's
+    /// record carries its base, its branch, its checkout and its target,
+    /// and nothing about a space. So the match is on the canonical root
+    /// alone — a space's name, its identity and when it was opened have no
+    /// say, which is what lets an operator close the space their work was
+    /// in, open another on the same directory, and find the work waiting
+    /// in it.
+    ///
+    /// A space rooted *above* the project does not match. A space's root
+    /// is what the sidebar, the Git badge and the changes overlay all
+    /// describe, so seating an isolated agent in a space that describes no
+    /// repository puts it back in the wrong place — which is the thing
+    /// this is fixing. Matching by containment instead would make one
+    /// space rooted at `$HOME` the owner of every project beneath it,
+    /// which on most machines is all of them.
+    fn land_agent_in_its_own_space(&mut self, pending: PendingAgentTab) {
+        match self.model.space_rooted_at(&pending.project) {
+            Some(space) => {
+                let _ = send_request(&mut self.stream, &ClientRequest::SelectSpace { space });
+                self.open_agent_tab(
+                    pending.label,
+                    pending.command,
+                    pending.cwd,
+                    &pending.agent,
+                    pending.size,
+                );
+            }
+            None => {
+                // The space has to exist before a tab can be opened in it,
+                // and `CreateSpace` answers on the session's own clock. So
+                // the tab waits for the update that names it, the way every
+                // other background answer here is waited for — rather than
+                // being sent now and landing in whichever space is selected.
+                let _ = send_request(
+                    &mut self.stream,
+                    &ClientRequest::CreateSpace {
+                        label: None,
+                        seat: uze_terminal::SpaceSeat {
+                            root: pending.project.clone(),
+                        },
+                        columns: pending.size.0,
+                        rows: pending.size.1,
+                    },
+                );
+                self.model.pending_agent_tab = Some(pending);
+            }
+        }
+    }
+
+    /// Opens the tab a space was created for, once the session says the
+    /// space is there. Does nothing until then, and gives up if the space
+    /// never appears — the placement already happened, so the work is on
+    /// disk either way.
+    pub(super) fn land_pending_agent_tab(&mut self) {
+        let Some(pending) = self.model.pending_agent_tab.take() else {
+            return;
+        };
+        let Some(space) = self.model.space_rooted_at(&pending.project) else {
+            self.model.pending_agent_tab = Some(pending);
+            return;
+        };
+        let _ = send_request(&mut self.stream, &ClientRequest::SelectSpace { space });
+        self.open_agent_tab(
+            pending.label,
+            pending.command,
+            pending.cwd,
+            &pending.agent,
+            pending.size,
+        );
+    }
+
     /// The one place a `CreateTab` for an agent is sent: an agent tab
     /// always carries the identity its placement recorded.
     fn open_agent_tab(
@@ -2728,7 +2802,15 @@ impl Attach<'_> {
         // keeps in step with the layout.
         let agent = placement.placement.agent().as_str().to_owned();
         let size = self.model.last_size;
-        self.open_agent_tab(label, command, placement.cwd, &agent, size);
+        let pending = PendingAgentTab {
+            project: placement.project,
+            label,
+            command,
+            cwd: placement.cwd,
+            agent,
+            size,
+        };
+        self.land_agent_in_its_own_space(pending);
         // The agent this one took over from stood in a directory that no
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
@@ -2837,6 +2919,10 @@ impl Attach<'_> {
             self.model.remembered.agent_support = Some(resolution);
             self.model.dirty = true;
         }
+        // A space this client asked for may have arrived; the tab that was
+        // waiting for it goes in now rather than into whichever space is
+        // selected.
+        self.land_pending_agent_tab();
         while let Ok(resolution) = self.channels.preserved.receiver.try_recv() {
             self.model.remembered.preserved_pending = false;
             self.model.remembered.preserved_work = resolution.work;

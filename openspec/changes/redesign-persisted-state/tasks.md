@@ -156,17 +156,17 @@
 
 ## 12. Resume lands where the work belongs
 
-- [ ] 12.1 Resolve the target space by canonical root through the runtime's
+- [x] 12.1 Resolve the target space by canonical root through the runtime's
       existing `space_for`, preferring the selected space when several
       match and otherwise the first.
-- [ ] 12.2 Select that space before opening the tab.
-- [ ] 12.3 Open a space with `Seating::Open` at the project's seat when
+- [x] 12.2 Select that space before opening the tab.
+- [x] 12.3 Open a space with `Seating::Open` at the project's seat when
       none matches, sequencing the tab on the session update that names it.
-- [ ] 12.4 Leave a space rooted above the project unmatched, with the
+- [x] 12.4 Leave a space rooted above the project unmatched, with the
       reason recorded beside the code.
 - [ ] 12.5 Refuse a resume whose project directory no longer exists:
       nothing opens, the reason is said, the entry stays.
-- [ ] 12.6 Tests: an open space receives the tab and no second space is
+- [x] 12.6 Tests: an open space receives the tab and no second space is
       created for the same root; a closed-and-reopened space matches
       however it is named; the space the operator was looking at receives
       nothing.

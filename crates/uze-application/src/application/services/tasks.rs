@@ -192,6 +192,7 @@ impl Workspace<'_> {
                 let root = canonical(pane_cwd);
                 let agent = self.record_in_the_root(&root, harness)?;
                 Ok(AgentPlacement {
+                    project: root.clone(),
                     cwd: root,
                     placement: Placement::InPlace { id: agent.id },
                     warnings: Vec::new(),
@@ -296,6 +297,7 @@ impl Workspace<'_> {
             &policy.setup,
         ));
         Ok(AgentPlacement {
+            project: primary.clone(),
             cwd: acquired.path,
             placement: Placement::Isolated {
                 task: task.id,
@@ -407,6 +409,7 @@ impl Workspace<'_> {
             warnings.push(reason);
         }
         Ok(AgentPlacement {
+            project: primary.clone(),
             cwd: acquired.path,
             placement: Placement::Isolated {
                 task: id,
@@ -448,6 +451,7 @@ impl Workspace<'_> {
                 (landing::slot_path(&primary, task), task.checkout.clone())
             {
                 return Ok(AgentPlacement {
+                    project: primary.clone(),
                     cwd: existing,
                     placement: Placement::Isolated {
                         task: id,
@@ -470,6 +474,7 @@ impl Workspace<'_> {
             };
             acquired_slot = Some(acquired.clone());
             Ok(AgentPlacement {
+                project: primary.clone(),
                 cwd: acquired.path,
                 placement,
                 warnings: Vec::new(),
@@ -1901,6 +1906,11 @@ pub struct DeliveryPolicyView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentPlacement {
     pub cwd: PathBuf,
+    /// The repository the agent belongs to, which is a different question
+    /// from where it will run: an isolated agent's `cwd` is a checkout
+    /// under the project, and a client deciding *which space* to open the
+    /// tab in needs the project rather than the checkout.
+    pub project: PathBuf,
     pub placement: Placement,
     /// What preparing the checkout could not do — a missing link target, a
     /// failed setup — none of which stops the launch.

@@ -325,6 +325,16 @@ struct DeliveryResolution {
     reports: Vec<DeliveryReport>,
 }
 
+/// An agent's tab, and the project whose space it belongs in.
+struct PendingAgentTab {
+    project: PathBuf,
+    label: String,
+    command: Vec<String>,
+    cwd: PathBuf,
+    agent: String,
+    size: (u16, u16),
+}
+
 /// Open state of the preserved-work list: tasks holding work that no live
 /// tab is in front of.
 /// Everything reachable with `scopes` open, each with the key that
@@ -2379,6 +2389,12 @@ struct WorkspaceModel {
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
     recently_quiet: Vec<PaneId>,
+    /// An agent's tab waiting for the space it belongs in to exist.
+    ///
+    /// `CreateSpace` answers on the session's own clock, and a `CreateTab`
+    /// sent before that lands in whichever space is selected — which is
+    /// the bug this whole path exists to fix, reintroduced by racing it.
+    pending_agent_tab: Option<PendingAgentTab>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
     /// Everything that can be done here, each with the key that reaches
@@ -2724,6 +2740,28 @@ impl WorkspaceModel {
             && self.action_index.is_none()
             && self.manage.is_none()
             && !self.commit_detail_open()
+    }
+
+    /// The open space rooted at `project`, by canonical root.
+    ///
+    /// Prefers the selected space when several are rooted there — which
+    /// the first round of `add-space-kinds` allowed on purpose — because
+    /// the one the operator is looking at is the one they meant.
+    fn space_rooted_at(&self, project: &Path) -> Option<SpaceId> {
+        let canonical = |root: &Path| root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let wanted = canonical(project);
+        let session = self.session.as_ref()?;
+        let matching: Vec<&Space> = session
+            .workspace
+            .spaces
+            .iter()
+            .filter(|space| canonical(&space.root) == wanted)
+            .collect();
+        matching
+            .iter()
+            .find(|space| space.id == session.workspace.selected_space)
+            .or_else(|| matching.first())
+            .map(|space| space.id)
     }
 
     fn hit_at(&self, column: u16, row: u16) -> Option<WorkspaceHit> {

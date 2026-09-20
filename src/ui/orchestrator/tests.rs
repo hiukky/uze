@@ -3096,6 +3096,48 @@ mod workspace_tests {
     }
 
     /// A one-agent session whose only tab runs in `cwd`.
+    /// Work is bound to a project and never to a space: an agent's record
+    /// carries its base, branch, checkout and target, and nothing about a
+    /// space. So a space is matched by its canonical root alone.
+    #[test]
+    fn a_space_is_matched_by_its_root_whatever_it_is_called() {
+        let scratch = uze_testkit::temp::scratch("orchestrator-space-by-root");
+        let project = scratch.join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let mut session = session(&project);
+        // The space the work was left in was closed; this is a different
+        // one, opened later on the same directory, under another name.
+        session.workspace.spaces[0].label = "something else entirely".into();
+        let model = model_of(session);
+
+        assert_eq!(
+            model.space_rooted_at(&project),
+            Some(model.session.as_ref().unwrap().workspace.spaces[0].id),
+            "the name and the identity have no say; the root does"
+        );
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    /// A space's root is what the sidebar, the badge and the changes
+    /// overlay all describe. One rooted at `$HOME` describes no repository,
+    /// so seating an isolated agent there would put it back in the wrong
+    /// place — and matching by containment would make that space the owner
+    /// of every project beneath it.
+    #[test]
+    fn a_space_rooted_above_the_project_does_not_match_it() {
+        let scratch = uze_testkit::temp::scratch("orchestrator-space-above");
+        let project = scratch.join("home").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let model = model_of(session(scratch.join("home")));
+
+        assert_eq!(
+            model.space_rooted_at(&project),
+            None,
+            "a space above the project is not the project's space"
+        );
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
     fn agent_session_in(cwd: &str) -> WorkspaceModel {
         let mut session = session("/repo");
         let tab = &mut session.workspace.spaces[0].tabs[0];
@@ -7277,15 +7319,24 @@ mod workspace_tests {
         primary: &Path,
         task: TaskView,
     ) -> WorkspaceModel {
-        let mut model = agent_session_in(&format!("{} (deleted)", checkout.display()));
+        // The space is rooted at the project, as an operator working on it
+        // has it: an agent belongs to its project, and that is what decides
+        // which space its tab opens in.
+        let mut session = session(primary);
+        let tab = &mut session.workspace.spaces[0].tabs[0];
+        tab.label = "Agent".into();
+        tab.pane.process = "agent".into();
+        tab.pane.cwd = format!("{} (deleted)", checkout.display()).into();
+        let mut model = model_of(session);
         let pane = first_tab(&model).pane.id;
         // Rows under the one that lost its checkout: what the picker
         // opens over, and what its own rows have to answer ahead of.
         if let Some(session) = model.session.as_mut() {
             let space = session.workspace.selected_space;
             for label in ["Agent two", "Agent three"] {
-                let opened = session.add_tab(space, label.into(), None, 80, 24, "/repo".into());
-                session.update_pane_status(opened, "/repo".into(), "agent".into());
+                let opened =
+                    session.add_tab(space, label.into(), None, 80, 24, primary.to_path_buf());
+                session.update_pane_status(opened, primary.to_path_buf(), "agent".into());
             }
         }
         model
@@ -7558,6 +7609,12 @@ mod workspace_tests {
     /// Resuming a preserved task whose checkout is still there opens the
     /// agent in that checkout *and* names the task on the launch: a tab
     /// without the stamp is an agent no reader can bind to its work.
+    ///
+    /// And it opens it in a space rooted at the work's own project. The
+    /// client here is looking at a space rooted somewhere else entirely —
+    /// which is the ordinary case for a list that crosses projects — so a
+    /// space for the project is opened first, and the tab waits for it
+    /// rather than landing in the one in front of the operator.
     #[test]
     fn resuming_a_preserved_task_that_kept_its_checkout_opens_a_stamped_tab() {
         let repository = uze_testkit::git::Repository::new("orchestrator-resume-kept");
@@ -7610,6 +7667,29 @@ mod workspace_tests {
             uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
             task_id,
         );
+        let project = root.canonicalize().unwrap();
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::CreateSpace { seat, .. } if seat.root == project
+            )),
+            "no space is open on the work's project, so one is: {sent:?}"
+        );
+        assert!(
+            !sent
+                .iter()
+                .any(|request| matches!(request, ClientRequest::CreateTab { .. })),
+            "and the tab waits for it rather than landing in the space the \
+             operator was looking at: {sent:?}"
+        );
+
+        // The session now has the space, as the runtime would have said.
+        let mut session = session(&project);
+        session.workspace.spaces[0].tabs.clear();
+        driven.attach.model.session = Some(session);
+        driven.attach.land_pending_agent_tab();
+
         let sent = driven.sent();
         assert!(
             sent.iter().any(|request| matches!(
@@ -7618,6 +7698,11 @@ mod workspace_tests {
                     if cwd.as_deref() == Some(placement.cwd.as_path()) && env.contains(&identity)
             )),
             "the agent opens in its checkout, launched for its task: {sent:?}"
+        );
+        assert!(
+            sent.iter()
+                .any(|request| matches!(request, ClientRequest::SelectSpace { .. })),
+            "in the space rooted at its own project: {sent:?}"
         );
     }
 
