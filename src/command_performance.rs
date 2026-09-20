@@ -49,6 +49,19 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     // and performs one Git ref rename. An agent waiting on this is an
     // agent not working.
     ("agent task name", PerformanceClass::Budgeted),
+    // Not budgeted: it walks the declared directory, reads every file in
+    // it and lays out and routes every diagram. The cost is the project's
+    // own — what it declares and how large those diagrams are — and there
+    // is nothing to cache, because the answer is about the bytes on disk
+    // right now. It runs where a check runs, not on the way to something
+    // else.
+    (
+        "agent artifacts check",
+        PerformanceClass::JustifiedSlow(
+            "lays out and routes every diagram the project declares, which is work \
+             proportional to what it holds",
+        ),
+    ),
     ("context inspect", PerformanceClass::Budgeted),
     ("context plan", PerformanceClass::Budgeted),
     ("context reconcile", PerformanceClass::Budgeted),

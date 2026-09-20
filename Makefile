@@ -109,7 +109,13 @@ coverage: ## Run workspace tests with LLVM coverage (skips the one env-dependent
 	cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip foreground_status_reports
 	cargo llvm-cov report --lcov --output-path lcov.info
 
-check: fmt lint deny test test-telemetry python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
+# Every file under the declared directory, not the eight `uze-extensions`
+# names: a crate that may not touch the filesystem cannot notice a ninth
+# diagram, and a diagram nothing draws is how this directory would rot.
+artifacts: ## Draw every diagram this project declares and fail on one that does not.
+	$(CARGO) run --quiet --bin uze -- agent artifacts check
+
+check: fmt lint deny test test-telemetry python-fmt python-lint artifacts ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
 
 # GitHub publishes no offline runner (`actions/runner` is for self-hosted and
 # is still driven by GitHub), so the honest local mirror is the commands

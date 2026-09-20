@@ -166,3 +166,60 @@ fn the_install_alias_is_the_same_command() {
         String::from_utf8_lossy(&short.stdout)
     );
 }
+
+/// The check an agent runs after writing a diagram, through the real
+/// binary: what it says is asserted against the files on disk and the
+/// process's exit code, never against its own claim of success.
+#[test]
+fn an_agent_is_told_whether_the_diagrams_it_wrote_draw() {
+    let env = TestEnvironment::isolated();
+    let root = &env.project;
+    std::fs::write(root.join("agents.yaml"), "artifacts:\n  path: diagrams\n").unwrap();
+    let diagrams = root.join("diagrams");
+    std::fs::create_dir_all(&diagrams).unwrap();
+    std::fs::write(
+        diagrams.join("fine.mmd"),
+        "---\ntitle: Fine\n---\nflowchart LR\n  a[A] --> b[B]\n",
+    )
+    .unwrap();
+    std::fs::write(diagrams.join("roadmap.mmd"), "gantt\n  title Roadmap\n").unwrap();
+
+    let output = env.run(
+        uze_bin(),
+        &["agent", "artifacts", "check", "--format", "json"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a diagram the surface cannot draw fails the check"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the agent's format is JSON");
+    assert_eq!(report["checked"], 2);
+    assert_eq!(report["undrawable"], 1);
+    let verdict = |origin: &str| {
+        report["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|artifact| artifact["origin"] == origin)
+            .map(|artifact| artifact["verdict"].as_str().unwrap().to_owned())
+            .expect("every declared file is reported")
+    };
+    assert_eq!(verdict("fine.mmd"), "drawn");
+    assert_eq!(verdict("roadmap.mmd"), "undrawable");
+
+    // The file is what the verdict is about: change it, and the answer
+    // changes with it.
+    std::fs::write(
+        diagrams.join("roadmap.mmd"),
+        "---\ntitle: Roadmap\n---\nsequenceDiagram\n  a->>b: now\n",
+    )
+    .unwrap();
+    let output = env.run(uze_bin(), &["agent", "artifacts", "check"]);
+    assert!(
+        output.status.success(),
+        "both draw now: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
