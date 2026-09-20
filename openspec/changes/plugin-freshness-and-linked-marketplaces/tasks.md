@@ -89,30 +89,30 @@
 
 ## 5. Linked marketplaces
 
-- [ ] 5.1 The link record in machine state — marketplace name to checkout
+- [x] 5.1 The link record in machine state — marketplace name to checkout
       path — with its own path in `UzeHome` (`delivery/state.rs`)
-- [ ] 5.2 `uze market link <name> <path>` / `uze market unlink <name>`;
+- [x] 5.2 `uze market link <name> <path>` / `uze market unlink <name>`;
       linking refuses a checkout whose repository identity is not the
       marketplace's (`src/main.rs`, `application/marketplace.rs`)
-- [ ] 5.3 Split `resolve_into_lock`: acquiring and installing stays shared by
+- [x] 5.3 Split `resolve_into_lock`: acquiring and installing stays shared by
       `add`/`install`/`update`; what is written to the lock becomes the
       caller's, so a linked marketplace writes nothing without a branch
       inside the shared function
-- [ ] 5.3b Resolution prefers the linked checkout's working tree, re-ingesting
+- [x] 5.3b Resolution prefers the linked checkout's working tree, re-ingesting
       when its content differs from the Store's; no network, no commit
       (`application/project_environment.rs`)
-- [ ] 5.3c A linked checkout's content is what Git does not ignore — tracked
+- [x] 5.3c A linked checkout's content is what Git does not ignore — tracked
       plus untracked-not-ignored — for both the digest and the ingest, so an
       editor's temporary file or a build artifact never becomes package
       content. Tests for both sides
 - [ ] 5.3d An mtime/size pass short-circuits before the digest, so an
       unchanged linked checkout costs a stat per file, not two full tree
       reads (`digest.rs:54-90`)
-- [ ] 5.4 `install` and `update` never write a lock entry resolved from a
+- [x] 5.4 `install` and `update` never write a lock entry resolved from a
       linked checkout, and say why the pin did not move
 - [ ] 5.5 `market list`, `market inspect` and the plugins screen say a
       marketplace is linked and to where
-- [ ] 5.6 Tests: an edit in the checkout reaches the Store with no commit;
+- [x] 5.6 Tests: an edit in the checkout reaches the Store with no commit;
       the lock is byte-identical across an update while linked; linking to a
       foreign repository is refused
 

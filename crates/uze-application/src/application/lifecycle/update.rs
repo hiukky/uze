@@ -12,6 +12,32 @@ use super::super::services::Plugins;
 use super::super::*;
 
 impl Plugins<'_> {
+    /// The package re-read from the checkout its marketplace is linked to,
+    /// or `None` when it is not linked.
+    ///
+    /// Best-effort by design: a link pointing at a checkout that has since
+    /// been moved or broken must not make the package un-updatable, so a
+    /// failure here falls back to the source the package was installed
+    /// from and the ordinary error surfaces from there.
+    fn linked_source(
+        &self,
+        installed: &uze_core::StoredPackage,
+    ) -> Option<uze_core::MaterializedPackage> {
+        let marketplace = installed.id.marketplace();
+        let record = uze_core::state::marketplace_get(&self.0.home, marketplace).ok()??;
+        record.link?;
+        let request = super::super::marketplace::MarketplaceRequest::of(&record.source).ok()?;
+        request
+            .materialize_plugin(
+                installed.id.plugin_name(),
+                super::super::marketplace::MirrorAt {
+                    home: &self.0.home,
+                    marketplace,
+                },
+            )
+            .ok()
+    }
+
     #[tracing::instrument(name = "plugins.update", skip_all, fields(id = %id), err)]
     pub fn update(&self, id: &str, authority: &dyn TrustAuthority) -> Result<UpdatePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
@@ -26,7 +52,17 @@ impl Plugins<'_> {
 
         // Re-resolve the *request*, not the resolution: that is what makes a
         // branch move forward while a pinned commit stays put.
-        let materialized = self.acquire(&installed.provenance.requested)?;
+        //
+        // Unless the marketplace is linked to a checkout on this machine,
+        // in which case the request is not where the bytes are any more.
+        // Asked here rather than by the caller because a link is a machine
+        // fact, and this is the machine-level way to bring a package up to
+        // date — so `uze plugin update` and a project's own update follow
+        // it alike.
+        let materialized = match self.linked_source(&installed) {
+            Some(request) => request,
+            None => self.acquire(&installed.provenance.requested)?,
+        };
 
         let previous = {
             let resources = uze_core::engine::package_resources(&installed)?;

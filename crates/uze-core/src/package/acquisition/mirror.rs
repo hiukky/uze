@@ -382,3 +382,148 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 }
+
+/// What a checkout's `subdirectory` holds, as package content: the files
+/// Git tracks, plus the ones written and not yet committed, minus the ones
+/// its ignore rules exclude.
+///
+/// That set is the author's own intent, already written down. A file they
+/// have just created is what a linked marketplace exists to deliver; a
+/// file they told Git to ignore — an editor's swapfile, a build artifact —
+/// is not part of the package in any revision, and would otherwise reach a
+/// harness as one.
+///
+/// Paths are relative to `checkout` and sorted, so two calls on an
+/// unchanged tree answer identically.
+pub fn tracked_and_new(checkout: &Path, subdirectory: Option<&str>) -> Result<Vec<String>> {
+    let mut arguments = vec![
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ];
+    let spec = subdirectory.unwrap_or(".");
+    reject_option_shaped(spec, "subdirectory")?;
+    arguments.push(spec);
+    let listing = run(&arguments, Some(checkout))?;
+    let mut paths: Vec<String> = listing
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// Copies `subdirectory` of a linked `checkout` into `destination` — the
+/// files [`tracked_and_new`] names, and nothing else.
+///
+/// The one path that reads a working tree somebody is editing. Everything
+/// else here reads history, which cannot change under it.
+pub fn materialize_linked(
+    checkout: &Path,
+    subdirectory: Option<&str>,
+    destination: &Path,
+) -> Result<()> {
+    for relative in tracked_and_new(checkout, subdirectory)? {
+        let source = checkout.join(&relative);
+        // Written out at the same depth a materialized commit would be, so
+        // a caller resolves the plugin's root the same way either way.
+        let target = destination.join(&relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        // A path Git lists but that is no longer there — deleted between
+        // the listing and the copy — is not an error: it is content the
+        // author has just removed.
+        match std::fs::copy(&source, &target) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source_error) => {
+                return Err(UzeError::Read {
+                    path: source,
+                    source: source_error,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod linked_tests {
+    use super::*;
+    use std::fs;
+
+    fn checkout(label: &str) -> std::path::PathBuf {
+        let root = uze_testkit::temp::scratch(label);
+        let at = root.join("checkout");
+        fs::create_dir_all(at.join("plugins/flow")).unwrap();
+        let git = |args: &[&str]| {
+            run(args, Some(&at)).unwrap();
+        };
+        git(&["init", "--initial-branch=main"]);
+        git(&["config", "user.email", "t@example.invalid"]);
+        git(&["config", "user.name", "Test"]);
+        fs::write(at.join(".gitignore"), "*.swp\ntarget/\n").unwrap();
+        fs::write(at.join("plugins/flow/plugin.json"), r#"{"name":"flow"}"#).unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "first"]);
+        at
+    }
+
+    #[test]
+    fn a_file_written_and_not_yet_committed_is_package_content() {
+        let at = checkout("linked-uncommitted");
+        fs::write(at.join("plugins/flow/new.md"), "just written").unwrap();
+
+        let content = tracked_and_new(&at, Some("plugins/flow")).unwrap();
+
+        assert!(
+            content.contains(&"plugins/flow/new.md".to_owned()),
+            "what the link exists to deliver: {content:?}"
+        );
+        fs::remove_dir_all(at.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_file_the_checkout_ignores_is_not_package_content() {
+        let at = checkout("linked-ignored");
+        fs::write(at.join("plugins/flow/.SKILL.md.swp"), "editor noise").unwrap();
+        fs::create_dir_all(at.join("plugins/flow/target")).unwrap();
+        fs::write(at.join("plugins/flow/target/built"), "artifact").unwrap();
+
+        let content = tracked_and_new(&at, Some("plugins/flow")).unwrap();
+
+        assert!(
+            !content.iter().any(|path| path.contains(".swp")),
+            "an editor's temporary file never reaches a harness: {content:?}"
+        );
+        assert!(
+            !content.iter().any(|path| path.contains("target/")),
+            "nor does a build artifact: {content:?}"
+        );
+        fs::remove_dir_all(at.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn materializing_writes_the_content_and_only_the_content() {
+        let at = checkout("linked-materialize");
+        fs::write(at.join("plugins/flow/new.md"), "just written").unwrap();
+        fs::write(at.join("plugins/flow/.SKILL.md.swp"), "editor noise").unwrap();
+        let out = at.parent().unwrap().join("out");
+
+        materialize_linked(&at, Some("plugins/flow"), &out).unwrap();
+
+        assert!(out.join("plugins/flow/plugin.json").is_file());
+        assert!(out.join("plugins/flow/new.md").is_file());
+        assert!(!out.join("plugins/flow/.SKILL.md.swp").exists());
+        fs::remove_dir_all(at.parent().unwrap()).unwrap();
+    }
+}

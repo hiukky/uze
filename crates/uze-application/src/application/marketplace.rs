@@ -78,11 +78,60 @@ impl MarketplaceRequest {
     /// narrowed to the plugin's directory, so cleanup still owns the whole
     /// checkout (`MaterializedPackage::retarget`) and the bytes live until
     /// the Store has ingested them.
+    /// A plugin read from a checkout this machine develops.
+    ///
+    /// Its provenance resolves to a *path*, not a commit — because that is
+    /// what it is. Nothing downstream can then mistake it for something
+    /// reproducible: `agents.lock` refuses to pin it, which is the whole
+    /// point, since a pin taken from unpublished work is one a
+    /// collaborator cannot reach.
+    fn materialize_from_link(&self, plugin: &str, checkout: &Path) -> Result<MaterializedPackage> {
+        let manifest_bytes = std::fs::read(
+            checkout.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME),
+        )
+        .map_err(|source| UzeError::Read {
+            path: checkout.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME),
+            source,
+        })?;
+        let manifest = marketplace::parse_manifest(&manifest_bytes)?;
+        let within = marketplace::plugin_subdirectory(&manifest, plugin)?;
+
+        let scratch = acquisition::scratch_directory()?;
+        let within_marketplace = (within != ".").then(|| PathBuf::from(&within));
+        let provenance = Provenance {
+            requested: PackageSource::Local {
+                path: checkout.to_path_buf(),
+            },
+            resolved: ResolvedSource::Local {
+                path: checkout.to_path_buf(),
+            },
+        };
+        let mut package = MaterializedPackage::owned(scratch.clone(), provenance.clone());
+        acquisition::mirror::materialize_linked(checkout, Some(&within), &scratch)?;
+        let plugin_root = match &within_marketplace {
+            Some(within) => scratch.join(within),
+            None => scratch,
+        };
+        package.retarget(plugin_root, provenance);
+        Ok(package)
+    }
+
     pub(crate) fn materialize_plugin(
         &self,
         plugin: &str,
         at: MirrorAt<'_>,
     ) -> Result<MaterializedPackage> {
+        // A marketplace the operator develops is read from their checkout,
+        // working tree and all. The Store still holds the delivered bytes —
+        // every harness reads it, and containment is enforced on ingest —
+        // so what the link changes is when the Store is refilled, not who
+        // is authoritative.
+        if let Ok(Some(record)) = uze_core::state::marketplace_get(at.home, at.marketplace)
+            && let Some(checkout) = record.link
+        {
+            return self.materialize_from_link(plugin, &checkout);
+        }
+
         let repository = super::marketplace_catalogue::mirror_dir(at.home, at.marketplace);
         acquisition::mirror::ensure_for(
             &self.repository.fetch,
@@ -201,6 +250,33 @@ impl Marketplace<'_> {
             return Err(UzeError::ReservedMarketplace(name));
         }
         uze_core::state::marketplace_add(&self.0.home, &name, source.clone())
+    }
+
+    /// Reads `name` from `checkout` on this machine from now on.
+    ///
+    /// Machine scope by construction: the record lives in the machine's own
+    /// registry and no project file is touched. That separation is the
+    /// point — inferring a link from a `path:` source is the conflation
+    /// that put an operator's home directory into a versioned
+    /// `agents.yaml`.
+    #[tracing::instrument(name = "marketplace.link", skip_all, fields(name = %name), err)]
+    pub fn link(&self, name: &str, checkout: &Path) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        uze_core::state::marketplace_link(&self.0.home, name, checkout)?;
+        // What the catalogue holds was read from the source, not from the
+        // checkout now answering for it.
+        self.0.marketplace_catalogues.invalidate(name);
+        Ok(())
+    }
+
+    /// Stops reading `name` from a checkout. `Ok(false)` when it was not
+    /// linked, which is an answer rather than a failure.
+    #[tracing::instrument(name = "marketplace.unlink", skip_all, fields(name = %name), err)]
+    pub fn unlink(&self, name: &str) -> Result<bool> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let had = uze_core::state::marketplace_unlink(&self.0.home, name)?;
+        self.0.marketplace_catalogues.invalidate(name);
+        Ok(had)
     }
 
     #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]

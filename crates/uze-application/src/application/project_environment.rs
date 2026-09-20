@@ -349,7 +349,15 @@ impl Project<'_> {
                     .id
             };
 
-            self.record_in_lock(&mut lock, &name, &marketplace, &request, &installed_id)?;
+            let pinned =
+                self.record_in_lock(&mut lock, &name, &marketplace, &request, &installed_id)?;
+            if !pinned {
+                outcomes.push(UpdateOutcome::Held {
+                    plugin: name,
+                    reason: "linked to a checkout on this machine, which pins nothing".to_owned(),
+                });
+                continue;
+            }
             let after = lock
                 .marketplaces
                 .get(&marketplace)
@@ -662,21 +670,22 @@ impl Project<'_> {
         marketplace: &str,
         request: &MarketplaceRequest,
         installed_id: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let stored = self.0.package_by_name(installed_id)?;
         let reproducible = stored.provenance.resolved.lock_revision().is_some();
+        // A marketplace read from a checkout this machine develops resolves
+        // to a path, not a commit, and pins nothing. Writing one would put
+        // a revision taken from unpublished work into a file a
+        // collaborator pulls — the mistake `pnpm link` also refuses. The
+        // project's existing entry is left exactly as it is.
+        let uze_core::acquisition::ResolvedSource::Git { commit, .. } = &stored.provenance.resolved
+        else {
+            return Ok(false);
+        };
         lock.plugins.insert(
             plugin.to_owned(),
             LockedPlugin::resolved(marketplace, &stored.root, reproducible),
         );
-        // The revision belongs to the marketplace, which is the thing that
-        // has one: a plugin is a directory inside it.
-        let uze_core::acquisition::ResolvedSource::Git { commit, .. } = &stored.provenance.resolved
-        else {
-            return Err(UzeError::AcquisitionFailed(format!(
-                "`{marketplace}` did not resolve to a commit"
-            )));
-        };
         lock.marketplaces.insert(
             marketplace.to_owned(),
             LockedMarketplace {
@@ -686,7 +695,7 @@ impl Project<'_> {
                 revision: commit.clone(),
             },
         );
-        Ok(())
+        Ok(true)
     }
 
     fn resolve_into_lock(

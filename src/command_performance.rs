@@ -90,6 +90,11 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
+    // Both are a registry write plus dropping a cache entry. `link` also
+    // asks Git what repository the checkout is, which is local and answers
+    // in one call.
+    ("market link", PerformanceClass::Budgeted),
+    ("market unlink", PerformanceClass::Budgeted),
     ("market inspect", PerformanceClass::Budgeted),
     (
         "market add",
@@ -210,6 +215,14 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "market remove",
         "uze_application::application::performance_tests::removals_meet_the_budget",
+    ),
+    (
+        "market link",
+        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
+    ),
+    (
+        "market unlink",
+        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
     ),
     (
         "market inspect",

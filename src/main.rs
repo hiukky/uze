@@ -234,6 +234,16 @@ enum MarketAction {
     },
     /// Remove a marketplace (blocked while plugins from it are installed).
     Remove { name: String },
+    /// Read a marketplace from a checkout on this machine you develop.
+    ///
+    /// Machine scope: nothing is written into any project's files, and the
+    /// project keeps declaring the remote. While a marketplace is linked
+    /// its plugins follow your working tree — ignored files excluded — and
+    /// `agents.lock` is not pinned from it, because a revision taken from
+    /// unpublished work is one a collaborator cannot reach.
+    Link { name: String, checkout: PathBuf },
+    /// Stop reading a marketplace from a checkout.
+    Unlink { name: String },
     /// Inspect one marketplace's own source and plugin count.
     ///
     /// Distinct from inspecting one plugin within a marketplace
@@ -1222,6 +1232,28 @@ fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
         MarketAction::Remove { name } => {
             app.marketplace().remove(&name)?;
             println!("Removed marketplace {name}");
+        }
+        MarketAction::Link { name, checkout } => {
+            let checkout = checkout
+                .canonicalize()
+                .map_err(|_| uze_application::UzeError::MissingPath(checkout.clone()))?;
+            app.marketplace().link(&name, &checkout)?;
+            println!(
+                "{} {name} is read from {}\n  Its plugins follow your working tree; \
+                 agents.lock is not pinned from it.",
+                progress::success_icon(),
+                checkout.display()
+            );
+        }
+        MarketAction::Unlink { name } => {
+            if app.marketplace().unlink(&name)? {
+                println!(
+                    "{} {name} is read from its source again",
+                    progress::success_icon()
+                );
+            } else {
+                println!("{name} was not linked");
+            }
         }
         MarketAction::Inspect { name, format } => {
             let detail = app.marketplace().inspect(&name)?;

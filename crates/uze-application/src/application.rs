@@ -582,11 +582,17 @@ impl UzeApplication {
         // No catalogue knows this package: `uze add <path|git>` installs
         // under a marketplace nothing registered, so there is no ref for it
         // to be behind.
-        if !matches!(
-            uze_core::state::marketplace_get(&self.home, marketplace),
-            Ok(Some(_))
-        ) {
+        let Ok(Some(record)) = uze_core::state::marketplace_get(&self.home, marketplace) else {
             return Freshness::unpinned();
+        };
+        // A marketplace read from a checkout this machine develops has no
+        // meaningful "newer": the working tree is what exists, and it
+        // changes whenever its author saves.
+        if let Some(checkout) = record.link {
+            return Freshness {
+                state: FreshnessState::Linked { checkout },
+                established_at_unix: None,
+            };
         }
         let uze_core::ResolvedSource::Git { commit, .. } = &package.provenance.resolved else {
             return Freshness::unpinned();

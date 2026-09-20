@@ -517,3 +517,90 @@ fn updating_a_plugin_this_project_does_not_declare_writes_nothing() {
         "a refused update writes nothing"
     );
 }
+
+/// The author's loop: a marketplace linked to a checkout follows the
+/// working tree, and the project's pin never comes from it.
+#[test]
+fn a_linked_marketplace_follows_the_checkout_and_pins_nothing() {
+    let (application, repository) = project("linked-project");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+    let pinned = fs::read_to_string(root.join("agents.lock")).unwrap();
+
+    application.marketplace().link("mkt", &market).unwrap();
+
+    // An edit with no commit behind it.
+    write_skill(&market, "edited, never committed");
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+
+    // The Store — what every harness reads — carries the edit.
+    let stored = application
+        .plugins()
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.id == "flow@mkt")
+        .expect("the plugin is installed")
+        .store_path
+        .join("skills/one/SKILL.md");
+    assert!(
+        fs::read_to_string(&stored)
+            .unwrap()
+            .contains("edited, never committed"),
+        "a linked marketplace follows the working tree"
+    );
+
+    // And the lock is untouched, byte for byte.
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        pinned,
+        "a pin must never come from unpublished work"
+    );
+    assert!(
+        !report.moved(),
+        "nothing was pinned, so nothing moved: {report:?}"
+    );
+
+    // UZE performed no Git on the operator's checkout: their edit is still
+    // uncommitted, and their branch is untouched.
+    let status = repository.git_in(&market, &["status", "--porcelain"]);
+    assert!(
+        status.contains("SKILL.md"),
+        "the edit is still the operator's to commit: {status:?}"
+    );
+}
+
+/// Linking refuses a checkout holding some other repository: a link says
+/// "read this marketplace here", and a directory holding a different
+/// project is not that marketplace wherever it sits.
+#[test]
+fn linking_to_a_foreign_checkout_is_refused() {
+    let (application, repository) = project("linked-foreign");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "a");
+    let stranger = root.parent().unwrap().join("stranger");
+    marketplace_beside(&repository, &stranger, "b");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+
+    let refused = application.marketplace().link("mkt", &stranger);
+
+    assert!(refused.is_err(), "{refused:?}");
+}
