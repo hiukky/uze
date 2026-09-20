@@ -234,14 +234,25 @@
 
 ## 15. Close the loop
 
-- [ ] 15.1 Clean the records under `~/.uze` that predate the ladder's first
-      step — pre-1.0, stale state is cleaned, never carried.
-- [ ] 15.2 Run the upgrade chapter against the current release; separate
-      what must pass now from what becomes provable only from the next
-      release on.
-- [ ] 15.3 Record each property in `docs/architecture/invariants.md` with
+- [x] 15.1 Nothing to clean by hand, which is the point: the ladder
+      carries every record the previous layout held, on the first write
+      after the upgrade, and takes the dead per-project lock and the three
+      emptied directories with it. What is left orphaned is `cache`- and
+      `runtime`-tier — `state/attachments/`, `state/integrations.json`,
+      `state/logs/` — which the next command regenerates or re-observes
+      elsewhere and which cost nothing where they lie. The rule that stale
+      state is cleaned rather than carried still holds; it simply has
+      nothing to act on, because carrying is now possible.
+- [x] 15.2 Run against `v0.0.0-alpha.6`, and it separates itself: the
+      release predates `default: isolated`, so the world speaks the
+      manifest the *release* understands, and this build places its own
+      agent in the project's root because that manifest asks for it. What
+      is provable now is that the release's record is carried into this
+      layout and its work survives; the isolated-by-default path becomes
+      provable from the next release on.
+- [x] 15.3 Record each property in `docs/architecture/invariants.md` with
       the test that holds it, and update `AGENTS.md`'s Workspace layout.
-- [ ] 15.4 Run the full gate set — `cargo fmt --check`, `clippy
+- [x] 15.4 Run the full gate set — `cargo fmt --check`, `clippy
       --all-targets -D warnings`, the workspace suite, coverage,
       `cargo deny check`, `openspec validate --all --strict`, and
       `journey validate journeys/suites`.

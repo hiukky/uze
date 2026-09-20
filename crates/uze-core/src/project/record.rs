@@ -139,6 +139,16 @@ fn carry_across_the_move(home: &UzeHome, id: &str, directory: &Path) {
             let _ = fs::rename(&was, &now);
         }
     }
+    // The lock beside the old store is not carried: it guards a path that
+    // no longer exists, and the new store mints its own. Left behind it is
+    // a file nothing will ever open again.
+    let _ = fs::remove_file(state.join("tasks").join(format!("{id}.lock")));
+    // And the directories the three used to live in, when nothing else is
+    // in them. `remove_dir` refuses a directory with anything left, so a
+    // project still on the old layout keeps its own.
+    for emptied in ["tasks", "conversations", "prompt-history"] {
+        let _ = fs::remove_dir(state.join(emptied));
+    }
 }
 
 /// Owner-only, because of what is in here.
