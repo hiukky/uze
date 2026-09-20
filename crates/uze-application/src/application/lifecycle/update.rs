@@ -48,13 +48,6 @@ impl Plugins<'_> {
         // reporting the client's own pid back at them. Nothing is written
         // until `deliver` below, which is where the lock belongs.
         let installed = self.0.package_by_name(id)?;
-        // An update is a version change, never a re-namespacing (ADR-038):
-        // whatever local name this package currently answers to — its own
-        // bare name, or an `alias` a past collision resolution gave it —
-        // must come back exactly the same after the reinstall below removes
-        // and recreates its registration.
-        let active_name = installed.active_name.clone();
-        let bare_name = installed.id.plugin_name().to_owned();
 
         // Re-resolve the *request*, not the resolution: that is what makes a
         // branch move forward while a pinned commit stays put.
@@ -69,6 +62,34 @@ impl Plugins<'_> {
             Some(request) => request,
             None => self.acquire(&installed.provenance.requested)?,
         };
+        self.replace_with(id, materialized, authority)
+    }
+
+    /// Replaces `id`'s installed revision with bytes the caller already
+    /// materialized, and puts the old one back if the new one cannot be
+    /// delivered.
+    ///
+    /// Separate from `update` because *where the new bytes come from* is
+    /// the caller's question and the replacement is not. A machine update
+    /// re-resolves the package's own request; a project's update resolves
+    /// the ref its manifest declares, which is a different revision
+    /// whenever the request was itself pinned — a package reproduced from
+    /// `agents.lock` has the locked commit *as* its request, so
+    /// re-resolving that can only ever return what is already installed.
+    pub(crate) fn replace_with(
+        &self,
+        id: &str,
+        materialized: uze_core::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdatePluginReport> {
+        let installed = self.0.package_by_name(id)?;
+        // An update is a version change, never a re-namespacing (ADR-038):
+        // whatever local name this package currently answers to — its own
+        // bare name, or an `alias` a past collision resolution gave it —
+        // must come back exactly the same after the reinstall below removes
+        // and recreates its registration.
+        let active_name = installed.active_name.clone();
+        let bare_name = installed.id.plugin_name().to_owned();
 
         let previous = {
             let resources = uze_core::engine::package_resources(&installed)?;

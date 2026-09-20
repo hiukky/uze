@@ -325,14 +325,29 @@ impl Project<'_> {
                 .get(&marketplace)
                 .map(|entry| entry.revision.clone());
 
+            // Resolved from what *this project declares*, never from the
+            // package's own request. A package reproduced from `agents.lock`
+            // carries the locked commit *as* its request, so re-resolving
+            // that can only ever return the revision already installed —
+            // and when that commit lives on no remote, not even that.
+            //
             // Replacing, not installing over: the Store is idempotent by
-            // *origin*, and a marketplace's url and ref do not change
-            // between revisions — so installing again would hand back the
-            // revision already held. `Plugins::update` is the path that
-            // replaces, and it rolls the installed revision back if the new
-            // one cannot be delivered.
+            // origin, so installing again hands back what is already held.
+            // `replace_with` is the path that replaces, and it puts the
+            // installed revision back if the new one cannot be delivered.
             let installed_id = if self.0.package_by_name(&qualified).is_ok() {
-                match self.0.plugins().update(&qualified, authority) {
+                let materialized = request.materialize_plugin(
+                    &name,
+                    super::marketplace::MirrorAt {
+                        home: &self.0.home,
+                        marketplace: &marketplace,
+                    },
+                )?;
+                match self
+                    .0
+                    .plugins()
+                    .replace_with(&qualified, materialized, authority)
+                {
                     Ok(UpdatePluginReport::Updated { plugin, .. }) => plugin.id,
                     Ok(UpdatePluginReport::Blocked { .. }) => {
                         outcomes.push(UpdateOutcome::Held {

@@ -661,3 +661,53 @@ fn an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs() {
         "the reachable marketplace's plugin is installed"
     );
 }
+
+/// A package reproduced from `agents.lock` carries the locked commit *as*
+/// its own request, so re-resolving the request can only ever return what
+/// is already installed. `uze update` must resolve what the *manifest*
+/// declares instead — which is the only thing that can name a newer
+/// revision.
+///
+/// The shape this missed: a marketplace declared by path resolves to a
+/// commit from the local checkout, while the lock records the remote
+/// identity so the project stays reproducible. A commit never pushed then
+/// exists on no remote, and re-resolving the request fails outright rather
+/// than merely standing still.
+#[test]
+fn update_resolves_what_the_manifest_declares_not_what_the_package_requested() {
+    let (application, repository) = project("update-declared-ref");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&market.to_string_lossy())
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    // Reproduce it the way a fresh machine does: the package's own request
+    // becomes the locked commit.
+    application.plugins().remove("flow@mkt").ok();
+    application.project().install(&root, &AlwaysTrust).unwrap();
+
+    let moved_to = move_marketplace(&repository, &market, "second body");
+
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+
+    assert!(
+        report.moved(),
+        "update must follow the declared ref, not the pinned request: {report:?}"
+    );
+    let locked = fs::read_to_string(root.join("agents.lock")).unwrap();
+    assert!(
+        locked.contains(&moved_to),
+        "the lock records where the declared ref points now: {locked}"
+    );
+}

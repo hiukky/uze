@@ -59,6 +59,7 @@ impl Plugins<'_> {
             .collect();
         let reconciliation = self.0.reconcile_cached_report(package.id.as_str());
         Ok(PluginInspection {
+            revision: self.0.installed_revision(&package),
             plugin: self.0.plugin_summary(&package)?,
             capabilities: resources
                 .iter()
@@ -227,8 +228,35 @@ pub struct HarnessDelivery {
     pub capabilities: Vec<CapabilityDelivery>,
 }
 
+/// Which revision of a plugin is installed, as something a person can
+/// place in time.
+///
+/// The freshness state says *whether* there is something newer; this says
+/// what you actually have. A drawer showing only the state leaves "is this
+/// from this morning or from March" unanswerable, which is the question a
+/// person opening it usually has.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum InstalledRevision {
+    /// A commit, with Git's own account of how long ago it landed and what
+    /// it was about.
+    Commit {
+        short: String,
+        age: String,
+        subject: String,
+    },
+    /// A checkout on this machine. There is no revision to name: what is
+    /// installed is whatever its author last saved.
+    Checkout { path: PathBuf },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginInspection {
+    /// `None` for a package whose bytes came from nowhere a revision can
+    /// be read from — the snapshot inside the binary, a direct install —
+    /// or whose mirror no longer holds the commit it was installed at.
+    /// Absent rather than guessed.
+    pub revision: Option<InstalledRevision>,
     pub plugin: PluginSummary,
     pub capabilities: Vec<PluginCapability>,
     pub deliveries: Vec<HarnessDelivery>,

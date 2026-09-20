@@ -335,6 +335,29 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_describes_itself_and_an_absent_one_says_nothing() {
+        let (root, first, second) = origin("mirror-describe");
+        let mirror = root.join("mirror");
+        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+
+        let described = describe(&mirror, &second).expect("the head is described");
+        assert!(second.starts_with(&described.short));
+        assert_eq!(described.subject, "second");
+        assert!(
+            described.age.contains("ago") || described.age.contains("now"),
+            "Git's own relative date, whatever it decided: {}",
+            described.age
+        );
+        assert_eq!(describe(&mirror, &first).unwrap().subject, "first");
+
+        assert!(
+            describe(&mirror, "0000000000000000000000000000000000000000").is_none(),
+            "a commit this mirror does not have is an answer, not a failure"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_mirror_of_another_repository_is_replaced_not_fetched_into() {
         let (root, _first, second) = origin("mirror-foreign");
         let mirror = root.join("mirror");
@@ -526,4 +549,37 @@ mod linked_tests {
         assert!(!out.join("plugins/flow/.SKILL.md.swp").exists());
         fs::remove_dir_all(at.parent().unwrap()).unwrap();
     }
+}
+
+/// What one commit says about itself: its short form, how long ago it
+/// landed, and its subject.
+///
+/// The age comes from Git's own `%cr` ("3 hours ago") rather than from a
+/// timestamp this would have to render: Git already decides where the
+/// boundary between hours and days falls, and a second opinion on that is
+/// a second thing to get wrong.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitSummary {
+    pub short: String,
+    pub age: String,
+    pub subject: String,
+}
+
+/// `commit` described, or `None` when this mirror does not have it — a
+/// commit the remote no longer carries, or one that was never fetched.
+/// Absence is an answer here, not a failure: the caller shows what it
+/// knows and says nothing about what it does not.
+pub fn describe(directory: &Path, commit: &str) -> Option<CommitSummary> {
+    reject_option_shaped(commit, "commit").ok()?;
+    let answer = run(
+        &["show", "--no-patch", "--format=%h%x1f%cr%x1f%s", commit],
+        Some(directory),
+    )
+    .ok()?;
+    let mut fields = answer.trim().split('\u{1f}');
+    Some(CommitSummary {
+        short: fields.next()?.to_owned(),
+        age: fields.next()?.to_owned(),
+        subject: fields.next().unwrap_or_default().to_owned(),
+    })
 }

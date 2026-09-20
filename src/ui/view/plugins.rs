@@ -27,7 +27,7 @@ use ratatui::{
 
 use uze_application::CapabilityKind;
 use uze_application::application::{
-    DoctorReport, FreshnessState, MarketplacePluginSummary, PluginCapability,
+    DoctorReport, FreshnessState, InstalledRevision, MarketplacePluginSummary, PluginCapability,
 };
 
 use super::super::agent_support::capability_label;
@@ -549,6 +549,53 @@ fn render_plugin_drawer(
             detail.summary.name == plugin.name && detail.summary.marketplace == plugin.marketplace
         })
     });
+
+    // What you actually have, before what it offers. The row's status
+    // column says whether something newer exists; this says how old the
+    // thing in front of you is, which is the question the state alone
+    // cannot answer.
+    if let Some(revision) = installed_inspection
+        .flatten()
+        .and_then(|detail| detail.revision.as_ref())
+    {
+        lines.push(Line::from(Span::styled(
+            "REVISION",
+            theme::fg_bold(Token::TextMuted),
+        )));
+        match revision {
+            InstalledRevision::Commit {
+                short,
+                age,
+                subject,
+            } => {
+                lines.push(Line::from(vec![
+                    Span::styled(short.clone(), theme::fg(Token::TextSecondary)),
+                    Span::raw("  "),
+                    Span::styled(age.clone(), theme::fg(Token::TextMuted)),
+                ]));
+                if !subject.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        text::elide(subject, room),
+                        theme::fg(Token::TextMuted),
+                    )));
+                }
+            }
+            // No revision to name: what is installed is whatever its
+            // author last saved, so the checkout is the only honest
+            // answer.
+            InstalledRevision::Checkout { path } => {
+                lines.push(Line::from(Span::styled(
+                    "follows your working tree",
+                    theme::fg(Token::TextSecondary),
+                )));
+                lines.push(Line::from(Span::styled(
+                    text::elide(&path.display().to_string(), room),
+                    theme::fg(Token::TextMuted),
+                )));
+            }
+        }
+        lines.push(Line::from(""));
+    }
 
     lines.push(Line::from(Span::styled(
         "RESOURCES",
