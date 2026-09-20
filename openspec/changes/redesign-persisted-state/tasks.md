@@ -95,11 +95,11 @@
 
 ## 7. The receipt ledger
 
-- [ ] 7.1 Remove the composite receipt key — unparseable because the
+- [x] 7.1 Remove the composite receipt key — unparseable because the
       resource identity carries colons of its own, and read by nobody — and
       make the ledger a list.
-- [ ] 7.2 Key idempotent upsert on the fields that identify a receipt.
-- [ ] 7.3 Test that recording the same attachment twice leaves one receipt.
+- [x] 7.2 Key idempotent upsert on the fields that identify a receipt.
+- [x] 7.3 Test that recording the same attachment twice leaves one receipt.
 
 ## 8. Located resources stay addressable
 

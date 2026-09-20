@@ -499,7 +499,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
@@ -553,7 +552,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
@@ -603,7 +601,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,

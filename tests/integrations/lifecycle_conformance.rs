@@ -343,7 +343,7 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
     for vendor in ["claude-code", "codex", "antigravity"] {
         let for_vendor: Vec<_> = receipts
             .iter()
-            .filter(|(_, receipt)| receipt.integration == vendor)
+            .filter(|receipt| receipt.integration == vendor)
             .collect();
         assert_eq!(
             for_vendor.len(),
@@ -353,7 +353,7 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
              capability receipt for a resource it already covers",
             for_vendor.len()
         );
-        let (_, receipt) = for_vendor[0];
+        let receipt = for_vendor[0];
         assert!(
             matches!(receipt.artifact, ManagedArtifact::IntegrationOwned { .. }),
             "{vendor}: the one receipt for a package-covered resource must be package-level \

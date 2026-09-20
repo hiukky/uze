@@ -707,14 +707,14 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();
-    let receipts = ledger["receipts"].as_object().unwrap();
+    let receipts = ledger["receipts"].as_array().unwrap();
     assert!(receipts.len() >= 2);
     // With the default `uze` seeded, attachments also contain its own
     // package-level receipts (the default package is generatable too, see
     // the skill-fixture CLI test); filter to this MCP package's receipts
     // before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
-        .values()
+        .iter()
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance@test")
         .collect();
     assert!(

@@ -75,7 +75,7 @@ impl Plugins<'_> {
                 } => (detached_receipts, already_missing_receipts, final_report),
             };
         for reconciled in &final_report.receipts {
-            state::forget_receipt(&self.0.home, &reconciled.ledger_key)?;
+            state::forget_receipt(&self.0.home, &reconciled.receipt)?;
         }
         self.0.store.remove_package(&package.id)?;
         // The package set changed, so every derived view is now stale. A

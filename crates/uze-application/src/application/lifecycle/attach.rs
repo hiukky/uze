@@ -108,7 +108,7 @@ impl UzeApplication {
             // suite with a truthful fake CLI).
             let already_attached = state::receipts(&self.home, Some(package.id.as_str()))?
                 .into_iter()
-                .any(|(_, receipt)| {
+                .any(|receipt| {
                     receipt.integration == integration.id()
                         && receipt.resource_identity.is_none()
                         && integration.inspect_receipt(&receipt).state == AttachmentState::Matched
@@ -122,22 +122,23 @@ impl UzeApplication {
                 // every one of them is safely detachable: a single
                 // Drifted/Conflict/Blocked leaves decomposed delivery in
                 // place rather than adding a native copy beside it.
-                let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
+                let existing: Vec<uze_core::integration::AttachmentReceipt> =
                     state::receipts(&self.home, Some(package.id.as_str()))?
                         .into_iter()
-                        .filter(|(_, r)| {
-                            r.integration == integration.id() && r.resource_identity.is_some()
+                        .filter(|receipt| {
+                            receipt.integration == integration.id()
+                                && receipt.resource_identity.is_some()
                         })
                         .collect();
                 let mut covered_existing = Vec::new();
-                for (key, receipt) in &existing {
+                for receipt in &existing {
                     if let Some(identity) = &receipt.resource_identity
                         && plan.provided_resource_identities.contains(identity)
                     {
-                        covered_existing.push((key.clone(), receipt.clone()));
+                        covered_existing.push(receipt.clone());
                     }
                 }
-                let native_blocked = covered_existing.iter().any(|(_, receipt)| {
+                let native_blocked = covered_existing.iter().any(|receipt| {
                     matches!(
                         integration.inspect_receipt(receipt).state,
                         AttachmentState::Drifted
@@ -149,24 +150,20 @@ impl UzeApplication {
                     // Keep decomposed delivery; do not attach native to avoid duplication.
                     provided = BTreeSet::new();
                 } else {
-                    for (key, receipt) in covered_existing {
+                    for receipt in covered_existing {
                         let inspection = integration.inspect_receipt(&receipt);
                         if inspection.state == AttachmentState::Matched {
                             let detached = integration.detach_receipt(&receipt)?;
                             if detached.state == AttachmentState::Missing {
-                                state::forget_receipt(&self.home, &key)?;
+                                state::forget_receipt(&self.home, &receipt)?;
                             }
                         } else if inspection.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, &key)?;
+                            state::forget_receipt(&self.home, &receipt)?;
                         }
                     }
                     if let Some(receipt) = integration.attach_package(package, &plan)? {
                         let location = receipt.artifact.location();
-                        state::record_receipt(
-                            &self.home,
-                            package_receipt_key(package.id.as_str(), integration.id()),
-                            receipt,
-                        )?;
+                        state::record_receipt(&self.home, receipt)?;
                         delivery.attachments.push(AttachmentSummary {
                             integration: integration.id().to_owned(),
                             location,
@@ -186,11 +183,7 @@ impl UzeApplication {
                 let resolved = self.resolve_exposure_name(resource, integration)?;
                 if let Some(receipt) = integration.attach_receipt(&resolved)? {
                     let location = receipt.artifact.location();
-                    state::record_receipt(
-                        &self.home,
-                        resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                        receipt,
-                    )?;
+                    state::record_receipt(&self.home, receipt)?;
                     delivery.attachments.push(AttachmentSummary {
                         integration: integration.id().to_owned(),
                         location,
@@ -252,7 +245,7 @@ impl UzeApplication {
         // Existing receipt wins: a resource already attached keeps the
         // physical entry it was given, so re-running attach never renames
         // or duplicates it.
-        if let Some((_, existing)) = all_receipts.iter().find(|(_, receipt)| {
+        if let Some(existing) = all_receipts.iter().find(|receipt| {
             receipt.resource_identity.as_deref() == Some(resource_id.as_str())
                 && (receipt.integration == integration.id() || shares_root(&receipt.integration))
         }) {
@@ -265,10 +258,10 @@ impl UzeApplication {
         }
         let claimed: BTreeSet<String> = all_receipts
             .iter()
-            .filter(|(_, receipt)| {
+            .filter(|receipt| {
                 receipt.integration == integration.id() || shares_root(&receipt.integration)
             })
-            .filter_map(|(_, receipt)| receipt.artifact.exposure_name())
+            .filter_map(|receipt| receipt.artifact.exposure_name())
             .collect();
         // A shared root must converge on the same physical name no matter
         // which member happens to attach first. If any integration sharing
@@ -321,13 +314,10 @@ impl UzeApplication {
         };
         let claimant = all_receipts
             .iter()
-            .filter(|(_, receipt)| {
+            .filter(|receipt| {
                 receipt.integration == integration.id() || shares_root(&receipt.integration)
             })
-            .find_map(|(_, receipt)| {
-                (receipt.artifact.exposure_name().as_deref() == Some(entry.as_str()))
-                    .then_some(receipt)
-            });
+            .find(|receipt| receipt.artifact.exposure_name().as_deref() == Some(entry.as_str()));
         let Some(claimant) = claimant else {
             // Defensive fallback (should be unreachable): retain the
             // previous behavior rather than panicking on ledger drift.
@@ -366,12 +356,4 @@ fn artifact_owned_target(receipt: &AttachmentReceipt) -> PathBuf {
 
         _ => receipt.artifact.location(),
     }
-}
-
-fn package_receipt_key(package: &str, integration: &str) -> String {
-    format!("{package}:{integration}:package")
-}
-
-fn resource_receipt_key(package: &str, integration: &str, resource: &uze_core::Resource) -> String {
-    format!("{package}:{integration}:{}", resource.identity())
 }

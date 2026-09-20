@@ -30,6 +30,22 @@ pub struct AttachmentReceipt {
     pub artifact: ManagedArtifact,
 }
 
+impl AttachmentReceipt {
+    /// A name for this attachment, for something that has to key on one.
+    ///
+    /// Derived rather than stored. The ledger used to key its receipts by
+    /// this very string, which made it a second copy of three fields — and
+    /// an unsplittable one, since a resource identity carries colons of its
+    /// own. As a cache key none of that matters: nothing parses it, and it
+    /// only has to differ when the attachment does.
+    pub fn cache_key(&self) -> String {
+        match &self.resource_identity {
+            Some(identity) => format!("{}:{}:{identity}", self.package_id, self.integration),
+            None => format!("{}:{}:package", self.package_id, self.integration),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AttachmentState {

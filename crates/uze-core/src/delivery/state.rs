@@ -46,9 +46,32 @@ mod shapes {
     }
 
     first_shape! {
-        AttachmentLedger => "attachments",
         ProvisioningRegistry => "provisioning",
         MarketplaceRegistry => "marketplaces",
+    }
+
+    /// Shape 1 keyed its receipts by a string built from three of their own
+    /// fields. Shape 2 drops the key and keeps the values, in the order
+    /// the map had them.
+    impl uze_document::Shaped for AttachmentLedger {
+        const SHAPE: u32 = 2;
+        const KIND: &'static str = "attachments";
+
+        fn ladder() -> uze_document::Ladder {
+            &[uze_document::Step {
+                from: 1,
+                to: 2,
+                climb: |mut document| {
+                    if let Some(receipts) = document.get_mut("receipts")
+                        && let Some(keyed) = receipts.as_object()
+                    {
+                        let values: Vec<serde_json::Value> = keyed.values().cloned().collect();
+                        *receipts = serde_json::Value::Array(values);
+                    }
+                    Ok(document)
+                },
+            }]
+        }
     }
 }
 
@@ -70,44 +93,64 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     crate::persistence::write_atomic(path, &payload)
 }
 
+/// Who owns what UZE put on a harness's disk.
+///
+/// A list, because a receipt already says what it is about: its package,
+/// its integration and the resource it delivers. It was a map keyed by
+/// `"{package}:{integration}:{identity}"` — a string nothing could split
+/// back, since a resource identity carries colons of its own
+/// (`package:git@ai:skills/commit/SKILL.md` makes five segments), and
+/// nothing read: every caller filtered on the fields instead. A key that
+/// is a concatenation of the value is the value said twice.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct AttachmentLedger {
-    receipts: BTreeMap<String, AttachmentReceipt>,
+    receipts: Vec<AttachmentReceipt>,
 }
 
 fn attachments_path(home: &UzeHome) -> PathBuf {
     home.attachments_path()
 }
 
-pub fn receipts(
-    home: &UzeHome,
-    package_id: Option<&str>,
-) -> Result<Vec<(String, AttachmentReceipt)>> {
+/// Whether two receipts are about the same attachment — which is what a
+/// key was for, asked of the fields that answer it.
+fn same_attachment(left: &AttachmentReceipt, right: &AttachmentReceipt) -> bool {
+    left.package_id == right.package_id
+        && left.integration == right.integration
+        && left.resource_identity == right.resource_identity
+}
+
+pub fn receipts(home: &UzeHome, package_id: Option<&str>) -> Result<Vec<AttachmentReceipt>> {
     let ledger: AttachmentLedger = read_json_or_default(&attachments_path(home))?;
     Ok(ledger
         .receipts
         .into_iter()
-        .filter(|(_, receipt)| package_id.is_none_or(|id| receipt.package_id == id))
+        .filter(|receipt| package_id.is_none_or(|id| receipt.package_id == id))
         .collect())
 }
 
-pub fn record_receipt(home: &UzeHome, key: String, receipt: AttachmentReceipt) -> Result<()> {
+/// Records an attachment, replacing whatever was recorded for the same
+/// one. Idempotent: attaching twice leaves one receipt, which is what the
+/// map's key bought and the fields buy without it.
+pub fn record_receipt(home: &UzeHome, receipt: AttachmentReceipt) -> Result<()> {
     home.ensure_layout()?;
     update_receipts(home, |receipts| {
-        receipts.insert(key, receipt);
+        match receipts
+            .iter_mut()
+            .find(|existing| same_attachment(existing, &receipt))
+        {
+            Some(existing) => *existing = receipt,
+            None => receipts.push(receipt),
+        }
     })
 }
 
-pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
+pub fn forget_receipt(home: &UzeHome, receipt: &AttachmentReceipt) -> Result<()> {
     update_receipts(home, |receipts| {
-        receipts.remove(key);
+        receipts.retain(|existing| !same_attachment(existing, receipt));
     })
 }
 
-fn update_receipts(
-    home: &UzeHome,
-    change: impl FnOnce(&mut BTreeMap<String, AttachmentReceipt>),
-) -> Result<()> {
+fn update_receipts(home: &UzeHome, change: impl FnOnce(&mut Vec<AttachmentReceipt>)) -> Result<()> {
     let path = attachments_path(home);
     let mut ledger: AttachmentLedger = read_json_or_default(&path)?;
     change(&mut ledger.receipts);
@@ -339,32 +382,46 @@ mod tests {
     }
 
     #[test]
+    /// Shape 1 keyed its receipts by a string built from three of their own
+    /// fields, and that string could not be split back: a resource identity
+    /// carries colons of its own. Shape 2 drops the key and keeps the
+    /// values, and a machine coming from the previous release loses nothing
+    /// by the change.
+    #[test]
+    fn a_ledger_keyed_by_a_string_is_carried_across_into_a_list() {
+        let home = temp_home("receipt-ledger-shape-1");
+        home.ensure_layout().unwrap();
+        fs::write(
+            home.attachments_path(),
+            br#"{"receipts":{
+              "git@ai:opencode:package:git@ai:skills/commit/SKILL.md":{
+                "package_id":"git@ai","resource_identity":"package:git@ai:skills/commit/SKILL.md",
+                "integration":"opencode","artifact":{"INTEGRATION_OWNED":{"kind":"k","selector":"s",
+                "origin":"generated","detail":{}}}},
+              "git@ai:codex:package":{
+                "package_id":"git@ai","resource_identity":null,"integration":"codex",
+                "artifact":{"INTEGRATION_OWNED":{"kind":"k","selector":"s","origin":"generated",
+                "detail":{}}}}}}"#,
+        )
+        .unwrap();
+
+        let carried = receipts(&home, Some("git@ai")).unwrap();
+        assert_eq!(carried.len(), 2, "both receipts survive: {carried:?}");
+        assert!(
+            carried
+                .iter()
+                .any(|receipt| receipt.resource_identity.as_deref()
+                    == Some("package:git@ai:skills/commit/SKILL.md")),
+            "including the one whose identity made the old key unsplittable"
+        );
+    }
+
     fn receipt_ledger_persists_multiple_receipts_and_idempotent_keys() {
         let home = temp_home("receipt-ledger");
-        record_receipt(
-            &home,
-            "plugin-a:codex:mcp".to_owned(),
-            receipt("plugin-a", "codex", "uze-a"),
-        )
-        .unwrap();
-        record_receipt(
-            &home,
-            "plugin-a:codex:mcp".to_owned(),
-            receipt("plugin-a", "codex", "uze-a"),
-        )
-        .unwrap();
-        record_receipt(
-            &home,
-            "plugin-a:claude:mcp".to_owned(),
-            receipt("plugin-a", "claude-code", "uze-a"),
-        )
-        .unwrap();
-        record_receipt(
-            &home,
-            "plugin-b:codex:mcp".to_owned(),
-            receipt("plugin-b", "codex", "uze-b"),
-        )
-        .unwrap();
+        record_receipt(&home, receipt("plugin-a", "codex", "uze-a")).unwrap();
+        record_receipt(&home, receipt("plugin-a", "codex", "uze-a")).unwrap();
+        record_receipt(&home, receipt("plugin-a", "claude-code", "uze-a")).unwrap();
+        record_receipt(&home, receipt("plugin-b", "codex", "uze-b")).unwrap();
 
         assert_eq!(receipts(&home, None).unwrap().len(), 3);
         let package_a = receipts(&home, Some("plugin-a")).unwrap();
@@ -372,7 +429,7 @@ mod tests {
         assert!(
             package_a
                 .iter()
-                .all(|(_, receipt)| receipt.package_id == "plugin-a")
+                .all(|receipt| receipt.package_id == "plugin-a")
         );
         fs::remove_dir_all(home.root()).unwrap();
     }
@@ -391,7 +448,6 @@ mod tests {
         let home = temp_home("native-package-only");
         record_receipt(
             &home,
-            "plugin-a:codex:package".to_owned(),
             AttachmentReceipt {
                 package_id: "plugin-a".to_owned(),
                 resource_identity: None,
@@ -411,7 +467,7 @@ mod tests {
         .unwrap();
         let stored = receipts(&home, Some("plugin-a")).unwrap();
         assert_eq!(stored.len(), 1);
-        assert!(stored[0].1.resource_identity.is_none());
+        assert!(stored[0].resource_identity.is_none());
         fs::remove_dir_all(home.root()).unwrap();
     }
 

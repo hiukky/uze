@@ -71,9 +71,9 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
 
     let ledger = std::fs::read(env.uze_home.join("state/attachments.json")).unwrap();
     let ledger: serde_json::Value = serde_json::from_slice(&ledger).unwrap();
-    let receipts = ledger["receipts"].as_object().unwrap();
+    let receipts = ledger["receipts"].as_array().unwrap();
     let for_package: Vec<_> = receipts
-        .values()
+        .iter()
         .filter(|receipt| receipt["package_id"] == "uze-agent-skill-conformance@test")
         .collect();
     // One package-level (or one capability-level) receipt per integration —

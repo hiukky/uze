@@ -204,13 +204,14 @@ impl Health<'_> {
             // exactly. Other attachments are still inspected once by the
             // subsequent doctor report, avoiding a second vendor CLI call on
             // every anomalous report.
-            for (ledger_key, receipt) in entries.into_iter().filter(|(_, receipt)| {
+            for receipt in entries.into_iter().filter(|receipt| {
                 matches!(
                     receipt.artifact,
                     ManagedArtifact::SymlinkReference { .. }
                         | ManagedArtifact::ManagedTextRegion { .. }
                 )
             }) {
+                let ledger_key = receipt.cache_key();
                 let Some(integration) = self
                     .0
                     .integrations
@@ -325,7 +326,7 @@ impl Health<'_> {
         };
         let orphan_ids: BTreeSet<String> = all_receipts
             .into_iter()
-            .map(|(_, receipt)| receipt.package_id)
+            .map(|receipt| receipt.package_id)
             .filter(|id| !known_ids.contains(id.as_str()))
             .collect();
 
@@ -359,7 +360,7 @@ impl Health<'_> {
                 .receipts
                 .iter()
                 .filter(|reconciled| {
-                    state::forget_receipt(&self.0.home, &reconciled.ledger_key).is_ok()
+                    state::forget_receipt(&self.0.home, &reconciled.receipt).is_ok()
                 })
                 .map(|reconciled| reconciled.ledger_key.clone())
                 .collect();
@@ -409,25 +410,29 @@ mod tests {
             )
             .unwrap();
         let package_id = app.plugins().list().unwrap().remove(0).id;
-        state::record_receipt(
-            &home,
-            "fixture:receipt".to_owned(),
-            AttachmentReceipt {
-                package_id,
-                resource_identity: Some("skill:fixture".to_owned()),
-                integration: "fixture".to_owned(),
-                artifact: ManagedArtifact::SymlinkReference {
-                    path: link.clone(),
-                    target: target.clone(),
-                },
+        let recorded = AttachmentReceipt {
+            package_id,
+            resource_identity: Some("skill:fixture".to_owned()),
+            integration: "fixture".to_owned(),
+            artifact: ManagedArtifact::SymlinkReference {
+                path: link.clone(),
+                target: target.clone(),
             },
-        )
-        .unwrap();
+        };
+        // The name a report gives an attachment is derived from the
+        // receipt's own fields now, rather than being a key the ledger
+        // stored beside them.
+        let named = recorded.cache_key();
+        state::record_receipt(&home, recorded).unwrap();
         let report = app.health().maintain();
-        assert!(report.outcomes.iter().any(|outcome| matches!(
-            outcome,
-            MaintenanceOutcome::Repaired { receipt, .. } if receipt == "fixture:receipt"
-        )));
+        assert!(
+            report.outcomes.iter().any(|outcome| matches!(
+                outcome,
+                MaintenanceOutcome::Repaired { receipt, .. } if *receipt == named
+            )),
+            "{:?}",
+            report.outcomes
+        );
         assert_eq!(fs::read_link(link).unwrap(), target);
     }
 
@@ -456,7 +461,6 @@ mod tests {
         let package_id = app.plugins().list().unwrap().remove(0).id;
         state::record_receipt(
             &home,
-            "fixture:drifted".to_owned(),
             AttachmentReceipt {
                 package_id,
                 resource_identity: Some("skill:fixture".to_owned()),
@@ -501,7 +505,6 @@ mod tests {
         // already an orphan the moment it is recorded.
         state::record_receipt(
             &home,
-            "old-git:fixture:package".to_owned(),
             AttachmentReceipt {
                 package_id: "old-git".to_owned(),
                 resource_identity: None,
