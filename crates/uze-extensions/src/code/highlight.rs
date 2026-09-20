@@ -106,10 +106,24 @@ pub(crate) fn line(highlighter: &mut HighlightLines<'_>, text: &str) -> Vec<(Rgb
         .collect()
 }
 
-/// Every line of `text`, highlighted as one continuous stream.
-pub(crate) fn lines(text: &str, path: &Path, theme_name: &str) -> Vec<Vec<(Rgb, String)>> {
+/// The first `limit` lines of `text`, highlighted as one continuous
+/// stream.
+///
+/// Bounded because the cost is per line and the screen is not: see
+/// [`super::request`]. Taken from the front rather than from a window
+/// anywhere else, because syntect's state is the reason a doc comment
+/// stays one for the lines below it — there is no way to colour line
+/// five hundred without having walked the four hundred and ninety-nine
+/// above it.
+pub(crate) fn lines(
+    text: &str,
+    path: &Path,
+    theme_name: &str,
+    limit: usize,
+) -> Vec<Vec<(Rgb, String)>> {
     let mut highlighter = highlighter(path, theme_name);
     text.lines()
+        .take(limit)
         .map(|text| line(&mut highlighter, text))
         .collect()
 }

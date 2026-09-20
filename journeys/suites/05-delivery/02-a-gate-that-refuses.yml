@@ -30,9 +30,9 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "+ │ ✦"
+      - click: "+  ✦"
         in: strip
-        offset: 4
+        offset: 3
         expect: new agent
       - click: " new agent "
         say: place an agent
@@ -50,7 +50,7 @@ scenes:
           git -C "$slot" commit -qm 'feat(api): add the file the gate refuses'
         say: it commits exactly what the gate is declared to reject
       - wait: screen
-        until: "merge → main"
+        until: "→ main"
         in: strip
         timeout: 40
         settle: 1.0
@@ -65,7 +65,7 @@ scenes:
 
   - scene: delivery runs the checks, they refuse, and nothing lands
     when:
-      - click: "merge → main"
+      - click: "→ main"
         say: press deliver
         in: strip
         # The gate carries weight because it is exact: the failure is
@@ -75,10 +75,12 @@ scenes:
         expect_timeout: 90
         pause: 3.0
       - wait: screen
-        until: "retry"
+        until: "→ main ×"
         in: strip
         timeout: 30
-        say: and the button becomes the next thing to do, not a dead end
+        say: |
+          and the button is still the next thing to do, wearing the mark
+          of what the checks said rather than becoming a dead end
     then:
       - cmd:
           run: "git -C {project} log --oneline -1"

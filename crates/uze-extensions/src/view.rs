@@ -142,6 +142,17 @@ pub struct View {
     /// be reachable by pointing at it, and a mode nothing on screen
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
+    /// What this surface can be *about*, in the order they should be
+    /// offered, with the current one marked — a checkout's files or a
+    /// map of the whole of it.
+    ///
+    /// Apart from [`View::modes`] because the two are different
+    /// questions, and one row of chips asking both is a row where
+    /// neither is read: this is what is being looked at, and that is how
+    /// what was found is shown. So they sit at the two ends of the same
+    /// row, each over the half it governs — this one where the finding
+    /// happens, in place of a heading that only ever named it.
+    pub subjects: Vec<Mode>,
     pub layout: Layout,
     /// The descent the viewer is in, outermost first, with the step they
     /// are standing on marked. Empty where what there is to see does not
@@ -197,6 +208,14 @@ pub enum Layout {
 pub struct Mode {
     pub label: String,
     pub active: bool,
+    /// What this one is, for the mark drawn before its name.
+    ///
+    /// [`RowIcon::None`] where the words are the whole of it: a way of
+    /// *drawing* what is already on screen has nothing to be a picture
+    /// of, and a mark invented for it would be a second thing to learn.
+    /// The host draws none at all in a glyph set that has no icon for
+    /// it, so the control reads the same either way.
+    pub icon: RowIcon,
 }
 
 /// The left-hand list of things to choose between.
@@ -262,6 +281,10 @@ pub enum RowIcon {
     Archive,
     Git,
     Legal,
+    /// A checkout drawn as where its lines are.
+    Map,
+    /// What a checkout differs from the branch it started from.
+    Changes,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -315,6 +338,14 @@ pub enum Content {
         heading: String,
         /// First line to show. The host clamps it to what exists.
         scroll: u16,
+        /// Where `lines` starts, as an index into the whole content.
+        ///
+        /// The window would otherwise have to begin at the first line for
+        /// `scroll` to mean anything, which is what made drawing the
+        /// bottom of a long file cost the whole file: every line above it
+        /// was produced to be skipped. Saying where the window sits is
+        /// what lets it be one.
+        first: usize,
         /// The lines worth drawing right now — a *window*, not the whole
         /// content: producing a large file's every line on every frame is
         /// work nobody sees.
@@ -464,6 +495,11 @@ pub enum ViewHit {
     /// One of the [`View::modes`] offered, chosen — by its index into
     /// that list, which is the extension's own order.
     SelectMode(usize),
+    /// The same, for one of the [`View::subjects`]. Its own hit rather
+    /// than one index space over both, because the two lists are the
+    /// extension's own orders and nothing but the extension can say
+    /// where one ends.
+    SelectSubject(usize),
     /// The edge between navigator and content, taken hold of.
     ///
     /// One target for two gestures, because the edge is one line and

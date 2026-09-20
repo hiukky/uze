@@ -551,6 +551,13 @@ mod workspace_tests {
             })
             .unwrap();
         model.hits = hits;
+        // What the loop itself keeps from a frame — the extension surface
+        // reports the geometry a click has to be resolved against, and a
+        // test that dropped it would resolve clicks against the default.
+        if let Some(rendered) = metrics.code {
+            model.code_tree_scroll = rendered.navigator_scroll;
+            model.code_scrollbars = rendered;
+        }
         model.absorb_manage_frame(metrics.manage);
         compute_layout(area, model.sidebar_width)
     }
@@ -708,6 +715,214 @@ mod workspace_tests {
             model.architect.as_ref().expect("open").place(),
             moved_to,
             "and the one left mid-walk is where it was left"
+        );
+    }
+
+    /// Opening a surface back where it was left asks for every directory
+    /// that was open, and those answers do not wait on each other.
+    ///
+    /// One request per pass made that one *frame* per directory: a third
+    /// of a second of a tree filling in a row at a time, for a tenth of a
+    /// millisecond of work. Reads keep the one-at-a-time chain, because a
+    /// save and the re-read that follows it have an order.
+    #[test]
+    fn every_directory_a_resumed_tree_needs_is_asked_for_at_once() {
+        use std::sync::mpsc;
+
+        use uze_extensions::code;
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        model.remembered.code_places.insert(
+            root.clone(),
+            code::CodePlace::at(&root, &root.join("src/ui/widget/row.rs"), false),
+        );
+        open_code(&mut model, code::ContentMode::Contents);
+
+        let (sender, _receiver) = mpsc::channel();
+        model.schedule_file_request(&sender);
+
+        let held = model.code_request_pending;
+        let waiting = model
+            .code
+            .as_ref()
+            .expect("the surface is open")
+            .peek_request();
+        assert!(
+            waiting.is_none(),
+            "every directory went out together, and the read behind them with it: {waiting:?}"
+        );
+        assert!(
+            held,
+            "the read is what took the one-at-a-time chain, not the listings"
+        );
+    }
+
+    /// Measuring a checkout opens every file it has, and the surface it
+    /// feeds is opened and closed all day. The second open shows the map
+    /// it already has rather than paying for it again and showing none
+    /// until it lands.
+    #[test]
+    fn a_checkout_measured_once_is_not_measured_again_on_the_way_back_in() {
+        use std::sync::mpsc;
+
+        use uze_extensions::code;
+
+        use crate::ui::orchestrator::MeasureResolution;
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+
+        let measured = code::Measure {
+            root: root.clone(),
+            files: vec![code::FileMeasure {
+                path: "src/main.rs".to_owned(),
+                lines: 120,
+                commits: 3,
+                changed: false,
+            }],
+        };
+        model.absorb_measure(MeasureResolution {
+            root: root.clone(),
+            measure: Some(measured),
+        });
+        assert!(model.code.as_ref().expect("open").has_map());
+
+        model.close_code();
+        open_code(&mut model, code::ContentMode::Contents);
+        assert!(
+            model.code.as_ref().expect("open").has_map(),
+            "the map is there the moment the surface is"
+        );
+
+        let (sender, _receiver) = mpsc::channel();
+        model.schedule_code_measure(&sender);
+        assert!(
+            model.code_measure_asked.is_none(),
+            "and nothing was asked of the checkout again"
+        );
+    }
+
+    /// The header row is the first row inside the frame, and the control
+    /// that says which half you are in stands where the heading did.
+    ///
+    /// A blank row between the frame's own edge and a row of controls
+    /// left those controls belonging to neither, and the list's heading
+    /// named the half it was already the only thing showing.
+    #[test]
+    fn the_code_header_is_one_row_in_and_carries_the_control() {
+        use uze_extensions::{DirEntry, ExtensionHit, code, view::ViewHit};
+
+        let root = PathBuf::from("/repo");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        let mut view = code::CodeView::opening(
+            root.clone(),
+            "/repo".to_owned(),
+            code::ContentMode::Contents,
+        );
+        view.take_request();
+        view.absorb(code::FileAnswer::Listed {
+            path: root.clone(),
+            entries: Ok(vec![DirEntry {
+                directory: false,
+                name: "main.rs".to_owned(),
+            }]),
+        });
+        // A measured checkout is what makes the map one of the halves.
+        view.absorb_measure(code::Measure {
+            root,
+            files: vec![code::FileMeasure {
+                path: "main.rs".to_owned(),
+                lines: 1,
+                commits: 1,
+                changed: false,
+            }],
+        });
+        model.code = Some(view);
+
+        let rows = frame_rows(&mut model);
+        assert!(
+            rows[1].contains("Files") && rows[1].contains("Map"),
+            "the control is on the row under the frame's edge: {:?}",
+            rows[1]
+        );
+        assert!(
+            !rows[1].contains("FILES"),
+            "and the heading it replaced is gone: {:?}",
+            rows[1]
+        );
+
+        full_frame(&mut model);
+        let control = model.hits.iter().find(|(_, hit)| {
+            matches!(
+                hit,
+                WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::SelectSubject(_)))
+            )
+        });
+        let (rect, _) = control.expect("the control can be pointed at");
+        assert_eq!(rect.y, 1, "on that same row");
+    }
+
+    /// A click on the map lands on the column the pointer is over.
+    ///
+    /// A drawing has no line numbers and so no gutter, and the rule that
+    /// turned a pointer into a position assumed one either way: every
+    /// click resolved seven cells to the left of where it landed, which
+    /// on a map is a tile or two over — and against the right-hand edge,
+    /// a tile nobody could reach at all.
+    #[test]
+    fn a_click_on_the_map_resolves_to_the_column_under_the_pointer() {
+        use uze_extensions::{ExtensionHit, code, view::ViewHit};
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+        let view = model.code.as_mut().expect("the surface is open");
+        view.absorb_measure(code::Measure {
+            root,
+            files: (0..6)
+                .map(|n| code::FileMeasure {
+                    path: format!("src/m{n}.rs"),
+                    lines: 400 + n * 100,
+                    commits: n,
+                    changed: false,
+                })
+                .collect(),
+        });
+        view.show(code::ContentMode::Map);
+        full_frame(&mut model);
+
+        assert_eq!(
+            model.code_scrollbars.content_gutter, 0,
+            "a drawing carries no line numbers, so it has no gutter"
+        );
+        let (rect, line, cell) = model
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| match hit {
+                WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::PlaceCaret { line, cell })) => {
+                    Some((*rect, *line, *cell))
+                }
+                _ => None,
+            })
+            .expect("the map's rows are clickable");
+        let _ = line;
+        let far_right = rect.x + rect.width - 1;
+        assert_eq!(
+            crate::ui::extension_view::caret_cell_at(
+                rect,
+                cell,
+                far_right,
+                model.code_scrollbars.content_gutter,
+            ),
+            usize::from(rect.width - 1),
+            "the last column of a row is the last cell of the drawing"
         );
     }
 

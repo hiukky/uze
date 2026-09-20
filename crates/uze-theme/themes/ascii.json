@@ -72,6 +72,8 @@
     "manage": "=",
     "code": "",
     "architect": "",
+    "map": "",
+    "changes": "",
 
     "text.ellipsis": "...",
     "text.em-dash": "--",

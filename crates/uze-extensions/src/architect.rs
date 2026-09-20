@@ -986,9 +986,14 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             .iter()
             .map(|&(showing, label)| Mode {
                 label: label.to_owned(),
+                icon: RowIcon::None,
                 active: showing == state.showing,
             })
             .collect(),
+        // Nothing to be about but the artifacts it draws: the trail is
+        // how this surface is walked, and the selectors above it are
+        // what stand where the code surface's own halves do.
+        subjects: Vec::new(),
         layout: Layout::Board,
         trail: state.steps(),
     }
@@ -1025,6 +1030,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         Showing::Source => {
             let lines = source_lines(state.source());
             Content::Lines {
+                first: 0,
                 heading: state.caption(),
                 scroll: state.corner(space).1.max(0) as u16,
                 total: lines.len(),
@@ -1038,6 +1044,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         _ => {
             let lines = state.screen(space).map(|s| s.lines()).unwrap_or_default();
             Content::Lines {
+                first: 0,
                 heading: state.caption(),
                 scroll: 0,
                 total: lines.len(),

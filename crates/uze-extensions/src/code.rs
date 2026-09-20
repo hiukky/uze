@@ -86,7 +86,7 @@ mod treemap;
 
 pub use changes::{ChangeSummary, change_summary};
 pub use history::{Commit, CommitDetail, Timeline, commit_detail, timeline, timeline_section};
-pub use map::{Measure, measure};
+pub use map::{FileMeasure, Measure, measure};
 pub use render::view;
 pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 
@@ -147,11 +147,31 @@ pub enum ContentMode {
     Map,
 }
 
-/// One entry of the control that says how this surface is showing what
-/// it is showing — the selection's own ways of being read, then the
-/// checkout's. One axis, because the question is the same either way,
-/// and it is what makes the map reachable by pointing at it rather than
-/// only by a key.
+/// One of the halves this surface is made of — what the viewer is
+/// looking at, as against how it is drawn.
+///
+/// The three are one extension because the selection has to survive a
+/// switch between them (see the module doc), and they are one control
+/// for the same reason: they are the same question asked once, and the
+/// answer is where you are.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Half {
+    /// The checkout's tree, and a file read out of it.
+    Files,
+    /// A picture of where the lines are.
+    Map,
+    /// What is different from the branch this one started from.
+    Changes,
+}
+
+/// One entry of the control that says how the half on show is *drawn* —
+/// a document as its markup or as the document, a measurement in one of
+/// three renderings.
+///
+/// Apart from [`Half`] because they are two questions and the row asked
+/// both at once for as long as they shared a control: the map stood
+/// beside "Preview" and "Source" and was read as a third way of showing
+/// a file, which is what it is not.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Showing {
     /// What was on show before the map, or what is on show now: the
@@ -240,6 +260,15 @@ pub struct CodeView {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CodePlace {
     selected: Option<PathBuf>,
+    /// Whether the row the cursor was on is a file — the only kind of
+    /// row there is anything to read.
+    ///
+    /// Carried because the tree is not listed yet when a place is
+    /// restored, so nothing else can tell: coming back to a directory
+    /// asked the host to read one, and the answer to that is "not
+    /// readable as text", drawn in the colour of a failure, on a
+    /// surface where nothing had gone wrong.
+    selected_is_a_file: bool,
     expanded: BTreeSet<PathBuf>,
     folded: BTreeSet<String>,
     scroll: u16,
@@ -262,6 +291,7 @@ impl CodePlace {
         }
         Self {
             selected: (!is_directory).then(|| target.to_path_buf()),
+            selected_is_a_file: !is_directory,
             expanded,
             ..Self::default()
         }
@@ -276,6 +306,9 @@ impl CodePlace {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewPlacement {
     path: Option<PathBuf>,
+    /// What the diff already on screen was read from — so a re-read that
+    /// finds the same thing can say so instead of colouring it again.
+    diff: u64,
 }
 
 impl CodeView {
@@ -329,6 +362,7 @@ impl CodeView {
     pub fn resuming(mut self, place: CodePlace) -> Self {
         let CodePlace {
             selected,
+            selected_is_a_file,
             expanded,
             folded,
             scroll,
@@ -344,7 +378,9 @@ impl CodeView {
         self.selected = Some(path);
         self.read_selection_as_what_it_is();
         match self.navigator() {
-            NavigatorMode::Files => self.load_selection(None),
+            // A directory is where the cursor was, and nothing to read.
+            NavigatorMode::Files if selected_is_a_file => self.load_selection(None),
+            NavigatorMode::Files => {}
             // The list and the diff both arrive from the refresh the host
             // schedules the moment the surface opens.
             NavigatorMode::Changes => self.changes.diff_pending = true,
@@ -359,6 +395,7 @@ impl CodeView {
     /// Where the viewer is, for the host to hand back to [`Self::resuming`].
     pub fn place(&self) -> CodePlace {
         CodePlace {
+            selected_is_a_file: self.selected_is_a_file(),
             selected: self.selected.clone(),
             expanded: self.files.expanded.clone(),
             folded: self.changes.folded.clone(),
@@ -429,6 +466,12 @@ impl CodeView {
     pub fn placement(&self) -> ViewPlacement {
         ViewPlacement {
             path: self.selected.clone(),
+            // A diff still being waited for is not one on screen, and
+            // must not be recognised as the answer to its own read.
+            diff: match self.changes.diff_pending {
+                true => 0,
+                false => self.changes.diff_digest,
+            },
         }
     }
 
@@ -441,7 +484,9 @@ impl CodeView {
     pub fn refresh(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> RefreshedChanges {
         let branch = checkout::branch_of(host, &root);
         let changes = match host.repository_root(&root) {
-            Ok(resolved) => Changes::read(host, &resolved, placement.path.as_deref()),
+            Ok(resolved) => {
+                Changes::read(host, &resolved, placement.path.as_deref(), placement.diff)
+            }
             Err(message) => Changes::failed(message),
         };
         RefreshedChanges {
@@ -463,8 +508,17 @@ impl CodeView {
         // what changed, and tidying the tree around it is not something
         // it gets to undo.
         let folded = std::mem::take(&mut self.changes.folded);
+        // The read found the diff exactly as it is here, so here is where
+        // it stays — the cells were never sent back.
+        let diff = match changes.diff_unchanged {
+            true => std::mem::take(&mut self.changes.diff),
+            false => Vec::new(),
+        };
         self.changes = changes;
         self.changes.folded = folded;
+        if self.changes.diff_unchanged {
+            self.changes.diff = diff;
+        }
         // The selection moved while the read was out, so what came back
         // is a diff of a file nobody is looking at. Keep the list, ask
         // again for the diff.
@@ -479,6 +533,13 @@ impl CodeView {
     /// The next thing the host should do for the files half, or `None`.
     pub fn take_request(&mut self) -> Option<FileRequest> {
         self.queue.pop_front()
+    }
+
+    /// The same one, left where it is — so a host that runs some kinds of
+    /// request differently can see which kind is next before committing
+    /// to it.
+    pub fn peek_request(&self) -> Option<&FileRequest> {
+        self.queue.front()
     }
 
     /// Whether anything is still out.
@@ -532,6 +593,25 @@ impl CodeView {
                     }
                     Err(message) => open.error = Some(message),
                 }
+                self.colour_the_rest();
+            }
+            // Nothing is said about a colouring that failed: the file it
+            // was about is on screen and readable, and the only thing
+            // lost is colour on the part nobody has scrolled to.
+            FileAnswer::Coloured { path, file } => {
+                let Ok(loaded) = file else {
+                    return;
+                };
+                let Some(open) = self
+                    .open
+                    .as_mut()
+                    .filter(|open| open.path == path && !open.modified && !open.loading)
+                else {
+                    return;
+                };
+                let wanted = open.caret.line;
+                open.install(loaded);
+                open.place_caret(wanted);
             }
             FileAnswer::Saved { path, outcome } => match outcome {
                 Ok(()) => {
@@ -621,6 +701,7 @@ impl CodeView {
             ContentMode::Contents | ContentMode::Preview => {
                 self.reveal_selection();
                 self.load_selection(line);
+                self.colour_the_rest();
             }
             ContentMode::Diff => {
                 self.scroll = line
@@ -662,38 +743,84 @@ impl CodeView {
         self.map_showing
     }
 
-    /// The ways this surface can show what it is showing, in the order
+    /// The ways this surface can show *what is selected*, in the order
     /// the control offers them — and the one list both the chips and the
     /// click that picks one are read from, so an index can never mean
     /// two different things.
+    ///
+    /// Never the map: that is not a way of showing the selection, it is
+    /// another thing to be looking at, and it is offered as one — see
+    /// [`Self::subjects`]. Empty where there is no choice to make, which
+    /// is most files: a control with one option is a label that can be
+    /// clicked.
     pub(super) fn showings(&self) -> Vec<Showing> {
-        if self.content == ContentMode::Map {
-            return vec![
-                Showing::Selection(self.before_map),
+        match self.content {
+            ContentMode::Map => vec![
                 Showing::Measured(MapShowing::Unicode),
                 Showing::Measured(MapShowing::Ascii),
                 Showing::Measured(MapShowing::Ranking),
-            ];
+            ],
+            // A diff is read one way. What is offered here is how to read
+            // the *selection*, and a change has no second form.
+            ContentMode::Diff => Vec::new(),
+            _ if self.selected_is_markdown() => vec![
+                Showing::Selection(ContentMode::Preview),
+                Showing::Selection(ContentMode::Contents),
+            ],
+            _ => Vec::new(),
         }
-        let mut showings = Vec::new();
-        if self.selected_is_markdown() && self.content != ContentMode::Diff {
-            showings.push(Showing::Selection(ContentMode::Preview));
-            showings.push(Showing::Selection(ContentMode::Contents));
-        } else if self.offers_the_map() {
-            showings.push(Showing::Selection(self.content));
-        }
-        if self.offers_the_map() {
-            showings.push(Showing::Measured(MapShowing::Unicode));
-        }
-        showings
     }
 
-    /// Whether the map is on offer. It is another way of finding a file,
-    /// so it belongs beside the tree and not beside the diff: what
-    /// changed is a list of its own, and a map of the whole checkout
-    /// answers a question nobody reviewing a change is asking.
-    fn offers_the_map(&self) -> bool {
-        self.map.is_some() && self.navigator() == NavigatorMode::Files
+    /// The halves this surface has, in the order the nav offers them.
+    ///
+    /// Always all of them, and always in this order. The row that says
+    /// where you are is the one thing on the surface that may not move
+    /// when you use it: a control whose members come and go is one you
+    /// have to look at again after every press, and the eye was already
+    /// on the place the chip used to be.
+    pub(super) fn halves(&self) -> [Half; 3] {
+        [Half::Files, Half::Map, Half::Changes]
+    }
+
+    /// Which of them is on show.
+    pub(super) fn half(&self) -> Half {
+        match self.content {
+            ContentMode::Map => Half::Map,
+            ContentMode::Diff => Half::Changes,
+            ContentMode::Contents | ContentMode::Preview => Half::Files,
+        }
+    }
+
+    /// Goes to one of them.
+    ///
+    /// The nav is the whole of this surface's navigation, so every half
+    /// is reachable from every other — including the map from the
+    /// changes, which used to be refused on the grounds that the map is
+    /// a way through the files. It is; going there is also leaving the
+    /// changes, and that is what the press said.
+    pub(super) fn show_half(&mut self, half: Half) {
+        match half {
+            Half::Changes => self.show(ContentMode::Diff),
+            // As whatever the selection is: a document opens as the
+            // document it is, which is the same rule arriving at a file
+            // any other way follows.
+            Half::Files => {
+                let mode = match self.selected_is_markdown() {
+                    true => ContentMode::Preview,
+                    false => ContentMode::Contents,
+                };
+                self.show(mode);
+            }
+            Half::Map if self.map.is_none() => {
+                self.notice = Some("the checkout has not been measured yet".to_owned());
+            }
+            Half::Map => {
+                if self.content != ContentMode::Map {
+                    self.before_map = self.content;
+                    self.show(ContentMode::Map);
+                }
+            }
+        }
     }
 
     /// One of them, picked.
@@ -723,14 +850,7 @@ impl CodeView {
     fn toggle_map(&mut self) {
         match self.content {
             ContentMode::Map => self.show(self.before_map),
-            _ if self.offers_the_map() => {
-                self.before_map = self.content;
-                self.show(ContentMode::Map);
-            }
-            _ if self.navigator() != NavigatorMode::Files => {
-                self.notice = Some("the map is a way through the files".to_owned());
-            }
-            _ => self.notice = Some("the checkout has not been measured yet".to_owned()),
+            _ => self.show_half(Half::Map),
         }
     }
 
@@ -782,12 +902,46 @@ impl CodeView {
         }
     }
 
+    /// Asks for the rest of the open file's colour.
+    ///
+    /// Only while the source is what is being read: a document shown as
+    /// a document renders its own fenced blocks, and colouring its markup
+    /// is a pass for a screen nobody is looking at. Asking to see the
+    /// source is what pays for it — which is why this is also called
+    /// from [`Self::show`].
+    fn colour_the_rest(&mut self) {
+        if self.content != ContentMode::Contents {
+            return;
+        }
+        let Some(path) = self
+            .open
+            .as_ref()
+            .filter(|open| open.partial && open.error.is_none() && !open.loading)
+            .map(|open| open.path.clone())
+        else {
+            return;
+        };
+        let asked = self
+            .queue
+            .iter()
+            .any(|request| matches!(request, FileRequest::Colour(queued) if *queued == path));
+        if !asked {
+            self.queue.push_back(FileRequest::Colour(path));
+        }
+    }
+
     /// Reads the selected file, putting the caret on `line` when it
     /// lands.
     fn load_selection(&mut self, line: Option<usize>) {
         let Some(path) = self.selected.clone() else {
             return;
         };
+        // The cursor can stand on a directory; there is nothing in one
+        // to read, and asking anyway answers with a failure about a
+        // file that was never opened.
+        if !self.selected_is_a_file() {
+            return;
+        }
         if self.open.as_ref().is_some_and(|open| open.path == path) {
             if let Some(line) = line
                 && let Some(open) = self.open.as_mut()
@@ -803,6 +957,11 @@ impl CodeView {
         };
         self.open = Some(open);
         self.scroll = 0;
+        // Whatever was still to be coloured belonged to the file being
+        // left, and the answer would be dropped on arrival. Asking for it
+        // anyway is a read the viewer waits behind for nothing.
+        self.queue
+            .retain(|request| !matches!(request, FileRequest::Colour(_)));
         self.queue.push_back(FileRequest::Read(path));
     }
 
@@ -1264,6 +1423,11 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> C
                 view.show_this_way(showing);
             }
         }
+        Some(ViewHit::SelectSubject(index)) => {
+            if let Some(half) = view.halves().get(index).copied() {
+                view.show_half(half);
+            }
+        }
         Some(ViewHit::Close) => return CodeOutcome::Close,
         _ => {}
     }
@@ -1279,6 +1443,11 @@ fn map_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> CodeOutc
         Some(ViewHit::SelectMode(index)) => {
             if let Some(showing) = view.showings().get(index).copied() {
                 view.show_this_way(showing);
+            }
+        }
+        Some(ViewHit::SelectSubject(index)) => {
+            if let Some(half) = view.halves().get(index).copied() {
+                view.show_half(half);
             }
         }
         // The first step of the trail is the checkout itself, which the

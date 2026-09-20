@@ -20,7 +20,7 @@ use super::{
 use crate::{
     DirEntry,
     code::highlight::FALLBACK_SYNTAX_THEME,
-    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size, Span},
+    view::{Command, Content, LineTone, NavigatorRow, Role, RowIcon, RowMark, Size, Span},
 };
 
 fn space() -> Size {
@@ -457,6 +457,94 @@ impl Host for RepositoryHost {
     }
 }
 
+/// A repository that answers the same thing every time, and counts how
+/// often it was asked to diff.
+struct StillRepository {
+    diffs: std::cell::Cell<usize>,
+}
+
+impl Host for StillRepository {
+    fn git(&self, _root: &Path, args: &[&str], _answers: &[i32]) -> Result<String, String> {
+        match args.first() {
+            Some(&"status") => Ok(" M src/ui.rs\n".to_owned()),
+            Some(&"diff") => {
+                self.diffs.set(self.diffs.get() + 1);
+                Ok("@@ -1,2 +1,2 @@\n context\n-old line\n+new line\n".to_owned())
+            }
+            _ => Ok("main\n".to_owned()),
+        }
+    }
+
+    fn repository_root(&self, path: &Path) -> Result<PathBuf, String> {
+        Ok(path.to_path_buf())
+    }
+
+    fn read_file(&self, _path: &Path) -> Result<String, String> {
+        Err("nothing is read here".to_owned())
+    }
+
+    fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, String> {
+        Ok(Vec::new())
+    }
+
+    fn write_file(&self, _path: &Path, _contents: &str) -> Result<(), String> {
+        unreachable!("reading a repository writes nothing")
+    }
+
+    fn delete_file(&self, _path: &Path) -> Result<(), String> {
+        unreachable!("reading a repository deletes nothing")
+    }
+
+    fn syntax_theme(&self) -> String {
+        FALLBACK_SYNTAX_THEME.to_owned()
+    }
+}
+
+/// The changes are re-read on a timer, because the checkout is under an
+/// agent's hands. Colouring a diff that did not move is the same picture
+/// drawn twice — the one unbounded cost this surface pays over and over
+/// if nothing notices.
+#[test]
+fn a_diff_that_has_not_moved_is_not_coloured_again() {
+    let host = StillRepository {
+        diffs: std::cell::Cell::new(0),
+    };
+    let root = PathBuf::from("/repo");
+    let mut view = CodeView::opening(root.clone(), "/repo".to_owned(), ContentMode::Diff);
+
+    // The first read has no selection yet, so there is no diff to ask
+    // about; it is what lands the selection.
+    let first = CodeView::refresh(&host, root.clone(), view.placement());
+    assert!(!first.changes.diff_unchanged);
+    view.absorb_changes(first);
+    let second = CodeView::refresh(&host, root.clone(), view.placement());
+    assert!(
+        !second.changes.diff_unchanged,
+        "the selected file's own diff"
+    );
+    view.absorb_changes(second);
+    let coloured = view.changes.diff.len();
+    assert!(coloured > 0, "there is a diff on screen");
+
+    let third = CodeView::refresh(&host, root.clone(), view.placement());
+    assert!(
+        third.changes.diff_unchanged,
+        "the same bytes in the same palette are the same picture"
+    );
+    assert!(third.changes.diff.is_empty(), "so none of it travels back");
+    view.absorb_changes(third);
+    assert_eq!(
+        view.changes.diff.len(),
+        coloured,
+        "and what is on screen stays on screen"
+    );
+    assert_eq!(
+        host.diffs.get(),
+        2,
+        "git is still asked every time — only the colouring is skipped"
+    );
+}
+
 /// A filesystem that only ever existed in memory, so these prove the
 /// surface's own behaviour rather than a temp directory's.
 #[derive(Default)]
@@ -569,6 +657,132 @@ fn item_names_of_tree(view: &CodeView) -> Vec<String> {
         .into_iter()
         .map(|row| row.name)
         .collect()
+}
+
+/// A file is on screen before all of it is coloured, and colouring the
+/// rest never changes a character of it.
+///
+/// The whole point of the two passes: colouring costs per line, a screen
+/// does not, and a file that has to be coloured to the end before it can
+/// be read is a file that opens in half a second.
+#[test]
+fn a_long_file_is_readable_before_all_of_it_is_coloured() {
+    let long: String = (1..=900).map(|n| format!("fn line_{n}() {{}}\n")).collect();
+    let machine = FakeMachine::default().with_file("/w/long.rs", &long);
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    press(&mut view, Command::Activate);
+
+    // Everything up to, but not including, the pass that colours the
+    // rest: this is the state the first frame draws.
+    let mut asked = Vec::new();
+    while let Some(request) = view.take_request() {
+        asked.push(request.clone());
+        if matches!(request, FileRequest::Colour(_)) {
+            break;
+        }
+        view.absorb(fulfill(&machine, request));
+    }
+    assert_eq!(
+        asked.last(),
+        Some(&FileRequest::Colour(PathBuf::from("/w/long.rs"))),
+        "the rest of the colour is asked for once the file is shown"
+    );
+
+    let open = view.open.as_ref().expect("the first row is read");
+    assert_eq!(open.lines.len(), 900, "every line is there to read");
+    assert!(
+        !open.highlighted[0].is_empty(),
+        "what the viewer is looking at is coloured"
+    );
+    assert!(
+        open.highlighted[899].is_empty(),
+        "the far end of the file is not, yet"
+    );
+    let Content::Lines { lines, .. } = super::view(&view, space()).content else {
+        panic!("an open file is lines");
+    };
+    assert!(
+        lines.iter().all(|line| !line.spans.is_empty()),
+        "an uncoloured line is still drawn as the text it is"
+    );
+
+    view.absorb(fulfill(
+        &machine,
+        FileRequest::Colour(PathBuf::from("/w/long.rs")),
+    ));
+    let open = view.open.as_ref().expect("still open");
+    assert!(
+        open.highlighted.iter().all(|spans| !spans.is_empty()),
+        "the second pass colours the whole file"
+    );
+    assert_eq!(open.lines.len(), 900, "and changes none of its text");
+    assert_eq!(open.lines[899], "fn line_900() {}");
+}
+
+/// A document opens as the document it is, and its markup is never
+/// coloured for a screen nobody asked for — until somebody asks for the
+/// source, which is when that work becomes worth doing.
+#[test]
+fn a_documents_markup_is_coloured_only_once_the_source_is_asked_for() {
+    let machine = FakeMachine::default().with_file("/w/README.md", "# hi\n\n`code`\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+
+    assert_eq!(
+        view.content,
+        ContentMode::Preview,
+        "a document reads as one"
+    );
+    let open = view.open.as_ref().expect("the document is read");
+    assert!(
+        open.highlighted.iter().all(|spans| spans.is_empty()),
+        "nothing coloured the markup"
+    );
+
+    view.show(ContentMode::Contents);
+    settle(&mut view, &machine);
+    let open = view.open.as_ref().expect("still open");
+    assert!(
+        open.highlighted.iter().any(|spans| !spans.is_empty()),
+        "asking for the source is what pays for colouring it"
+    );
+}
+
+/// The content the host is handed is a window that starts where the
+/// viewer is, and says where that is — so drawing the end of a long file
+/// costs the end of it rather than all of it.
+#[test]
+fn the_content_window_starts_where_the_viewer_is() {
+    let long: String = (1..=900).map(|n| format!("line {n}\n")).collect();
+    let machine = FakeMachine::default().with_file("/w/long.rs", &long);
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    scroll_to(&mut view, 500);
+
+    let Content::Lines {
+        first,
+        lines,
+        total,
+        scroll,
+        ..
+    } = super::view(&view, space()).content
+    else {
+        panic!("an open file is lines");
+    };
+    assert_eq!(total, 900, "the whole file is still what it is");
+    assert_eq!(first, 500);
+    assert_eq!(scroll, 500, "and the host still applies it");
+    assert_eq!(lines.first().map(|line| line.number.as_str()), Some("501"));
+    assert!(
+        lines.len() <= usize::from(space().height) * 2,
+        "a window, not a file: {} lines",
+        lines.len()
+    );
 }
 
 #[test]
@@ -1351,6 +1565,48 @@ fn measured() -> map::Measure {
     }
 }
 
+/// A directory is a place the cursor can be, and no file to read.
+///
+/// Coming back to one asked the host to read it: the answer is "not
+/// readable as text", drawn in the colour of a failure, where what is
+/// true is that nothing is open. The same surface says exactly that
+/// when it opens on an empty selection, and it is what a reader who has
+/// selected nothing needs to be told.
+#[test]
+fn coming_back_to_a_directory_row_reads_nothing_and_says_nothing_is_open() {
+    let machine = FakeMachine::default()
+        .with_directory("/w/src")
+        .with_file("/w/src/main.rs", "fn main() {}\n")
+        .with_file("/w/notes.txt", "one\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    assert_eq!(
+        view.selected.as_deref(),
+        Some(Path::new("/w/src")),
+        "the tree opens on its first row, which is a directory"
+    );
+
+    let mut again = files_at("/w").resuming(view.place());
+    settle(&mut again, &machine);
+
+    assert!(again.open.is_none(), "a directory was never a file to open");
+    let Content::Message { role, hint, .. } = super::view(&again, space()).content else {
+        panic!("nothing is open, so the content is what to do about it");
+    };
+    assert_eq!(role, Role::Muted, "nothing failed");
+    assert!(hint.is_some(), "and there is something to do about it");
+
+    // The other way to the same read: leave the files half with the
+    // cursor on a directory, and come back to it.
+    again.show(ContentMode::Diff);
+    again.show(ContentMode::Contents);
+    settle(&mut again, &machine);
+    assert!(
+        again.open.is_none(),
+        "the half is the same one, and so is the row it was left on"
+    );
+}
+
 /// The map is a fourth way of looking at the same checkout, and the
 /// selection is what survives the switch: a tile followed is the file
 /// selected, read by whichever half was on show before the map.
@@ -1399,6 +1655,74 @@ fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
     );
 }
 
+fn chips(modes: &[crate::view::Mode]) -> Vec<(&str, bool)> {
+    modes
+        .iter()
+        .map(|mode| (mode.label.as_str(), mode.active))
+        .collect()
+}
+
+/// The two ends of the header row answer two questions: what the surface
+/// is about, over the half that does the finding, and how what was found
+/// is shown, over the half that shows it.
+#[test]
+fn the_header_offers_the_halves_on_one_side_and_the_renderings_on_the_other() {
+    let machine = FakeMachine::default()
+        .with_file("/w/README.md", "# hi\n")
+        .with_file("/w/main.rs", "fn main() {}\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    view.absorb_measure(crate::code::Measure {
+        root: PathBuf::from("/w"),
+        files: vec![crate::code::FileMeasure {
+            path: "main.rs".to_owned(),
+            lines: 1,
+            commits: 1,
+            changed: false,
+        }],
+    });
+
+    // On a document: the two ways of reading it, and the two halves.
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    let drawn = render::view(&view, space());
+    assert_eq!(
+        chips(&drawn.subjects),
+        [("Files", true), ("Map", false), ("Changes", false)]
+    );
+    assert_eq!(chips(&drawn.modes), [("Preview", true), ("Source", false)]);
+    // Each half is a thing, and says which. A way of *drawing* one is
+    // not a thing, and carries no mark at all.
+    assert_eq!(
+        drawn
+            .subjects
+            .iter()
+            .map(|mode| mode.icon)
+            .collect::<Vec<_>>(),
+        [RowIcon::Directory, RowIcon::Map, RowIcon::Changes]
+    );
+    assert!(
+        drawn.modes.iter().all(|mode| mode.icon == RowIcon::None),
+        "a rendering has nothing to be a picture of"
+    );
+
+    // On anything else there is one way to read it, and a control with
+    // one option is a label that can be clicked. Back to the tree first:
+    // activating a file puts the keyboard in what it opened.
+    press(&mut view, Command::FocusNext);
+    press(&mut view, Command::SelectNext);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    let drawn = render::view(&view, space());
+    assert_eq!(
+        chips(&drawn.subjects),
+        [("Files", true), ("Map", false), ("Changes", false)],
+        "the halves never come and go — the row that says where you are \
+         is the one thing that may not move when it is used"
+    );
+    assert!(drawn.modes.is_empty(), "nothing to choose between");
+}
+
 /// The map takes the frame, and its levels are the breadcrumb: an
 /// either/or with the tree, not a column beside it.
 #[test]
@@ -1406,16 +1730,23 @@ fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     let mut view = surface(Path::new("/repo"), Vec::new(), 0);
     view.absorb_measure(measured());
 
-    // Not beside the diff: a map of the whole checkout answers a
-    // question nobody reviewing a change is asking.
+    // One of the three halves, so it is reachable from each of the
+    // others — including the changes, where going to the map is also
+    // leaving them, which is what the press said.
     assert!(
-        !render::view(&view, space())
+        render::view(&view, space())
             .footer
             .contains(&Command::ToggleMap),
-        "the changes half does not offer it"
+        "a measured checkout offers it wherever you are in it"
     );
     press(&mut view, Command::ToggleMap);
-    assert_eq!(view.showing(), ContentMode::Diff, "nor does its key");
+    assert_eq!(view.showing(), ContentMode::Map, "from the changes too");
+    press(&mut view, Command::ToggleMap);
+    assert_eq!(
+        view.showing(),
+        ContentMode::Diff,
+        "and back to the half it was opened over"
+    );
 
     view.show(ContentMode::Contents);
     press(&mut view, Command::ToggleMap);
@@ -1425,22 +1756,17 @@ fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     assert_eq!(drawn.layout, crate::view::Layout::Board);
     let steps: Vec<&str> = drawn.trail.iter().map(|step| step.name.as_str()).collect();
     assert_eq!(steps, ["repo"], "the checkout, and nothing entered yet");
-    let chips: Vec<(&str, bool)> = drawn
-        .modes
-        .iter()
-        .map(|mode| (mode.label.as_str(), mode.active))
-        .collect();
     assert_eq!(
-        chips,
-        [
-            // Named for the half it would go back to — the tree — so the
-            // way out is a chip somebody can point at, not only a key
-            // they have to know.
-            ("Files", false),
-            ("Map", true),
-            ("ASCII", false),
-            ("Ranking", false),
-        ]
+        chips(&drawn.subjects),
+        [("Files", false), ("Map", true), ("Changes", false)],
+        "which half you are in, and the way to the others as chips \
+         somebody can point at rather than keys they have to know"
+    );
+    assert_eq!(
+        chips(&drawn.modes),
+        [("Unicode", true), ("ASCII", false), ("Ranking", false)],
+        "and beside the content, only the ways of drawing it — named as \
+         what they are, since the nav above already says Map"
     );
 
     // Down a level, and the key that closes comes back up before it

@@ -11,7 +11,7 @@
 //! it is easiest to break.
 
 use super::{
-    CodeView, ContentMode, Focus, MapShowing, NavigatorMode, Showing,
+    CodeView, ContentMode, Focus, Half, MapShowing, NavigatorMode, Showing,
     changes_tree::{FileTreeItem, file_tree_items, selected_tree_row},
     diff::content_line,
     editor::OpenFile,
@@ -45,6 +45,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             },
             footer,
             modes: Vec::new(),
+            subjects: Vec::new(),
             layout: Layout::Sidebar,
             trail: Vec::new(),
         };
@@ -62,6 +63,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             content: map_content(code, space),
             footer,
             modes: modes(code),
+            subjects: subjects(code),
             layout: Layout::Board,
             trail: map_trail(code),
         };
@@ -82,6 +84,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
         },
         footer,
         modes: modes(code),
+        subjects: subjects(code),
         layout: Layout::Sidebar,
         trail: Vec::new(),
     }
@@ -116,6 +119,7 @@ fn map_content(code: &CodeView, space: Size) -> Content {
     Content::Lines {
         heading: map.caption(cells),
         scroll: 0,
+        first: 0,
         total: lines.len(),
         lines,
         caret: None,
@@ -157,7 +161,10 @@ fn modes(code: &CodeView) -> Vec<Mode> {
     code.showings()
         .into_iter()
         .map(|showing| Mode {
-            label: mode_label(code, showing),
+            label: mode_label(showing),
+            // A way of drawing what is already on screen is not a thing
+            // to be a picture of.
+            icon: RowIcon::None,
             active: match showing {
                 Showing::Selection(mode) => code.content == mode,
                 Showing::Measured(map) => {
@@ -168,18 +175,47 @@ fn modes(code: &CodeView) -> Vec<Mode> {
         .collect()
 }
 
-fn mode_label(code: &CodeView, showing: Showing) -> String {
+/// The halves of this surface, named as the three places they are: the
+/// checkout's files, a picture of where its lines are, and what changed
+/// in it.
+///
+/// Never named after the *rendering* the map happens to be in — that is
+/// what the control below is for, and a chip that said "ASCII" here
+/// would be answering a question nobody asked of this row.
+fn subjects(code: &CodeView) -> Vec<Mode> {
+    let here = code.half();
+    code.halves()
+        .into_iter()
+        .map(|half| Mode {
+            label: match half {
+                Half::Files => "Files".to_owned(),
+                Half::Map => "Map".to_owned(),
+                Half::Changes => "Changes".to_owned(),
+            },
+            icon: match half {
+                Half::Files => RowIcon::Directory,
+                Half::Map => RowIcon::Map,
+                Half::Changes => RowIcon::Changes,
+            },
+            active: half == here,
+        })
+        .collect()
+}
+
+/// What each way of drawing is called — the way itself, never the thing
+/// being drawn.
+///
+/// The measurement's first rendering is "Unicode", the same word the
+/// architect surface uses for the same choice, and not "Map": the nav
+/// above already carries that word for the half, and one word naming
+/// two things in one header is the header asking to be read twice.
+fn mode_label(showing: Showing) -> String {
     match showing {
         Showing::Selection(ContentMode::Preview) => "Preview".to_owned(),
-        Showing::Selection(ContentMode::Contents) => match code.content {
-            // Beside "Preview" it names the markup; beside the map it
-            // names the half the viewer would be going back to.
-            ContentMode::Map => "Files".to_owned(),
-            _ => "Source".to_owned(),
-        },
+        Showing::Selection(ContentMode::Contents) => "Source".to_owned(),
         Showing::Selection(ContentMode::Diff) => "Changes".to_owned(),
         Showing::Selection(ContentMode::Map) => "Map".to_owned(),
-        Showing::Measured(MapShowing::Unicode) => "Map".to_owned(),
+        Showing::Measured(MapShowing::Unicode) => "Unicode".to_owned(),
         Showing::Measured(MapShowing::Ascii) => "ASCII".to_owned(),
         Showing::Measured(MapShowing::Ranking) => "Ranking".to_owned(),
     }
@@ -214,11 +250,7 @@ fn footer(code: &CodeView) -> Vec<Command> {
         commands.push(Command::Edit);
         commands.push(Command::Delete);
     }
-    if code
-        .showings()
-        .iter()
-        .any(|showing| matches!(showing, Showing::Measured(_)))
-    {
+    if code.has_map() {
         commands.push(Command::ToggleMap);
     }
     commands.push(Command::FocusNext);
@@ -356,14 +388,16 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
                 .unwrap_or_else(|_| code.display_root.clone())
         ),
         scroll: code.scroll,
-        // Bounded by the space plus what is scrolled past, not by the
-        // space alone: a wrapped line occupies more than one row, and
-        // only the host — which does the wrapping — knows how many.
-        // Erring long costs a few unrendered lines; erring short would
-        // show blank rows at the bottom of a long diff.
+        first: code.scroll as usize,
+        // Twice the space rather than exactly it: a wrapped line occupies
+        // more than one row, and only the host — which does the wrapping
+        // — knows how many. Erring long costs a few unrendered lines;
+        // erring short would show blank rows at the bottom of a long
+        // diff.
         lines: diff
             .iter()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
+            .skip(code.scroll as usize)
+            .take(usize::from(space.height).saturating_mul(2))
             .map(content_line)
             .collect(),
     }
@@ -382,10 +416,13 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
         Ok(open) => open,
         Err(message) => return message,
     };
-    let lines = super::markdown::render(&open.contents(), &open.theme);
+    let (total, lines) = open.preview(
+        code.scroll as usize,
+        usize::from(space.height).saturating_mul(2),
+    );
     Content::Lines {
         caret: None,
-        total: lines.len(),
+        total,
         heading: format!(
             "{} · preview",
             open.path
@@ -394,10 +431,8 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
                 .display()
         ),
         scroll: code.scroll,
-        lines: lines
-            .into_iter()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
-            .collect(),
+        first: code.scroll as usize,
+        lines,
     }
 }
 
@@ -457,22 +492,28 @@ fn contents_content(code: &CodeView, space: Size) -> Content {
             }
         ),
         scroll: code.scroll,
-        // From the first line, never from the scrolled-to one: the host
-        // is what applies `scroll`, so skipping here would move the
-        // content twice for one wheel notch — and the caret's line index
-        // has to keep meaning the same thing on both sides of that.
+        // The window starts where the viewer is, and says so: the line
+        // numbers, the caret's line and the hits a click lands in are all
+        // indices into the file, and `first` is what keeps them meaning
+        // that on both sides.
+        first: code.scroll as usize,
         lines: open
             .lines
             .iter()
             .enumerate()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
+            .skip(code.scroll as usize)
+            .take(usize::from(space.height).saturating_mul(2))
             .map(|(index, text)| ContentLine {
                 gutter: " ".to_owned(),
                 number: (index + 1).to_string(),
                 tone: LineTone::Neutral,
+                // A line with no colouring yet — one past the glance the
+                // read coloured, or one just typed — is drawn as the text
+                // it is until the pass that colours it lands.
                 spans: open
                     .highlighted
                     .get(index)
+                    .filter(|spans| !spans.is_empty())
                     .map(|spans| {
                         spans
                             .iter()
