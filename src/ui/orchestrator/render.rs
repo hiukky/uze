@@ -3058,8 +3058,12 @@ pub(super) fn color(color: TerminalColor) -> Color {
 /// rather than a column short of it. Insetting again here is what put a
 /// second margin on that side.
 ///
-/// A row down from the pane's top, so the stack reads as sitting over the
-/// pane rather than hanging off the strip.
+/// Flush with the pane's own top row, which already sits a row below the
+/// tab strip's text. A row of air was added on top of that one, and two
+/// rows is far enough that the message stops reading as an answer to what
+/// the strip above it says and starts reading as something floating in the
+/// pane — which is the opposite of what a toast anchored to the top-right
+/// is for.
 fn render_toasts(
     frame: &mut ratatui::Frame<'_>,
     pane: Rect,
@@ -3070,12 +3074,7 @@ fn render_toasts(
     if stack.is_empty() || pane.width < 16 || pane.height < 5 {
         return;
     }
-    let area = Rect::new(
-        pane.x,
-        pane.y + 1,
-        pane.width,
-        pane.height.saturating_sub(1),
-    );
+    let area = pane;
     let mut targets = Vec::new();
     for (index, placed) in widget::toast::stack(frame, area, &stack)
         .into_iter()

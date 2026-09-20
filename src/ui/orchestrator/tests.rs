@@ -8003,6 +8003,12 @@ mod workspace_tests {
             toast.right(),
             chip.right()
         );
+        assert_eq!(
+            toast.y, layout.pane.y,
+            "and on the pane's first row: the strip already puts a row \
+             between the two, and a second one reads as the message \
+             floating rather than answering what is above it"
+        );
     }
 }
 
