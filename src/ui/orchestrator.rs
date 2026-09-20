@@ -4274,6 +4274,19 @@ fn deliver_selected_tab(
         );
         return;
     };
+    // Only what UZE cut. The button is not drawn for an agent in the
+    // project's own root, but the key still reaches here — and a key that
+    // silently did nothing, or handed the operator a `NotReady` from deep
+    // in delivery, is worse than one that says whose branch it is.
+    if !task.isolated {
+        model.raise_toast(
+            ToastKind::Told,
+            "this branch is yours, not UZE's",
+            "isolate the agent to have UZE deliver its work",
+            None,
+        );
+        return;
+    }
     // The drawn state, not the recorded one: a second press while the
     // first delivery is still running is answered with what is happening
     // rather than with nothing at all.
