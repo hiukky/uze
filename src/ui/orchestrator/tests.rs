@@ -711,6 +711,94 @@ mod workspace_tests {
         );
     }
 
+    /// Opening a surface back where it was left asks for every directory
+    /// that was open, and those answers do not wait on each other.
+    ///
+    /// One request per pass made that one *frame* per directory: a third
+    /// of a second of a tree filling in a row at a time, for a tenth of a
+    /// millisecond of work. Reads keep the one-at-a-time chain, because a
+    /// save and the re-read that follows it have an order.
+    #[test]
+    fn every_directory_a_resumed_tree_needs_is_asked_for_at_once() {
+        use std::sync::mpsc;
+
+        use uze_extensions::code;
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        model.remembered.code_places.insert(
+            root.clone(),
+            code::CodePlace::at(&root, &root.join("src/ui/widget/row.rs"), false),
+        );
+        open_code(&mut model, code::ContentMode::Contents);
+
+        let (sender, _receiver) = mpsc::channel();
+        model.schedule_file_request(&sender);
+
+        let held = model.code_request_pending;
+        let waiting = model
+            .code
+            .as_ref()
+            .expect("the surface is open")
+            .peek_request();
+        assert!(
+            waiting.is_none(),
+            "every directory went out together, and the read behind them with it: {waiting:?}"
+        );
+        assert!(
+            held,
+            "the read is what took the one-at-a-time chain, not the listings"
+        );
+    }
+
+    /// Measuring a checkout opens every file it has, and the surface it
+    /// feeds is opened and closed all day. The second open shows the map
+    /// it already has rather than paying for it again and showing none
+    /// until it lands.
+    #[test]
+    fn a_checkout_measured_once_is_not_measured_again_on_the_way_back_in() {
+        use std::sync::mpsc;
+
+        use uze_extensions::code;
+
+        use crate::ui::orchestrator::MeasureResolution;
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+
+        let measured = code::Measure {
+            root: root.clone(),
+            files: vec![code::FileMeasure {
+                path: "src/main.rs".to_owned(),
+                lines: 120,
+                commits: 3,
+                changed: false,
+            }],
+        };
+        model.absorb_measure(MeasureResolution {
+            root: root.clone(),
+            measure: Some(measured),
+        });
+        assert!(model.code.as_ref().expect("open").has_map());
+
+        model.close_code();
+        open_code(&mut model, code::ContentMode::Contents);
+        assert!(
+            model.code.as_ref().expect("open").has_map(),
+            "the map is there the moment the surface is"
+        );
+
+        let (sender, _receiver) = mpsc::channel();
+        model.schedule_code_measure(&sender);
+        assert!(
+            model.code_measure_asked.is_none(),
+            "and nothing was asked of the checkout again"
+        );
+    }
+
     /// A click inside the explorer has to resolve to the row the frame
     /// drew, not to something laid out under it. The overlay covers the
     /// whole frame and pushes its own hits into the shared table, so

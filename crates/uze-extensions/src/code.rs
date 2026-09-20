@@ -86,7 +86,7 @@ mod treemap;
 
 pub use changes::{ChangeSummary, change_summary};
 pub use history::{Commit, CommitDetail, Timeline, commit_detail, timeline, timeline_section};
-pub use map::{Measure, measure};
+pub use map::{FileMeasure, Measure, measure};
 pub use render::view;
 pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 
@@ -276,6 +276,9 @@ impl CodePlace {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewPlacement {
     path: Option<PathBuf>,
+    /// What the diff already on screen was read from — so a re-read that
+    /// finds the same thing can say so instead of colouring it again.
+    diff: u64,
 }
 
 impl CodeView {
@@ -429,6 +432,12 @@ impl CodeView {
     pub fn placement(&self) -> ViewPlacement {
         ViewPlacement {
             path: self.selected.clone(),
+            // A diff still being waited for is not one on screen, and
+            // must not be recognised as the answer to its own read.
+            diff: match self.changes.diff_pending {
+                true => 0,
+                false => self.changes.diff_digest,
+            },
         }
     }
 
@@ -441,7 +450,9 @@ impl CodeView {
     pub fn refresh(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> RefreshedChanges {
         let branch = checkout::branch_of(host, &root);
         let changes = match host.repository_root(&root) {
-            Ok(resolved) => Changes::read(host, &resolved, placement.path.as_deref()),
+            Ok(resolved) => {
+                Changes::read(host, &resolved, placement.path.as_deref(), placement.diff)
+            }
             Err(message) => Changes::failed(message),
         };
         RefreshedChanges {
@@ -463,8 +474,17 @@ impl CodeView {
         // what changed, and tidying the tree around it is not something
         // it gets to undo.
         let folded = std::mem::take(&mut self.changes.folded);
+        // The read found the diff exactly as it is here, so here is where
+        // it stays — the cells were never sent back.
+        let diff = match changes.diff_unchanged {
+            true => std::mem::take(&mut self.changes.diff),
+            false => Vec::new(),
+        };
         self.changes = changes;
         self.changes.folded = folded;
+        if self.changes.diff_unchanged {
+            self.changes.diff = diff;
+        }
         // The selection moved while the read was out, so what came back
         // is a diff of a file nobody is looking at. Keep the list, ask
         // again for the diff.
@@ -479,6 +499,13 @@ impl CodeView {
     /// The next thing the host should do for the files half, or `None`.
     pub fn take_request(&mut self) -> Option<FileRequest> {
         self.queue.pop_front()
+    }
+
+    /// The same one, left where it is — so a host that runs some kinds of
+    /// request differently can see which kind is next before committing
+    /// to it.
+    pub fn peek_request(&self) -> Option<&FileRequest> {
+        self.queue.front()
     }
 
     /// Whether anything is still out.
@@ -532,6 +559,25 @@ impl CodeView {
                     }
                     Err(message) => open.error = Some(message),
                 }
+                self.colour_the_rest();
+            }
+            // Nothing is said about a colouring that failed: the file it
+            // was about is on screen and readable, and the only thing
+            // lost is colour on the part nobody has scrolled to.
+            FileAnswer::Coloured { path, file } => {
+                let Ok(loaded) = file else {
+                    return;
+                };
+                let Some(open) = self
+                    .open
+                    .as_mut()
+                    .filter(|open| open.path == path && !open.modified && !open.loading)
+                else {
+                    return;
+                };
+                let wanted = open.caret.line;
+                open.install(loaded);
+                open.place_caret(wanted);
             }
             FileAnswer::Saved { path, outcome } => match outcome {
                 Ok(()) => {
@@ -621,6 +667,7 @@ impl CodeView {
             ContentMode::Contents | ContentMode::Preview => {
                 self.reveal_selection();
                 self.load_selection(line);
+                self.colour_the_rest();
             }
             ContentMode::Diff => {
                 self.scroll = line
@@ -782,6 +829,34 @@ impl CodeView {
         }
     }
 
+    /// Asks for the rest of the open file's colour.
+    ///
+    /// Only while the source is what is being read: a document shown as
+    /// a document renders its own fenced blocks, and colouring its markup
+    /// is a pass for a screen nobody is looking at. Asking to see the
+    /// source is what pays for it — which is why this is also called
+    /// from [`Self::show`].
+    fn colour_the_rest(&mut self) {
+        if self.content != ContentMode::Contents {
+            return;
+        }
+        let Some(path) = self
+            .open
+            .as_ref()
+            .filter(|open| open.partial && open.error.is_none() && !open.loading)
+            .map(|open| open.path.clone())
+        else {
+            return;
+        };
+        let asked = self
+            .queue
+            .iter()
+            .any(|request| matches!(request, FileRequest::Colour(queued) if *queued == path));
+        if !asked {
+            self.queue.push_back(FileRequest::Colour(path));
+        }
+    }
+
     /// Reads the selected file, putting the caret on `line` when it
     /// lands.
     fn load_selection(&mut self, line: Option<usize>) {
@@ -803,6 +878,11 @@ impl CodeView {
         };
         self.open = Some(open);
         self.scroll = 0;
+        // Whatever was still to be coloured belonged to the file being
+        // left, and the answer would be dropped on arrival. Asking for it
+        // anyway is a read the viewer waits behind for nothing.
+        self.queue
+            .retain(|request| !matches!(request, FileRequest::Colour(_)));
         self.queue.push_back(FileRequest::Read(path));
     }
 

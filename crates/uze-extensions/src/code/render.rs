@@ -116,6 +116,7 @@ fn map_content(code: &CodeView, space: Size) -> Content {
     Content::Lines {
         heading: map.caption(cells),
         scroll: 0,
+        first: 0,
         total: lines.len(),
         lines,
         caret: None,
@@ -356,14 +357,16 @@ fn diff_content(code: &CodeView, space: Size) -> Content {
                 .unwrap_or_else(|_| code.display_root.clone())
         ),
         scroll: code.scroll,
-        // Bounded by the space plus what is scrolled past, not by the
-        // space alone: a wrapped line occupies more than one row, and
-        // only the host — which does the wrapping — knows how many.
-        // Erring long costs a few unrendered lines; erring short would
-        // show blank rows at the bottom of a long diff.
+        first: code.scroll as usize,
+        // Twice the space rather than exactly it: a wrapped line occupies
+        // more than one row, and only the host — which does the wrapping
+        // — knows how many. Erring long costs a few unrendered lines;
+        // erring short would show blank rows at the bottom of a long
+        // diff.
         lines: diff
             .iter()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
+            .skip(code.scroll as usize)
+            .take(usize::from(space.height).saturating_mul(2))
             .map(content_line)
             .collect(),
     }
@@ -382,10 +385,13 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
         Ok(open) => open,
         Err(message) => return message,
     };
-    let lines = super::markdown::render(&open.contents(), &open.theme);
+    let (total, lines) = open.preview(
+        code.scroll as usize,
+        usize::from(space.height).saturating_mul(2),
+    );
     Content::Lines {
         caret: None,
-        total: lines.len(),
+        total,
         heading: format!(
             "{} · preview",
             open.path
@@ -394,10 +400,8 @@ fn preview_content(code: &CodeView, space: Size) -> Content {
                 .display()
         ),
         scroll: code.scroll,
-        lines: lines
-            .into_iter()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
-            .collect(),
+        first: code.scroll as usize,
+        lines,
     }
 }
 
@@ -457,22 +461,28 @@ fn contents_content(code: &CodeView, space: Size) -> Content {
             }
         ),
         scroll: code.scroll,
-        // From the first line, never from the scrolled-to one: the host
-        // is what applies `scroll`, so skipping here would move the
-        // content twice for one wheel notch — and the caret's line index
-        // has to keep meaning the same thing on both sides of that.
+        // The window starts where the viewer is, and says so: the line
+        // numbers, the caret's line and the hits a click lands in are all
+        // indices into the file, and `first` is what keeps them meaning
+        // that on both sides.
+        first: code.scroll as usize,
         lines: open
             .lines
             .iter()
             .enumerate()
-            .take(usize::from(space.height).saturating_mul(2) + code.scroll as usize)
+            .skip(code.scroll as usize)
+            .take(usize::from(space.height).saturating_mul(2))
             .map(|(index, text)| ContentLine {
                 gutter: " ".to_owned(),
                 number: (index + 1).to_string(),
                 tone: LineTone::Neutral,
+                // A line with no colouring yet — one past the glance the
+                // read coloured, or one just typed — is drawn as the text
+                // it is until the pass that colours it lands.
                 spans: open
                     .highlighted
                     .get(index)
+                    .filter(|spans| !spans.is_empty())
                     .map(|spans| {
                         spans
                             .iter()

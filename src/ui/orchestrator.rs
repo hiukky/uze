@@ -76,6 +76,13 @@ const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 /// as a faster, smaller motion than a full-width spinner.
 const AGENT_ACTIVITY_FRAMES: usize = 8;
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
+
+/// How long a checkout's measurement is taken to still describe it.
+///
+/// Long enough that opening the code surface, closing it and opening it
+/// again is free — which is how it is used — and short enough that a map
+/// is never a picture of a morning ago.
+const CODE_MEASURE_FRESH: Duration = Duration::from_secs(30);
 /// How long a pressed control wears its pressed skin. Long enough to be
 /// seen at a glance, short enough that it reads as the press itself and
 /// never as a state the control got stuck in.
@@ -2434,6 +2441,15 @@ struct WorkspaceModel {
     /// the answer outside a repository is nothing, and a flag cleared on
     /// nothing would ask again every frame.
     code_measure_asked: Option<PathBuf>,
+    /// The last measurement of each checkout, and when it was taken.
+    ///
+    /// Kept because measuring is a `git grep` that opens every file the
+    /// checkout has, and the surface it feeds is opened and closed all
+    /// day. Without it, every open paid that again and showed no map
+    /// until it landed — the one thing the cost was supposed to buy.
+    /// Handed to a surface the moment it opens, and taken again in the
+    /// background once it is old enough to have missed something.
+    code_measures: BTreeMap<PathBuf, (Instant, code::Measure)>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
@@ -3646,26 +3662,40 @@ impl WorkspaceModel {
         true
     }
 
-    /// Asks for a re-read of the open changes overlay when its own cadence
-    /// says so, carrying the placement the viewer is at (see
-    /// Hands the surface's next file request to a thread, one at a time.
+    /// Hands the surface's file requests to threads.
     ///
-    /// Serialised on purpose: a save followed by the re-read that
-    /// re-highlights it must land in that order, and two reads racing
-    /// would let the older one describe the newer one's file.
+    /// Everything that reads, writes or colours a *file* stays
+    /// serialised: a save followed by the re-read that re-colours it must
+    /// land in that order, and two reads racing would let the older one
+    /// describe the newer one's file.
+    ///
+    /// Listings are not in that chain. They answer about directories
+    /// nothing else in the queue names, they cost a `readdir` each, and
+    /// they arrive in bulk — opening a surface back where it was left
+    /// asks for every directory that was open. One per pass made that a
+    /// frame each: a third of a second of a tree filling in one row at a
+    /// time, for a tenth of a millisecond of actual work.
     fn schedule_file_request(&mut self, sender: &mpsc::Sender<FileResolution>) {
-        if self.code_request_pending {
-            return;
-        }
         let Some(view) = self.code.as_mut() else {
             return;
         };
         let root = view.root().to_path_buf();
-        let Some(request) = view.take_request() else {
-            return;
-        };
-        self.code_request_pending = true;
-        spawn_file_request(root, request, sender.clone());
+        loop {
+            let listing = match view.peek_request() {
+                Some(code::FileRequest::List(_)) => true,
+                // The chain is busy, and the queue is in the order the
+                // surface asked: stopping here rather than looking past
+                // it is what keeps a save ahead of the read that follows
+                // it.
+                Some(_) if !self.code_request_pending => false,
+                _ => return,
+            };
+            let Some(request) = view.take_request() else {
+                return;
+            };
+            self.code_request_pending |= !listing;
+            spawn_file_request(root.clone(), request, sender.clone());
+        }
     }
 
     fn schedule_artifacts_read(&mut self, sender: &mpsc::Sender<ArtifactsResolution>) {
@@ -3691,7 +3721,12 @@ impl WorkspaceModel {
     /// Installs one file answer, if the surface is still open on the
     /// checkout it was read for.
     fn absorb_file_answer(&mut self, resolution: FileResolution) -> bool {
-        self.code_request_pending = false;
+        // A listing never took the chain, so it does not release it — a
+        // pass that let one clear a read's reservation would put the next
+        // read alongside the read it has to follow.
+        if !matches!(resolution.answer, code::FileAnswer::Listed { .. }) {
+            self.code_request_pending = false;
+        }
         let Some(view) = self
             .code
             .as_mut()
@@ -3720,17 +3755,39 @@ impl WorkspaceModel {
         spawn_changes_refresh(view.root().to_path_buf(), view.placement(), sender.clone());
     }
 
+    /// Gives a surface that has just opened the measurement this client
+    /// already holds for its checkout, so the map is there to be asked
+    /// for rather than arriving a second later.
+    fn show_remembered_measure(&mut self) {
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        if let Some((_, measure)) = self.code_measures.get(view.root()) {
+            view.absorb_measure(measure.clone());
+        }
+    }
+
     /// Asks for the checkout's measurement, once per surface that has no
     /// map yet. A `git grep` over every file is not a read to repeat, so
     /// the root it was asked about is remembered rather than the request
     /// being in flight: outside a repository the answer is nothing, and
     /// nothing must not be asked for again.
     fn schedule_code_measure(&mut self, sender: &mpsc::Sender<MeasureResolution>) {
-        let Some(view) = self.code.as_ref().filter(|view| !view.has_map()) else {
+        let Some(view) = self.code.as_ref() else {
             return;
         };
         let root = view.root().to_path_buf();
         if self.code_measure_asked.as_deref() == Some(root.as_path()) {
+            return;
+        }
+        // A measurement this recent describes the same checkout: a map is
+        // where the lines are, and that is not a picture that changes
+        // between one look at it and the next.
+        if self
+            .code_measures
+            .get(&root)
+            .is_some_and(|(taken, _)| taken.elapsed() < CODE_MEASURE_FRESH)
+        {
             return;
         }
         self.code_measure_asked = Some(root.clone());
@@ -3743,6 +3800,11 @@ impl WorkspaceModel {
         let Some(measure) = resolution.measure else {
             return false;
         };
+        // Kept whether or not there is still a surface to show it: the
+        // next one to open on this checkout is the reason it was worth
+        // measuring.
+        self.code_measures
+            .insert(resolution.root.clone(), (Instant::now(), measure.clone()));
         let Some(view) = self
             .code
             .as_mut()
@@ -4753,6 +4815,7 @@ fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
     model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.code_measure_asked = None;
+    model.show_remembered_measure();
     model.dirty = true;
 }
 
@@ -4771,6 +4834,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
         None => view,
     });
     model.code_measure_asked = None;
+    model.show_remembered_measure();
     // The scroll is not restored with the place: the first frame reveals
     // whatever is selected, which is where the viewer was looking anyway.
     model.code_tree_scroll = extension_view::NavigatorScroll::default();

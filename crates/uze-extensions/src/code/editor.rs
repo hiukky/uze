@@ -5,11 +5,11 @@
 //! is the text and what happens to the text, which is also why it is the
 //! part of this extension with the most tests per line.
 
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf};
 
 use super::request::LoadedFile;
 use crate::view::Command;
-use crate::view::{Caret, Rgb};
+use crate::view::{Caret, ContentLine, Rgb};
 
 /// How the file terminated its lines when it was read.
 ///
@@ -79,7 +79,12 @@ pub(super) struct OpenFile {
     /// What rejoining them has to put back.
     endings: LineEndings,
     /// One entry per line of `lines`, kept in step through every edit.
+    /// An empty entry is a line nothing has coloured yet, which the
+    /// renderer draws as the text it is.
     pub(super) highlighted: Vec<Vec<(Rgb, String)>>,
+    /// Whether some of `lines` is still uncoloured — what makes a second
+    /// pass worth asking for (see [`super::FileRequest::Colour`]).
+    pub(super) partial: bool,
     pub(super) theme: String,
     pub(super) caret: Caret,
     pub(super) editing: bool,
@@ -89,6 +94,23 @@ pub(super) struct OpenFile {
     pub(super) loading: bool,
     /// Why it could not be shown, when it could not be.
     pub(super) error: Option<String>,
+    /// How many times the text has changed. The identity the rendered
+    /// preview is kept against — a number rather than the text itself,
+    /// because comparing a document to decide whether to re-render it
+    /// costs what rendering it was supposed to save.
+    revision: u64,
+    /// The last rendering of this buffer as the document it describes,
+    /// and the revision and theme it was rendered from.
+    ///
+    /// Rendering a document is a parse and a highlighter per fenced
+    /// block — a frame's whole budget for a file of any size, paid again
+    /// on every frame because the preview is drawn from the buffer
+    /// rather than from the read. So it is done when the buffer changes,
+    /// not when the screen does. Behind a cell because a view is drawn
+    /// through a shared reference: the host asks what to draw, and
+    /// producing that answer is not a change to anything the viewer can
+    /// see.
+    preview: RefCell<Option<(u64, String, Vec<ContentLine>)>>,
 }
 
 impl OpenFile {
@@ -98,12 +120,15 @@ impl OpenFile {
             lines: Vec::new(),
             endings: LineEndings::default(),
             highlighted: Vec::new(),
+            partial: false,
             theme: String::new(),
             caret: Caret::default(),
             editing: false,
             modified: false,
             loading: true,
             error: None,
+            revision: 0,
+            preview: RefCell::new(None),
         }
     }
 
@@ -137,7 +162,15 @@ impl OpenFile {
     /// out of it — an empty file still has one line, or there is nowhere
     /// to start typing.
     pub(super) fn install(&mut self, loaded: LoadedFile) {
-        let (text, highlighted, theme) = loaded.into_parts();
+        // Taken apart in one move, here and nowhere else: a buffer
+        // holding half of one file and half of another is the one state
+        // none of this can recover from.
+        let LoadedFile {
+            text,
+            highlighted,
+            complete,
+            theme,
+        } = loaded;
         let (lines, endings) = split_lines(&text);
         self.lines = lines;
         self.endings = endings;
@@ -147,10 +180,46 @@ impl OpenFile {
             self.lines.push(String::new());
         }
         // The highlighter walks the text with `str::lines`, which sees no
-        // line at all in an empty file where the caret still needs one.
+        // line at all in an empty file where the caret still needs one —
+        // and it stops at a glance's worth of a long one. Either way every
+        // line has an entry afterwards, because an edit inserts and
+        // removes in both lists at once and they cannot drift apart.
+        self.partial = !complete;
         self.highlighted.resize(self.lines.len(), Vec::new());
         self.modified = false;
         self.error = None;
+        self.changed();
+    }
+
+    /// Records that the text is not what it was, so anything kept from
+    /// the old one is known to be stale.
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// This buffer as the document it describes: how many lines it comes
+    /// to, and `count` of them from `first`.
+    ///
+    /// Rendered once per change to the buffer rather than once per frame,
+    /// and copied out a window at a time, because the two together are
+    /// what keep a long document's preview off the frame's budget.
+    pub(super) fn preview(&self, first: usize, count: usize) -> (usize, Vec<ContentLine>) {
+        let mut cached = self.preview.borrow_mut();
+        let fresh = cached
+            .as_ref()
+            .is_some_and(|(revision, theme, _)| *revision == self.revision && theme == &self.theme);
+        if !fresh {
+            *cached = Some((
+                self.revision,
+                self.theme.clone(),
+                super::markdown::render(&self.contents(), &self.theme),
+            ));
+        }
+        let (_, _, lines) = cached.as_ref().expect("rendered just above");
+        (
+            lines.len(),
+            lines.iter().skip(first).take(count).cloned().collect(),
+        )
     }
 
     /// Puts the caret on `line`, clamped to what the file has.
@@ -179,6 +248,7 @@ impl OpenFile {
     /// the next save re-reads the file and colours all of it properly —
     /// so the error is bounded in both size and lifetime.
     pub(super) fn recolour_caret_line(&mut self) {
+        self.changed();
         let Some(text) = self.lines.get(self.caret.line) else {
             return;
         };

@@ -1025,6 +1025,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         Showing::Source => {
             let lines = source_lines(state.source());
             Content::Lines {
+                first: 0,
                 heading: state.caption(),
                 scroll: state.corner(space).1.max(0) as u16,
                 total: lines.len(),
@@ -1038,6 +1039,7 @@ fn content(state: &ArchitectView, space: Size) -> Content {
         _ => {
             let lines = state.screen(space).map(|s| s.lines()).unwrap_or_default();
             Content::Lines {
+                first: 0,
                 heading: state.caption(),
                 scroll: 0,
                 total: lines.len(),

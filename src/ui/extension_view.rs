@@ -351,6 +351,7 @@ pub(crate) fn render(
         Content::Lines {
             heading,
             scroll,
+            first,
             lines,
             total,
             caret,
@@ -361,6 +362,7 @@ pub(crate) fn render(
                 Lines {
                     heading,
                     scroll: *scroll,
+                    first: *first,
                     lines,
                     total: *total,
                     caret: *caret,
@@ -392,6 +394,7 @@ fn render_board(
         }
         Content::Lines {
             scroll,
+            first,
             lines,
             total,
             ..
@@ -400,7 +403,8 @@ fn render_board(
             for (row, (offset, line)) in lines
                 .iter()
                 .enumerate()
-                .skip(usize::from(*scroll))
+                .map(|(offset, line)| (offset + first, line))
+                .skip(usize::from(*scroll).saturating_sub(*first))
                 .take(usize::from(board.height))
                 .enumerate()
             {
@@ -1037,6 +1041,10 @@ fn render_navigator(
 struct Lines<'a> {
     heading: &'a str,
     scroll: u16,
+    /// Where `lines` starts in the whole content — see
+    /// [`Content::Lines::first`]. Every index this draws with is an index
+    /// into the content, never into the window.
+    first: usize,
     lines: &'a [ContentLine],
     total: usize,
     caret: Option<Caret>,
@@ -1052,6 +1060,7 @@ fn render_lines(
     let Lines {
         heading,
         scroll,
+        first,
         lines,
         total,
         caret,
@@ -1101,7 +1110,12 @@ fn render_lines(
     };
     let text_width = text_width(content.width, gutter);
     let mut y = content.y;
-    for (offset, line) in lines.iter().enumerate().skip(scroll as usize) {
+    for (offset, line) in lines
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| (offset + first, line))
+        .skip((scroll as usize).saturating_sub(first))
+    {
         let height = line_height(line, content.width, gutter);
         if y.saturating_add(height) > content.bottom() {
             break;
@@ -1718,6 +1732,7 @@ mod tests {
                 ],
             }),
             content: Content::Lines {
+                first: 0,
                 caret: None,
                 total: 1,
                 heading: "DIFF · src/ui.rs".to_owned(),
@@ -1830,6 +1845,7 @@ mod tests {
                 rows,
             }),
             content: Content::Lines {
+                first: 0,
                 heading: String::new(),
                 scroll: 0,
                 lines: Vec::new(),
@@ -1979,6 +1995,7 @@ mod tests {
                 rows,
             }),
             content: Content::Lines {
+                first: 0,
                 heading: String::new(),
                 scroll: 0,
                 lines: Vec::new(),

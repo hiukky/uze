@@ -51,6 +51,18 @@ pub(super) struct Changes {
     /// open at all.
     pub(super) error: Option<String>,
     pub(super) refreshed_at: Option<Instant>,
+    /// What the diff on screen was read from — the raw output and the
+    /// palette together, as one number.
+    ///
+    /// Carried so the next read can tell that it found the same thing.
+    /// A diff is re-read on a timer, because the file behind it is under
+    /// an agent's hands; colouring it again when not one byte of it moved
+    /// is the same picture drawn twice, and for a large diff it is the
+    /// most expensive thing this surface does.
+    pub(super) diff_digest: u64,
+    /// The read found the diff exactly as it already was, so it carries
+    /// no cells — the ones on screen are the answer.
+    pub(super) diff_unchanged: bool,
 }
 
 impl Changes {
@@ -66,7 +78,7 @@ impl Changes {
     /// rebuilt this way, which was safe while nothing in it was authored
     /// by the viewer; the same struct now holds a buffer, so a refresh
     /// that could reach it would be a refresh that eats what was typed.
-    pub(super) fn read(host: &dyn Host, root: &Path, selected: Option<&Path>) -> Self {
+    pub(super) fn read(host: &dyn Host, root: &Path, selected: Option<&Path>, shown: u64) -> Self {
         let status = match host.git(root, STATUS_ARGS, &[]) {
             Ok(output) => output,
             Err(message) => return Self::failed(message),
@@ -76,7 +88,7 @@ impl Changes {
             refreshed_at: Some(Instant::now()),
             ..Self::default()
         };
-        changes.load_diff(host, root, selected);
+        changes.load_diff(host, root, selected, shown);
         changes
     }
 
@@ -96,7 +108,7 @@ impl Changes {
         self.files.iter().position(|file| file.path == path)
     }
 
-    fn load_diff(&mut self, host: &dyn Host, root: &Path, selected: Option<&Path>) {
+    fn load_diff(&mut self, host: &dyn Host, root: &Path, selected: Option<&Path>, shown: u64) {
         let Some(file) = self
             .position_of(selected)
             .and_then(|index| self.files.get(index))
@@ -118,13 +130,34 @@ impl Changes {
         } else {
             host.git(root, &["diff", "HEAD", "--", &relative], &[])
         };
-        self.diff = match raw {
-            Ok(output) => diff::read(&output, &path, &host.syntax_theme()),
+        let output = match raw {
+            Ok(output) => output,
             Err(message) => {
                 self.error = Some(message);
-                Vec::new()
+                return;
             }
         };
+        let theme = host.syntax_theme();
+        self.diff_digest = Self::digest_of(&output, &theme);
+        // Nothing moved, and the palette is the one it was drawn in.
+        if self.diff_digest == shown && shown != 0 {
+            self.diff_unchanged = true;
+            return;
+        }
+        self.diff = diff::read(&output, &path, &theme);
+    }
+
+    /// One number standing for a diff drawn in a palette: what a re-read
+    /// compares against to know it found the same picture.
+    fn digest_of(output: &str, theme: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        output.hash(&mut hasher);
+        theme.hash(&mut hasher);
+        // Zero doubles as "nothing is on screen yet" at the one call site
+        // that compares these, so a diff that genuinely hashes to zero is
+        // coloured again every read — the cheaper of the two mistakes.
+        hasher.finish()
     }
 
     /// The next changed file in tree order from `from`, in `direction`,
@@ -422,7 +455,7 @@ mod repository_tests {
         repository.git(&["add", "staged.rs"]);
         std::fs::write(root.join("new.rs"), "fn brand_new() {}\n").unwrap();
 
-        let changes = Changes::read(&TestHost, &root, None);
+        let changes = Changes::read(&TestHost, &root, None, 0);
         assert!(
             changes.error.is_none(),
             "unexpected error: {:?}",
@@ -451,14 +484,14 @@ mod repository_tests {
         );
         // Read with a file named, the diff of that file comes with it.
         let first = changes.files[0].path.clone();
-        let changes = Changes::read(&TestHost, &root, Some(&first));
+        let changes = Changes::read(&TestHost, &root, Some(&first), 0);
         assert!(
             !changes.diff.is_empty(),
             "expected a non-empty diff for the file that was asked about"
         );
 
         std::fs::write(root.join("later.rs"), "fn later() {}\n").unwrap();
-        let changes = Changes::read(&TestHost, &root, Some(&first));
+        let changes = Changes::read(&TestHost, &root, Some(&first), 0);
         assert!(
             changes
                 .files
@@ -546,7 +579,7 @@ mod repository_tests {
         std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
 
         let agent_root = TestHost.repository_root(&linked).expect("a checkout");
-        let from_agent = Changes::read(&TestHost, &agent_root, None);
+        let from_agent = Changes::read(&TestHost, &agent_root, None, 0);
         assert!(from_agent.error.is_none(), "{:?}", from_agent.error);
         assert_eq!(
             crate::shared::checkout::branch_of(&TestHost, &agent_root),
@@ -563,7 +596,7 @@ mod repository_tests {
         );
 
         let primary_root = TestHost.repository_root(&root).expect("a checkout");
-        let from_primary = Changes::read(&TestHost, &primary_root, None);
+        let from_primary = Changes::read(&TestHost, &primary_root, None, 0);
         assert!(from_primary.error.is_none(), "{:?}", from_primary.error);
         assert_eq!(
             from_primary

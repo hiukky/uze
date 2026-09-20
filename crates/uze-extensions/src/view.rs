@@ -315,6 +315,14 @@ pub enum Content {
         heading: String,
         /// First line to show. The host clamps it to what exists.
         scroll: u16,
+        /// Where `lines` starts, as an index into the whole content.
+        ///
+        /// The window would otherwise have to begin at the first line for
+        /// `scroll` to mean anything, which is what made drawing the
+        /// bottom of a long file cost the whole file: every line above it
+        /// was produced to be skipped. Saying where the window sits is
+        /// what lets it be one.
+        first: usize,
         /// The lines worth drawing right now — a *window*, not the whole
         /// content: producing a large file's every line on every frame is
         /// work nobody sees.
