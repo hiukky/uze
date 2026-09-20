@@ -236,6 +236,12 @@ mod tests {
                 .join("skills/worktree/SKILL.md")
                 .is_file()
         );
+        assert!(
+            materialized
+                .root()
+                .join("skills/architect/SKILL.md")
+                .is_file()
+        );
     }
 
     #[test]

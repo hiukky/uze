@@ -1,5 +1,5 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "uze",
-  "description": "UZE's own agentic context orchestrator: makes a project's instructions context (AGENTS.md and its harness bridges) portable, using UZE's deterministic context CLI as the only thing that ever mutates anything."
+  "description": "UZE's own agentic Skills: making a project's instructions context (AGENTS.md and its harness bridges) portable, working in the checkout UZE placed you in, and writing the diagrams it keeps under `artifacts:` — each one reasoning over a deterministic `uze` CLI that is the only thing that ever mutates or judges anything."
 }

@@ -4,7 +4,7 @@ This is a normal Agent Plugins 1.0 package. It carries no special treatment in
 the Store, the router, or any integration — it is installed, discovered and
 delivered exactly the way any other Skill-only package is.
 
-It ships two Skills:
+It ships three Skills:
 
 - `skills/init/SKILL.md` — an agentic orchestrator that calls UZE's own
   deterministic `uze context inspect|plan|reconcile` CLI to make a project's
@@ -12,6 +12,9 @@ It ships two Skills:
 - `skills/worktree/SKILL.md` — coordinates isolated worktrees for concurrent
   agent work and safe integration, honouring the `worktrees:` policy the
   project declares in `agents.yaml`.
+- `skills/architect/SKILL.md` — writing the Mermaid diagrams a project keeps
+  under `artifacts:`: which view a change belongs in, how the architect
+  surface lists it, and `uze agent artifacts check` as the proof it draws.
 
 See [`docs/capabilities/context-manager.md`](../../docs/capabilities/context-manager.md)
 for the architecture these sit on top of, and

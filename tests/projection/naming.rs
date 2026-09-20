@@ -313,7 +313,11 @@ fn package_uze_plus_skill_uze_naturally_gets_the_stable_label_no_special_case() 
     names.sort();
     assert_eq!(
         names,
-        vec!["uze:init".to_owned(), "uze:worktree".to_owned()],
+        vec![
+            "uze:architect".to_owned(),
+            "uze:init".to_owned(),
+            "uze:worktree".to_owned(),
+        ],
         "the official package gets the same stable namespaced label as any other plugin (ADR-026)"
     );
     fs::remove_dir_all(root).unwrap();
