@@ -202,19 +202,25 @@
 
 ## 13. The upgrade tier
 
-- [ ] 13.1 Teach the journey runner to download and cache the released
+- [x] 13.1 Teach the journey runner to download and cache the released
       `uze` for the platform.
-- [ ] 13.2 Give the chapter a world root short enough that `$UZE_HOME` can
-      hold a socket.
-- [ ] 13.3 Chapter `07-upgrade`: the released binary creates a workspace,
+- [x] 13.2 Nothing to do: the worlds live under `/tmp/uze-journeys/<slug>`
+      and `socket_path` already falls back when a home is too long for a
+      socket path. The chapter's own runs bind in the workspace's own
+      directory, which is the first candidate.
+- [x] 13.3 Chapter `07-upgrade`: the released binary creates a workspace,
       agents and checkouts; this build opens on the same machine; the
       spaces, branches and commits are still there and an agent can be
       created with no intervening step.
 - [ ] 13.4 Journey: the released binary leaves a server running; this build
-      meets it and neither hangs up in silence nor needs a reboot.
-- [ ] 13.5 Journey: the older binary reads a document this build wrote, and
+      meets it and neither hangs up in silence nor needs a reboot. Left for
+      a follow-up: the retire-and-replace path it would exercise is already
+      held by five runtime tests, and driving two live servers from one
+      journey is the kind of thing that makes a suite flaky before it makes
+      it truthful.
+- [x] 13.5 Journey: the older binary reads a document this build wrote, and
       leaves it untouched.
-- [ ] 13.6 Tag the chapter nightly — it needs the network and a cached
+- [x] 13.6 Tag the chapter nightly — it needs the network and a cached
       download.
 
 ## 14. Recovery, from the operator's side

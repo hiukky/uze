@@ -21,6 +21,7 @@ import glob as globlib
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -192,7 +193,7 @@ class World:
         return dict(self.env)
 
     def vars(self) -> dict:
-        return {
+        names = {
             "world": str(self.root),
             "home": str(self.home),
             "uze_home": str(self.uze_home),
@@ -200,6 +201,86 @@ class World:
             "repo": str(REPO),
             "shell_rc": str(self.home / shell_rc_name()),
         }
+        # Only for a journey that asks for it: resolving it eagerly would
+        # put a download in front of every run of every chapter.
+        released = RELEASED.get("path")
+        if released:
+            names["released_uze"] = str(released)
+        return names
+
+
+# Where the previously released binary is kept between runs, and the one
+# resolved for this process.
+RELEASED: dict = {}
+RELEASED_CACHE = Path.home() / ".cache" / "uze-journeys" / "released"
+
+
+def released_binary(tag: str) -> Path:
+    """The `uze` of a published release, downloaded once and kept.
+
+    A fixture proves a ladder step. It cannot prove the claim, which is
+    about two binaries meeting on one disk: what the release process
+    actually produced, against what this build actually does. So this runs
+    what a user would have installed — which is also why the chapter that
+    uses it is nightly, since it needs the network.
+    """
+    RELEASED_CACHE.mkdir(parents=True, exist_ok=True)
+    binary = RELEASED_CACHE / tag / "uze"
+    if binary.exists():
+        RELEASED["path"] = binary
+        return binary
+
+    machine = platform.machine()
+    arch = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "arm64": "aarch64",
+        "aarch64": "aarch64",
+    }.get(machine)
+    if arch is None:
+        raise Failed(f"no released asset for this architecture: {machine}")
+    if platform.system() == "Darwin":
+        asset = f"uze-{arch}-macos.tar.gz"
+    else:
+        libc = (
+            "musl"
+            if "musl"
+            in subprocess.run(
+                ["ldd", "--version"], capture_output=True, text=True
+            ).stderr.lower()
+            else "gnu"
+        )
+        asset = f"uze-{arch}-linux-{libc}.tar.gz"
+
+    url = f"https://github.com/hiukky/uze/releases/download/{tag}/{asset}"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    archive = binary.parent / asset
+    fetched = subprocess.run(
+        [
+            "curl",
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--output",
+            str(archive),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if fetched.returncode != 0:
+        raise Failed(f"could not fetch {url}: {fetched.stderr.strip()}")
+    subprocess.run(["tar", "-xzf", str(archive), "-C", str(binary.parent)], check=True)
+    archive.unlink(missing_ok=True)
+    if not binary.exists():
+        raise Failed(f"{asset} carried no `uze`")
+    binary.chmod(0o755)
+    RELEASED["path"] = binary
+    return binary
 
 
 def shell_rc_name() -> str:
@@ -321,6 +402,12 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
     if root.exists() and not keep:
         shutil.rmtree(root)
     world_spec = spec.get("world", {})
+    # A journey that means to prove two binaries meeting on one disk says
+    # which release the other one is. Resolved here rather than lazily, so
+    # a chapter that needs the network fails saying so instead of halfway
+    # through a gesture.
+    if released := world_spec.get("released"):
+        released_binary(released)
     # Deliberately not `home/.uze`: UZE creates its own home on demand, and a
     # world that pre-creates it makes that unprovable.
     for part in ("home", "run", "bin", "projects"):
