@@ -1566,7 +1566,10 @@ impl Server {
                         }
                         None => {
                             events.reply(ClientEvent::Error {
-                                message: "cannot close the workspace's only tab".into(),
+                                // An agent's shells go with it, so what is
+                                // refused is a close that would empty the
+                                // space — not always a single tab.
+                                message: "cannot close a space's last tabs".into(),
                             });
                         }
                     }

@@ -2560,10 +2560,12 @@ pub(super) fn render_tab_strip(
     // anything opened with no agent selected.
     let context = context_agent(model, identities);
     let strip = strip_tabs(space, context, identities);
-    // Closability is a per-space rule (the server refuses to remove a
-    // space's only tab — see `Session::remove_tab`), so it's judged
+    // Closability is a per-space rule (the server refuses a removal that
+    // would empty a space — see `Session::remove_tab`), so it's judged
     // against every tab in the selected space, not just the ones this
-    // strip goes on to show.
+    // strip goes on to show. A close that would take the last of them
+    // still goes through: `close_tab_keeping_a_shell` opens the space's
+    // replacement first.
     let can_close = space.tabs.len() > 1;
 
     // The header's right end goes down first — before a tab is measured,

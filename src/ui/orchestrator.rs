@@ -4303,10 +4303,12 @@ fn dispatch_menu_action<W: io::Write>(
     }
 }
 
-/// Closes `tab`, first opening a shell of the space's own in its place when
-/// closing it would leave the space with none — the same rule that replaces
-/// a closed last space with one at home. The space's own shell is what its
-/// header lands on; without one a click there reached nothing.
+/// Closes `tab` — and, when it is an agent, the shells opened alongside it,
+/// which the server removes with it — first opening a shell of the space's
+/// own in its place when closing it would leave the space with none: the
+/// same rule that replaces a closed last space with one at home. The
+/// space's own shell is what its header lands on; without one a click
+/// there reached nothing.
 ///
 /// Every way a tab is closed goes through here: the strip's close mark,
 /// the keyboard, and the sidebar's menu.
@@ -4331,13 +4333,32 @@ fn close_tab_keeping_a_shell<W: io::Write>(
                 agent: None,
                 columns,
                 rows,
-                cwd: tab_cwd(model, tab),
+                // Where the *space* is, never where the closing tab stands.
+                // An agent stands in its own checkout, and opening the
+                // space's own shell there left a live pane inside a slot on
+                // its way back to the pool — which is what kept the slot
+                // from ever being handed on. A space with a shell of its
+                // own is never replaced, so this answers that shell's own
+                // directory in the one case it is not an agent's.
+                cwd: tab_space(model, tab).map(|space| space_cwd(space, identities)),
                 command: None,
                 env: Vec::new(),
             },
         );
     }
     let _ = send_request(stream, &ClientRequest::CloseTab { tab });
+}
+
+/// The space `tab` lives in, searched for across every space the way every
+/// other tab lookup here is.
+fn tab_space(model: &WorkspaceModel, tab: TabId) -> Option<&Space> {
+    model
+        .session
+        .as_ref()?
+        .workspace
+        .spaces
+        .iter()
+        .find(|space| space.tabs.iter().any(|candidate| candidate.id == tab))
 }
 
 /// A normal tab can close when it has a sibling. A lone recognized agent is
@@ -4357,8 +4378,9 @@ fn can_close_tab_from_menu(
 }
 
 /// Whether closing `tab` would leave its space without a shell of its own:
-/// no other tab that is one, nor a shell of `tab`'s that becomes one when
-/// `tab` goes (see `Session::remove_tab`). A space's only tab, when that tab
+/// no other tab that is one. A shell of `tab`'s is not one — it goes with
+/// its agent (see `Session::remove_tab`), so counting it left the space
+/// with nothing of its own to land on. A space's only tab, when that tab
 /// is already its own shell, is not replaced — the runtime keeps it.
 fn tab_needs_replacement_shell(
     model: &WorkspaceModel,
@@ -4374,9 +4396,10 @@ fn tab_needs_replacement_shell(
                 return false;
             };
             let lone_own_shell = space.tabs.len() == 1 && own(closing);
-            let another_remains = space.tabs.iter().any(|candidate| {
-                candidate.id != tab && (own(candidate) || candidate.agent == Some(tab))
-            });
+            let another_remains = space
+                .tabs
+                .iter()
+                .any(|candidate| candidate.id != tab && own(candidate));
             !lone_own_shell && !another_remains
         })
     })
