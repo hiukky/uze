@@ -604,3 +604,60 @@ fn linking_to_a_foreign_checkout_is_refused() {
 
     assert!(refused.is_err(), "{refused:?}");
 }
+
+/// A contributor cloning a project whose author declared a marketplace only
+/// they have gets the rest of the environment, and is told what is missing
+/// — rather than nothing at all.
+#[test]
+fn an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs() {
+    let (application, repository) = project("unreachable-market");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "reachable");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    // A second marketplace the author has and nobody else does.
+    let manifest = root.join("agents.yaml");
+    let declared = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "{declared}  theirs:\n    path: /nonexistent/theirs\n    plugins:\n      - other\n"
+        ),
+    )
+    .unwrap();
+
+    let report = application.project().install(&root, &AlwaysTrust).unwrap();
+
+    match report {
+        uze_application::application::InstallReport::Installed { skipped, .. } => {
+            assert_eq!(skipped.len(), 1, "{skipped:?}");
+            assert_eq!(skipped[0].plugin, "other");
+            assert!(
+                skipped[0].reason.contains("/nonexistent/theirs"),
+                "the skip names what this machine does not have: {}",
+                skipped[0].reason
+            );
+        }
+        other => panic!("the reachable half must still install: {other:?}"),
+    }
+
+    // The reachable plugin is installed and delivered.
+    assert!(
+        application
+            .plugins()
+            .list()
+            .unwrap()
+            .iter()
+            .any(|plugin| plugin.id == "flow@mkt"),
+        "the reachable marketplace's plugin is installed"
+    );
+}

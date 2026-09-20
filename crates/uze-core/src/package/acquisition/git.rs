@@ -374,13 +374,43 @@ pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Resul
         // never reaches this far, but a redirect or an embedded token in some
         // other position still must not survive into an error a user pastes
         // into an issue.
+        let complaint = String::from_utf8_lossy(&stderr_bytes);
+        let complaint = complaint.trim();
+        if refused_for_access(complaint) {
+            return Err(UzeError::RepositoryAccessRefused {
+                detail: redact(complaint),
+            });
+        }
         return Err(UzeError::AcquisitionFailed(redact(&format!(
             "`git {}` failed: {}",
             arguments.first().copied().unwrap_or("command"),
-            String::from_utf8_lossy(&stderr_bytes).trim()
+            complaint
         ))));
     }
     Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
+}
+
+/// Whether Git's complaint is about *reaching* the repository rather than
+/// about what is in it.
+///
+/// Matched on Git's own words, which is a real cost: they are not a stable
+/// interface and a translated Git says something else. The alternative is
+/// worse — a private marketplace surfacing four lines of Git's advice to
+/// somebody who only needs to know which marketplace it was and that it is
+/// a question of access. A phrase that stops matching degrades to the
+/// ordinary message, never to a wrong one.
+fn refused_for_access(complaint: &str) -> bool {
+    const ACCESS: &[&str] = &[
+        "could not read from remote repository",
+        "authentication failed",
+        "permission denied",
+        "repository not found",
+        "access denied",
+        "please make sure you have the correct access rights",
+        "terminal prompts disabled",
+    ];
+    let lowered = complaint.to_lowercase();
+    ACCESS.iter().any(|phrase| lowered.contains(phrase))
 }
 
 /// Replaces anything shaped like inline credentials in a message.

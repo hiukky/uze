@@ -437,6 +437,7 @@ impl Project<'_> {
 
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let mut installed_plugins = Vec::new();
+        let mut skipped: Vec<SkippedPlugin> = Vec::new();
 
         // Resolution comes first: `agents.yaml` is what the project asked
         // for and the lock is only what asking produced, so a declaration
@@ -455,7 +456,28 @@ impl Project<'_> {
             // The declaration is the authority over its own source: a lock
             // recording where the plugin used to come from is the stale
             // half, so it is overwritten rather than defended.
-            let fetch_source = Self::declared_fetch_source(&canonical, marketplace, declared)?;
+            //
+            // A marketplace this machine cannot reach *by declaration* — a
+            // path only its author has — is skipped and named, not fatal.
+            // A project declaring one is not broken for everybody else who
+            // clones it, and failing the whole command over it hands a
+            // contributor nothing where they could have had all but one.
+            let fetch_source = match Self::declared_fetch_source(&canonical, marketplace, declared)
+            {
+                Ok(source) => source,
+                Err(UzeError::MissingPath(path)) => {
+                    skipped.push(SkippedPlugin {
+                        plugin: stale.plugin.clone(),
+                        marketplace: marketplace.to_owned(),
+                        reason: format!(
+                            "its marketplace is declared at {}, which this machine does not have",
+                            path.display()
+                        ),
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let request = MarketplaceRequest::of(&fetch_source)?;
             self.register_marketplace(marketplace, fetch_source, &request.repository.identity)?;
             self.resolve_into_lock(&mut lock, &stale.plugin, marketplace, &request, authority)?;
@@ -556,12 +578,16 @@ impl Project<'_> {
             None => false,
         };
 
-        if nothing_moved && !reconciled {
+        // A skip is not "nothing to do": it is something this machine
+        // could not do, and it has to be said even when everything else
+        // already agreed.
+        if nothing_moved && !reconciled && skipped.is_empty() {
             return Ok(InstallReport::NoChanges);
         }
         Ok(InstallReport::Installed {
             plugins: installed_plugins,
             removed: removed_plugins,
+            skipped,
             reconciled,
         })
     }
@@ -863,9 +889,22 @@ pub enum InstallReport {
         plugins: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         removed: Vec<String>,
+        /// Plugins whose marketplace this machine cannot reach. Named
+        /// rather than silently absent: a half-installed environment that
+        /// says nothing looks complete.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<SkippedPlugin>,
         #[serde(default)]
         reconciled: bool,
     },
+}
+
+/// One plugin `install` could not reach, and why.
+#[derive(Clone, Debug, Serialize)]
+pub struct SkippedPlugin {
+    pub plugin: String,
+    pub marketplace: String,
+    pub reason: String,
 }
 
 /// Read by the project environment, `uze status` and the workspace

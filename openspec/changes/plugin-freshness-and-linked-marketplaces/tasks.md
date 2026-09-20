@@ -118,14 +118,14 @@
 
 ## 6. Marketplace honesty
 
-- [ ] 6.1 `install` and `update` skip a plugin whose marketplace this
+- [x] 6.1 `install` and `update` skip a plugin whose marketplace this
       machine cannot reach, name every skip in their own report, and succeed;
       a reachable marketplace that fails is still an error
       (`application/project_environment.rs`)
 - [ ] 6.1b `uze status` reports a project declaring a marketplace with no
       resolvable remote as not fully reproducible elsewhere, naming the
       marketplace and its plugins
-- [ ] 6.2 Classify an acquisition refused on credentials and report the
+- [x] 6.2 Classify an acquisition refused on credentials and report the
       marketplace, the URL and that it is an access question
       (`uze-core::error`, `package/acquisition/`)
 - [ ] 6.3 Tests: a clone with one unreachable and one reachable marketplace

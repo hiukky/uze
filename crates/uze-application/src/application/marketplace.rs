@@ -26,6 +26,27 @@ pub(crate) struct MarketplaceRequest {
     pub(crate) subdirectory: Option<PathBuf>,
 }
 
+/// Names the marketplace and the URL on an access refusal.
+///
+/// Git says "could not read from remote repository"; only this layer knows
+/// *which* repository that was and what the operator calls it. Every other
+/// error is passed through untouched — wrapping them all would bury the
+/// one that is actually about access.
+pub(crate) fn naming_the_marketplace<T>(
+    result: Result<T>,
+    marketplace: &str,
+    url: &str,
+) -> Result<T> {
+    match result {
+        Err(UzeError::RepositoryAccessRefused { detail }) => {
+            Err(UzeError::RepositoryAccessRefused {
+                detail: format!("marketplace `{marketplace}` at {url}\n{detail}"),
+            })
+        }
+        other => other,
+    }
+}
+
 /// Where a plugin's bytes are fetched from and written to.
 ///
 /// A mirror is per marketplace, so installing needs the name the machine
@@ -133,10 +154,14 @@ impl MarketplaceRequest {
         }
 
         let repository = super::marketplace_catalogue::mirror_dir(at.home, at.marketplace);
-        acquisition::mirror::ensure_for(
-            &self.repository.fetch,
-            &repository,
-            self.reference.as_deref(),
+        naming_the_marketplace(
+            acquisition::mirror::ensure_for(
+                &self.repository.fetch,
+                &repository,
+                self.reference.as_deref(),
+            ),
+            at.marketplace,
+            &self.repository.identity,
         )?;
         let commit = acquisition::mirror::resolve(&repository, self.reference.as_deref())?;
 

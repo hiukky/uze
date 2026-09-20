@@ -191,7 +191,11 @@ impl MarketplaceCatalogues {
         };
         let entry = self.entry_dir(name);
         let repository = entry.join(REPOSITORY_DIR);
-        acquisition::mirror::ensure(url, &repository)?;
+        super::marketplace::naming_the_marketplace(
+            acquisition::mirror::ensure(url, &repository),
+            name,
+            url,
+        )?;
         let commit = acquisition::mirror::resolve(&repository, reference.as_deref())?;
         let manifest = self.manifest_at(&repository, &commit)?;
 

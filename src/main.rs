@@ -2419,6 +2419,7 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
         InstallReport::Installed {
             plugins,
             removed,
+            skipped,
             reconciled,
         } => {
             let mut text = progress::report_title("Installed environment", None);
@@ -2436,6 +2437,14 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
                 text.push_str(&progress::report_section("Removed"));
                 for plugin in removed {
                     text.push_str(&format!("  {plugin}\n"));
+                }
+            }
+            // Named, never merely absent: an environment that is missing
+            // a plugin and says nothing about it looks complete.
+            if !skipped.is_empty() {
+                text.push_str(&progress::report_section("Not installed here"));
+                for one in skipped {
+                    text.push_str(&format!("  {} — {}\n", one.plugin, one.reason));
                 }
             }
             if *reconciled {
