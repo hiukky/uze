@@ -581,12 +581,15 @@ fn render_plugin_drawer(
                     Span::raw("  "),
                     Span::styled(age.clone(), theme::fg(Token::TextMuted)),
                 ]));
-                if !subject.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        text::elide(subject, room),
-                        theme::fg(Token::TextMuted),
-                    )));
-                }
+                // Folded, not elided: a commit subject is a sentence, and
+                // a truncated one loses the half that says what the
+                // change was. The drawer has rows to spare and the
+                // resource list below already folds the same way.
+                lines.extend(
+                    text::fold(subject, room)
+                        .into_iter()
+                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextMuted)))),
+                );
             }
             // Shipped inside the binary: there is no repository to ask,
             // and the release it came with is the only date that is true.
@@ -604,10 +607,11 @@ fn render_plugin_drawer(
                     "follows your working tree",
                     theme::fg(Token::TextSecondary),
                 )));
-                lines.push(Line::from(Span::styled(
-                    text::elide(&path.display().to_string(), room),
-                    theme::fg(Token::TextMuted),
-                )));
+                lines.extend(
+                    text::fold(&path.display().to_string(), room)
+                        .into_iter()
+                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextMuted)))),
+                );
             }
         }
         lines.push(Line::from(""));
