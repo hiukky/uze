@@ -40,6 +40,23 @@ pub(crate) fn actionable_alerts(doctor: Option<&DoctorReport>) -> Vec<Alert> {
             });
         }
     }
+    // Not `High`: nothing is broken and nothing is waiting. It is here so
+    // that an upgrade which could not carry something across is met by a
+    // sentence rather than by work the operator cannot find.
+    if doctor.leftovers.total > 0 {
+        alerts.push(Alert {
+            severity: Severity::Low,
+            label: format!(
+                "{} record{} left by a previous version",
+                doctor.leftovers.total,
+                if doctor.leftovers.total == 1 { "" } else { "s" }
+            ),
+            detail: match doctor.leftovers.set_aside.first() {
+                Some(newest) => format!("{} — {}", newest.path.display(), newest.remedy),
+                None => "nothing reads them; remove them when you no longer want them".to_owned(),
+            },
+        });
+    }
     for package in &doctor.attachments {
         let state = &package.state;
         if state.conflicts > 0 || state.blocked > 0 {

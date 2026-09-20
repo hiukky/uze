@@ -747,6 +747,29 @@ pub struct HookHealth {
     pub state: Option<AttachmentState>,
 }
 
+/// Records a previous version wrote that this one could not read, kept
+/// where they were.
+///
+/// Reported because nothing reads them again: without somewhere to say so
+/// they accumulate in silence, and the operator's first sign that anything
+/// happened is work they cannot find.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct UpgradeLeftovers {
+    /// The newest few, which are the ones an operator can still act on.
+    pub set_aside: Vec<SetAsideRecord>,
+    /// How many there are in all, including the ones not listed: a report
+    /// that names forty is one nobody reads.
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SetAsideRecord {
+    pub path: PathBuf,
+    pub set_aside_at_unix: u64,
+    /// What to do about it.
+    pub remedy: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct DoctorReport {
     pub uze_home: PathBuf,
@@ -756,6 +779,8 @@ pub struct DoctorReport {
     pub attachments: Vec<PackageManagedState>,
     pub ledger_error: Option<String>,
     pub provisioning_state_error: Option<String>,
+    /// What a previous version left behind that this one did not adopt.
+    pub leftovers: UpgradeLeftovers,
     pub maintenance: MaintenanceReport,
 }
 

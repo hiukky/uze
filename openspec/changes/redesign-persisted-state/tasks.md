@@ -149,15 +149,20 @@
 
 ## 10. `uze doctor` reports what the previous version left
 
-- [ ] 10.1 Decide how `doctor` learns about the terminal, which
-      `uze-application` does not depend on today.
-- [ ] 10.2 Each area carries its own upgrade leftovers beside its existing
+- [x] 10.1 Decided: it does not ask. It sweeps the filesystem for what
+      was set aside, which answers for the terminal runtime without
+      reaching it — `uze-terminal` depends on nothing here by design, and
+      the point of this report is to find what nobody is asking about.
+- [x] 10.2 Each area carries its own upgrade leftovers beside its existing
       errors.
-- [ ] 10.3 One summary line counting them, so an operator finds them
+- [x] 10.3 One summary line counting them, so an operator finds them
       without reading everything.
-- [ ] 10.4 Every leftover carries its remedy.
-- [ ] 10.5 Bound what accumulates: a set-aside document per event, kept
-      forever, is its own leak.
+- [x] 10.4 Every leftover carries its remedy.
+- [x] 10.5 Bounded in the report rather than on disk: the newest five are
+      named with their remedy and the rest are counted. The bytes are never
+      removed by UZE — a record it could not read is still not one it may
+      throw away — so the operator is told how many there are and what to
+      do, and decides.
 
 ## 11. Preserved work answers for the machine
 

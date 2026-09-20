@@ -1041,6 +1041,7 @@ mod tests {
                 attachments: Vec::new(),
                 ledger_error: None,
                 provisioning_state_error: None,
+                leftovers: Default::default(),
                 maintenance: MaintenanceReport {
                     outcomes: vec![MaintenanceOutcome::Repaired {
                         plugin: "fixture@local".to_owned(),

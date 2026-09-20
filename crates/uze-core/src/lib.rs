@@ -67,7 +67,8 @@ pub mod theme_state;
 // reader looks first.
 pub use capability::{hook, skill};
 pub use delivery::{
-    continuity, engine, exposure, integration, persistence, reconciliation, router, state,
+    continuity, engine, exposure, integration, leftovers, persistence, reconciliation, router,
+    state,
 };
 pub use machine::{
     detection_cache, features, harness_runtime, home, provisioning, shell_path, subprocess,

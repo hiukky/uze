@@ -157,6 +157,19 @@ impl Health<'_> {
             .iter()
             .find_map(|integration| state::provisioning(&self.0.home, integration.id()).err())
             .map(|error| error.to_string());
+        let found = uze_core::leftovers::set_aside(&self.0.home);
+        let leftovers = UpgradeLeftovers {
+            total: found.len(),
+            set_aside: found
+                .into_iter()
+                .take(uze_core::leftovers::REPORTED)
+                .map(|leftover| SetAsideRecord {
+                    path: leftover.path,
+                    set_aside_at_unix: leftover.set_aside_at_unix,
+                    remedy: uze_core::leftovers::Leftover::REMEDY,
+                })
+                .collect(),
+        };
         DoctorReport {
             uze_home: self.0.home.root().to_path_buf(),
             store,
@@ -165,6 +178,7 @@ impl Health<'_> {
             attachments: Vec::new(),
             ledger_error,
             provisioning_state_error,
+            leftovers,
             maintenance: MaintenanceReport::default(),
         }
     }
