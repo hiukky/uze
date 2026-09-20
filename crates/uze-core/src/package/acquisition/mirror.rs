@@ -358,6 +358,35 @@ mod tests {
     }
 
     #[test]
+    fn a_plugins_own_last_commit_is_not_the_marketplaces_head() {
+        let (root, _first, second) = origin("mirror-describe-path");
+        let origin_dir = root.join("origin");
+        let mirror = root.join("mirror");
+
+        // The marketplace moves, without touching the plugin.
+        fs::write(origin_dir.join("README.md"), "unrelated").unwrap();
+        run(&["add", "-A"], Some(&origin_dir)).unwrap();
+        run(&["commit", "-m", "docs: unrelated"], Some(&origin_dir)).unwrap();
+        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+        let head = resolve(&mirror, Some("main")).unwrap();
+
+        assert_eq!(describe(&mirror, &head).unwrap().subject, "docs: unrelated");
+        let plugin = describe_path(&mirror, &head, Some("plugins/flow")).unwrap();
+        assert_eq!(
+            plugin.subject, "second",
+            "a plugin is described by the last commit that touched it, not by the \
+             marketplace's head"
+        );
+        assert!(second.starts_with(&plugin.short));
+
+        assert!(
+            describe_path(&mirror, &head, Some("plugins/nothing-here")).is_none(),
+            "a path no commit has touched has nothing to describe"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_mirror_of_another_repository_is_replaced_not_fetched_into() {
         let (root, _first, second) = origin("mirror-foreign");
         let mirror = root.join("mirror");
@@ -565,6 +594,39 @@ pub struct CommitSummary {
     pub subject: String,
 }
 
+/// The last commit at or before `commit` that touched `subdirectory`,
+/// described.
+///
+/// A marketplace's own head says when the *marketplace* moved, which for a
+/// repository carrying several plugins is rarely when any one of them
+/// changed: a marketplace whose head is an hour old can hold a plugin
+/// nobody has touched in two weeks. The question a person asks of a plugin
+/// is about the plugin.
+pub fn describe_path(
+    directory: &Path,
+    commit: &str,
+    subdirectory: Option<&str>,
+) -> Option<CommitSummary> {
+    let Some(subdirectory) = subdirectory.filter(|path| *path != ".") else {
+        return describe(directory, commit);
+    };
+    reject_option_shaped(commit, "commit").ok()?;
+    reject_option_shaped(subdirectory, "subdirectory").ok()?;
+    let answer = run(
+        &[
+            "log",
+            "-1",
+            "--format=%h%x1f%cr%x1f%s",
+            commit,
+            "--",
+            subdirectory,
+        ],
+        Some(directory),
+    )
+    .ok()?;
+    parse_summary(&answer)
+}
+
 /// `commit` described, or `None` when this mirror does not have it — a
 /// commit the remote no longer carries, or one that was never fetched.
 /// Absence is an answer here, not a failure: the caller shows what it
@@ -576,7 +638,15 @@ pub fn describe(directory: &Path, commit: &str) -> Option<CommitSummary> {
         Some(directory),
     )
     .ok()?;
-    let mut fields = answer.trim().split('\u{1f}');
+    parse_summary(&answer)
+}
+
+fn parse_summary(answer: &str) -> Option<CommitSummary> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return None;
+    }
+    let mut fields = answer.split('\u{1f}');
     Some(CommitSummary {
         short: fields.next()?.to_owned(),
         age: fields.next()?.to_owned(),

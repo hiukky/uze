@@ -27,7 +27,7 @@ use ratatui::{
 
 use uze_application::CapabilityKind;
 use uze_application::application::{
-    DoctorReport, FreshnessState, InstalledRevision, MarketplacePluginSummary, PluginCapability,
+    DoctorReport, FreshnessState, MarketplacePluginSummary, PluginCapability, Revision,
 };
 
 use super::super::agent_support::capability_label;
@@ -554,16 +554,24 @@ fn render_plugin_drawer(
     // column says whether something newer exists; this says how old the
     // thing in front of you is, which is the question the state alone
     // cannot answer.
-    if let Some(revision) = installed_inspection
+    // Asked of whichever detail matches this row: what you have when it is
+    // installed, what you would be getting when it is not. "Is this
+    // abandoned" is the same question one step earlier.
+    let revision = installed_inspection
         .flatten()
         .and_then(|detail| detail.revision.as_ref())
-    {
+        .or_else(|| {
+            catalog_detail
+                .flatten()
+                .and_then(|detail| detail.revision.as_ref())
+        });
+    if let Some(revision) = revision {
         lines.push(Line::from(Span::styled(
             "REVISION",
             theme::fg_bold(Token::TextMuted),
         )));
         match revision {
-            InstalledRevision::Commit {
+            Revision::Commit {
                 short,
                 age,
                 subject,
@@ -580,10 +588,18 @@ fn render_plugin_drawer(
                     )));
                 }
             }
+            // Shipped inside the binary: there is no repository to ask,
+            // and the release it came with is the only date that is true.
+            Revision::Bundled { version } => {
+                lines.push(Line::from(Span::styled(
+                    format!("ships with uze {version}"),
+                    theme::fg(Token::TextSecondary),
+                )));
+            }
             // No revision to name: what is installed is whatever its
             // author last saved, so the checkout is the only honest
             // answer.
-            InstalledRevision::Checkout { path } => {
+            Revision::Checkout { path } => {
                 lines.push(Line::from(Span::styled(
                     "follows your working tree",
                     theme::fg(Token::TextSecondary),

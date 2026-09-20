@@ -503,6 +503,15 @@ impl Marketplace<'_> {
         };
         let inspected = uze_core::acquisition::inspect_capabilities(&materialized)?;
         Ok(MarketplacePluginDetail {
+            // The built-in marketplace has no repository to ask; every
+            // other one is asked about this plugin's own directory.
+            revision: if marketplace == BUILT_IN_MARKETPLACE {
+                Some(Revision::Bundled {
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                })
+            } else {
+                self.0.offered_revision(marketplace, name)
+            },
             capabilities: inspected
                 .resources
                 .iter()

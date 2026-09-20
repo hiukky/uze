@@ -3953,6 +3953,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
         route: Route::Plugins,
         focus: Focus::Content,
         marketplace_detail: Some(MarketplacePluginDetail {
+            revision: None,
             summary: summary.clone(),
             capabilities: vec![
                 capability("review", CapabilityKind::AgentSkill),

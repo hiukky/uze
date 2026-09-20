@@ -548,26 +548,69 @@ impl UzeApplication {
             .unwrap_or_default()
     }
 
-    /// Which revision of `package` is installed, named so a person can
-    /// place it in time.
+    /// When `package` was last written, named so a person can place it in
+    /// time.
     ///
     /// One Git call against a mirror already on this disk, and only on an
     /// explicit selection — the detail view, never a listing. That is the
     /// division the machine snapshot's budget forced: "is there something
     /// newer" has to be a JSON read because every listing pays it, and
-    /// "what exactly do I have" can afford to ask.
-    pub(crate) fn installed_revision(&self, package: &StoredPackage) -> Option<InstalledRevision> {
+    /// "how old is this" can afford to ask.
+    pub(crate) fn installed_revision(&self, package: &StoredPackage) -> Option<Revision> {
+        if matches!(
+            package.provenance.requested,
+            uze_core::PackageSource::Embedded { .. }
+        ) {
+            return Some(Revision::Bundled {
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            });
+        }
         let marketplace = package.id.marketplace();
         let record = uze_core::state::marketplace_get(&self.home, marketplace).ok()??;
         if let Some(checkout) = record.link {
-            return Some(InstalledRevision::Checkout { path: checkout });
+            return Some(Revision::Checkout { path: checkout });
         }
-        let uze_core::ResolvedSource::Git { commit, .. } = &package.provenance.resolved else {
+        let uze_core::ResolvedSource::Git {
+            commit,
+            subdirectory,
+            ..
+        } = &package.provenance.resolved
+        else {
             return None;
         };
         let repository = marketplace_catalogue::mirror_dir(&self.home, marketplace);
-        let described = uze_core::acquisition::mirror::describe(&repository, commit)?;
-        Some(InstalledRevision::Commit {
+        // The plugin's own directory at the revision installed: what is in
+        // front of the reader, not when its marketplace last moved.
+        let within = subdirectory.as_ref().map(|path| path.to_string_lossy());
+        let described =
+            uze_core::acquisition::mirror::describe_path(&repository, commit, within.as_deref())?;
+        Some(Revision::Commit {
+            short: described.short,
+            age: described.age,
+            subject: described.subject,
+        })
+    }
+
+    /// When the plugin `marketplace` offers as `plugin` was last written —
+    /// asked of a plugin that is not installed, which has no provenance of
+    /// its own to read.
+    pub(crate) fn offered_revision(&self, marketplace: &str, plugin: &str) -> Option<Revision> {
+        let record = uze_core::state::marketplace_get(&self.home, marketplace).ok()??;
+        if let Some(checkout) = record.link {
+            return Some(Revision::Checkout { path: checkout });
+        }
+        let mirrored = marketplace_catalogue::mirrored_head(&self.home, marketplace)?;
+        let catalogue = self.catalogue(marketplace, &record.source).ok()?;
+        let within =
+            uze_core::acquisition::marketplace::plugin_subdirectory(&catalogue.manifest, plugin)
+                .ok()?;
+        let repository = marketplace_catalogue::mirror_dir(&self.home, marketplace);
+        let described = uze_core::acquisition::mirror::describe_path(
+            &repository,
+            &mirrored.commit,
+            Some(&within),
+        )?;
+        Some(Revision::Commit {
             short: described.short,
             age: described.age,
             subject: described.subject,

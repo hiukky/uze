@@ -208,6 +208,9 @@ pub struct MarketplacePluginSummary {
 pub struct MarketplacePluginDetail {
     pub summary: MarketplacePluginSummary,
     pub capabilities: Vec<PluginCapability>,
+    /// When this plugin was last written in the marketplace that offers
+    /// it — what you would be installing, and how old it is.
+    pub revision: Option<Revision>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -228,18 +231,22 @@ pub struct HarnessDelivery {
     pub capabilities: Vec<CapabilityDelivery>,
 }
 
-/// Which revision of a plugin is installed, as something a person can
-/// place in time.
+/// When a plugin was last written, as something a person can place in
+/// time.
 ///
 /// The freshness state says *whether* there is something newer; this says
-/// what you actually have. A drawer showing only the state leaves "is this
-/// from this morning or from March" unanswerable, which is the question a
-/// person opening it usually has.
+/// how old the thing in front of you is. Answered for a plugin that is
+/// merely on offer too — "should I install this, or is it abandoned" is
+/// the same question asked one step earlier.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum InstalledRevision {
-    /// A commit, with Git's own account of how long ago it landed and what
-    /// it was about.
+pub enum Revision {
+    /// The last commit that touched this plugin's own directory, with
+    /// Git's account of how long ago it landed and what it was about.
+    ///
+    /// Its own directory, never the marketplace's head: a repository
+    /// carrying several plugins moves whenever any of them does, so its
+    /// head says nothing about this one.
     Commit {
         short: String,
         age: String,
@@ -248,15 +255,18 @@ pub enum InstalledRevision {
     /// A checkout on this machine. There is no revision to name: what is
     /// installed is whatever its author last saved.
     Checkout { path: PathBuf },
+    /// Shipped inside the binary. It has no repository to ask, and the
+    /// release it came with is the only date that is true about it.
+    Bundled { version: String },
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginInspection {
     /// `None` for a package whose bytes came from nowhere a revision can
-    /// be read from — the snapshot inside the binary, a direct install —
-    /// or whose mirror no longer holds the commit it was installed at.
-    /// Absent rather than guessed.
-    pub revision: Option<InstalledRevision>,
+    /// be read from — a direct install from a path or URL — or whose
+    /// mirror no longer holds the commit it was installed at. Absent
+    /// rather than guessed.
+    pub revision: Option<Revision>,
     pub plugin: PluginSummary,
     pub capabilities: Vec<PluginCapability>,
     pub deliveries: Vec<HarnessDelivery>,
