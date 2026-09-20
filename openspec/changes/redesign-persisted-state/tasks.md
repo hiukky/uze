@@ -264,8 +264,12 @@
       nothing observed of it, which is exactly `Running`.
 - [x] 16.2 Evaluate every agent, not only the isolated ones: a root agent
       reads the checkout it shares, through `readiness_of_checkout`.
-- [x] 16.3 Give `AgentView` a root form, and `deliverable` so the delivery
-      button is withheld without the state being.
+- [x] 16.3 Give `AgentView` a root form, and `isolated` so the delivery is
+      withheld without the state being — at the key as well as at the
+      button, since the key is bound whether or not a button is drawn.
+      The field states the *fact*; each caller states its own rule from it.
+      `branch` was the proxy two callers had been using, and it was only
+      ever true while a root agent had no branch to show.
 - [x] 16.4 Rename the vocabulary the record already outgrew: `TaskState` →
       `WorkState`, `TaskStateView` → `WorkStateView`, `TaskView` →
       `AgentView`, `TaskStore` → `AgentStore`, and the catalog's `TASK`
