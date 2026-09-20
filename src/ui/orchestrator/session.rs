@@ -619,10 +619,17 @@ impl Attach<'_> {
             Action::TogglePreservedWork => {
                 self.model.preserved = match self.model.preserved {
                     Some(_) => None,
-                    None => Some(PreservedOverlay {
-                        selected: 0,
-                        confirm_discard: false,
-                    }),
+                    None => {
+                        // Asked for on opening, and drawn from the last
+                        // answer while this one is out: an empty list that
+                        // fills a moment later reads as work having been
+                        // lost, which is the opposite of what this says.
+                        self.sweep_preserved_work();
+                        Some(PreservedOverlay {
+                            selected: 0,
+                            confirm_discard: false,
+                        })
+                    }
                 };
                 self.model.dirty = true;
             }
@@ -900,22 +907,22 @@ impl Attach<'_> {
                 overlay.confirm_discard = false;
             }
             Action::DeliverTask => {
-                if let Some((cwd, task)) = preserved.get(overlay.selected) {
+                if let Some(work) = preserved.get(overlay.selected) {
                     self.model
                         .remembered
                         .delivery_pending
-                        .insert(task.id.clone());
+                        .insert(work.id.clone());
                     spawn_delivery(
                         self.home,
-                        cwd.clone(),
-                        Some(task.id.clone()),
+                        work.project.clone(),
+                        Some(work.id.clone()),
                         self.channels.deliveries.sender.clone(),
                     );
                 }
             }
             Action::FinishTask => {
-                if let Some((cwd, task)) = preserved.get(overlay.selected) {
-                    self.mutate_task(cwd.clone(), task, TaskMutation::Finish);
+                if let Some(work) = preserved.get(overlay.selected) {
+                    self.mutate_preserved(work, TaskMutation::Finish);
                 }
             }
             // Placement answers with the task's own slot when it still has
@@ -923,10 +930,10 @@ impl Attach<'_> {
             // checkout removed by hand took only the uncommitted work.
             // Either way the launch carries the task's identity.
             Action::ResumeTask => {
-                if let Some((primary, task)) = preserved.get(overlay.selected) {
+                if let Some(work) = preserved.get(overlay.selected) {
                     let resume = ResumeTarget {
-                        primary: primary.clone(),
-                        task: task.id.clone(),
+                        primary: work.project.clone(),
+                        task: work.id.clone(),
                         // Asked for from the list, not from a row: there is
                         // no dead tab behind it.
                         replacing: None,
@@ -946,8 +953,8 @@ impl Attach<'_> {
             Action::ConfirmDiscard if overlay.confirm_discard => {
                 overlay.confirm_discard = false;
                 let selected = overlay.selected;
-                if let Some((cwd, task)) = preserved.get(selected) {
-                    self.mutate_task(cwd.clone(), task, TaskMutation::Discard);
+                if let Some(work) = preserved.get(selected) {
+                    self.mutate_preserved(work, TaskMutation::Discard);
                 }
             }
             _ => overlay.confirm_discard = false,
@@ -963,22 +970,47 @@ impl Attach<'_> {
     /// only thing said until the answer lands: unlike a delivery there is
     /// no button drawn for this, so silence would read as the key doing
     /// nothing.
-    fn mutate_task(&mut self, cwd: PathBuf, task: &TaskView, mutation: TaskMutation) {
+    /// Re-reads every project's preserved work, off the UI thread.
+    ///
+    /// Asked once at a time: the sweep opens `$UZE_HOME` and walks every
+    /// project UZE has recorded, and a second one in flight would answer
+    /// the same question twice.
+    fn sweep_preserved_work(&mut self) {
+        if self.model.remembered.preserved_pending {
+            return;
+        }
+        self.model.remembered.preserved_pending = true;
+        spawn_preserved_sweep(self.home, self.channels.preserved.sender.clone());
+    }
+
+    /// Finishes or discards one piece of preserved work, off this thread.
+    ///
+    /// The row carries the project it belongs to, rather than borrowing
+    /// whichever one the operator happens to be looking at — which is what
+    /// lets this list cross projects at all.
+    ///
+    /// Reserved under the work's own id, because a discard removes a whole
+    /// checkout and a second Enter arriving while the first removal is
+    /// still walking it must not start another. The busy notice is the only
+    /// thing said until the answer lands: unlike a delivery there is no
+    /// button drawn for this, so silence would read as the key doing
+    /// nothing.
+    fn mutate_preserved(&mut self, work: &uze_application::PreservedWork, mutation: TaskMutation) {
         if !self
             .model
             .remembered
             .task_mutation_pending
-            .insert(task.id.clone())
+            .insert(work.id.clone())
         {
             return;
         }
         self.model
-            .set_busy_notice(format!("{}: {}", task.label, mutation.underway()));
+            .set_busy_notice(format!("{}: {}", work.label, mutation.underway()));
         spawn_task_mutation(
             self.home,
-            cwd,
-            task.id.clone(),
-            task.label.clone(),
+            work.project.clone(),
+            work.id.clone(),
+            work.label.clone(),
             mutation,
             self.channels.mutations.sender.clone(),
         );
@@ -2805,6 +2837,11 @@ impl Attach<'_> {
             self.model.remembered.agent_support = Some(resolution);
             self.model.dirty = true;
         }
+        while let Ok(resolution) = self.channels.preserved.receiver.try_recv() {
+            self.model.remembered.preserved_pending = false;
+            self.model.remembered.preserved_work = resolution.work;
+            self.model.dirty = true;
+        }
         while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
             self.model
                 .remembered
@@ -2980,6 +3017,9 @@ impl Attach<'_> {
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
+            // A finish or a discard changes what is preserved, and the
+            // list may well be the surface the operator is looking at.
+            self.sweep_preserved_work();
             self.model.dirty = true;
         }
         // Readiness is a Git fact, read when a pane goes quiet and, less

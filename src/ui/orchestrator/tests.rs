@@ -1442,19 +1442,8 @@ mod workspace_tests {
     fn discarding_a_preserved_task_is_asked_for_rather_than_done_on_the_keystroke() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-discard-async"));
         let mut model = agent_with_task(TaskStateView::Ready, 1);
-        let mut parked = task_in(
-            "/repo/.worktrees/old",
-            "yesterday",
-            TaskStateView::Parked,
-            0,
-        );
-        parked.id = "t2".into();
-        model
-            .remembered
-            .tasks
-            .get_mut(Path::new("/repo"))
-            .unwrap()
-            .push(parked);
+        model.remembered.preserved_work =
+            vec![preserved("/repo", "t2", "yesterday", TaskStateView::Parked)];
         model.preserved = Some(PreservedOverlay {
             selected: 0,
             confirm_discard: false,
@@ -3010,33 +2999,37 @@ mod workspace_tests {
         );
     }
 
+    fn preserved(
+        project: &str,
+        id: &str,
+        label: &str,
+        state: TaskStateView,
+    ) -> uze_application::PreservedWork {
+        uze_application::PreservedWork {
+            project: PathBuf::from(project),
+            id: id.to_owned(),
+            label: label.to_owned(),
+            branch: format!("agent/{id}"),
+            checkout: Some(PathBuf::from(project).join(".worktrees").join(id)),
+            state,
+            created_at_unix: 1,
+        }
+    }
+
+    /// The list answers from the machine's records and subtracts the tabs
+    /// this client is in front of. A tab standing in front of an agent is
+    /// not preserved work; delivered work is not either.
     #[test]
-    fn preserved_work_lists_tasks_without_a_live_tab_and_nothing_else() {
+    fn preserved_work_lists_work_without_a_live_tab_and_nothing_else() {
         let mut model = agent_with_task(TaskStateView::Ready, 1);
-        let mut parked = task_in(
-            "/repo/.worktrees/old",
-            "yesterday",
-            TaskStateView::Parked,
-            0,
-        );
-        parked.id = "t2".into();
-        let mut delivered = task_in(
-            "/repo/.worktrees/gone",
-            "shipped",
-            TaskStateView::Integrated,
-            0,
-        );
-        delivered.id = "t3".into();
-        model
-            .remembered
-            .tasks
-            .get_mut(Path::new("/repo"))
-            .unwrap()
-            .extend([parked, delivered]);
+        model.remembered.preserved_work = vec![
+            preserved("/repo", "t2", "yesterday", TaskStateView::Uncommitted),
+            preserved("/other", "t3", "elsewhere", TaskStateView::Parked),
+        ];
 
         let preserved = model.preserved_tasks();
-        assert_eq!(preserved.len(), 1, "{preserved:?}");
-        assert_eq!(preserved[0].1.label, "yesterday");
+        assert_eq!(preserved.len(), 2, "{preserved:?}");
+        assert_eq!(preserved[0].label, "yesterday");
 
         model.preserved = Some(PreservedOverlay {
             selected: 0,
@@ -3065,8 +3058,8 @@ mod workspace_tests {
             "{text}"
         );
         assert!(
-            !text.contains("shipped"),
-            "delivered work is not preserved work"
+            text.contains("repo") && text.contains("other"),
+            "a list that crosses projects names each row's own: {text}"
         );
         let discard = uze_keys::active()
             .chord_for(
@@ -7581,12 +7574,11 @@ mod workspace_tests {
             )
             .unwrap();
         let task_id = placement.placement.agent().as_str().to_owned();
-        let primary = root.canonicalize().unwrap();
         let mut model = agent_session_in("/elsewhere");
-        model
-            .remembered
-            .tasks
-            .insert(primary.clone(), app.workspace().tasks(&primary));
+        // The list answers from the machine's records, so the resume path
+        // takes its project from the row rather than from wherever the
+        // client happens to be looking.
+        model.remembered.preserved_work = app.workspace().preserved_work();
         model.preserved = Some(PreservedOverlay {
             selected: 0,
             confirm_discard: false,

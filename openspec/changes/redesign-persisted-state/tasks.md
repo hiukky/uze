@@ -145,12 +145,12 @@
       per project.
 - [x] 11.3 Add the read model and the `UzeApplication` method presentation
       consumes; nothing in `src/` reaches past it.
-- [ ] 11.4 Draw `preserved_tasks` from it instead of `remembered.tasks`,
+- [x] 11.4 Draw `preserved_tasks` from it instead of `remembered.tasks`,
       scheduling the read off the UI thread and keeping the last answer
       drawn while one is in flight.
-- [ ] 11.5 Name each row's project in `render_preserved`, through the
+- [x] 11.5 Name each row's project in `render_preserved`, through the
       widget vocabulary and `theme` tokens.
-- [ ] 11.6 `TestBackend` tests: a project with no space open appears; two
+- [x] 11.6 `TestBackend` tests: a project with no space open appears; two
       projects sharing a branch name are distinguishable; delivered and
       discarded work does not appear.
 

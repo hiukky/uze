@@ -367,6 +367,35 @@ fn evaluation_key(cwd: &Path) -> PathBuf {
 
 /// Re-reads the tasks of the repository `cwd` belongs to, off the UI
 /// thread: every evaluation asks Git, and a delivery may run a gate.
+/// What a sweep of the machine's preserved work answered.
+struct PreservedResolution {
+    work: Vec<uze_application::PreservedWork>,
+}
+
+/// Re-reads every project's preserved work, off the UI thread.
+///
+/// Answers even when it found nothing, for the same reason the task
+/// evaluation does: a request that returns in silence never clears its
+/// pending flag, and the sweep is then never asked for again.
+fn spawn_preserved_sweep(home: &UzeHome, sender: mpsc::Sender<PreservedResolution>) {
+    let home = home.clone();
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.preserved_sweep").entered();
+        let work = answered_or(
+            || {
+                super::tui_application(home)
+                    .ok()
+                    .map(|app| app.workspace().preserved_work())
+                    .unwrap_or_default()
+            },
+            Vec::new(),
+        );
+        let _ = sender.send(PreservedResolution { work });
+    });
+}
+
 fn spawn_task_evaluation(
     home: &UzeHome,
     key: PathBuf,
@@ -2048,6 +2077,10 @@ struct Channels {
     /// The surface's file reads and writes, off-thread for the same
     /// reason its changes are.
     code_files: Answers<FileResolution>,
+    /// Preserved work across the machine. Off-thread like every other
+    /// read: it opens `$UZE_HOME` and walks every project UZE has
+    /// recorded, which is not something a frame may wait on.
+    preserved: Answers<PreservedResolution>,
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
     artifacts: Answers<ArtifactsResolution>,
@@ -2098,6 +2131,13 @@ struct Remembered {
     /// being rewritten while nobody is looking; within a session it is
     /// worth returning to, and across runs it is worth nothing.
     code_places: BTreeMap<PathBuf, code::CodePlace>,
+    /// Preserved work across the machine, as last swept. The last good
+    /// answer stays drawn while a new one is in flight, so opening the
+    /// list never shows an empty one it is about to fill.
+    preserved_work: Vec<uze_application::PreservedWork>,
+    /// Whether a sweep is out, so the list asks once rather than once per
+    /// frame.
+    preserved_pending: bool,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -3117,25 +3157,24 @@ impl WorkspaceModel {
             .map(|tab| tab.pane.id)
     }
 
-    /// Tasks holding work that no live agent tab is in front of, with the
-    /// repository each belongs to — what "preserved from yesterday" lists.
-    pub(super) fn preserved_tasks(&self) -> Vec<(PathBuf, TaskView)> {
-        let mut preserved: Vec<(PathBuf, TaskView)> = self
-            .remembered
-            .tasks
+    /// Work no live agent tab is in front of, wherever on this machine it
+    /// is — what the preserved-work list shows.
+    ///
+    /// Answered by a sweep of every project UZE has recorded, not by the
+    /// per-session evaluation cache beside it: that cache is filled only
+    /// for directories the sidebar already names, so it could never see a
+    /// project with no space open — which is the case the list exists for.
+    ///
+    /// Liveness is still this client's own question, asked by launch stamp:
+    /// the service hands over everything still preserved and the tabs
+    /// standing in front of an agent are what subtracts.
+    pub(super) fn preserved_tasks(&self) -> Vec<uze_application::PreservedWork> {
+        self.remembered
+            .preserved_work
             .iter()
-            .flat_map(|(primary, tasks)| tasks.iter().map(move |task| (primary, task)))
-            .filter(|(_, task)| {
-                !matches!(
-                    task.state,
-                    TaskStateView::Integrated | TaskStateView::Closed
-                )
-            })
-            .filter(|(_, task)| self.pane_for_agent(&task.id).is_none())
-            .map(|(primary, task)| (primary.clone(), task.clone()))
-            .collect();
-        preserved.sort_by_key(|(_, task)| task.created_at_unix);
-        preserved
+            .filter(|work| self.pane_for_agent(&work.id).is_none())
+            .cloned()
+            .collect()
     }
 
     /// Every directory the sidebar names a branch for — each space's root

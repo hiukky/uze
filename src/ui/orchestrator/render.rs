@@ -2371,43 +2371,32 @@ pub(super) fn render_preserved(
             theme::fg(Token::TextSecondary),
         )));
     }
-    for (index, (_, task)) in preserved.iter().enumerate() {
+    for (index, work) in preserved.iter().enumerate() {
         let selected = index == overlay.selected;
-        let state = model.drawn_state(task);
-        let (mark, hue) = task_mark(&state)
+        let (mark, hue) = task_mark(&work.state)
             .unwrap_or_else(|| (theme::glyph(Symbol::MarkDot), theme::color(Token::TextDim)));
-        let what = match &state {
-            TaskStateView::Ready => format!(
-                "{} commit{}, not delivered",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Published => match task.published_request {
-                Some(request) => format!("pushed to #{request}"),
-                None => "pushed, no request open".to_owned(),
-            },
-            TaskStateView::Parked if task.checkout.is_none() => format!(
-                "checkout removed, {} commit{} kept",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Parked if task.ahead > 0 => format!(
-                "{} commit{} kept",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Uncommitted | TaskStateView::Parked => "uncommitted changes".to_owned(),
-            TaskStateView::Conflicted { files } => format!(
-                "conflict in {} file{}",
-                files.len(),
-                if files.len() == 1 { "" } else { "s" }
-            ),
+        // What the *record* says, which is all this list asks. How far a
+        // branch is ahead and what the forge holds are questions about the
+        // project you are in, and asking them here would put one Git read
+        // per project on the machine behind a keystroke.
+        let what = match &work.state {
+            TaskStateView::Parked if work.checkout.is_none() => "checkout removed".to_owned(),
+            TaskStateView::Parked => "nobody is there".to_owned(),
+            TaskStateView::Uncommitted => "uncommitted changes".to_owned(),
+            TaskStateView::Conflicted { .. } => "conflict to resolve".to_owned(),
             TaskStateView::GateFailed => "checks failed".to_owned(),
-            TaskStateView::Running => "no commits yet".to_owned(),
+            TaskStateView::Running => "was running".to_owned(),
             TaskStateView::Integrating => "delivering".to_owned(),
-            TaskStateView::Integrated => "delivered".to_owned(),
-            TaskStateView::Closed => "nothing to deliver".to_owned(),
+            _ => work.branch.clone(),
         };
+        // The project, because this list crosses them: two agents carrying
+        // a branch of the same name in two repositories are one row twice
+        // without it.
+        let project = work
+            .project
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| work.project.display().to_string());
         let spans = vec![
             Span::styled(
                 if selected {
@@ -2419,13 +2408,14 @@ pub(super) fn render_preserved(
             ),
             Span::styled(format!("{mark} "), Style::default().fg(hue)),
             Span::styled(
-                task.label.clone(),
+                work.label.clone(),
                 Style::default().fg(if selected {
                     theme::color(Token::TextBright)
                 } else {
                     theme::color(Token::TextPrimary)
                 }),
             ),
+            Span::styled(format!("  {project}"), theme::fg(Token::TextMuted)),
             Span::styled(format!("  {what}"), theme::fg(Token::TextSecondary)),
         ];
         if selected {
