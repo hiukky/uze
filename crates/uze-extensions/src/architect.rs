@@ -218,17 +218,29 @@ pub fn read_artifacts(host: &dyn Host, checkout: &Path, source: ArtifactSource) 
     }
 }
 
+/// Said once because the surface and `uze agent artifacts check` both say
+/// it, and a project told two different things about the same state has
+/// to work out which one to believe.
+const UNDECLARED: &str = "This project declares no artifacts yet";
+const DECLARE_ARTIFACTS: &str = "Add `artifacts:` with a `path:` to agents.yaml, and keep \
+                                 Mermaid files (.mmd) in that directory — C4 views, sequences \
+                                 and flowcharts are drawn here.";
+
+/// Why a declared directory gave nothing back. Same reason as above.
+fn unreadable(declared: &str, reason: &str) -> (String, String) {
+    (
+        format!("`{declared}` could not be read"),
+        format!("{reason}. It is the `artifacts.path` agents.yaml declares."),
+    )
+}
+
 fn read_the_directory(host: &dyn Host, source: ArtifactSource) -> Artifacts {
     let nothing = |text: String, hint: &str| Artifacts::Nothing {
         text,
         hint: hint.to_owned(),
     };
     match source {
-        ArtifactSource::Undeclared => nothing(
-            "This project declares no artifacts yet".to_owned(),
-            "Add `artifacts:` with a `path:` to agents.yaml, and keep Mermaid files (.mmd) \
-             in that directory — C4 views, sequences and flowcharts are drawn here.",
-        ),
+        ArtifactSource::Undeclared => nothing(UNDECLARED.to_owned(), DECLARE_ARTIFACTS),
         ArtifactSource::Refused(reason) => nothing(
             reason,
             "Fix `artifacts:` in agents.yaml and open this again.",
@@ -244,11 +256,116 @@ fn read_the_directory(host: &dyn Host, source: ArtifactSource) -> Artifacts {
                  `sequenceDiagram` or `flowchart` is drawn here.",
             ),
             Ok(artifacts) => Artifacts::Found { artifacts, project },
-            Err(reason) => nothing(
-                format!("`{declared}` could not be read"),
-                &format!("{reason}. It is the `artifacts.path` agents.yaml declares."),
-            ),
+            Err(reason) => {
+                let (text, hint) = unreadable(&declared, &reason);
+                nothing(text, &hint)
+            }
         },
+    }
+}
+
+/// Whether a diagram survives being drawn — the only question a check can
+/// answer for whoever wrote it. The grammar is not restated anywhere: the
+/// parser is asked, and what it says is the answer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Verdict {
+    Drawn,
+    /// Drawn, minus the edges the layout found no path for. Held apart
+    /// from [`Verdict::Drawn`] because a diagram missing a relation still
+    /// looks finished — nothing on the board says a line was meant to be
+    /// there — which is the one failure an author cannot see by looking.
+    Unrouted {
+        edges: usize,
+    },
+    /// Not drawn, and why: the sentence the board shows in its place.
+    Undrawable(String),
+}
+
+impl Verdict {
+    pub fn is_drawn(&self) -> bool {
+        matches!(self, Self::Drawn)
+    }
+}
+
+/// What checking one artifact found.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Checked {
+    /// The file, as the project would say it.
+    pub origin: String,
+    /// The name the surface lists it under.
+    pub name: String,
+    /// The area its first word puts it in.
+    pub area: &'static str,
+    pub verdict: Verdict,
+}
+
+/// What checking a project found: its artifacts, or why it has none to
+/// check — the same two states the surface itself opens in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Checkup {
+    Checked {
+        /// The directory checked, how the project itself spells it.
+        declared: String,
+        /// Every artifact in it, in the order the menu lists them. Empty
+        /// where the directory holds none, which is an answer and not a
+        /// fault: a project may declare where its diagrams will go before
+        /// it has drawn one.
+        artifacts: Vec<Checked>,
+    },
+    /// Declared, and nothing the host will follow — the one state of the
+    /// declaration itself that is somebody's mistake.
+    Unusable { text: String, hint: String },
+    /// Nothing declared, which is not a mistake.
+    Nothing { text: String, hint: String },
+}
+
+/// Reads a project's artifacts and draws every one, reporting what that
+/// found instead of a canvas.
+///
+/// The surface's own path — the same catalog, the same parser, the same
+/// layout — because what an author needs is the answer *this build* would
+/// give, not a second opinion about the grammar that can drift from it.
+pub fn check(host: &dyn Host, source: ArtifactSource) -> Checkup {
+    match source {
+        ArtifactSource::Undeclared => Checkup::Nothing {
+            text: UNDECLARED.to_owned(),
+            hint: DECLARE_ARTIFACTS.to_owned(),
+        },
+        ArtifactSource::Refused(reason) => Checkup::Unusable {
+            text: reason,
+            hint: "Fix `artifacts:` in agents.yaml and run this again.".to_owned(),
+        },
+        ArtifactSource::Directory { path, declared, .. } => match catalog::read(host, &path) {
+            Ok(artifacts) => Checkup::Checked {
+                declared,
+                artifacts: Catalog::of(artifacts)
+                    .artifacts()
+                    .iter()
+                    .map(checked)
+                    .collect(),
+            },
+            Err(reason) => {
+                let (text, hint) = unreadable(&declared, &reason);
+                Checkup::Unusable { text, hint }
+            }
+        },
+    }
+}
+
+fn checked(artifact: &Artifact) -> Checked {
+    let verdict = match mermaid::parse(artifact.diagram()) {
+        Ok(Diagram::Graph(graph)) => match Scene::of(graph).routes.unrouted {
+            0 => Verdict::Drawn,
+            edges => Verdict::Unrouted { edges },
+        },
+        Ok(Diagram::Sequence(_)) => Verdict::Drawn,
+        Err(reason) => Verdict::Undrawable(reason),
+    };
+    Checked {
+        origin: artifact.origin.clone(),
+        name: artifact.name.clone(),
+        area: artifact.kind.name(),
+        verdict,
     }
 }
 

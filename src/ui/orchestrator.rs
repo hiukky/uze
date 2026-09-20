@@ -974,23 +974,7 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
         };
         let answer = answered_or(
             || {
-                let source = match uze_application::project_artifacts(&root) {
-                    uze_application::ProjectArtifacts::Undeclared => {
-                        architect::ArtifactSource::Undeclared
-                    }
-                    uze_application::ProjectArtifacts::Refused(reason) => {
-                        architect::ArtifactSource::Refused(reason)
-                    }
-                    uze_application::ProjectArtifacts::Declared {
-                        directory,
-                        declared,
-                        project,
-                    } => architect::ArtifactSource::Directory {
-                        path: directory,
-                        declared: declared.display().to_string(),
-                        project,
-                    },
-                };
+                let source = super::extension_host::artifacts_declared_in(&root);
                 architect::read_artifacts(&WorkspaceHost, &root, source)
             },
             silence,

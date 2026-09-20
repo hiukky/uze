@@ -349,7 +349,13 @@ need to).
   workspace's own architect surface (`agents.yaml`'s `artifacts:` points at
   the directory) and by `uze-extensions`'s tests, so a diagram that stops
   routing is a red build. The one diagram source: there is no separate
-  model to keep in sync.
+  model to keep in sync. `uze agent artifacts check` (`make artifacts`,
+  part of `make check`) draws every file in that directory the way the
+  surface would and fails on one that does not — the tests can only cover
+  the eight they name, because `uze-extensions` may not read a filesystem.
+  Writing one of these is the `uze:architect` Skill's subject; the accepted
+  syntax is never written down anywhere, because the parser is the only
+  thing that can answer and it moves.
 - `docs/architecture/invariants.md` — properties the architecture actually
   holds today, each tied to the specific test that proves it. Treat this as
   the canonical list of "do not break this" behaviors.

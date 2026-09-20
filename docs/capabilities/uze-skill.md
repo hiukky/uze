@@ -1,12 +1,13 @@
 # UZE's own Skills
 
 `plugins/uze` is the one official plugin, and it is an ordinary Agent Plugins
-1.0 package: `plugin.json` plus a `skills/` directory. It carries two Skills.
+1.0 package: `plugin.json` plus a `skills/` directory. It carries three Skills.
 
 | Skill | What it reasons about |
 |---|---|
 | `uze:init` | Portable project context. Delegates every managed mutation to the deterministic Context Manager (`uze context inspect \| plan \| reconcile`) and never bypasses it — see [context-manager.md](context-manager.md). |
 | `uze:worktree` | Git workspace ownership: when to isolate concurrent writes, how to hand off a branch, and when it is safe to integrate. It reads the project's `worktrees:` policy from `agents.yaml` before creating anything, uses Git directly, and has no Context Manager mutation authority. |
+| `uze:architect` | The diagrams a project keeps under `artifacts:`: which view a change belongs in, what the architect surface lists it as, and `uze agent artifacts check` as the only authority on whether it draws — the Skill never restates the accepted syntax, because the parser moves and a remembered grammar diverges from it silently. |
 
 **The Skill reasons; `uze` mutates.** That boundary lives in each SKILL.md's
 own "Hard boundaries" section, not in Rust: `uze-core` has no idea these

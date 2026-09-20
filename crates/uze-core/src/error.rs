@@ -126,6 +126,11 @@ pub enum UzeError {
     /// accepts, because a refusal is that agent's only feedback channel.
     #[error("{0}")]
     TaskNaming(String),
+    /// Artifacts the project declares do not draw as written. The report
+    /// printed before this says which and why; this is the verdict, so a
+    /// check is a gate rather than something to read.
+    #[error("{0}")]
+    ArtifactsNotDrawable(String),
     /// An agent could not be placed where it was asked for. Nothing was
     /// started: a launch that lands somewhere other than what the operator
     /// chose is worse than no launch, and a notice after the fact would not

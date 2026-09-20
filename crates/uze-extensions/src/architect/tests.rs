@@ -721,3 +721,141 @@ fn the_frame_says_what_this_is_on_top_and_where_it_is_at_the_foot() {
         Some((Role::Accent, true))
     );
 }
+
+/// A directory of diagrams, served from memory. The check reads the same
+/// two things the surface does — a listing and a file — so a host that
+/// answers both is the whole world it needs.
+struct Written(Vec<(&'static str, &'static str)>);
+
+impl Host for Written {
+    fn git(&self, _: &std::path::Path, _: &[&str], _: &[i32]) -> Result<String, String> {
+        Err("not asked".to_owned())
+    }
+    fn repository_root(&self, _: &std::path::Path) -> Result<PathBuf, String> {
+        Err("not asked".to_owned())
+    }
+    fn read_file(&self, path: &std::path::Path) -> Result<String, String> {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.0
+            .iter()
+            .find(|(written, _)| *written == name)
+            .map(|(_, source)| (*source).to_owned())
+            .ok_or_else(|| "no such file".to_owned())
+    }
+    fn list_dir(&self, _: &std::path::Path) -> Result<Vec<crate::DirEntry>, String> {
+        Ok(self
+            .0
+            .iter()
+            .map(|(name, _)| crate::DirEntry {
+                directory: false,
+                name: (*name).to_owned(),
+            })
+            .collect())
+    }
+    fn write_file(&self, _: &std::path::Path, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn delete_file(&self, _: &std::path::Path) -> Result<(), String> {
+        Ok(())
+    }
+    fn syntax_theme(&self) -> String {
+        String::new()
+    }
+}
+
+fn declared() -> ArtifactSource {
+    ArtifactSource::Directory {
+        path: PathBuf::from("/project/docs/architecture"),
+        declared: "docs/architecture".to_owned(),
+        project: PathBuf::from("/project"),
+    }
+}
+
+#[test]
+fn a_check_reports_every_artifact_by_what_drawing_it_found() {
+    let checkup = check(
+        &Written(vec![
+            ("fine.mmd", "flowchart LR\n  a[A] --> b[B]\n"),
+            ("roadmap.mmd", "gantt\n  title Roadmap\n"),
+            ("half.mmd", "C4Context\n  Person(a, \"A\")\n  Rel(a)\n"),
+        ]),
+        declared(),
+    );
+    let Checkup::Checked {
+        declared,
+        artifacts,
+    } = checkup
+    else {
+        panic!("a directory of diagrams is checked");
+    };
+    assert_eq!(declared, "docs/architecture");
+    let verdict = |origin: &str| {
+        artifacts
+            .iter()
+            .find(|artifact| artifact.origin == origin)
+            .map(|artifact| artifact.verdict.clone())
+            .expect("every file is reported")
+    };
+    assert_eq!(verdict("fine.mmd"), Verdict::Drawn);
+    // Quoted from the parser, never restated: a check that described the
+    // grammar in its own words would be a second answer to drift from.
+    assert_eq!(
+        verdict("roadmap.mmd"),
+        Verdict::Undrawable("`gantt` diagrams are not drawn yet".to_owned())
+    );
+    assert!(
+        matches!(verdict("half.mmd"), Verdict::Undrawable(reason) if reason.contains("Rel(a)"))
+    );
+}
+
+/// The failure an author cannot see by looking: the diagram opens, the
+/// boxes are all there, and a relation is simply absent from the board.
+#[test]
+fn a_diagram_that_draws_with_relations_missing_is_not_drawn() {
+    let mut dense = String::from("flowchart TD\n");
+    for from in 0..7 {
+        for to in 0..7 {
+            if from != to {
+                dense.push_str(&format!("  n{from}[Node {from}] --> n{to}[Node {to}]\n"));
+            }
+        }
+    }
+    let dense: &'static str = Box::leak(dense.into_boxed_str());
+    let Checkup::Checked { artifacts, .. } =
+        check(&Written(vec![("dense.mmd", dense)]), declared())
+    else {
+        panic!("a directory of diagrams is checked");
+    };
+    let Verdict::Unrouted { edges } = artifacts[0].verdict else {
+        panic!("every node joined to every other leaves edges with nowhere to go");
+    };
+    assert!(edges > 0);
+    assert!(
+        !artifacts[0].verdict.is_drawn(),
+        "which is what fails a check"
+    );
+}
+
+#[test]
+fn what_a_project_declares_decides_whether_having_no_diagrams_is_a_fault() {
+    let nothing = check(&Written(Vec::new()), ArtifactSource::Undeclared);
+    assert!(
+        matches!(nothing, Checkup::Nothing { text, .. } if text.contains("declares no artifacts")),
+        "declaring none is an answer, not a mistake"
+    );
+
+    let refused = check(
+        &Written(Vec::new()),
+        ArtifactSource::Refused("`artifacts.path` leaves the project".to_owned()),
+    );
+    assert!(
+        matches!(refused, Checkup::Unusable { text, .. } if text.contains("leaves the project")),
+        "a declaration the host will not follow is somebody's mistake"
+    );
+
+    let empty = check(&Written(Vec::new()), declared());
+    assert!(
+        matches!(empty, Checkup::Checked { artifacts, .. } if artifacts.is_empty()),
+        "a project may declare where its diagrams will go before drawing one"
+    );
+}

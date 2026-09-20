@@ -44,7 +44,7 @@ use uze_application::{
 };
 
 mod agent_support;
-mod extension_host;
+pub mod extension_host;
 mod extension_view;
 mod hit;
 mod input;

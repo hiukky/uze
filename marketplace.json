@@ -8,11 +8,13 @@
     {
       "name": "uze",
       "source": "./plugins/uze",
-      "description": "UZE's own agentic context orchestrator: makes a project's instructions context (AGENTS.md and its harness bridges) portable.",
+      "description": "UZE's own agentic Skills: making a project's instructions context (AGENTS.md and its harness bridges) portable, working in the checkout UZE placed you in, and writing the diagrams it keeps under `artifacts:`.",
       "keywords": [
         "context",
         "agents-md",
-        "portability"
+        "portability",
+        "worktrees",
+        "architecture"
       ]
     }
   ]

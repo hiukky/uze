@@ -132,6 +132,11 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentTaskAction,
     },
+    /// The diagrams this project declares under `artifacts:`
+    Artifacts {
+        #[command(subcommand)]
+        action: AgentArtifactsAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -140,6 +145,17 @@ enum AgentTaskAction {
     Name {
         /// The proposed name, judged against the project's vocabulary
         name: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentArtifactsAction {
+    /// Draw every declared diagram and say what that found
+    Check {
+        /// The project to check; the working directory by default
+        path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -2278,7 +2294,13 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
 /// refusal names what this project would have accepted, because that
 /// sentence is the only feedback channel a denied agent has.
 fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
-    let AgentAction::Task { action } = action;
+    match action {
+        AgentAction::Task { action } => run_agent_task(app, action),
+        AgentAction::Artifacts { action } => run_agent_artifacts(action),
+    }
+}
+
+fn run_agent_task(app: &UzeApplication, action: AgentTaskAction) -> Result<()> {
     match action {
         AgentTaskAction::Name { name, format } => {
             let cwd = cwd()?;
@@ -2325,6 +2347,201 @@ impl<'a> From<&'a uze_application::NamedTask> for NamedTaskReport<'a> {
             label: &named.label,
         }
     }
+}
+
+/// Draws every artifact the project declares, exactly as the workspace
+/// surface would, and answers with what that found.
+///
+/// The verdict is the exit code, not something to read: an agent that has
+/// just written a diagram needs to be *told* it does not draw, and a
+/// report it has to interpret is a report it can decide it passed. The
+/// grammar is never restated here — the parser is run and quoted.
+fn run_agent_artifacts(action: AgentArtifactsAction) -> Result<()> {
+    let AgentArtifactsAction::Check { path, format } = action;
+    let project = context_path(path);
+    let checkup = uze_extensions::architect::check(
+        &uze::ui::extension_host::WorkspaceHost,
+        uze::ui::extension_host::artifacts_declared_in(&project),
+    );
+    let report = ArtifactsCheckReport::from(&checkup);
+    emit(format, &report, render_artifacts_check);
+    match report.verdict() {
+        Some(failure) => Err(uze_application::UzeError::ArtifactsNotDrawable(failure)),
+        None => Ok(()),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ArtifactsCheckReport {
+    /// The directory checked, absent where nothing was.
+    declared: Option<String>,
+    checked: usize,
+    /// How many of them do not draw at all.
+    undrawable: usize,
+    /// How many draw with edges missing — counted apart because the board
+    /// still looks finished, which is the failure nobody sees by looking.
+    unrouted: usize,
+    artifacts: Vec<CheckedArtifactReport>,
+    /// Why there was nothing to check, where there was not.
+    nothing: Option<String>,
+    /// The same, where it is somebody's mistake rather than an answer.
+    unusable: Option<String>,
+    hint: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CheckedArtifactReport {
+    origin: String,
+    name: String,
+    area: &'static str,
+    /// `drawn`, `unrouted` or `undrawable` — the three states a diagram
+    /// can be in once this build has tried to draw it.
+    verdict: &'static str,
+    /// How many edges found no path.
+    unrouted: usize,
+    /// Why it is not drawn at all, quoted from the parser.
+    reason: Option<String>,
+}
+
+impl ArtifactsCheckReport {
+    /// What makes this a failed check, said in one sentence, or nothing.
+    fn verdict(&self) -> Option<String> {
+        if let Some(unusable) = &self.unusable {
+            return Some(unusable.clone());
+        }
+        match self.undrawable + self.unrouted {
+            0 => None,
+            failed => Some(format!(
+                "{failed} of {} artifacts do not draw as written",
+                self.checked
+            )),
+        }
+    }
+}
+
+impl From<&uze_extensions::architect::Checkup> for ArtifactsCheckReport {
+    fn from(checkup: &uze_extensions::architect::Checkup) -> Self {
+        use uze_extensions::architect::{Checkup, Verdict};
+        let empty = Self {
+            declared: None,
+            checked: 0,
+            undrawable: 0,
+            unrouted: 0,
+            artifacts: Vec::new(),
+            nothing: None,
+            unusable: None,
+            hint: None,
+        };
+        match checkup {
+            Checkup::Nothing { text, hint } => Self {
+                nothing: Some(text.clone()),
+                hint: Some(hint.clone()),
+                ..empty
+            },
+            Checkup::Unusable { text, hint } => Self {
+                unusable: Some(text.clone()),
+                hint: Some(hint.clone()),
+                ..empty
+            },
+            Checkup::Checked {
+                declared,
+                artifacts,
+            } => Self {
+                declared: Some(declared.clone()),
+                checked: artifacts.len(),
+                undrawable: artifacts
+                    .iter()
+                    .filter(|artifact| matches!(artifact.verdict, Verdict::Undrawable(_)))
+                    .count(),
+                unrouted: artifacts
+                    .iter()
+                    .filter(|artifact| matches!(artifact.verdict, Verdict::Unrouted { .. }))
+                    .count(),
+                artifacts: artifacts
+                    .iter()
+                    .map(|artifact| CheckedArtifactReport {
+                        origin: artifact.origin.clone(),
+                        name: artifact.name.clone(),
+                        area: artifact.area,
+                        verdict: match artifact.verdict {
+                            Verdict::Drawn => "drawn",
+                            Verdict::Unrouted { .. } => "unrouted",
+                            Verdict::Undrawable(_) => "undrawable",
+                        },
+                        unrouted: match artifact.verdict {
+                            Verdict::Unrouted { edges } => edges,
+                            _ => 0,
+                        },
+                        reason: match &artifact.verdict {
+                            Verdict::Undrawable(reason) => Some(reason.clone()),
+                            _ => None,
+                        },
+                    })
+                    .collect(),
+                ..empty
+            },
+        }
+    }
+}
+
+fn render_artifacts_check(report: &ArtifactsCheckReport) -> String {
+    if let Some(text) = report.unusable.as_ref().or(report.nothing.as_ref()) {
+        let mut out = progress::report_title("Artifacts", None);
+        out.push_str(&format!("\n  {}\n", progress::label(text)));
+        if let Some(hint) = &report.hint {
+            out.push_str(&format!("  {}\n", progress::label(hint)));
+        }
+        return out;
+    }
+    let declared = report.declared.as_deref().unwrap_or_default();
+    let mut out = progress::report_title(
+        "Artifacts",
+        Some(&format!("{declared} · {} checked", report.checked)),
+    );
+    out.push('\n');
+    let rows = report
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            let (icon, note) = match artifact.verdict {
+                "drawn" => (progress::success_icon(), artifact.name.clone()),
+                "unrouted" => (
+                    progress::warning_icon(),
+                    progress::warning_text(format!(
+                        "{} {} found no path",
+                        artifact.unrouted,
+                        plural(artifact.unrouted, "edge", "edges")
+                    )),
+                ),
+                _ => (
+                    progress::error_icon(),
+                    progress::error_text(artifact.reason.clone().unwrap_or_default()),
+                ),
+            };
+            vec![
+                format!("  {icon}"),
+                artifact.origin.clone(),
+                progress::label(artifact.area),
+                note,
+            ]
+        })
+        .collect();
+    out.push_str(&progress::aligned_rows(rows));
+    out.push('\n');
+    // Only the passing verdict is said here. The failing one is the error
+    // the command exits with, and saying it twice on one screen invites
+    // the reader to look for the difference between the two.
+    if report.verdict().is_none() {
+        out.push_str(&format!(
+            "\n  {}\n",
+            progress::success_text("Every artifact draws, with every edge routed.")
+        ));
+    }
+    out
+}
+
+fn plural(count: usize, one: &str, many: &str) -> String {
+    if count == 1 { one } else { many }.to_owned()
 }
 
 fn render_doctor(report: &DoctorReport) -> String {
