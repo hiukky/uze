@@ -197,11 +197,22 @@ pub struct PublicationOutcome {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct BlockedCapability {
+    pub integration: String,
+    pub capability: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct AddPluginReport {
     pub plugin: PluginSummary,
     pub package_plans: Vec<(String, PackageExposurePlan)>,
     pub attachments: Vec<AttachmentSummary>,
     pub publications: Vec<PublicationOutcome>,
+    /// Capabilities whose vendor-visible name is held by something UZE
+    /// does not own. The package is installed and everything else was
+    /// delivered; these are what a person has to settle.
+    pub blocked: Vec<BlockedCapability>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -778,9 +789,24 @@ pub struct HookHealth {
 pub struct UpgradeLeftovers {
     /// The newest few, which are the ones an operator can still act on.
     pub set_aside: Vec<SetAsideRecord>,
+    /// References into `$UZE_HOME` that resolve to nothing and that no
+    /// receipt claims — `uze doctor` removes these, unlike `set_aside`,
+    /// whose bytes only a person can judge.
+    pub dangling: Vec<DanglingReferenceRecord>,
     /// How many there are in all, including the ones not listed: a report
     /// that names forty is one nobody reads.
     pub total: usize,
+}
+
+/// A reference UZE wrote into a harness's shared discovery root that
+/// points into `$UZE_HOME` at something no longer there, and that no
+/// receipt claims. Nothing reads it, and it holds a name another package
+/// may need.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DanglingReferenceRecord {
+    pub path: PathBuf,
+    pub target: PathBuf,
+    pub remedy: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

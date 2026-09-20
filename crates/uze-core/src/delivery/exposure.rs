@@ -257,12 +257,38 @@ fn attach_symlink(path: &Path, target: &Path) -> Result<()> {
                 path: path.to_path_buf(),
                 source,
             })?;
-            if current != target {
-                // A managed-looking name is not ownership proof: users may
-                // repoint an earlier UZE reference. Preserve it.
-                return Err(UzeError::ManagedEntryDrift(path.to_path_buf()));
+            if current == target {
+                return Ok(());
             }
-            Ok(())
+            // A reference that resolves to nothing is holding nothing: the
+            // harness reads no capability through it, and refusing it
+            // preserves no work. That is exactly what a UZE-owned target
+            // which moved leaves behind — the generated tier is rebuilt at
+            // its new path while the reference into it stays where the
+            // harness looks — so the old reference is adopted rather than
+            // defended against its own owner.
+            //
+            // The question is asked as "is the target absent", never as
+            // "can the target be reached": a volume not mounted, a
+            // directory this user may not traverse, a dead network path —
+            // each answers "no" to the second question while the content
+            // is still there, and adopting on that answer would delete a
+            // live reference. Only `NotFound` is absence; every other
+            // error means UZE cannot tell, and what it cannot tell about
+            // it does not touch.
+            match fs::metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::remove_file(path).map_err(|source| UzeError::Write {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
+                    crate::persistence::create_symlink(target, path)
+                }
+                // Resolves, or cannot be told apart from one that does: a
+                // managed-looking name is not ownership proof, and users
+                // may repoint an earlier UZE reference. Preserve it.
+                _ => Err(UzeError::ManagedEntryDrift(path.to_path_buf())),
+            }
         }
         Ok(_) => Err(UzeError::ManagedEntryConflict(path.to_path_buf())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -358,6 +384,81 @@ mod tests {
         // Second attach is a no-op, not an error and not a re-link.
         artifact.attach_standard().unwrap();
         assert_eq!(fs::read_link(&link).unwrap(), source);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attach_adopts_a_reference_whose_target_no_longer_exists() {
+        // The shape UZE's own move of its generated tier left on every
+        // machine that had one: the reference is where the harness looks,
+        // and points at a directory that is gone.
+        let root = uze_testkit::temp::scratch("adopt");
+        let discovery_root = root.join("skills");
+        fs::create_dir_all(&discovery_root).unwrap();
+        let link = discovery_root.join("uze-example");
+        crate::persistence::create_symlink(&root.join("where-it-used-to-be"), &link).unwrap();
+
+        let source = root.join("where-it-is-now");
+        fs::create_dir_all(&source).unwrap();
+        managed_reference(&discovery_root, &source)
+            .attach_standard()
+            .unwrap();
+
+        assert_eq!(fs::read_link(&link).unwrap(), source);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attach_preserves_a_reference_somebody_repointed_at_their_own_content() {
+        let root = uze_testkit::temp::scratch("repointed");
+        let discovery_root = root.join("skills");
+        fs::create_dir_all(&discovery_root).unwrap();
+        let theirs = root.join("their-own-skill");
+        fs::create_dir_all(&theirs).unwrap();
+        let link = discovery_root.join("uze-example");
+        crate::persistence::create_symlink(&theirs, &link).unwrap();
+
+        let source = root.join("store-entry");
+        fs::create_dir_all(&source).unwrap();
+        let error = managed_reference(&discovery_root, &source)
+            .attach_standard()
+            .unwrap_err();
+
+        assert!(matches!(error, UzeError::ManagedEntryDrift(_)));
+        assert_eq!(fs::read_link(&link).unwrap(), theirs);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attach_preserves_a_reference_whose_target_cannot_be_read() {
+        // Absence and unreadability are different answers. A target behind
+        // a directory this user may not traverse is still there, and
+        // adopting on "could not stat" would delete a live reference.
+        let root = uze_testkit::temp::scratch("unreadable");
+        let discovery_root = root.join("skills");
+        fs::create_dir_all(&discovery_root).unwrap();
+        let vault = root.join("vault");
+        let theirs = vault.join("their-own-skill");
+        fs::create_dir_all(&theirs).unwrap();
+        let link = discovery_root.join("uze-example");
+        crate::persistence::create_symlink(&theirs, &link).unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&vault, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let source = root.join("store-entry");
+        fs::create_dir_all(&source).unwrap();
+        let outcome = managed_reference(&discovery_root, &source).attach_standard();
+
+        fs::set_permissions(&vault, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Running as root defeats the permission bit entirely; there the
+        // target simply resolves, which this same branch must also refuse.
+        assert!(matches!(outcome, Err(UzeError::ManagedEntryDrift(_))));
+        assert_eq!(fs::read_link(&link).unwrap(), theirs);
 
         fs::remove_dir_all(&root).unwrap();
     }

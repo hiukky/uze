@@ -1254,6 +1254,7 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
                         ));
                     }
                 }
+                warn_blocked(&report, app);
             }
         }
         PluginAction::List { format } => {
@@ -1859,6 +1860,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
             render_add_report(report, verbose || shorthand.verbose, app)
         )
     });
+    warn_blocked(&report, app);
     Ok(())
 }
 
@@ -2152,6 +2154,23 @@ fn render_inspection(report: &PluginInspection) -> String {
 /// `plugin inspect` state the same facts read-only. Harness rows carry the
 /// human label (`app.integration_label`) — the report's own keys stay the
 /// stable ids, which is what `--format json` emits.
+/// A capability whose vendor-visible name is held by something UZE does not
+/// own is warned about, never raised: the package is installed and its other
+/// capabilities are delivered, which is the same shape a failed publication
+/// already has (`PublicationOutcome::error`). Silence is what the naming
+/// rule forbids — an explicit conflict the operator can act on is what it
+/// asks for, and that is a sentence, not an exit code.
+fn warn_blocked(report: &AddPluginReport, app: &UzeApplication) {
+    for one in &report.blocked {
+        progress::warn(&format!(
+            "{}: {} was not delivered — {}",
+            app.health().integration_label(&one.integration),
+            one.capability,
+            one.reason
+        ));
+    }
+}
+
 fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplication) -> String {
     let mut out = format!("\n{}", progress::report_section("Delivery"));
     let attachments: BTreeMap<&str, &PathBuf> = report
@@ -2187,6 +2206,18 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
                 attachment.location.display()
             ));
         }
+    }
+    // A name held by something UZE does not own stops that one capability
+    // and nothing else. Said here rather than raised as a failure: the
+    // package is installed and the rest of it is delivered, so what the
+    // operator needs is the name and the reason, not an aborted command.
+    for one in &report.blocked {
+        out.push_str(&format!(
+            "  {}: {} not delivered — {}\n",
+            app.health().integration_label(&one.integration),
+            one.capability,
+            one.reason
+        ));
     }
     out
 }

@@ -27,11 +27,39 @@ pub(crate) enum NativeDelivery {
 }
 
 /// What one package's delivery to one integration produced: the native plan
-/// it was delivered under, if any, and where each recorded artifact landed.
+/// it was delivered under, if any, where each recorded artifact landed, and
+/// each capability something else already owned the name of.
 #[derive(Default)]
 pub(crate) struct PackageDelivery {
     pub plan: Option<uze_core::exposure::PackageExposurePlan>,
     pub attachments: Vec<AttachmentSummary>,
+    pub blocked: Vec<BlockedDelivery>,
+}
+
+/// One capability that could not be delivered because the name it needs is
+/// held by something UZE does not own.
+///
+/// Reported rather than propagated: a package's other capabilities are
+/// unaffected by one name being taken, and failing the whole command over
+/// it leaves the operator with nothing where they could have had all but
+/// one. Only the three refusals that *are* about a single name qualify —
+/// anything else (a write that failed, a vendor CLI that broke) is about
+/// the machine, and still fails.
+pub(crate) struct BlockedDelivery {
+    pub integration: String,
+    pub capability: String,
+    pub reason: String,
+}
+
+/// Whether `error` refuses one name, or says something is wrong with the
+/// machine. See [`BlockedDelivery`].
+fn refuses_one_name(error: &uze_core::UzeError) -> bool {
+    matches!(
+        error,
+        uze_core::UzeError::ManagedEntryDrift(_)
+            | uze_core::UzeError::ManagedEntryConflict(_)
+            | uze_core::UzeError::ProjectionConflict(_)
+    )
 }
 
 impl UzeApplication {
@@ -180,8 +208,28 @@ impl UzeApplication {
         }
         for resource in resources {
             if !provided.contains(&resource.identity()) {
-                let resolved = self.resolve_exposure_name(resource, integration)?;
-                if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                let attached = self
+                    .resolve_exposure_name(resource, integration)
+                    .and_then(|resolved| integration.attach_receipt(&resolved));
+                let receipt = match attached {
+                    Ok(receipt) => receipt,
+                    Err(error) if refuses_one_name(&error) => {
+                        tracing::warn!(
+                            integration = integration.id(),
+                            capability = %resource.identity(),
+                            reason = %error,
+                            "a capability's name is held by something UZE does not own"
+                        );
+                        delivery.blocked.push(BlockedDelivery {
+                            integration: integration.id().to_owned(),
+                            capability: resource.identity(),
+                            reason: error.to_string(),
+                        });
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some(receipt) = receipt {
                     let location = receipt.artifact.location();
                     state::record_receipt(&self.home, receipt)?;
                     delivery.attachments.push(AttachmentSummary {

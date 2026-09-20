@@ -42,6 +42,14 @@ pub enum MaintenanceOutcome {
     UpdateAvailable {
         plugin: String,
     },
+    /// A reference UZE wrote into a shared discovery root that points into
+    /// `$UZE_HOME` at something gone, which no receipt claims. Removed
+    /// rather than reported for a person to judge: it delivers nothing, it
+    /// can only be UZE's — nothing else writes inside `$UZE_HOME` — and
+    /// while it sits there it holds a name another package may need.
+    DanglingReferenceRemoved {
+        path: std::path::PathBuf,
+    },
     NeedsHumanAction {
         plugin: String,
         integration: Option<String>,
@@ -80,6 +88,12 @@ impl std::fmt::Display for MaintenanceOutcome {
                 "forgot {} orphaned receipt(s) left by {plugin}: {}",
                 ledger_keys.len(),
                 ledger_keys.join(", ")
+            ),
+            MaintenanceOutcome::DanglingReferenceRemoved { path } => write!(
+                formatter,
+                "removed {} — it pointed into UZE's own home at something gone and no receipt \
+                 claimed it",
+                path.display()
             ),
             MaintenanceOutcome::UpdateAvailable { plugin } => {
                 write!(formatter, "{plugin} has an update available")
@@ -276,6 +290,23 @@ impl Health<'_> {
                         });
                     }
                 }
+            }
+        }
+
+        for reference in self.dangling_references() {
+            match uze_core::leftovers::remove_dangling(&self.0.home, &reference) {
+                Ok(true) => report
+                    .outcomes
+                    .push(MaintenanceOutcome::DanglingReferenceRemoved {
+                        path: reference.path,
+                    }),
+                // It stopped being dangling between the sweep and the
+                // removal, which is the re-check doing its job.
+                Ok(false) => {}
+                Err(error) => report.outcomes.push(MaintenanceOutcome::Unavailable {
+                    integration: "environment".to_owned(),
+                    reason: format!("{} could not be removed: {error}", reference.path.display()),
+                }),
             }
         }
 
