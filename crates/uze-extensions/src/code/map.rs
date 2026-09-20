@@ -40,6 +40,9 @@ use super::treemap;
 /// The smallest tile that can carry a name: a border, a row, a border,
 /// and enough columns for a name rather than three letters and a cut.
 const NAMED: (i32, i32) = (13, 3);
+/// What a tile gives back on each side where a neighbour begins, so that
+/// no two of them draw on one cell. See [`bordered`].
+const GAP: i32 = 1;
 /// From this height on a tile says how many lines it holds, and from the
 /// next one what it is made of — a row per measure, under the name.
 const COUNTED: i32 = 4;
@@ -697,8 +700,13 @@ fn lay(entry: &Entry, from: usize, within: Frame, steps: Steps, tiles: &mut Vec<
 }
 
 /// Room for a name, a measure under it, and a border either side.
+///
+/// Measured on what the tile is *drawn* as, not on what it was laid out
+/// as: a tile gives a cell back on each side where it has a neighbour to
+/// clear (see [`bordered`]), and a threshold that did not know it was
+/// promising room the name would not get.
 fn fits_a_name(frame: &Frame) -> bool {
-    frame.w >= NAMED.0 && frame.h >= NAMED.1
+    frame.w - GAP >= NAMED.0 && frame.h - GAP >= NAMED.1
 }
 
 /// The frames for a split at `keeping`: what is kept, and — unless
@@ -735,19 +743,25 @@ fn frames_for(
     frames
 }
 
-/// The rectangle a tile's border is drawn on: its own, grown by a cell
-/// so that it ends *on* its neighbour's first column rather than beside
-/// it — except at the map's own edge, where there is no neighbour to
-/// meet. The tile still answers for the cells it was laid on, so the
-/// shared line belongs to whichever of the two lies after it.
+/// The rectangle a tile's border is drawn on: its own, one cell short of
+/// wherever a neighbour begins — except at the map's own edge, where
+/// there is none to clear and the tile runs flush to it.
+///
+/// Sharing the line instead put two tiles' borders on one cell, and a
+/// cell has one colour: a run they shared came out in whichever of the
+/// two claimed it, so a long edge between a red tile and a grey one was
+/// red for part of its length and grey for the rest — read as a
+/// rendering fault, which is the one thing a map of a checkout must not
+/// look like. A tile still answers for every cell it was laid on, so the
+/// gap is the tile's to click, not a seam between two.
 fn bordered(frame: Frame, space: (i32, i32)) -> Frame {
-    let right = (frame.x + frame.w).min(space.0 - 1);
-    let bottom = (frame.y + frame.h).min(space.1 - 1);
+    let clears_right = i32::from(frame.x + frame.w < space.0) * GAP;
+    let clears_bottom = i32::from(frame.y + frame.h < space.1) * GAP;
     Frame {
         x: frame.x,
         y: frame.y,
-        w: right - frame.x + 1,
-        h: bottom - frame.y + 1,
+        w: (frame.w - clears_right).max(1),
+        h: (frame.h - clears_bottom).max(1),
     }
 }
 
@@ -914,6 +928,48 @@ mod tests {
         let (big, busy) = (tile(&tiles, "big.rs"), tile(&tiles, "busy.rs"));
         assert!(big.frame.w * big.frame.h > busy.frame.w * busy.frame.h * 5);
         assert_eq!((big.heat, busy.heat), (Heat::Untouched, Heat::Hot));
+    }
+
+    /// No two tiles draw on one cell.
+    ///
+    /// A cell has one colour, so a border two tiles shared came out in
+    /// whichever of them claimed it: a long edge between a red tile and
+    /// a grey one was red for part of its length and grey for the rest,
+    /// which reads as a rendering fault rather than as two tiles.
+    #[test]
+    fn two_tiles_never_draw_on_the_same_cell() {
+        let mut files = vec![file("Cargo.lock", 3799, 2), file("AGENTS.md", 620, 9)];
+        files.extend((0..6).map(|n| file(&format!("crates/m{n}.rs"), 1400 + n * 300, n)));
+        files.extend((0..4).map(|n| file(&format!("src/u{n}.rs"), 2400, 20 + n)));
+        files.extend((0..9).map(|n| file(&format!("docs/{n:03}.md"), 380, 1)));
+        let map = map(files);
+
+        for space in [(70, 20), SPACE, (150, 38)] {
+            let drawn: Vec<Frame> = map
+                .tiles(space)
+                .iter()
+                .map(|tile| bordered(tile.frame, space))
+                .collect();
+            for (index, one) in drawn.iter().enumerate() {
+                for other in &drawn[index + 1..] {
+                    let apart = one.x + one.w <= other.x
+                        || other.x + other.w <= one.x
+                        || one.y + one.h <= other.y
+                        || other.y + other.h <= one.y;
+                    assert!(apart, "{one:?} and {other:?} overlap in {space:?}");
+                }
+            }
+            // And nothing is given up at the map's own edge, where there
+            // is no neighbour to clear.
+            assert!(
+                drawn.iter().any(|frame| frame.x + frame.w == space.0),
+                "the map reaches its right edge in {space:?}"
+            );
+            assert!(
+                drawn.iter().any(|frame| frame.y + frame.h == space.1),
+                "and its bottom one in {space:?}"
+            );
+        }
     }
 
     #[test]
