@@ -3,7 +3,7 @@
 The Lab's scenario surface is narrower than the delivered semantics: hooks
 are proven only for `deny`/`allow`/`order` on `PreToolUse`, MCP deep
 execution is proven only on Antigravity, non-interactive CLI mode is
-untouched, and project-context projection (`uze context reconcile`) has never
+untouched, and project-context projection (`uze agent context reconcile`) has never
 been exercised against a real harness. The compatibility claims that matter
 to a multi-harness user deserve end-to-end evidence for happy and degraded
 paths alike.
@@ -24,7 +24,7 @@ paths alike.
   proof.
 - Exercise **non-interactive CLI mode** per harness (`claude -p`,
   `codex exec`, `opencode run`) with the attached fixture.
-- Exercise **project-context projection** end-to-end: `uze context
+- Exercise **project-context projection** end-to-end: `uze agent context
   reconcile` in a disposable project, then assert the real harness picks up
   the projected context in its provider request.
 

@@ -28,7 +28,7 @@ DECLARATION_MARKER = "already isolated"
 #: A sentinel only the typed message carries.
 MESSAGE_MARKER = "UZE_CONFORMANCE_REBASE"
 
-#: The declaration `uze context reconcile` projects for a `worktrees`
+#: The declaration `uze agent context reconcile` projects for a `worktrees`
 #: policy, committed into the fixture repository so the slot's checkout
 #: carries it the way a real project's would. Kept in step with
 #: `WorktreePolicy::instructions` by the deterministic suite, not by this

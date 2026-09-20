@@ -11,7 +11,7 @@ worktrees:
 
   # UZE rebases an agent's branch onto the target, runs the checks, pushes
   # it, and asks the agent to open the request. Projected into AGENTS.md's
-  # "Concurrent work isolation" section by `uze context reconcile`.
+  # "Concurrent work isolation" section by `uze agent context reconcile`.
   completion: pr
 
   # An agent names its own work as its first action

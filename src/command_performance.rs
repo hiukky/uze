@@ -36,7 +36,7 @@ pub enum PerformanceClass {
 }
 
 /// One entry per leaf command path, space-separated the way a user types
-/// it (`"context inspect"`, not `"context::inspect"` or `"context.
+/// it (`"agent context inspect"`, not `"context::inspect"` or `"context.
 /// inspect"`). Every leaf `clap` resolves for `Cli` must appear here
 /// exactly once — see `tests::every_cli_command_is_classified`, which
 /// fails by name (missing or stale) rather than silently passing.
@@ -62,9 +62,12 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
              proportional to what it holds",
         ),
     ),
-    ("context inspect", PerformanceClass::Budgeted),
-    ("context plan", PerformanceClass::Budgeted),
-    ("context reconcile", PerformanceClass::Budgeted),
+    // Context reads and the reconcile they lead to sit on the same
+    // surface, for the same audience: a person asks `status`, an agent
+    // asks these.
+    ("agent context inspect", PerformanceClass::Budgeted),
+    ("agent context plan", PerformanceClass::Budgeted),
+    ("agent context reconcile", PerformanceClass::Budgeted),
     (
         "install",
         PerformanceClass::JustifiedSlow(
@@ -167,15 +170,15 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
         "uze_application::application::performance_tests::doctor_meets_the_budget",
     ),
     (
-        "context inspect",
+        "agent context inspect",
         "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (
-        "context plan",
+        "agent context plan",
         "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (
-        "context reconcile",
+        "agent context reconcile",
         "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (

@@ -714,7 +714,7 @@ impl Workspace<'_> {
     /// What declaring a completion behavior would do, so a caller can say
     /// it before doing it rather than after. Writing the policy touches a
     /// *tracked* file — the one the whole team reads — and the projected
-    /// `AGENTS.md` still needs `uze context reconcile` to follow it, so a
+    /// `AGENTS.md` still needs `uze agent context reconcile` to follow it, so a
     /// click that silently did both would be a click nobody could predict.
     #[tracing::instrument(name = "workspace.completion_change_consequence", skip_all, fields(cwd = %cwd.display()))]
     pub fn completion_change_consequence(&self, cwd: &Path) -> Option<PolicyWriteConsequence> {

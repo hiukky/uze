@@ -16,7 +16,7 @@ flag or operator action SHALL be required to obtain this fast path.
 #### Scenario: Repeated read-only commands are fast
 - **WHEN** any read-only command that reports harness or plugin state
   (including but not limited to `status`, `doctor`, `list`, `inspect`,
-  `context inspect`, `context plan`, `marketplace list`, `plugin list`) is
+  `agent context inspect`, `agent context plan`, `marketplace list`, `plugin list`) is
   run twice in a row with no change to installed harnesses or project
   state between runs
 - **THEN** the second invocation completes in under 50 milliseconds and

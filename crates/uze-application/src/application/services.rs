@@ -78,7 +78,7 @@ impl UzeApplication {
 /// projected from it.
 ///
 /// Separate from [`Project`] because the CLI grammar already draws that
-/// line (ADR-019): `uze context …` is its own command group, scoped to a
+/// line (ADR-019): `uze agent context …` is its own command group, scoped to a
 /// directory, and it never touches the machine-scoped environment.
 pub struct Context<'a>(pub(super) &'a UzeApplication);
 

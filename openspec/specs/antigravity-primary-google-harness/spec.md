@@ -103,7 +103,7 @@ not generate any bridge file for it.
 
 #### Scenario: Context reconcile writes nothing for Antigravity
 
-- **WHEN** `uze context reconcile` runs
+- **WHEN** `uze agent context reconcile` runs
 - **THEN** no Antigravity-specific file is written into the project.
 
 ### Requirement: Commands are adapted, not native

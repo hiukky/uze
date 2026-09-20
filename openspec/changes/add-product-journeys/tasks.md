@@ -144,7 +144,7 @@ already covers are ticked.
         the code states this either way, and an exit status is a contract.
       - the bridge file survives a reconcile empty. Deliberate and
         documented in `text_region::detach`; the cost is that
-        `uze context inspect` then reports the bridge as `Missing` while an
+        `uze agent context inspect` then reports the bridge as `Missing` while an
         empty file sits in the repository. The file's *existence* is the one
         managed artifact with no receipt behind it, and that is the fix.
       - an empty directory named after the plugin appears beside the one that

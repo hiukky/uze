@@ -19,9 +19,22 @@ of guessing:
 ## The commands
 
 ```bash
-$ uze context inspect      # what each harness currently sees — never writes
-$ uze context plan         # exactly what reconcile would change — never writes
-$ uze context reconcile    # apply it
+$ uze install    # resolve the environment, and leave the context reconciled
+$ uze status     # which file the context comes from, and who currently reads it
+```
+
+Reconciling is not a step you perform: `uze install` ends with it, so declaring
+an environment and projecting it are one command, and `uze status` is where you
+find out whether anything is still owed.
+
+The three operations underneath are on the
+[agent surface](/docs/cli#agent-surface), because their answer is region by
+region and only a writer of `AGENTS.md` acts on it:
+
+```bash
+$ uze agent context inspect      # what each harness currently sees — never writes
+$ uze agent context plan         # exactly what reconcile would change — never writes
+$ uze agent context reconcile    # apply it
 ```
 
 `reconcile` maintains only the delimited regions it owns. Anything you wrote

@@ -13,7 +13,7 @@ under it:
 
 | Root | Opened by | Carries |
 |---|---|---|
-| `cli` | every `uze <command>` | the leaf command (`context inspect`) and the argument line |
+| `cli` | every `uze <command>` | the leaf command (`agent context inspect`) and the argument line |
 | `tui.session` | the terminal UI | one per run; `tui.intent` under it per key or click that starts work, `tui.event` (debug) per raw event in the workspace client |
 | `shim` | a harness launched through `~/.uze/shims` | the harness name and the executable it resolved to |
 | `terminal.serve` | the terminal runtime server | `terminal.client` per attached client, `terminal.request` (debug) per request |

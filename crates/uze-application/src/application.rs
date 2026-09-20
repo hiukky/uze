@@ -75,7 +75,7 @@ pub use uze_core::workspace::WorkspaceKind;
 ///
 /// Kept, unchanged, alongside the newer `EXPERIMENTAL RUNTIME DELIVERY
 /// STRATEGY` (`ClaudeIntegration::runtime_contribution`, driven through the
-/// PATH shim rather than through `context reconcile`). Whether runtime
+/// PATH shim rather than through `agent context reconcile`). Whether runtime
 /// projection ever replaces this bridge for Claude is a separate, later
 /// decision pending an empirical interactive comparison. Do not remove
 /// or fold this into the experimental

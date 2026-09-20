@@ -5,7 +5,7 @@
 
 | Skill | What it reasons about |
 |---|---|
-| `uze:init` | Portable project context. Delegates every managed mutation to the deterministic Context Manager (`uze context inspect \| plan \| reconcile`) and never bypasses it — see [context-manager.md](context-manager.md). |
+| `uze:init` | Portable project context. Delegates every managed mutation to the deterministic Context Manager (`uze agent context inspect \| plan \| reconcile`) and never bypasses it — see [context-manager.md](context-manager.md). |
 | `uze:worktree` | Git workspace ownership: when to isolate concurrent writes, how to hand off a branch, and when it is safe to integrate. It reads the project's `worktrees:` policy from `agents.yaml` before creating anything, uses Git directly, and has no Context Manager mutation authority. |
 | `uze:architect` | The diagrams a project keeps under `artifacts:`: which view a change belongs in, what the architect surface lists it as, and `uze agent artifacts check` as the only authority on whether it draws — the Skill never restates the accepted syntax, because the parser moves and a remembered grammar diverges from it silently. |
 
@@ -17,7 +17,7 @@ touch anything between `<!-- uze:begin -->` / `<!-- uze:end -->` markers, invent
 its own marker or receipt mechanics, or apply a change without confirmation.
 
 The enforcement that actually holds is unchanged by any of that:
-`uze context reconcile` is still the only code path that writes a managed
+`uze agent context reconcile` is still the only code path that writes a managed
 region, so a misbehaving invocation cannot corrupt state any worse than a human
 running shell commands already could.
 
@@ -44,7 +44,7 @@ catalog, which is what caught it — the generated
 each integration's own `invocation_prefix()`, so it cannot drift from the code.
 
 Every harness runs its shell tool with cwd set to the session's working
-directory, so `uze context inspect` with no path argument already resolves
+directory, so `uze agent context inspect` with no path argument already resolves
 correctly, and every harness can ask the user a question in ordinary
 conversation. Neither needed new integration surface.
 

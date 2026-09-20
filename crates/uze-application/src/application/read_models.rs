@@ -364,7 +364,7 @@ pub enum ContextMechanism {
     /// shim on this process's `PATH`, so a launch from here bypasses it.
     ShimShadowed,
     /// A persistent bridge file in the project root, maintained by
-    /// `uze context reconcile`, carries it.
+    /// `uze agent context reconcile`, carries it.
     Bridge,
     /// No delivery strategy exists for this harness and this resource.
     Unsupported,
@@ -608,7 +608,7 @@ impl ContextPlan {
 
 /// Whether a planned region action would actually write. `Blocked` is not
 /// mutating: it is a reason nothing can be applied, and reporting it as a
-/// pending change would make `context plan` claim work that `reconcile`
+/// pending change would make `agent context plan` claim work that `reconcile`
 /// will refuse to do.
 fn is_mutating(action: &instruction_context::PlannedAction) -> bool {
     matches!(
@@ -617,11 +617,31 @@ fn is_mutating(action: &instruction_context::PlannedAction) -> bool {
     )
 }
 
+/// The project's shared instruction file, as `uze status` carries it.
+/// Deliberately three facts and not the source's full observation: a
+/// person needs to know which document this is, whether it is there, and
+/// how much of it UZE owns — the regions themselves are
+/// `agent context inspect`'s answer.
+#[derive(Clone, Debug, Serialize)]
+pub struct InstructionsFile {
+    pub path: PathBuf,
+    pub exists: bool,
+    /// How many managed regions UZE owns in it: each installed package's
+    /// contribution, plus the worktree policy when one is declared.
+    pub managed_regions: usize,
+}
+
 /// A project-scoped health summary. See `UzeApplication::status` for why
 /// this is deliberately not folded into `doctor`.
 #[derive(Clone, Debug, Serialize)]
 pub struct StatusReport {
     pub root: PathBuf,
+    /// The one file every harness's context is read from, and whether this
+    /// project has written it yet. Named here because `status` is where a
+    /// person asks whether the project is ready, and an answer about
+    /// context that never says which document it is about cannot be acted
+    /// on.
+    pub instructions: InstructionsFile,
     pub portability: Portability,
     pub harnesses: Vec<HarnessContextStatus>,
     pub packages_installed: usize,
@@ -633,8 +653,9 @@ pub struct StatusReport {
     pub drift: EnvironmentDrift,
     /// Human-readable, one-line-each context problems: a non-matched
     /// contribution, a bridge gap, a malformed or blocked orphan region.
-    /// Empty means healthy. Never a substitute for `context inspect`'s
-    /// full detail — this is the "does anything need my attention" view.
+    /// Empty means healthy. Never a substitute for the full detail of
+    /// `agent context inspect` — this is the "does anything need my
+    /// attention" view.
     pub issues: Vec<String>,
 }
 

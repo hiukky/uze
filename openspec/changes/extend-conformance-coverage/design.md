@@ -51,7 +51,7 @@ adapts to stdout (marker line, then quiet). Harnesses whose CLI mode cannot
 reach the synthetic provider (probe in sandbox first) register that honestly.
 
 **D4 — Project-context phase.** In-container disposable project: `uze
-market add` + `uze plugin install @` (project scope), then `uze context
+market add` + `uze plugin install @` (project scope), then `uze agent context
 inspect`/`reconcile`, then a one-shot or short TUI turn from that cwd. The
 assertion is the provider request carrying the project's context markers —
 the same `struct.json` evidence channel, no new observability.

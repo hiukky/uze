@@ -28,17 +28,17 @@ write it safely.
 ## Hard boundaries — read before doing anything
 
 You MAY:
-- Run `uze context inspect`, `uze context plan`, `uze context reconcile` (all accept `--format json`).
+- Run `uze agent context inspect`, `uze agent context plan`, `uze agent context reconcile` (all accept `--format json`).
 - Read files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, package manifests, README, CI config, docs.
 - Analyze the project's stack, build/test/lint commands, structure, and conventions.
 - Ask the user questions and propose content.
 - Write **user-owned, non-managed content** — e.g. drafting new prose for `AGENTS.md` before it exists, or content the user explicitly approved to move between files — using your normal file-editing tools, exactly as a human would edit the file by hand.
-- Verify the result by calling `uze context inspect` again after any change.
+- Verify the result by calling `uze agent context inspect` again after any change.
 
 You MUST NOT:
-- Write, edit, or delete anything between `<!-- uze:begin ... -->` / `<!-- uze:end ... -->` markers, ever, under any circumstance. Those are UZE-owned. If you need one to exist, match, or go away, that is what `uze context reconcile` is for — call it, don't hand-edit around it.
+- Write, edit, or delete anything between `<!-- uze:begin ... -->` / `<!-- uze:end ... -->` markers, ever, under any circumstance. Those are UZE-owned. If you need one to exist, match, or go away, that is what `uze agent context reconcile` is for — call it, don't hand-edit around it.
 - Invent your own markers, receipts, or bridge mechanics.
-- Run shell one-liners, `sed`, or scripts that touch `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` as a substitute for `uze context reconcile`.
+- Run shell one-liners, `sed`, or scripts that touch `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` as a substitute for `uze agent context reconcile`.
 - Implement your own version of inspect/plan/reconcile logic (e.g. hand-computing what's drifted). Always ask the CLI; never infer state from a stale memory of a previous call.
 - Apply any AGENTS.md/bridge change without an explicit human confirmation first.
 - Silently overwrite or "fix" a `DRIFTED` state you see reported. Report it and ask.
@@ -49,7 +49,7 @@ You MUST NOT:
 Run first, before saying anything about the project's context:
 
 ```bash
-uze context inspect --format json
+uze agent context inspect --format json
 ```
 
 This is read-only and safe to run at any time, including mid-conversation to
@@ -76,8 +76,8 @@ This is the "extract the portable core" flow — see **Flow B** below.
 
 ### `PARTIALLY_PORTABLE` (AGENTS.md exists, at least one bridge gap)
 
-Run `uze context plan --format json`. The gaps are almost always a bridge
-that's `Missing` (a harness just needs `uze context reconcile`, no semantic
+Run `uze agent context plan --format json`. The gaps are almost always a bridge
+that's `Missing` (a harness just needs `uze agent context reconcile`, no semantic
 work needed) or `Blocked` (drifted/malformed — report it, ask the human how
 they want to resolve it; do not guess). If every gap is a plain `Missing`
 bridge, you can usually skip straight to Step 4 (confirm) — there is no
@@ -147,7 +147,7 @@ apart at a glance:
 **1. Semantic proposal** — the content you are proposing, in full or as a
 substantive summary. This is your reasoning, not yet applied.
 
-**2. Deterministic UZE plan** — the output of `uze context plan`, verbatim
+**2. Deterministic UZE plan** — the output of `uze agent context plan`, verbatim
 or lightly formatted: which `AGENTS.md` regions would be `ATTACH`ed, which
 bridges would be `ATTACH`ed, and anything `BLOCKED` (drift/malformed — flag
 prominently, this needs the user's decision, not yours).
@@ -166,7 +166,7 @@ No portable project context exists.
 Proposed AGENTS.md content
   [the actual drafted content, or a clear summary of it]
 
-UZE plan (uze context plan)
+UZE plan (uze agent context plan)
   AGENTS.md   pkg  ATTACH
   CLAUDE.md   claude-code  ATTACH  (bridge: @AGENTS.md)
   Codex       native, no artifact
@@ -186,7 +186,7 @@ same turn — do not turn this into a multi-round wizard.
    vendor-specific fragments within a vendor file), write that first, with
    your normal file tools — this is content you and the user own, not a
    managed region.
-2. Then run `uze context reconcile --format json`. This is what actually
+2. Then run `uze agent context reconcile --format json`. This is what actually
    creates/updates any UZE-owned region and any bridge. Never substitute a
    hand-written region for this step, even if you believe you know the
    exact bytes it would produce.
@@ -196,7 +196,7 @@ same turn — do not turn this into a multi-round wizard.
 
 ## Step 5 — verify and report
 
-Run `uze context inspect --format json` one more time and report the real,
+Run `uze agent context inspect --format json` one more time and report the real,
 current, verified state — never the state you expect based on what you
 just did:
 
@@ -217,13 +217,13 @@ Portability: PORTABLE
 - **Healthy context** (Step 2's `PORTABLE` branch): say so plainly, do not
   manufacture work. "Project context is healthy and portable. No changes
   required."
-- **Managed region `DRIFTED`**: `uze context inspect` will show this per
+- **Managed region `DRIFTED`**: `uze agent context inspect` will show this per
   contribution or bridge. Report exactly what's drifted and where, and ask
   the user how they want to resolve it (e.g. "accept the current file
   content and I'll treat it as the new baseline" is a human decision about
   *content*, which then still only gets written via a package
   update/reconcile — never explain this away or paper over it).
-- **A harness not detected on this machine**: `uze context inspect` reports
+- **A harness not detected on this machine**: `uze agent context inspect` reports
   this as `NotDetected`, not a gap. Mention it factually if relevant, don't
   treat it as something to fix.
 

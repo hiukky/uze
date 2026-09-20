@@ -574,7 +574,7 @@ impl Project<'_> {
 
 /// `uze status`'s view of this project's `agents.lock` — deliberately
 /// smaller than `ProjectEnvironmentPlan` (which
-/// `context inspect`-equivalent commands already cover in full): just
+/// `agent context inspect`-equivalent commands already cover in full): just
 /// enough to answer "is there a lock, and does it match what's installed."
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "SCREAMING_SNAKE_CASE")]

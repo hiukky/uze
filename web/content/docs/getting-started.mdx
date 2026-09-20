@@ -124,19 +124,22 @@ $ uze plugin inspect flow    # capabilities, and how each harness will receive t
 
 ## Share one project context
 
-`AGENTS.md` at the project root is the portable baseline. `uze context` reads it,
-shows what each harness sees, and maintains the one bridge that needs
-maintaining:
+`AGENTS.md` at the project root is the portable baseline, and you never run a
+command to maintain it: `uze install` leaves it composed and every harness
+bridge in step, and `uze status` says which file the context comes from and
+whether each detected harness reads it.
 
 ```bash
-$ uze context inspect     # what each harness currently sees — read-only
-$ uze context plan        # exactly what reconcile would change — read-only
-$ uze context reconcile   # apply it
+$ uze install    # resolve, install, and leave the context reconciled
+$ uze status     # which file, which harnesses, and anything still owed
 ```
 
-`reconcile` only ever writes inside the delimited regions it owns. Anything you
-wrote around them is preserved, and a vendor file holding its own content is
-reported rather than overwritten. See [Project context](/docs/concepts/context).
+Only the delimited regions uze owns are ever written. Anything you wrote around
+them is preserved, and a vendor file holding its own content is reported rather
+than overwritten. The region-by-region detail is on the
+[agent surface](/docs/cli#agent-surface) — `uze agent context inspect | plan |
+reconcile` — written for an agent maintaining the file, not for you. See
+[Project context](/docs/concepts/context).
 
 ## Check the health
 

@@ -277,6 +277,27 @@ impl Health<'_> {
                     .map(|region| format!("{region}: malformed")),
             )
             .collect();
+        // Read out of the sources the inspection already observed rather
+        // than asked of the filesystem again: `status` and `agent context
+        // inspect` must never disagree about whether the file is there.
+        let instructions = context
+            .sources
+            .iter()
+            .find(|source| source.file_name == uze_core::project_context::AGENTS_MD_FILE_NAME)
+            .map_or_else(
+                || InstructionsFile {
+                    path: context
+                        .canonical
+                        .join(uze_core::project_context::AGENTS_MD_FILE_NAME),
+                    exists: false,
+                    managed_regions: 0,
+                },
+                |source| InstructionsFile {
+                    path: source.path.clone(),
+                    exists: source.exists,
+                    managed_regions: source.managed_region_identities.len(),
+                },
+            );
         let project_lock = self.0.project().lock_status(project_root);
         // The plan is where the whole chain is compared; status shows what
         // it found rather than asking the same questions a second way. A
@@ -289,6 +310,7 @@ impl Health<'_> {
             .unwrap_or_default();
         Ok(StatusReport {
             root: context.canonical.clone(),
+            instructions,
             drift,
             portability: context.portability,
             harnesses: context.harnesses,

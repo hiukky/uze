@@ -62,11 +62,6 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Manage this project's context (AGENTS.md)
-    Context {
-        #[command(subcommand)]
-        action: ContextAction,
-    },
     /// Choose what UZE looks like (machine-level)
     Theme {
         #[command(subcommand)]
@@ -136,6 +131,12 @@ enum AgentAction {
     Artifacts {
         #[command(subcommand)]
         action: AgentArtifactsAction,
+    },
+    /// This project's context (AGENTS.md) — what it declares, what
+    /// reconciling it would write, and writing it
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
     },
 }
 
@@ -422,7 +423,7 @@ enum HelpTopic {
 
 /// The commands the root help lists under "Project:" — the project-scoped
 /// half of ADR-019's grammar. Every other visible command is the machine's.
-const PROJECT_COMMANDS: &[&str] = &["install", "remove", "status", "context"];
+const PROJECT_COMMANDS: &[&str] = &["install", "remove", "status"];
 
 /// Whether clap reads `arguments` as a command to run — which makes a
 /// `help` among them one of its values rather than a request for a page.
@@ -657,7 +658,7 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 /// The leaf command path `argv` names, spelled the way a person types it
-/// (`context inspect`); the first argument when it names no subcommand
+/// (`agent context inspect`); the first argument when it names no subcommand
 /// (a `plugin@marketplace` shorthand), and `tui` when there is none.
 /// Parsed again from the grammar rather than derived from `Cli`'s
 /// variants, so a renamed subcommand renames its span with it.
@@ -804,7 +805,6 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             emit(format, &report, render_status);
         }
         Command::Agent { action } => run_agent(&app, action)?,
-        Command::Context { action } => run_context(&app, action)?,
         Command::Theme { action } => run_theme(&app, &home, action)?,
         Command::Market { action } => run_market(&app, action)?,
         Command::Plugin { action } => run_plugin(&app, action, verbose)?,
@@ -918,9 +918,15 @@ fn print_setup_help() {
     );
 }
 
-/// `uze context …` — the project-scoped half of the grammar: what this
-/// project declares, what reconciling it would write, and writing it. See
-/// ADR-019 for why none of these ever touch machine state.
+/// `uze agent context …` — the project-scoped half of the grammar, on the
+/// agent's surface: what this project declares, what reconciling it would
+/// write, and writing it. See ADR-019 for why none of these ever touch
+/// machine state.
+///
+/// It sits under `agent` because its reader is one: a person asks `uze
+/// status` whether the project is ready and `uze install` to make it so,
+/// and neither ever needs the region-by-region detail these three answer
+/// with.
 fn run_context(app: &UzeApplication, action: ContextAction) -> Result<()> {
     match action {
         ContextAction::Inspect { path, format } => {
@@ -1874,7 +1880,7 @@ fn blocked(
     ))
 }
 
-/// `uze context` defaults to the current directory; an explicit path is
+/// `uze agent context` defaults to the current directory; an explicit path is
 /// otherwise used exactly as given.
 fn context_path(path: Option<PathBuf>) -> PathBuf {
     path.unwrap_or_else(|| PathBuf::from("."))
@@ -2297,6 +2303,7 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
     match action {
         AgentAction::Task { action } => run_agent_task(app, action),
         AgentAction::Artifacts { action } => run_agent_artifacts(action),
+        AgentAction::Context { action } => run_context(app, action),
     }
 }
 
@@ -2770,9 +2777,11 @@ fn render_status(report: &StatusReport) -> String {
 
     text.push('\n');
     text.push_str(&progress::report_section("Context coverage"));
+    text.push_str(&render_status_instructions(&report.instructions));
     for harness in &report.harnesses {
         text.push_str(&render_status_harness(harness));
     }
+    text.push_str(&render_portability_gaps(&report.portability));
 
     text.push('\n');
     text.push_str(&progress::report_section("Project environment"));
@@ -2884,6 +2893,55 @@ fn render_drift(drift: &uze_application::application::EnvironmentDrift) -> Strin
     text
 }
 
+/// The file the rows beneath it are about. A coverage list that never
+/// names the document it covers reads as an answer to a question nobody
+/// asked — and when the file is absent, its absence *is* the finding.
+fn render_status_instructions(
+    instructions: &uze_application::application::InstructionsFile,
+) -> String {
+    let name = instructions.path.file_name().map_or_else(
+        || instructions.path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let state = if !instructions.exists {
+        progress::warning_text("absent")
+    } else if instructions.managed_regions == 0 {
+        progress::success_text("present")
+    } else {
+        progress::success_text(format!(
+            "present, {} {} managed by UZE",
+            instructions.managed_regions,
+            plural(instructions.managed_regions, "region", "regions")
+        ))
+    };
+    format!("  {name:<16} {state}\n")
+}
+
+/// Why this project is not portable, in the words the inspection already
+/// found. `status` says "needs attention" on its own line; without this
+/// it never says what about.
+fn render_portability_gaps(portability: &Portability) -> String {
+    let gaps: Vec<String> = match portability {
+        Portability::Portable | Portability::NoContext => return String::new(),
+        Portability::PartiallyPortable { gaps } => gaps.clone(),
+        Portability::VendorLocked { files } => files
+            .iter()
+            .map(|path| {
+                format!(
+                    "{}: carries instructions no other harness reads",
+                    path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned()
+                    )
+                )
+            })
+            .collect(),
+    };
+    gaps.iter()
+        .map(|gap| format!("  {} {gap}\n", progress::warning_icon()))
+        .collect()
+}
+
 fn render_status_harness(harness: &uze_application::application::HarnessContextStatus) -> String {
     let state = match &harness.delivery {
         HarnessContextDelivery::Native => progress::success_text("Native"),
@@ -2908,13 +2966,22 @@ fn locked_plugin_count(status: &uze_application::application::ProjectLockStatus)
     }
 }
 
+/// The one command this project is owed, in the words of somebody who
+/// runs `uze status` and nothing else. `install` converges the manifest
+/// and leaves the context reconciled, so it is the answer to everything a
+/// command *can* answer — but a project with no `AGENTS.md` is owed a
+/// decision about what goes in one, and naming a command there would
+/// promise a repair that running it does not perform.
 fn status_next_step(report: &StatusReport) -> Option<&'static str> {
     if locked_plugin_count(&report.project_lock) > 0 {
-        Some("Run `uze install` to install the locked project packages.")
-    } else if !report.issues.is_empty() || !matches!(report.portability, Portability::Portable) {
-        Some("Run `uze context reconcile` to repair project context.")
-    } else {
-        None
+        return Some("Run `uze install` to install the locked project packages.");
+    }
+    match &report.portability {
+        Portability::NoContext | Portability::VendorLocked { .. } => {
+            Some("Write an AGENTS.md — the `uze:init` Skill drafts one with you.")
+        }
+        Portability::Portable if report.issues.is_empty() => None,
+        _ => Some("Run `uze install` to repair project context."),
     }
 }
 
@@ -3123,7 +3190,7 @@ fn render_context_plan(plan: &ContextPlan, app: &UzeApplication) -> String {
         }
     }
     if plan.has_changes() {
-        text.push_str("\nRun `uze context reconcile` to apply.\n");
+        text.push_str("\nRun `uze agent context reconcile` to apply.\n");
     } else {
         text.push_str("\nNo changes: context is already reconciled.\n");
     }
@@ -3250,5 +3317,134 @@ mod grammar_tests {
             !names.iter().any(|name| name == "external"),
             "the shorthand fallback must never appear as a discoverable command name"
         );
+    }
+
+    /// Context lives on the agent's surface and nowhere else. A root
+    /// `context` would put the same three verbs in front of a person who
+    /// is served by `status` and `install`, and the audience split is the
+    /// whole of why they moved.
+    #[test]
+    fn context_is_reached_only_through_the_agent_surface() {
+        let command = Cli::command();
+        assert!(
+            command
+                .get_subcommands()
+                .all(|sub| sub.get_name() != "context"),
+            "`context` must not be a root command"
+        );
+        let agent = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == "agent")
+            .expect("the agent surface must exist");
+        assert!(
+            agent
+                .get_subcommands()
+                .any(|sub| sub.get_name() == "context"),
+            "`agent context` must exist"
+        );
+        assert!(
+            agent.is_hide_set(),
+            "the agent surface is documented in the projected instructions, not in `uze --help`"
+        );
+    }
+}
+
+/// What `uze status` — the one context surface a person is expected to
+/// read — must keep saying. The three verbs it replaced now answer to an
+/// agent, so anything a person needs about the project's context has to
+/// be legible here or nowhere.
+#[cfg(test)]
+mod status_output_tests {
+    use uze_application::application::{
+        EnvironmentDrift, InstructionsFile, Portability, ProjectLockStatus, StatusReport,
+    };
+
+    use super::{render_status, status_next_step};
+
+    fn report(instructions: InstructionsFile, portability: Portability) -> StatusReport {
+        StatusReport {
+            root: std::path::PathBuf::from("/project"),
+            instructions,
+            portability,
+            harnesses: Vec::new(),
+            packages_installed: 0,
+            packages_contributing_here: 0,
+            project_lock: ProjectLockStatus::Absent,
+            drift: EnvironmentDrift::default(),
+            issues: Vec::new(),
+        }
+    }
+
+    fn present() -> InstructionsFile {
+        InstructionsFile {
+            path: std::path::PathBuf::from("/project/AGENTS.md"),
+            exists: true,
+            managed_regions: 2,
+        }
+    }
+
+    fn absent() -> InstructionsFile {
+        InstructionsFile {
+            path: std::path::PathBuf::from("/project/AGENTS.md"),
+            exists: false,
+            managed_regions: 0,
+        }
+    }
+
+    #[test]
+    fn the_coverage_section_names_the_file_it_is_about() {
+        let text = render_status(&report(present(), Portability::Portable));
+        assert!(text.contains("AGENTS.md"), "{text}");
+        assert!(text.contains("2 regions managed by UZE"), "{text}");
+    }
+
+    #[test]
+    fn an_absent_file_is_the_finding_rather_than_a_silent_gap() {
+        let text = render_status(&report(absent(), Portability::NoContext));
+        assert!(text.contains("absent"), "{text}");
+    }
+
+    /// The gaps used to be reachable only by running `context inspect`,
+    /// which is now the agent's command; a person reading "needs
+    /// attention" has to be told what about.
+    #[test]
+    fn a_bridge_gap_is_named_where_a_person_reads_it() {
+        let text = render_status(&report(
+            present(),
+            Portability::PartiallyPortable {
+                gaps: vec!["claude-code: bridge Missing".to_owned()],
+            },
+        ));
+        assert!(text.contains("claude-code: bridge Missing"), "{text}");
+    }
+
+    #[test]
+    fn a_vendor_locked_project_is_owed_a_decision_never_a_command() {
+        let step = status_next_step(&report(
+            absent(),
+            Portability::VendorLocked {
+                files: vec![std::path::PathBuf::from("/project/CLAUDE.md")],
+            },
+        ))
+        .expect("a vendor-locked project is owed something");
+        assert!(!step.contains("uze "), "{step}");
+        assert!(step.contains("AGENTS.md"), "{step}");
+    }
+
+    #[test]
+    fn a_reconcilable_gap_is_owed_the_command_that_closes_it() {
+        let step = status_next_step(&report(
+            present(),
+            Portability::PartiallyPortable {
+                gaps: vec!["claude-code: bridge Missing".to_owned()],
+            },
+        ))
+        .expect("a bridge gap is owed a command");
+        assert_eq!(step, "Run `uze install` to repair project context.");
+    }
+
+    #[test]
+    fn a_healthy_project_is_owed_nothing() {
+        assert!(status_next_step(&report(present(), Portability::Portable)).is_none());
     }
 }
