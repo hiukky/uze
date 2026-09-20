@@ -322,7 +322,7 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Agent, Base, TaskStore};
+    use crate::task::{Agent, AgentStore, Base};
 
     fn home(label: &str) -> UzeHome {
         UzeHome::at(uze_testkit::temp::scratch(label))
@@ -460,7 +460,7 @@ mod tests {
         let primary = project("conversation-no-owner-project");
         let slot = primary.join(".worktrees").join("slot-1");
         fs::create_dir_all(&slot).unwrap();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let task = task_named("slot-1");
         let id = task.id.as_str().to_owned();
         store.upsert(task);
@@ -510,7 +510,7 @@ mod tests {
         let nested = slot.join("src").join("deep");
         fs::create_dir_all(&nested).unwrap();
 
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let previous = task_named("slot-1");
         let current = task_named("slot-1");
         let previous_id = previous.id.clone();
@@ -552,7 +552,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         let agent = Agent::in_the_root("claude-code");
         let id = agent.id.clone();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         store.upsert(agent);
         task::save(&home, &root, &store).unwrap();
 

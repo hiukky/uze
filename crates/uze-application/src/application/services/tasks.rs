@@ -15,7 +15,7 @@ use uze_core::{
     conversation::{self, Claim},
     landing::{self, Delivered, DeliveryFailure, Readiness},
     manifest, prompt_history,
-    task::{self, Agent, AgentId, Base, Isolation, TaskState, TaskStore},
+    task::{self, Agent, AgentId, AgentStore, Base, Isolation, WorkState},
     workspace,
     worktree::{self, BranchVocabulary, CompletionBehavior, NameRefusal, WorktreePolicy},
 };
@@ -271,7 +271,9 @@ impl Workspace<'_> {
             // and its empty branch back, and refuse the launch.
             Err(error) => {
                 let Some(isolation) = taken.as_ref().and_then(Agent::isolation) else {
-                    return Err(refused(format!("task state could not be read: {error}")));
+                    return Err(refused(format!(
+                        "the agents recorded here could not be read: {error}"
+                    )));
                 };
                 let _ = checkout::discard(&primary, isolation);
                 return Err(refused(format!(
@@ -444,8 +446,11 @@ impl Workspace<'_> {
             let agent = task_mut(store, task_id)
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
             let id = agent.id.clone();
-            let task = agent
-                .isolation_mut()
+            let Agent {
+                state, isolation, ..
+            } = agent;
+            let task = isolation
+                .as_mut()
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
             if let (Some(existing), Some(checkout)) =
                 (landing::slot_path(&primary, task), task.checkout.clone())
@@ -465,7 +470,7 @@ impl Workspace<'_> {
             let acquired = checkout::resume(&primary, &snapshot, task, policy.slots, occupied)
                 .map_err(|error| UzeError::ResumeFailed(error.to_string()))?;
             task.checkout = Some(acquired.id.clone());
-            task.state = TaskState::Running;
+            *state = WorkState::Running;
             let placement = Placement::Isolated {
                 task: id,
                 checkout: acquired.id.clone(),
@@ -670,7 +675,7 @@ impl Workspace<'_> {
 
     /// Every task recorded for `cwd`'s repository, as last evaluated.
     #[tracing::instrument(name = "workspace.tasks", skip_all, fields(cwd = %cwd.display()))]
-    pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
+    pub fn tasks(&self, cwd: &Path) -> Vec<AgentView> {
         self.repository(cwd)
             .map(|repository| repository.views())
             .unwrap_or_default()
@@ -744,18 +749,22 @@ impl Workspace<'_> {
             checkout::reconcile(&primary, store, &target);
             let pass = EvaluationPass {
                 primary: &primary,
+                target: &target,
                 occupied,
                 owners: store.slot_owners(),
                 vocabulary: &policy.branch,
                 completion,
             };
-            for agent in store.agents.iter_mut().filter(|agent| agent.is_isolated()) {
+            // Every agent, not only the isolated ones: where the work
+            // stands is a fact about the checkout an agent sits in, and
+            // one in the project's own root sits in a checkout too.
+            for agent in store.agents.iter_mut() {
                 if let Some(read) = pass.evaluate(agent) {
                     ask_the_remote.extend(read.ask_the_remote);
                     notices.extend(read.notice);
                 }
             }
-            Ok(task_views(&primary, store, completion))
+            Ok(task_views(&primary, store, completion, &target))
         });
         let (tasks, recovery) = match evaluated {
             Ok(answered) => answered,
@@ -772,12 +781,18 @@ impl Workspace<'_> {
             unreadable: None,
             recovered: recovery.set_aside.map(|set_aside| {
                 format!(
-                    "task state unreadable — set aside at {}",
+                    "the agents recorded here could not be read — set aside at {}",
                     set_aside.path.display()
                 )
             }),
         };
-        self.adopt_observed_requests(&primary, completion, &ask_the_remote, &mut evaluation);
+        self.adopt_observed_requests(
+            &primary,
+            completion,
+            &target,
+            &ask_the_remote,
+            &mut evaluation,
+        );
         evaluation
     }
 
@@ -789,6 +804,7 @@ impl Workspace<'_> {
         &self,
         primary: &Path,
         completion: CompletionBehavior,
+        target: &str,
         asked: &[(AgentId, Isolation)],
         evaluation: &mut Evaluation,
     ) {
@@ -815,7 +831,7 @@ impl Workspace<'_> {
                     landing::adopt_request(record, observation);
                 }
             }
-            Ok(task_views(primary, store, completion))
+            Ok(task_views(primary, store, completion, target))
         });
         match adopted {
             Ok(tasks) => evaluation.tasks = tasks,
@@ -846,11 +862,7 @@ impl Workspace<'_> {
         let mut ready: Vec<(u64, String)> = repository
             .store
             .isolated()
-            .filter(|agent| {
-                agent
-                    .isolation()
-                    .is_some_and(|isolation| isolation.state == TaskState::Ready)
-            })
+            .filter(|agent| agent.state == WorkState::Ready)
             .map(|agent| (agent.created_at_unix, agent.id.as_str().to_owned()))
             .collect();
         ready.sort();
@@ -875,7 +887,7 @@ impl Workspace<'_> {
     /// going quiet — wait the full two minutes and then fail, and the
     /// press that waited came back as "nothing ready".
     ///
-    /// So the lock is taken to mark the task [`TaskState::Integrating`]
+    /// So the lock is taken to mark the task [`WorkState::Integrating`]
     /// and released. That state is what tells the rest of the client the
     /// task is spoken for: an evaluation skips it, and so does the release
     /// of abandoned tasks — both already did, because a delivery has
@@ -901,7 +913,8 @@ impl Workspace<'_> {
                 // `Integrating` is what the *document* says while it runs
                 // — the claim, not an input to it.
                 let claimed = agent.clone();
-                agent.isolation_mut()?.state = TaskState::Integrating;
+                agent.isolation()?;
+                agent.state = WorkState::Integrating;
                 Some(claimed)
             }))
         });
@@ -919,13 +932,18 @@ impl Workspace<'_> {
             }
         };
         let id = agent.id.clone();
-        let outcome = deliver_one(primary, policy, &id, agent.isolation_mut()?);
+        let outcome = deliver_one(primary, policy, &id, &mut agent);
         let mut report = DeliveryReport {
-            task: TaskView::from_agent(primary, &agent, policy.completion)?,
+            task: AgentView::from_agent(
+                primary,
+                &agent,
+                policy.completion,
+                &target_of(primary, policy),
+            )?,
             outcome,
             warnings: Vec::new(),
         };
-        let task = agent.isolation()?.clone();
+        let delivered = agent.clone();
         let recorded = task::locked(&self.0.home, primary, |store| {
             let Some(record) = task_mut(store, task_id) else {
                 return Ok(Recorded::Superseded);
@@ -933,13 +951,10 @@ impl Workspace<'_> {
             // Only the record this delivery claimed. The operator can
             // finish or discard a task while its gate runs, and what they
             // decided about it is newer than this.
-            let Some(record) = record.isolation_mut() else {
-                return Ok(Recorded::Superseded);
-            };
-            if record.state != TaskState::Integrating {
+            if record.state != WorkState::Integrating {
                 return Ok(Recorded::Superseded);
             }
-            *record = task;
+            *record = delivered;
             Ok(Recorded::Applied)
         });
         match recorded {
@@ -968,7 +983,12 @@ impl Workspace<'_> {
         let store = task::load(&self.0.home, primary).ok()?;
         let agent = store.agent(task_id)?;
         Some(DeliveryReport {
-            task: TaskView::from_agent(primary, agent, policy.completion)?,
+            task: AgentView::from_agent(
+                primary,
+                agent,
+                policy.completion,
+                &target_of(primary, policy),
+            )?,
             outcome: DeliveryOutcome::Refused(format!("the delivery could not start: {error}")),
             warnings: Vec::new(),
         })
@@ -1098,20 +1118,20 @@ impl Workspace<'_> {
             for agent in store.agents.iter_mut() {
                 let id = agent.id.clone();
                 let label = agent.label.clone();
-                let Some(task) = agent.isolation_mut() else {
-                    continue;
-                };
                 // A delivery in flight owns the agent until it answers.
-                if !is_agents_turn(&task.state) {
+                if !is_agents_turn(&agent.state) {
                     continue;
                 }
+                let Some(task) = agent.isolation() else {
+                    continue;
+                };
                 let in_its_slot = landing::slot_path(&primary, task)
                     .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
                 let launched_for = echoed.iter().any(|echo| echo == id.as_str());
                 if in_its_slot || launched_for {
                     continue;
                 }
-                let slot = checkout::release(&primary, task, &target);
+                let slot = checkout::release(&primary, agent, &target);
                 released.push(ReleasedTask {
                     id: id.as_str().to_owned(),
                     label,
@@ -1163,10 +1183,10 @@ impl Workspace<'_> {
             .repository_context(cwd)
             .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
         task::locked(&self.0.home, &primary, |store| {
-            let task = task_mut(store, task_id)
-                .and_then(Agent::isolation_mut)
+            let agent = task_mut(store, task_id)
+                .filter(|agent| agent.is_isolated())
                 .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
-            task.state = TaskState::Integrated;
+            agent.state = WorkState::Integrated;
             Ok(())
         })
     }
@@ -1206,7 +1226,7 @@ impl Workspace<'_> {
 struct Repository {
     primary: PathBuf,
     policy: WorktreePolicy,
-    store: TaskStore,
+    store: AgentStore,
 }
 
 impl Repository {
@@ -1214,15 +1234,20 @@ impl Repository {
         target_of(&self.primary, &self.policy)
     }
 
-    fn views(&self) -> Vec<TaskView> {
-        task_views(&self.primary, &self.store, self.policy.completion)
+    fn views(&self) -> Vec<AgentView> {
+        task_views(
+            &self.primary,
+            &self.store,
+            self.policy.completion,
+            &self.target(),
+        )
     }
 }
 
 /// Whether an agent may still be at work on a task in `state`: live, and
 /// not owned by a delivery in flight.
-fn is_agents_turn(state: &TaskState) -> bool {
-    checkout::is_live(state) && *state != TaskState::Integrating
+fn is_agents_turn(state: &WorkState) -> bool {
+    checkout::is_live(state) && *state != WorkState::Integrating
 }
 
 /// What reading one task from its checkout came to: the task as the remote
@@ -1236,6 +1261,9 @@ struct Read {
 /// What every task of one evaluation pass is read against.
 struct EvaluationPass<'a> {
     primary: &'a Path,
+    /// What the project delivers onto, and what an agent in the root is
+    /// measured against — it has no base of its own to be ahead of.
+    target: &'a str,
     /// The checkout directories a live pane still sits in.
     occupied: &'a [PathBuf],
     owners: BTreeSet<AgentId>,
@@ -1249,6 +1277,22 @@ impl EvaluationPass<'_> {
     fn evaluate(&self, agent: &mut Agent) -> Option<Read> {
         let primary = self.primary;
         let id = agent.id.clone();
+        if !agent.is_isolated() {
+            // An agent in the project's own root: the checkout is the
+            // project, and where the work stands there is what the
+            // operator and every sibling agent are looking at too. Only
+            // the three questions a directory can answer are asked — a
+            // delivery is UZE's to run only on a branch UZE cut.
+            if is_agents_turn(&agent.state) {
+                agent.state = match landing::readiness_of_checkout(primary, self.target) {
+                    Readiness::Running => WorkState::Running,
+                    Readiness::Uncommitted => WorkState::Uncommitted,
+                    Readiness::Rebasing { files } => WorkState::Conflicted { files },
+                    Readiness::Ready { .. } => WorkState::Ready,
+                };
+            }
+            return None;
+        }
         // The branch a task is on is a Git fact, and the recorded branch
         // is a cache of it. Re-read before anything is asked *about* the
         // branch: an operator renaming it by hand otherwise leaves every
@@ -1264,7 +1308,10 @@ impl EvaluationPass<'_> {
         {
             agent.take_name(actual);
         }
-        let task = agent.isolation_mut()?;
+        let Agent {
+            state, isolation, ..
+        } = agent;
+        let task = isolation.as_mut()?;
         // A task that ended is still looked at while it owns its slot: the
         // agent that delivered usually keeps working in the same checkout,
         // and skipping every non-live task froze that row on `delivered`
@@ -1277,14 +1324,14 @@ impl EvaluationPass<'_> {
         // its checkout (`occupied`): parked means "no agent left", and an
         // agent that is there makes it a lie, whichever way it got there —
         // a release that raced the tab opening, a resume.
-        let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+        let ended_owner = matches!(*state, WorkState::Integrated | WorkState::Closed)
             && self.owners.contains(&id);
-        let parked_with_agent = task.state == TaskState::Parked
+        let parked_with_agent = *state == WorkState::Parked
             && slot
                 .as_ref()
                 .is_some_and(|slot| self.occupied.iter().any(|pane| pane.starts_with(slot)));
-        let parked_alone = task.state == TaskState::Parked && !parked_with_agent;
-        if !(is_agents_turn(&task.state) || ended_owner || parked_with_agent || parked_alone) {
+        let parked_alone = *state == WorkState::Parked && !parked_with_agent;
+        if !(is_agents_turn(state) || ended_owner || parked_with_agent || parked_alone) {
             return None;
         }
         // Parked is nobody's turn, but its work can still reach the target
@@ -1292,7 +1339,7 @@ impl EvaluationPass<'_> {
         // the forge. Left parked, it was listed as preserved work for good
         // and its slot never went back to the pool.
         if parked_alone {
-            landing::settle_delivered(primary, task);
+            landing::settle_delivered(primary, state, task);
             return None;
         }
         // A rebase paused on work the target already carries — what an
@@ -1301,10 +1348,10 @@ impl EvaluationPass<'_> {
         let paused = slot
             .as_ref()
             .is_some_and(|slot| landing::paused_rebase(slot).is_some());
-        if paused && landing::settle_delivered(primary, task) {
+        if paused && landing::settle_delivered(primary, state, task) {
             return None;
         }
-        self.read_readiness(task, ended_owner);
+        self.read_readiness(state, task, ended_owner);
         // The other half of what a delivery would do, learned the same way
         // readiness is: an agent told to push and open the request itself
         // is the one case UZE's own records can never cover, and until this
@@ -1324,11 +1371,11 @@ impl EvaluationPass<'_> {
         // completion behaviour: a task that follows the target as it moves
         // meets a conflict while its agent is still holding the change,
         // rather than in a request already opened.
-        let notice = if matches!(task.state, TaskState::Running | TaskState::Ready)
+        let notice = if matches!(*state, WorkState::Running | WorkState::Ready)
             && let Err(DeliveryFailure::Conflict {
                 files,
                 target_moved,
-            }) = landing::refresh(primary, task)
+            }) = landing::refresh(primary, state, task)
             && let Some(slot) = slot
         {
             Some(AgentNotice {
@@ -1348,16 +1395,16 @@ impl EvaluationPass<'_> {
         })
     }
 
-    fn read_readiness(&self, task: &mut Isolation, ended_owner: bool) {
+    fn read_readiness(&self, state: &mut WorkState, task: &mut Isolation, ended_owner: bool) {
         let primary = self.primary;
         match landing::readiness(primary, task) {
             // Nothing new since it ended leaves the ending standing: the
             // delivery is the last thing that happened to the task, and
             // saying `running` instead would erase it on the next tick.
             Readiness::Running if ended_owner => {}
-            Readiness::Running => task.state = TaskState::Running,
-            Readiness::Uncommitted => task.state = TaskState::Uncommitted,
-            Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+            Readiness::Running => *state = WorkState::Running,
+            Readiness::Uncommitted => *state = WorkState::Uncommitted,
+            Readiness::Rebasing { files } => *state = WorkState::Conflicted { files },
             // A forge that squashes what it merges leaves none of the
             // branch's commits in the target, so they still count as ahead;
             // asked by patch instead, the work is delivered. Left `Ready`,
@@ -1366,18 +1413,18 @@ impl EvaluationPass<'_> {
             Readiness::Ready { .. }
                 if checkout::is_integrated(primary, &task.target, &task.branch) =>
             {
-                landing::mark_delivered(primary, task);
+                landing::mark_delivered(primary, state, task);
             }
             Readiness::Ready { base, .. } => {
                 // Delivered, and now holding work the target lacks: the
                 // agent kept going, and the request it had answered for the
                 // work already merged, not for this.
-                if task.state == TaskState::Integrated {
+                if *state == WorkState::Integrated {
                     task.forget_request();
                 }
                 task.base_commit = base;
-                if task.state != TaskState::GateFailed {
-                    task.state = TaskState::Ready;
+                if *state != WorkState::GateFailed {
+                    *state = WorkState::Ready;
                 }
             }
         }
@@ -1399,7 +1446,7 @@ impl EvaluationPass<'_> {
             return;
         };
         if self.vocabulary.names_work()
-            && isolation.state == TaskState::Ready
+            && agent.state == WorkState::Ready
             && !agent.is_named()
             && let Some(derived) = landing::derived_name(primary, isolation, self.vocabulary)
             && !checkout::branch_exists(primary, &derived)
@@ -1420,15 +1467,20 @@ fn target_of(primary: &Path, policy: &WorktreePolicy) -> String {
         .unwrap_or_else(|| "HEAD".to_owned())
 }
 
-fn task_mut<'a>(store: &'a mut TaskStore, id: &str) -> Option<&'a mut Agent> {
+fn task_mut<'a>(store: &'a mut AgentStore, id: &str) -> Option<&'a mut Agent> {
     store.agent_mut(id)
 }
 
-fn task_views(primary: &Path, store: &TaskStore, completion: CompletionBehavior) -> Vec<TaskView> {
+fn task_views(
+    primary: &Path,
+    store: &AgentStore,
+    completion: CompletionBehavior,
+    target: &str,
+) -> Vec<AgentView> {
     store
         .agents
         .iter()
-        .filter_map(|agent| TaskView::from_agent(primary, agent, completion))
+        .filter_map(|agent| AgentView::from_agent(primary, agent, completion, target))
         .collect()
 }
 
@@ -1462,7 +1514,7 @@ fn deliver_one(
     primary: &Path,
     policy: &WorktreePolicy,
     id: &AgentId,
-    task: &mut Isolation,
+    agent: &mut Agent,
 ) -> DeliveryOutcome {
     let completion = policy.completion;
     let gate = policy.gate.clone();
@@ -1470,7 +1522,11 @@ fn deliver_one(
         completion,
         gate: &gate,
     };
-    match landing::deliver(primary, task, &policy) {
+    // Kept for the messages below, which describe the branch rather than
+    // the outcome; delivery itself writes through the agent.
+    let task = agent.isolation().cloned();
+    let task = task.as_ref();
+    match landing::deliver(primary, agent, &policy) {
         Ok(Delivered::Handoff) => DeliveryOutcome::Handoff,
         Ok(Delivered::Merged { .. }) => DeliveryOutcome::Merged,
         Ok(Delivered::Published { branch, request }) => {
@@ -1481,7 +1537,9 @@ fn deliver_one(
             instruction,
         }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
             task: id.as_str().to_owned(),
-            checkout: landing::slot_path(primary, task).unwrap_or_default(),
+            checkout: task
+                .and_then(|task| landing::slot_path(primary, task))
+                .unwrap_or_default(),
             message: instruction,
         }),
         Err(DeliveryFailure::Conflict {
@@ -1489,14 +1547,26 @@ fn deliver_one(
             target_moved,
         }) => DeliveryOutcome::ReturnedToAgent(AgentNotice {
             task: id.as_str().to_owned(),
-            checkout: landing::slot_path(primary, task).unwrap_or_default(),
-            message: landing::conflict_message(task, &files, target_moved),
+            checkout: task
+                .and_then(|task| landing::slot_path(primary, task))
+                .unwrap_or_default(),
+            message: landing::conflict_message(
+                task.expect("delivery needs isolation"),
+                &files,
+                target_moved,
+            ),
         }),
         Err(DeliveryFailure::GateFailed { command, output }) => {
             DeliveryOutcome::ReturnedToAgent(AgentNotice {
                 task: id.as_str().to_owned(),
-                checkout: landing::slot_path(primary, task).unwrap_or_default(),
-                message: landing::gate_failure_message(task, &command, &output),
+                checkout: task
+                    .and_then(|task| landing::slot_path(primary, task))
+                    .unwrap_or_default(),
+                message: landing::gate_failure_message(
+                    task.expect("delivery needs isolation"),
+                    &command,
+                    &output,
+                ),
             })
         }
         Err(other) => DeliveryOutcome::Refused(other.to_string()),
@@ -1598,7 +1668,7 @@ pub struct UpstreamSync {
 
 /// One piece of preserved work, as the list that crosses projects sees it.
 ///
-/// Deliberately thinner than a [`TaskView`]. Readiness, publication and how
+/// Deliberately thinner than a [`AgentView`]. Readiness, publication and how
 /// far a branch is ahead are questions about the project you are *in*, and
 /// answering them here would put one Git read per project on the machine
 /// behind a keystroke. Everything below comes from the record alone, which
@@ -1615,20 +1685,30 @@ pub struct PreservedWork {
     pub checkout: Option<PathBuf>,
     /// The state the record itself carries — never `Integrated` or
     /// `Closed`, which is what "preserved" means.
-    pub state: TaskStateView,
+    pub state: WorkStateView,
     pub created_at_unix: u64,
 }
 
 /// One task as presentation sees it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskView {
+pub struct AgentView {
     pub id: String,
     pub label: String,
     pub branch: String,
     pub target: String,
-    /// The slot's directory, when the task has one on disk.
+    /// The checkout this agent works in: a slot of its own when it has
+    /// one, and the project's own root when it does not.
     pub checkout: Option<PathBuf>,
-    pub state: TaskStateView,
+    /// Whether the checkout above was cut for this agent alone.
+    ///
+    /// The fact, not one of its consequences: an isolated agent is the one
+    /// UZE gave a branch and a slot to, and that is what decides whether
+    /// delivering it is UZE's to do, which group its row sits in, and
+    /// whether it can still be offered isolation. Read the fact and state
+    /// the rule at the call site — `branch` is not a proxy for it, because
+    /// an agent in the project's root is on one too.
+    pub isolated: bool,
+    pub state: WorkStateView,
     /// What delivering this task does — the project's own say, carried on
     /// the task so a surface offering the delivery can name its ending
     /// instead of showing one verb for three different outcomes.
@@ -1663,7 +1743,7 @@ impl PreservedWork {
     /// anything.
     fn from_agent(project: &Path, agent: &Agent) -> Option<Self> {
         let isolation = agent.isolation()?;
-        if matches!(isolation.state, TaskState::Integrated | TaskState::Closed) {
+        if matches!(agent.state, WorkState::Integrated | WorkState::Closed) {
             return None;
         }
         Some(Self {
@@ -1672,17 +1752,24 @@ impl PreservedWork {
             label: agent.label.clone(),
             branch: isolation.branch.clone(),
             checkout: landing::slot_path(project, isolation),
-            state: TaskStateView::from(&isolation.state),
+            state: WorkStateView::from(&agent.state),
             created_at_unix: agent.created_at_unix,
         })
     }
 }
 
-impl TaskView {
+impl AgentView {
     /// `None` for an agent working in the project's root: every field
     /// here is about a branch of its own, and it has none.
-    fn from_agent(primary: &Path, agent: &Agent, completion: CompletionBehavior) -> Option<Self> {
-        let task = agent.isolation()?;
+    fn from_agent(
+        primary: &Path,
+        agent: &Agent,
+        completion: CompletionBehavior,
+        target: &str,
+    ) -> Option<Self> {
+        let Some(task) = agent.isolation() else {
+            return Some(Self::in_the_root(primary, agent, completion, target));
+        };
         // What the remote holds, not what UZE remembers having sent: a
         // push the agent made is a push, and a view built from UZE's own
         // record of its own deliveries goes on offering to send commits
@@ -1704,14 +1791,52 @@ impl TaskView {
             branch: task.branch.clone(),
             target: task.target.clone(),
             checkout: landing::slot_path(primary, task),
-            state: drawn_state(primary, task, unsynced),
+            state: drawn_state(primary, &agent.state, task, unsynced),
             completion,
+            isolated: true,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: published.map(|published| published.branch),
             published_request: task.published_request,
             unsynced,
             created_at_unix: agent.created_at_unix,
         })
+    }
+
+    /// An agent working in the project's own root, beside the operator.
+    ///
+    /// Every field here is about the checkout it sits in rather than one
+    /// cut for it, and every other agent in that checkout reads the same
+    /// answers — which is the truth about where they are. What it never
+    /// carries is a publication or a base of its own: the branch is the
+    /// operator's, UZE did not cut it, and `isolated` says so, because
+    /// rebasing and pushing it is theirs to ask for and never UZE's to
+    /// offer.
+    fn in_the_root(
+        primary: &Path,
+        agent: &Agent,
+        completion: CompletionBehavior,
+        target: &str,
+    ) -> Self {
+        let branch = checkout::current_branch(primary).unwrap_or_default();
+        Self {
+            id: agent.id.as_str().to_owned(),
+            label: agent.label.clone(),
+            ahead: if branch.is_empty() {
+                0
+            } else {
+                checkout::commits_ahead(primary, target, &branch)
+            },
+            branch,
+            target: target.to_owned(),
+            checkout: Some(primary.to_path_buf()),
+            state: WorkStateView::from(&agent.state),
+            completion,
+            isolated: false,
+            published_as: None,
+            published_request: None,
+            unsynced: None,
+            created_at_unix: agent.created_at_unix,
+        }
     }
 }
 
@@ -1723,29 +1848,34 @@ impl TaskView {
 /// anything is still waiting to be handed over. Only where the completion
 /// publishes — `published` is `None` everywhere else, and the record's own
 /// state stands.
-fn drawn_state(primary: &Path, task: &Isolation, unsynced: Option<usize>) -> TaskStateView {
+fn drawn_state(
+    primary: &Path,
+    state: &WorkState,
+    task: &Isolation,
+    unsynced: Option<usize>,
+) -> WorkStateView {
     // Parked says only that nobody is there. A rebase paused in the
     // checkout is what the operator will find, and "uncommitted changes"
     // sent them looking for edits that were really conflict markers.
-    if task.state == TaskState::Parked
+    if *state == WorkState::Parked
         && let Some(files) =
             landing::slot_path(primary, task).and_then(|slot| landing::paused_rebase(&slot))
     {
-        return TaskStateView::Conflicted { files };
+        return WorkStateView::Conflicted { files };
     }
-    publication_state(&task.state, unsynced)
+    publication_state(state, unsynced)
 }
 
-fn publication_state(state: &TaskState, unsynced: Option<usize>) -> TaskStateView {
-    let view = TaskStateView::from(state);
-    if view == TaskStateView::Ready && unsynced == Some(0) {
-        return TaskStateView::Published;
+fn publication_state(state: &WorkState, unsynced: Option<usize>) -> WorkStateView {
+    let view = WorkStateView::from(state);
+    if view == WorkStateView::Ready && unsynced == Some(0) {
+        return WorkStateView::Published;
     }
     view
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TaskStateView {
+pub enum WorkStateView {
     Running,
     Uncommitted,
     Ready,
@@ -1771,7 +1901,7 @@ pub enum TaskStateView {
     Closed,
 }
 
-impl TaskStateView {
+impl WorkStateView {
     /// Why delivery is refused, for a state where it is — `None` for the
     /// states delivery may be offered for. `Published` is one: the request
     /// is level with the branch, but the target moves, and a re-sync is how
@@ -1799,20 +1929,20 @@ impl TaskStateView {
     }
 }
 
-impl From<&TaskState> for TaskStateView {
-    fn from(state: &TaskState) -> Self {
+impl From<&WorkState> for WorkStateView {
+    fn from(state: &WorkState) -> Self {
         match state {
-            TaskState::Running => Self::Running,
-            TaskState::Uncommitted => Self::Uncommitted,
-            TaskState::Ready => Self::Ready,
-            TaskState::Integrating => Self::Integrating,
-            TaskState::Conflicted { files } => Self::Conflicted {
+            WorkState::Running => Self::Running,
+            WorkState::Uncommitted => Self::Uncommitted,
+            WorkState::Ready => Self::Ready,
+            WorkState::Integrating => Self::Integrating,
+            WorkState::Conflicted { files } => Self::Conflicted {
                 files: files.clone(),
             },
-            TaskState::GateFailed => Self::GateFailed,
-            TaskState::Integrated => Self::Integrated,
-            TaskState::Parked => Self::Parked,
-            TaskState::Closed => Self::Closed,
+            WorkState::GateFailed => Self::GateFailed,
+            WorkState::Integrated => Self::Integrated,
+            WorkState::Parked => Self::Parked,
+            WorkState::Closed => Self::Closed,
         }
     }
 }
@@ -1828,7 +1958,7 @@ pub struct AgentNotice {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Evaluation {
-    pub tasks: Vec<TaskView>,
+    pub tasks: Vec<AgentView>,
     pub notices: Vec<AgentNotice>,
     /// Why the repository's recorded tasks could not be read, when they
     /// could not be.
@@ -1875,7 +2005,7 @@ pub enum DeliveryOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryReport {
-    pub task: TaskView,
+    pub task: AgentView,
     pub outcome: DeliveryOutcome,
     /// What the delivery could not do, none of which undoes the outcome —
     /// the same channel [`AgentPlacement`] carries. The one entry today is
@@ -2322,9 +2452,25 @@ mod placement_tests {
             "",
             "no branch was created"
         );
+        // Both are listed, and both read the same state: it is a fact
+        // about the checkout they share, not about either of them. What
+        // neither has is a delivery — the branch is the operator's, and
+        // rebasing and pushing it is theirs to ask for.
+        let listed = app.workspace().tasks(&root);
+        assert_eq!(listed.len(), 2, "{listed:?}");
         assert!(
-            app.workspace().tasks(&root).is_empty(),
-            "an agent in the root is not a task"
+            listed.iter().all(|view| !view.isolated),
+            "neither was cut by UZE, so neither is UZE's to deliver"
+        );
+        assert!(
+            listed.iter().all(
+                |view| view.checkout.as_deref() == Some(root.canonicalize().unwrap().as_path())
+            ),
+            "the checkout they work in is the project itself"
+        );
+        assert_eq!(
+            listed[0].state, listed[1].state,
+            "one checkout, one answer about where the work in it stands"
         );
         assert_eq!(live_in_the_root(&app, &root).len(), 2);
     }
@@ -2403,11 +2549,7 @@ mod placement_tests {
             .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store
-            .get_mut(slot(&first))
-            .and_then(Agent::isolation_mut)
-            .unwrap()
-            .state = uze_core::task::TaskState::Integrated;
+        store.get_mut(slot(&first)).unwrap().state = uze_core::task::WorkState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
         let second = app
@@ -2438,11 +2580,7 @@ mod placement_tests {
         let before = slot(&first).clone();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store
-            .get_mut(&before)
-            .and_then(Agent::isolation_mut)
-            .unwrap()
-            .state = uze_core::task::TaskState::Closed;
+        store.get_mut(&before).unwrap().state = uze_core::task::WorkState::Closed;
         task::save(&app.home, &primary, &store).unwrap();
         let second = app
             .workspace()
@@ -2450,11 +2588,7 @@ mod placement_tests {
             .unwrap();
         assert_eq!(second.cwd, first.cwd, "the freed slot is reused");
         let mut store = task::load(&app.home, &primary).unwrap();
-        store
-            .get_mut(&before)
-            .and_then(Agent::isolation_mut)
-            .unwrap()
-            .state = uze_core::task::TaskState::Running;
+        store.get_mut(&before).unwrap().state = uze_core::task::WorkState::Running;
         task::save(&app.home, &primary, &store).unwrap();
 
         let evaluation = app
@@ -2472,7 +2606,7 @@ mod placement_tests {
             "it keeps the branch it had"
         );
         assert_eq!(earlier.checkout, None, "the slot is no longer its");
-        assert_eq!(earlier.state, TaskStateView::Closed);
+        assert_eq!(earlier.state, WorkStateView::Closed);
     }
 
     /// A forge that squashes what it merges leaves none of the branch's
@@ -2497,7 +2631,7 @@ mod placement_tests {
             .evaluate_tasks(&root, std::slice::from_ref(&placed.cwd));
 
         let task = evaluation.tasks.iter().find(|task| task.id == id).unwrap();
-        assert_eq!(task.state, TaskStateView::Integrated);
+        assert_eq!(task.state, WorkStateView::Integrated);
         assert!(
             evaluation.notices.is_empty(),
             "nothing goes back to the agent"
@@ -2524,14 +2658,10 @@ mod placement_tests {
     }
 
     /// Records `state` for `task` the way an earlier session left it.
-    fn recorded(app: &UzeApplication, root: &Path, task: &AgentId, state: TaskState) {
+    fn recorded(app: &UzeApplication, root: &Path, task: &AgentId, state: WorkState) {
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store
-            .get_mut(task)
-            .and_then(Agent::isolation_mut)
-            .unwrap()
-            .state = state;
+        store.get_mut(task).unwrap().state = state;
         task::save(&app.home, &primary, &store).unwrap();
     }
 
@@ -2560,10 +2690,10 @@ mod placement_tests {
                 "replaying the branch onto its own squash conflicts"
             );
             let (state, occupied) = if parked {
-                (TaskState::Parked, Vec::new())
+                (WorkState::Parked, Vec::new())
             } else {
                 (
-                    TaskState::Conflicted {
+                    WorkState::Conflicted {
                         files: vec![PathBuf::from("feature.rs")],
                     },
                     vec![placed.cwd.clone()],
@@ -2578,7 +2708,7 @@ mod placement_tests {
                 .iter()
                 .find(|task| task.id == id.as_str())
                 .unwrap();
-            assert_eq!(task.state, TaskStateView::Integrated, "parked: {parked}");
+            assert_eq!(task.state, WorkStateView::Integrated, "parked: {parked}");
             assert!(
                 landing::paused_rebase(&placed.cwd).is_none(),
                 "the replay is abandoned (parked: {parked})"
@@ -2605,7 +2735,7 @@ mod placement_tests {
             .unwrap();
         let id = slot(&placed).clone();
         let tip = squash_merged(&repository, &placed.cwd);
-        recorded(&app, &root, &id, TaskState::Ready);
+        recorded(&app, &root, &id, WorkState::Ready);
 
         let report = app.workspace().deliver_task(&root, id.as_str()).unwrap();
 
@@ -2614,7 +2744,7 @@ mod placement_tests {
             "{:?}",
             report.outcome
         );
-        assert_eq!(report.task.state, TaskStateView::Integrated);
+        assert_eq!(report.task.state, WorkStateView::Integrated);
         assert!(landing::paused_rebase(&placed.cwd).is_none());
         assert_eq!(repository.git_in(&placed.cwd, &["rev-parse", "HEAD"]), tip);
     }
@@ -2641,7 +2771,7 @@ mod placement_tests {
                 .try_git_in(&placed.cwd, &["rebase", "main"])
                 .is_err()
         );
-        recorded(&app, &root, &id, TaskState::Parked);
+        recorded(&app, &root, &id, WorkState::Parked);
 
         let task = app
             .workspace()
@@ -2651,7 +2781,7 @@ mod placement_tests {
             .unwrap();
         assert_eq!(
             task.state,
-            TaskStateView::Conflicted {
+            WorkStateView::Conflicted {
                 files: vec![PathBuf::from("feature.rs")]
             }
         );
@@ -2688,7 +2818,7 @@ mod placement_tests {
         };
 
         let delivered = view(app.workspace().evaluate_tasks(&root, occupied));
-        assert_eq!(delivered.state, TaskStateView::Integrated);
+        assert_eq!(delivered.state, WorkStateView::Integrated);
         assert_eq!(delivered.published_request, Some(51));
 
         std::fs::write(placed.cwd.join("more.rs"), b"fn more() {}").unwrap();
@@ -2697,7 +2827,7 @@ mod placement_tests {
         let continued = view(app.workspace().evaluate_tasks(&root, occupied));
         assert_eq!(
             continued.state,
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "following the target moved the new work alone"
         );
         assert_eq!(
@@ -2726,11 +2856,7 @@ mod placement_tests {
             .unwrap();
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
-        store
-            .get_mut(slot(&first))
-            .and_then(Agent::isolation_mut)
-            .unwrap()
-            .state = uze_core::task::TaskState::Integrated;
+        store.get_mut(slot(&first)).unwrap().state = uze_core::task::WorkState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
         let still_inside = vec![first.cwd.clone()];
@@ -2784,7 +2910,7 @@ mod placement_tests {
             .find(|task| task.id == task_id)
             .unwrap();
         assert_eq!(task.checkout, None, "the directory is gone");
-        assert_eq!(task.state, TaskStateView::Parked);
+        assert_eq!(task.state, WorkStateView::Parked);
 
         let resumed = app.workspace().resume_task(&root, &task_id, &[]).unwrap();
         assert!(resumed.cwd.join("kept.rs").is_file(), "the commit is back");
@@ -2800,7 +2926,7 @@ mod placement_tests {
             .find(|task| task.id == task_id)
             .unwrap();
         assert_eq!(task.checkout.as_deref(), Some(resumed.cwd.as_path()));
-        assert_eq!(task.state, TaskStateView::Running, "live again");
+        assert_eq!(task.state, WorkStateView::Running, "live again");
     }
 
     /// Parked says "no agent left". A pane sitting in the task's checkout
@@ -2836,12 +2962,12 @@ mod placement_tests {
         };
         assert_eq!(
             state_of(&[]),
-            TaskStateView::Parked,
+            WorkStateView::Parked,
             "nobody there: stays put"
         );
         assert_eq!(
             state_of(&[first.cwd.join("src")]),
-            TaskStateView::Uncommitted,
+            WorkStateView::Uncommitted,
             "a pane inside makes it that agent's task again"
         );
     }
@@ -2856,7 +2982,7 @@ mod task_service_tests {
     fn record_an_agent(
         app: &UzeApplication,
         project: &Path,
-        state: TaskState,
+        state: WorkState,
         branch: Option<&str>,
     ) -> String {
         uze_core::record::ensure(&app.home, project).unwrap();
@@ -2870,7 +2996,7 @@ mod task_service_tests {
         if let Some(branch) = branch {
             agent.take_name(branch.to_owned());
         }
-        agent.isolation_mut().expect("isolated").state = state;
+        agent.state = state;
         let id = agent.id.as_str().to_owned();
         task::locked(&app.home, project, |store| {
             store.upsert(agent);
@@ -2888,7 +3014,7 @@ mod task_service_tests {
         let app = application("preserved-unopened-home");
         let project = uze_testkit::temp::scratch("preserved-unopened");
         std::fs::create_dir_all(&project).unwrap();
-        record_an_agent(&app, &project, TaskState::Running, None);
+        record_an_agent(&app, &project, WorkState::Running, None);
 
         // A second application over the same home: a fresh session that
         // has opened nothing.
@@ -2913,7 +3039,7 @@ mod task_service_tests {
         let projects = ["preserved-one", "preserved-two"].map(|label| {
             let project = uze_testkit::temp::scratch(label);
             std::fs::create_dir_all(&project).unwrap();
-            record_an_agent(&app, &project, TaskState::Running, Some("fix/login"));
+            record_an_agent(&app, &project, WorkState::Running, Some("fix/login"));
             project
         });
 
@@ -2943,7 +3069,7 @@ mod task_service_tests {
         let app = application("preserved-vanished-home");
         let project = uze_testkit::temp::scratch("preserved-vanished");
         std::fs::create_dir_all(&project).unwrap();
-        let id = record_an_agent(&app, &project, TaskState::Parked, None);
+        let id = record_an_agent(&app, &project, WorkState::Parked, None);
         std::fs::remove_dir_all(&project).unwrap();
 
         let preserved = app.workspace().preserved_work();
@@ -2967,11 +3093,11 @@ mod task_service_tests {
         let app = application("preserved-delivered-home");
         let project = uze_testkit::temp::scratch("preserved-delivered");
         std::fs::create_dir_all(&project).unwrap();
-        record_an_agent(&app, &project, TaskState::Running, None);
+        record_an_agent(&app, &project, WorkState::Running, None);
         assert_eq!(app.workspace().preserved_work().len(), 1);
 
-        record_an_agent(&app, &project, TaskState::Integrated, None);
-        record_an_agent(&app, &project, TaskState::Closed, None);
+        record_an_agent(&app, &project, WorkState::Integrated, None);
+        record_an_agent(&app, &project, WorkState::Closed, None);
 
         assert_eq!(
             app.workspace().preserved_work().len(),
@@ -3162,7 +3288,7 @@ mod task_service_tests {
         repository.git_in(slot, &["commit", "-qm", file]);
     }
 
-    fn view_of(app: &UzeApplication, root: &Path, id: &str) -> TaskView {
+    fn view_of(app: &UzeApplication, root: &Path, id: &str) -> AgentView {
         app.workspace()
             .tasks(root)
             .into_iter()
@@ -3170,7 +3296,7 @@ mod task_service_tests {
             .expect("the task is recorded")
     }
 
-    fn state_of(app: &UzeApplication, root: &Path, id: &str) -> TaskStateView {
+    fn state_of(app: &UzeApplication, root: &Path, id: &str) -> WorkStateView {
         app.workspace()
             .tasks(root)
             .into_iter()
@@ -3186,21 +3312,21 @@ mod task_service_tests {
         let root = repository.root().to_path_buf();
         let app = application("svc-merge-home");
         let (id, slot) = launched(&app, &root);
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Running);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Running);
 
         std::fs::write(slot.join("draft.rs"), "").unwrap();
         assert_eq!(
             app.workspace().evaluate_tasks(&root, &[]).tasks[0].state,
-            TaskStateView::Uncommitted
+            WorkStateView::Uncommitted
         );
         agent_commits(&repository, &slot, "draft.rs", "fn done() {}");
         let evaluation = app.workspace().evaluate_tasks(&root, &[]);
-        assert_eq!(evaluation.tasks[0].state, TaskStateView::Ready);
+        assert_eq!(evaluation.tasks[0].state, WorkStateView::Ready);
         assert!(evaluation.notices.is_empty());
 
         let report = app.workspace().deliver_task(&root, &id).unwrap();
         assert_eq!(report.outcome, DeliveryOutcome::Merged);
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrated);
         assert!(root.join("draft.rs").is_file());
     }
 
@@ -3218,19 +3344,19 @@ mod task_service_tests {
 
         agent_commits(&repository, &slot, "first.rs", "fn first() {}");
         app.workspace().deliver_task(&root, &id).unwrap();
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrated);
 
         // Nothing new: the delivery is the last thing that happened, and
         // an evaluation must not talk it back down to `running`.
         app.workspace().evaluate_tasks(&root, &[]);
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrated);
 
         // The same agent carries on in the same checkout.
         std::fs::write(slot.join("second.rs"), "fn second() {}").unwrap();
         app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &id),
-            TaskStateView::Uncommitted,
+            WorkStateView::Uncommitted,
             "changes in the slot are seen after a delivery, not only before one"
         );
 
@@ -3238,7 +3364,7 @@ mod task_service_tests {
         app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &id),
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "and it becomes deliverable a second time"
         );
     }
@@ -3255,7 +3381,7 @@ mod task_service_tests {
         let (first, slot) = launched(&app, &root);
         agent_commits(&repository, &slot, "first.rs", "fn first() {}");
         app.workspace().deliver_task(&root, &first).unwrap();
-        assert_eq!(state_of(&app, &root, &first), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &first), WorkStateView::Integrated);
 
         // The freed slot goes to the next agent, who dirties it.
         let (second, reused) = launched(&app, &root);
@@ -3265,12 +3391,12 @@ mod task_service_tests {
         app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &second),
-            TaskStateView::Uncommitted,
+            WorkStateView::Uncommitted,
             "the work in the slot belongs to the agent sitting in it"
         );
         assert_eq!(
             state_of(&app, &root, &first),
-            TaskStateView::Integrated,
+            WorkStateView::Integrated,
             "and never revives the task that handed the slot over"
         );
     }
@@ -3301,7 +3427,7 @@ mod task_service_tests {
         );
         assert!(matches!(
             state_of(&app, &root, &id),
-            TaskStateView::Conflicted { .. }
+            WorkStateView::Conflicted { .. }
         ));
     }
 
@@ -3348,7 +3474,7 @@ mod task_service_tests {
             "{:?}",
             report.outcome
         );
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::GateFailed);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::GateFailed);
 
         agent_commits(&repository, &slot, "must-exist", "");
         app.workspace().evaluate_tasks(&root, &[]);
@@ -3389,11 +3515,11 @@ mod task_service_tests {
         app.workspace().evaluate_tasks(&root, &[]);
         let report = app.workspace().deliver_task(&root, &id).unwrap();
         assert_eq!(report.outcome, DeliveryOutcome::Handoff);
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Ready);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Ready);
         let branch = report.task.branch.clone();
 
         app.workspace().finish_task(&root, &id).unwrap();
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrated);
         assert!(
             slot.is_dir()
                 && repository
@@ -3492,7 +3618,7 @@ mod task_service_tests {
         assert_eq!(synced.unsynced, Some(0), "nothing left to send");
         assert_eq!(
             synced.state,
-            TaskStateView::Published,
+            WorkStateView::Published,
             "the work is with its reviewer, not waiting to be handed over"
         );
         assert_eq!(
@@ -3516,7 +3642,7 @@ mod task_service_tests {
         );
         assert_eq!(
             behind.state,
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "which puts the work back in the operator's hands"
         );
     }
@@ -3541,7 +3667,7 @@ mod task_service_tests {
         let view = view_of(&app, &root, &id);
         assert_eq!(view.published_as, None);
         assert_eq!(view.unsynced, None, "the merge has not happened");
-        assert_eq!(view.state, TaskStateView::Ready, "so it is still to do");
+        assert_eq!(view.state, WorkStateView::Ready, "so it is still to do");
         assert_eq!(view.ahead, 1, "and that is what it would land");
     }
 
@@ -3585,7 +3711,7 @@ mod task_service_tests {
         );
         assert_eq!(
             evaluation.tasks[0].state,
-            TaskStateView::Parked,
+            WorkStateView::Parked,
             "and the commits in that checkout are what it is adopted as holding"
         );
     }
@@ -3695,7 +3821,7 @@ mod task_service_tests {
             agent_commits(&repository, &slot, &format!("other-{index}.rs"), "");
         }
         app.workspace().evaluate_tasks(&root, &[]);
-        assert_eq!(state_of(&app, &root, &delivered), TaskStateView::Ready);
+        assert_eq!(state_of(&app, &root, &delivered), WorkStateView::Ready);
 
         let evaluator = {
             let (home, root) = (home.clone(), root.clone());
@@ -3721,7 +3847,7 @@ mod task_service_tests {
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(
             state_of(&app, &root, &delivered),
-            TaskStateView::Integrated,
+            WorkStateView::Integrated,
             "the delivery is what the document says happened last"
         );
     }
@@ -3785,7 +3911,7 @@ mod task_service_tests {
         );
         assert_eq!(
             state_of(&app, &root, &id),
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "and the task is exactly as deliverable as it was"
         );
     }
@@ -3837,7 +3963,7 @@ mod task_service_tests {
         assert!(root.join("work.rs").is_file(), "the work really did land");
         assert_eq!(
             state_of(&app, &root, &id),
-            TaskStateView::Integrating,
+            WorkStateView::Integrating,
             "and the record is where the claim left it — the delivery that \
              owns it is the one that could not write"
         );
@@ -3875,7 +4001,7 @@ mod task_service_tests {
         let spawned = std::time::Instant::now();
         let claimed = loop {
             let store = task::load(&home, &root).expect("the document is readable");
-            if store.agents[0].isolation().unwrap().state == TaskState::Integrating {
+            if store.agents[0].state == WorkState::Integrating {
                 break std::time::Instant::now();
             }
             assert!(
@@ -3896,7 +4022,7 @@ mod task_service_tests {
 
         let report = deliverer.join().unwrap();
         assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrated);
     }
 
     /// What a delivery that never answered leaves behind, and what every
@@ -3918,10 +4044,7 @@ mod task_service_tests {
         agent_commits(&repository, &slot, "work.rs", "");
         app.workspace().evaluate_tasks(&root, &[]);
         task::locked(&app.home, &root, |store| {
-            task_mut(store, &id)
-                .and_then(Agent::isolation_mut)
-                .expect("the task is recorded")
-                .state = TaskState::Integrating;
+            task_mut(store, &id).expect("the agent is recorded").state = WorkState::Integrating;
             Ok(())
         })
         .unwrap();
@@ -3933,7 +4056,7 @@ mod task_service_tests {
                 .iter()
                 .find(|task| task.id == id)
                 .map(|task| task.state.clone()),
-            Some(TaskStateView::Integrating),
+            Some(WorkStateView::Integrating),
             "an evaluation neither revives it nor writes over it"
         );
         assert!(
@@ -3942,9 +4065,9 @@ mod task_service_tests {
                 .is_empty(),
             "and no pane in its checkout does not make it abandoned"
         );
-        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrating);
+        assert_eq!(state_of(&app, &root, &id), WorkStateView::Integrating);
         assert_eq!(
-            TaskStateView::Integrating.undeliverable_reason(),
+            WorkStateView::Integrating.undeliverable_reason(),
             Some("already delivering"),
             "which is what the operator is told if they press it"
         );
@@ -4326,7 +4449,7 @@ mod naming_tests {
         assert_eq!(task.ahead, 1, "the commit is still counted");
         assert_eq!(
             task.state,
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "a hand-renamed branch still reaches ready"
         );
     }
@@ -4387,7 +4510,7 @@ mod derived_naming_tests {
         );
         assert_eq!(
             task.state,
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "and it is still deliverable"
         );
     }
@@ -4478,7 +4601,7 @@ mod derived_naming_tests {
             .evaluate_tasks(&root, std::slice::from_ref(&checkout));
 
         let task = evaluation.tasks.last().unwrap();
-        assert_eq!(task.state, TaskStateView::Uncommitted);
+        assert_eq!(task.state, WorkStateView::Uncommitted);
         assert!(task.branch.starts_with("agent/"));
     }
 

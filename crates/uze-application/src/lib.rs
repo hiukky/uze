@@ -5,9 +5,9 @@ pub mod bootstrap;
 
 pub use application::UzeApplication;
 pub use application::services::{
-    AgentIdentity, AgentNotice, AgentPlacement, Carry, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind, PreservedWork,
-    ProjectArtifacts, Reconciliation, ReleasedTask, TaskStateView, TaskView, UpstreamSync,
+    AgentIdentity, AgentNotice, AgentPlacement, AgentView, Carry, DeliveryOutcome,
+    DeliveryPolicyView, DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind,
+    PreservedWork, ProjectArtifacts, Reconciliation, ReleasedTask, UpstreamSync, WorkStateView,
     project_artifacts,
 };
 

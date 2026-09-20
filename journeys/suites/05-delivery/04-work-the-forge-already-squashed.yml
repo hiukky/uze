@@ -54,7 +54,7 @@ scenes:
         say: the agent commits the feature, then its fix
       - wait: shell
         until: |
-          python3 -c "import json, glob, sys; states = [a['isolation']['state']['state'] for f in glob.glob('{uze_home}/state/projects/*/agents.json') for a in json.load(open(f))['agents'] if a.get('isolation')]; sys.exit(0 if 'ready' in states else 1)"
+          python3 -c "import json, glob, sys; states = [a['state']['state'] for f in glob.glob('{uze_home}/state/projects/*/agents.json') for a in json.load(open(f))['agents'] if a.get('isolation')]; sys.exit(0 if 'ready' in states else 1)"
         # The sidebar re-reads task state on a 20-second timer; three
         # intervals, so the wait is bounded by the cadence, not racing it.
         timeout: 70
@@ -76,7 +76,7 @@ scenes:
         say: the operator squash-merges the branch, as a forge's button would
       - wait: shell
         until: |
-          python3 -c "import json, glob, sys; states = [a['isolation']['state']['state'] for f in glob.glob('{uze_home}/state/projects/*/agents.json') for a in json.load(open(f))['agents'] if a.get('isolation')]; sys.exit(0 if 'integrated' in states else 1)"
+          python3 -c "import json, glob, sys; states = [a['state']['state'] for f in glob.glob('{uze_home}/state/projects/*/agents.json') for a in json.load(open(f))['agents'] if a.get('isolation')]; sys.exit(0 if 'integrated' in states else 1)"
         timeout: 70
         say: the next evaluation reads the patch the target now carries
     then:

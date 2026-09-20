@@ -1505,6 +1505,18 @@ removal.
 > `crates/uze-core/src/project/record.rs::tests::forgetting_a_project_is_one_removal_and_touches_no_other`
 > `crates/uze-core/src/project/record.rs::tests::the_previous_layouts_records_are_carried_into_the_directory`
 
+### Where the work stands belongs to the agent, and to the checkout it is in
+
+Every agent reads where the work in its checkout stands, whether or not
+that checkout was cut for it. An isolated agent has one to itself, so the
+answer is its own; agents sharing the project's root all read the same
+one, which is the truth about where they are. Only *delivering* is
+withheld from them: the branch is the operator's, UZE did not cut it, and
+rebasing and pushing it is theirs to ask for.
+
+> `crates/uze-core/src/project/task.rs::tests::the_shape_that_kept_the_state_inside_the_isolation_is_carried_across`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::an_agent_in_the_root_creates_no_checkout_and_no_branch_and_shares_the_tree`
+
 ### Preserved work answers for the machine, and resumes into its own project
 
 Work is bound to a project and never to a space: an agent's record carries

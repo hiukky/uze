@@ -31,8 +31,8 @@ use std::{
 };
 use uze_application::AgentIdentity;
 use uze_application::{
-    CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
-    UpstreamSync,
+    AgentView, CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, UpstreamSync,
+    WorkStateView,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -274,7 +274,7 @@ const TOAST_TTL: Duration = Duration::from_secs(6);
 const MAX_TOASTS: usize = 4;
 
 /// What a background evaluation answered.
-struct TaskResolution {
+struct WorkResolution {
     /// The key [`WorkspaceModel::schedule_evaluation`] reserved, released
     /// on arrival whatever the answer was. It travels with the request
     /// because the two ends resolve a repository differently — the
@@ -311,7 +311,7 @@ struct EvaluationAnswer {
 struct DeliveryResolution {
     cwd: PathBuf,
     /// The task the press reserved in `delivery_pending`, carried the way
-    /// [`TaskResolution`] carries its key and released on arrival
+    /// [`WorkResolution`] carries its key and released on arrival
     /// whatever came back.
     ///
     /// Releasing by walking `reports` alone is only correct while there
@@ -411,7 +411,7 @@ fn spawn_task_evaluation(
     key: PathBuf,
     cwd: PathBuf,
     occupied: Vec<PathBuf>,
-    sender: mpsc::Sender<TaskResolution>,
+    sender: mpsc::Sender<WorkResolution>,
 ) {
     let home = home.clone();
     let parent = tracing::Span::current();
@@ -448,7 +448,7 @@ fn spawn_task_evaluation(
             },
             None,
         );
-        let _ = sender.send(TaskResolution { key, answered });
+        let _ = sender.send(WorkResolution { key, answered });
     });
 }
 
@@ -494,14 +494,14 @@ fn spawn_delivery(
 
 /// What a preserved task is asked to become.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TaskMutation {
+enum WorkMutation {
     /// Closed, its slot released. The work itself is kept.
     Finish,
     /// Thrown away: the checkout removed, the branch deleted.
     Discard,
 }
 
-impl TaskMutation {
+impl WorkMutation {
     /// What the operator is told while it runs, and what they are told
     /// when it is done.
     fn underway(self) -> &'static str {
@@ -527,7 +527,7 @@ struct MutationResolution {
     /// follows.
     task: String,
     label: String,
-    mutation: TaskMutation,
+    mutation: WorkMutation,
     outcome: std::result::Result<(), String>,
 }
 
@@ -544,7 +544,7 @@ fn spawn_task_mutation(
     cwd: PathBuf,
     task: String,
     label: String,
-    mutation: TaskMutation,
+    mutation: WorkMutation,
     sender: mpsc::Sender<MutationResolution>,
 ) {
     let home = home.clone();
@@ -558,8 +558,8 @@ fn spawn_task_mutation(
             || {
                 tui_application(home)
                     .and_then(|app| match mutation {
-                        TaskMutation::Finish => app.workspace().finish_task(&cwd, &task),
-                        TaskMutation::Discard => app.workspace().discard_task(&cwd, &task),
+                        WorkMutation::Finish => app.workspace().finish_task(&cwd, &task),
+                        WorkMutation::Discard => app.workspace().discard_task(&cwd, &task),
                     })
                     .map_err(|error| error.to_string())
             },
@@ -2072,7 +2072,7 @@ pub(crate) struct WorkspaceMemory {
 #[derive(Default)]
 struct Channels {
     support: Answers<SupportResolution>,
-    tasks: Answers<TaskResolution>,
+    tasks: Answers<WorkResolution>,
     deliveries: Answers<DeliveryResolution>,
     /// Finishing and discarding a preserved task. Off-thread for the same
     /// reason a delivery is: a discard is `git worktree remove` and a
@@ -2150,7 +2150,7 @@ struct Remembered {
     preserved_pending: bool,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
-    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    tasks: BTreeMap<PathBuf, Vec<AgentView>>,
     /// The branch checked out at each evaluation key (see
     /// [`evaluation_key`]) — the primary's for every slot of a repository,
     /// a directory's own outside any slot. Read for an agent outside any
@@ -3138,7 +3138,7 @@ impl WorkspaceModel {
     }
 
     /// The task listed for an identity, whichever repository listed it.
-    fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &TaskView)> {
+    fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &AgentView)> {
         self.remembered.tasks.iter().find_map(|(primary, tasks)| {
             tasks
                 .iter()
@@ -3150,7 +3150,7 @@ impl WorkspaceModel {
     /// The task a tab is for: the one the launch named, once an evaluation
     /// lists it. Nothing stands in for it before that — a slot's previous
     /// occupant is not this agent's task, whatever the directory says.
-    pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {
+    pub(super) fn tab_task(&self, tab: TabId) -> Option<&AgentView> {
         let id = self.tab_agent_id(tab)?;
         self.task_with_id(id).map(|(_, task)| task)
     }
@@ -3161,7 +3161,7 @@ impl WorkspaceModel {
     /// resolves. Only
     /// while the task is waiting for a slot: once resumed it has one, and
     /// the row that lost its own is nobody's way back in any more.
-    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &TaskView)> {
+    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &AgentView)> {
         let tab = self.tab(tab)?;
         if !self.remembered.lost_checkouts.contains(&tab.pane.id) {
             return None;
@@ -3170,7 +3170,7 @@ impl WorkspaceModel {
         let resumable = task.checkout.is_none()
             && !matches!(
                 task.state,
-                TaskStateView::Integrating | TaskStateView::Integrated
+                WorkStateView::Integrating | WorkStateView::Integrated
             );
         resumable.then_some((primary, task))
     }
@@ -3181,15 +3181,15 @@ impl WorkspaceModel {
     /// A delivery runs in this client's own thread — rebase, then a gate
     /// that may take half an hour, then a push — and for all of it the
     /// record on disk still says whatever it said before the press.
-    /// `TaskState::Integrating` is set by `landing::deliver` in memory and
+    /// `WorkState::Integrating` is set by `landing::deliver` in memory and
     /// overwritten by the outcome before the store is ever saved, so no
     /// evaluation can ever read it back: the client that started the
     /// delivery is the only party that knows one is running, which is why
     /// this is the one state drawn from the client rather than from the
     /// view it was handed.
-    pub(super) fn drawn_state(&self, task: &TaskView) -> TaskStateView {
+    pub(super) fn drawn_state(&self, task: &AgentView) -> WorkStateView {
         if self.remembered.delivery_pending.contains(&task.id) {
-            return TaskStateView::Integrating;
+            return WorkStateView::Integrating;
         }
         task.state.clone()
     }
@@ -3260,7 +3260,7 @@ impl WorkspaceModel {
         &mut self,
         home: &UzeHome,
         cwd: PathBuf,
-        sender: &mpsc::Sender<TaskResolution>,
+        sender: &mpsc::Sender<WorkResolution>,
     ) {
         let key = evaluation_key(&cwd);
         if !self.remembered.task_eval_pending.insert(key.clone()) {
@@ -4314,7 +4314,7 @@ fn sync_slot_occupancy(
     model: &mut WorkspaceModel,
     home: &UzeHome,
     sender: &mpsc::Sender<OccupancyResolution>,
-    tasks: &mpsc::Sender<TaskResolution>,
+    tasks: &mpsc::Sender<WorkResolution>,
 ) {
     if !model.occupancy_stale || model.occupancy_pending {
         return;

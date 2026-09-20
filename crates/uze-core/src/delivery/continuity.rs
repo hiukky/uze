@@ -191,7 +191,7 @@ mod tests {
         exposure::ExposurePlan,
         integration::HarnessDetection,
         router::HarnessCapabilities,
-        task::{self, Agent, Base, TaskStore},
+        task::{self, Agent, AgentStore, Base},
     };
     use std::{
         cell::RefCell,
@@ -271,7 +271,7 @@ mod tests {
         );
         task.isolation_mut().unwrap().checkout = Some(CheckoutId::adopted("slot-1"));
         let id = task.id.as_str().to_owned();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         store.upsert(task);
         task::save(&home, &primary, &store).unwrap();
         (home, primary, slot, id)

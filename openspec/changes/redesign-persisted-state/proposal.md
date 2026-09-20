@@ -112,6 +112,27 @@ incoherence in what UZE persists:
   `persistence::write_atomic` performs every write; `self_update.rs` stops
   carrying its own.
 
+**Where the work stands**
+
+- **`state` moves out of `Isolation` and onto `Agent`.** It lived inside on
+  the argument that `Ready` is not representable without a checkout to be
+  ready in. Every agent has a checkout to be ready in; only an isolated one
+  has a checkout *of its own*. So an agent in the project's root — which
+  had no state at all, and therefore no mark on any surface — now reads the
+  one its checkout has, shared with the operator and every sibling agent in
+  it. That is the truth about where they are, and a better answer than the
+  nothing they had.
+- **Only delivering is withheld.** Rebasing the operator's branch onto the
+  target, running the gate over it and pushing it is theirs to ask for, so
+  the button is not drawn. The state still is.
+- **The vocabulary catches up with the record.** Two records became one
+  called `Agent` two releases ago; `TaskState`, `TaskView` and `TaskStore`
+  did not follow. "Task" says *a unit of work owned by one agent*, and with
+  the state belonging to a checkout that several agents share, both halves
+  are now false. `WorkState`, `AgentView`, `AgentStore` — and the status
+  catalog's `TASK` section becomes `WORK`, which is the word this project's
+  own prose has used throughout.
+
 **What it buys the operator**
 
 - **Preserved work answers for the machine**, and resuming places the agent

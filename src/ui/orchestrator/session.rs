@@ -922,7 +922,7 @@ impl Attach<'_> {
             }
             Action::FinishTask => {
                 if let Some(work) = preserved.get(overlay.selected) {
-                    self.mutate_preserved(work, TaskMutation::Finish);
+                    self.mutate_preserved(work, WorkMutation::Finish);
                 }
             }
             // Placement answers with the task's own slot when it still has
@@ -954,7 +954,7 @@ impl Attach<'_> {
                 overlay.confirm_discard = false;
                 let selected = overlay.selected;
                 if let Some(work) = preserved.get(selected) {
-                    self.mutate_preserved(work, TaskMutation::Discard);
+                    self.mutate_preserved(work, WorkMutation::Discard);
                 }
             }
             _ => overlay.confirm_discard = false,
@@ -995,7 +995,7 @@ impl Attach<'_> {
     /// thing said until the answer lands: unlike a delivery there is no
     /// button drawn for this, so silence would read as the key doing
     /// nothing.
-    fn mutate_preserved(&mut self, work: &uze_application::PreservedWork, mutation: TaskMutation) {
+    fn mutate_preserved(&mut self, work: &uze_application::PreservedWork, mutation: WorkMutation) {
         if !self
             .model
             .remembered
@@ -2567,11 +2567,9 @@ impl Attach<'_> {
         if launched_agent_id(found).is_none() {
             return false;
         }
-        if self
-            .model
-            .tab_task(tab)
-            .is_some_and(|task| !task.branch.is_empty())
-        {
+        // Already isolated: there is nothing to offer. Asked of the
+        // record rather than of the branch, which every agent has.
+        if self.model.tab_task(tab).is_some_and(|task| task.isolated) {
             return false;
         }
         // Whether a slot can be cut here is a Git question, and nothing
@@ -2979,7 +2977,7 @@ impl Attach<'_> {
             // said instead.
             if let Some(reason) = evaluation.unreadable {
                 self.model
-                    .raise_toast(ToastKind::Failed, "tasks unreadable", reason, None);
+                    .raise_toast(ToastKind::Failed, "agents unreadable", reason, None);
                 continue;
             }
             // Said before the tasks are taken, because it is what those

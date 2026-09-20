@@ -860,10 +860,10 @@ pub(super) fn agents_in_drawing_order<'a>(
 /// off the record UZE wrote rather than the shape of the directory the
 /// pane happens to sit in.
 pub(super) fn agent_group(model: &WorkspaceModel, tab: TabId) -> AgentGroup {
-    if model
-        .tab_task(tab)
-        .is_some_and(|task| !task.branch.is_empty())
-    {
+    // The record's own answer, not the branch: every agent is on one now,
+    // and an agent in the space's root would have grouped itself with the
+    // isolated ones the moment its row learnt what branch that was.
+    if model.tab_task(tab).is_some_and(|task| task.isolated) {
         AgentGroup::Isolated
     } else {
         AgentGroup::InTheRoot
@@ -1783,32 +1783,32 @@ fn push_root_toggle(
 /// different things is what made the second column read as an echo of the
 /// first. It wears a mark of its own, `task.ready`, instead.
 /// [`render_status_catalog`] is this table's legend and must move with it.
-pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
+pub(super) fn task_mark(state: &WorkStateView) -> Option<(String, Color)> {
     let (symbol, hue) = match state {
         // Nothing to report, and for the same reason: a task that has not
         // committed yet and one whose agent left with nothing both hold
         // no work. `Closed` in particular must not wear `Integrated`'s
         // arrow — that arrow claims a delivery.
-        TaskStateView::Running | TaskStateView::Closed => return None,
-        TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
-        TaskStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
+        WorkStateView::Running | WorkStateView::Closed => return None,
+        WorkStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
+        WorkStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
         // The one mark that points away from UZE, because the work does:
         // it is on the forge, and what happens to it next happens there.
         // Muted for the same reason the button is — nothing is being asked
         // of the operator — and deliberately not `Integrated`'s arrow,
         // which claims the work is in the target.
-        TaskStateView::Published => (Symbol::ArrowExternal, theme::color(Token::StatePublished)),
-        TaskStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
+        WorkStateView::Published => (Symbol::ArrowExternal, theme::color(Token::StatePublished)),
+        WorkStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
         // Split, where one warning mark used to cover both: a paused rebase
         // wants your hands in the slot, a failed gate wants the code fixed —
         // different work, and the sidebar was the one surface that never
         // said which (the strip's own button already did).
-        TaskStateView::Conflicted { .. } => {
+        WorkStateView::Conflicted { .. } => {
             (Symbol::MarkAttention, theme::color(Token::StateWarning))
         }
-        TaskStateView::GateFailed => (Symbol::MarkCross, theme::color(Token::StateDanger)),
-        TaskStateView::Integrated => (Symbol::ArrowUp, theme::color(Token::StateLanded)),
-        TaskStateView::Parked => (Symbol::Menu, theme::color(Token::TextMuted)),
+        WorkStateView::GateFailed => (Symbol::MarkCross, theme::color(Token::StateDanger)),
+        WorkStateView::Integrated => (Symbol::ArrowUp, theme::color(Token::StateLanded)),
+        WorkStateView::Parked => (Symbol::Menu, theme::color(Token::TextMuted)),
     };
     Some((theme::glyph(symbol), hue))
 }
@@ -1827,10 +1827,15 @@ pub(super) fn render_status_catalog(
     anchor: Rect,
     tick: usize,
 ) {
-    // The agent column answers "what is the process doing", the task
-    // column "what does its branch hold" — two questions about the same
-    // row, which is exactly why they are two columns and why one legend
-    // has to carry both.
+    // The agent column answers "what is the process doing", the work
+    // column "where does the work in its checkout stand" — two questions
+    // about the same row, which is exactly why they are two columns and
+    // why one legend has to carry both.
+    //
+    // Both answer for every agent. The work column used to be readable
+    // only for an isolated one, so an operator who launched an agent in
+    // the project's own root met eight marks that never appeared and
+    // reasonably concluded it was broken.
     let agent_rows: Vec<(String, Color, &str, &str)> = [
         (
             AgentTabStatus::Working,
@@ -1869,44 +1874,44 @@ pub(super) fn render_status_catalog(
     // here next.
     let task_rows: Vec<(String, Color, &str, &str)> = [
         (
-            TaskStateView::Uncommitted,
+            WorkStateView::Uncommitted,
             "uncommitted",
-            "changes in the slot, not committed",
+            "changes in the checkout, not committed",
         ),
         (
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "ready",
             "commits ahead on a clean tree — deliverable",
         ),
         (
-            TaskStateView::Published,
+            WorkStateView::Published,
             "published",
             "on the remote, level with it — with its reviewer",
         ),
         (
-            TaskStateView::Integrating,
+            WorkStateView::Integrating,
             "delivering",
             "the rebase, the gate and the push, in flight",
         ),
         (
-            TaskStateView::Conflicted { files: Vec::new() },
+            WorkStateView::Conflicted { files: Vec::new() },
             "conflict",
-            "the rebase stopped; resolve it in the slot",
+            "the rebase stopped; resolve it in the checkout",
         ),
         (
-            TaskStateView::GateFailed,
+            WorkStateView::GateFailed,
             "checks failed",
             "the gate failed on the rebased commits",
         ),
         (
-            TaskStateView::Integrated,
+            WorkStateView::Integrated,
             "delivered",
             "the work is in the target",
         ),
         (
-            TaskStateView::Parked,
+            WorkStateView::Parked,
             "parked",
-            "no agent left; the slot still holds work",
+            "no agent left; the work is still there",
         ),
     ]
     .into_iter()
@@ -1956,7 +1961,7 @@ pub(super) fn render_status_catalog(
         };
     section("AGENT", &agent_rows, &mut lines);
     lines.push(Line::from(""));
-    section("TASK", &task_rows, &mut lines);
+    section("WORK", &task_rows, &mut lines);
 
     let width = (content_width + 2 * CATALOG_H_PAD + 2).min(area.width);
     let height = (lines.len() as u16 + 2).min(area.height);
@@ -2231,8 +2236,8 @@ fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
 /// nothing to anything but the branch — the one question an operator has
 /// before pressing it (see [`delivery_ending`]).
 fn deliver_button(
-    task: &TaskView,
-    state: &TaskStateView,
+    task: &AgentView,
+    state: &WorkStateView,
     tick: usize,
 ) -> Option<(String, Color, bool)> {
     match state {
@@ -2240,12 +2245,12 @@ fn deliver_button(
         // the button reports the sync instead of counting commits the
         // request already carries. It stays pressable — the target moves,
         // and a re-sync is how the branch follows it.
-        TaskStateView::Published => Some((
+        WorkStateView::Published => Some((
             format!("{} {}", theme::glyph(Symbol::MarkOk), delivery_ending(task)),
             theme::color(Token::TextMuted),
             true,
         )),
-        TaskStateView::Ready => Some(match task.unsynced {
+        WorkStateView::Ready => Some(match task.unsynced {
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
@@ -2265,12 +2270,12 @@ fn deliver_button(
         }),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
-        TaskStateView::GateFailed => Some((
+        WorkStateView::GateFailed => Some((
             format!("{} retry", theme::glyph(Symbol::TaskRetry)),
             theme::color(Token::StateDanger),
             true,
         )),
-        TaskStateView::Conflicted { .. } => Some((
+        WorkStateView::Conflicted { .. } => Some((
             "! conflict".to_owned(),
             theme::color(Token::StateWarning),
             false,
@@ -2280,7 +2285,7 @@ fn deliver_button(
         // as the project's checks do, and a still word for that many
         // seconds reads as a screen that has stopped. The sidebar's mark
         // keeps `Symbol::Ellipsis` — a single cell has no room to turn.
-        TaskStateView::Integrating => Some((
+        WorkStateView::Integrating => Some((
             format!("{} delivering", agent_activity_frame(tick)),
             theme::color(Token::StateInFlight),
             false,
@@ -2299,7 +2304,7 @@ fn deliver_button(
 /// agent to open the request — and a sync from then on, pushing new
 /// commits onto a request that already exists. Naming the request is how
 /// the button says which of the two it has become.
-fn delivery_ending(task: &TaskView) -> String {
+fn delivery_ending(task: &AgentView) -> String {
     match task.completion {
         CompletionBehavior::Merge => {
             format!("merge {} {}", theme::glyph(Symbol::ArrowTo), task.target)
@@ -2380,13 +2385,13 @@ pub(super) fn render_preserved(
         // project you are in, and asking them here would put one Git read
         // per project on the machine behind a keystroke.
         let what = match &work.state {
-            TaskStateView::Parked if work.checkout.is_none() => "checkout removed".to_owned(),
-            TaskStateView::Parked => "nobody is there".to_owned(),
-            TaskStateView::Uncommitted => "uncommitted changes".to_owned(),
-            TaskStateView::Conflicted { .. } => "conflict to resolve".to_owned(),
-            TaskStateView::GateFailed => "checks failed".to_owned(),
-            TaskStateView::Running => "was running".to_owned(),
-            TaskStateView::Integrating => "delivering".to_owned(),
+            WorkStateView::Parked if work.checkout.is_none() => "checkout removed".to_owned(),
+            WorkStateView::Parked => "nobody is there".to_owned(),
+            WorkStateView::Uncommitted => "uncommitted changes".to_owned(),
+            WorkStateView::Conflicted { .. } => "conflict to resolve".to_owned(),
+            WorkStateView::GateFailed => "checks failed".to_owned(),
+            WorkStateView::Running => "was running".to_owned(),
+            WorkStateView::Integrating => "delivering".to_owned(),
             _ => work.branch.clone(),
         };
         // The project, because this list crosses them: two agents carrying
@@ -2802,6 +2807,11 @@ pub(super) fn render_tab_strip(
     // to find again.
     if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
+        // Only what UZE cut. An agent in the project's own root is on the
+        // operator's branch, and rebasing it onto the target, running the
+        // gate over it and pushing it is theirs to ask for. Its state is
+        // still drawn — where the work stands is a fact either way.
+        && task.isolated
         && let Some((text, hue, clickable)) =
             deliver_button(task, &model.drawn_state(task), model.tick)
     {

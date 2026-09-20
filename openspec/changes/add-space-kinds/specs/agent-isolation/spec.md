@@ -29,9 +29,14 @@ second.
 The system SHALL start every agent in the space's root, on whatever branch
 that directory is on, without creating a checkout or a branch, and SHALL
 record it with its identity, the harness it runs and when it started. An
-agent that is not isolated SHALL have no branch, no readiness, no delivery
-and no preserved work of its own; its conversation SHALL be recorded and
-resumed as any agent's is. Several agents MAY share one root.
+agent that is not isolated SHALL have no branch of its own, no delivery and
+no preserved work; its conversation SHALL be recorded and resumed as any
+agent's is. Several agents MAY share one root.
+
+Where the work in its checkout stands SHALL be read for it as for any
+other agent — the checkout's answer, which every agent sharing that
+checkout reads alike. Only *delivering* it is withheld, because the branch
+is the operator's and UZE did not cut it.
 
 #### Scenario: Launching an agent creates nothing on disk
 - **WHEN** an agent is launched in a space
@@ -93,12 +98,15 @@ on a clean tree the two answers produce the same result.
 - **WHEN** an agent is isolated while the space's root has no uncommitted changes
 - **THEN** either answer isolates it, and neither tree gains or loses anything
 
-### Requirement: An isolated agent is the subject of readiness and delivery
+### Requirement: An isolated agent is the subject of delivery
 The system SHALL treat an isolated agent exactly as a task is treated
-today: its branch's readiness is evaluated, its work is delivered by the
-project's completion behaviour, it can be named, and its checkout is a
-slot that is reused when the agent ends. An agent that is not isolated
-SHALL be none of those things.
+today: its work is delivered by the project's completion behaviour, it can
+be named, and its checkout is a slot that is reused when the agent ends.
+An agent that is not isolated SHALL be none of those things.
+
+Readiness is not among them. Where the work in a checkout stands is read
+for every agent, isolated or not — what an unisolated one lacks is a
+branch UZE cut, and therefore a delivery UZE may run.
 
 #### Scenario: Delivery is offered for an isolated agent
 - **WHEN** an isolated agent has commits its target does not have

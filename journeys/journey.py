@@ -972,7 +972,13 @@ class Checker:
         """The isolated agents, each read as one record: the agent's own
         fields with its isolation's on top, which is how every check below
         asks about a branch or a checkout without knowing where the field
-        sits in the document."""
+        sits in the document.
+
+        Where the work stands is the agent's own now, and the isolation no
+        longer carries one — so it survives the merge below and the checks
+        keep reading `task["state"]`. An agent in the project's root has a
+        state too; it is left out here because these checks are about the
+        branch UZE cut, and it has none."""
         return [
             {**agent, **agent["isolation"]}
             for agent in self.agents()

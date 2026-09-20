@@ -256,3 +256,22 @@
       --all-targets -D warnings`, the workspace suite, coverage,
       `cargo deny check`, `openspec validate --all --strict`, and
       `journey validate journeys/suites`.
+
+## 16. Where the work stands belongs to the agent, not to its isolation
+
+- [x] 16.1 Move `state` out of `Isolation` and onto `Agent`, with the rung
+      that lifts it — an agent that had none was in the root and had
+      nothing observed of it, which is exactly `Running`.
+- [x] 16.2 Evaluate every agent, not only the isolated ones: a root agent
+      reads the checkout it shares, through `readiness_of_checkout`.
+- [x] 16.3 Give `AgentView` a root form, and `deliverable` so the delivery
+      button is withheld without the state being.
+- [x] 16.4 Rename the vocabulary the record already outgrew: `TaskState` →
+      `WorkState`, `TaskStateView` → `WorkStateView`, `TaskView` →
+      `AgentView`, `TaskStore` → `AgentStore`, and the catalog's `TASK`
+      section → `WORK`.
+- [x] 16.5 Correct `add-space-kinds`'s own requirement in place: only
+      *delivering* is withheld from an unisolated agent, not readiness.
+- [x] 16.6 Tests: the rung lifts both kinds of agent; two agents sharing
+      the project's root are both listed, read one state, and offer no
+      delivery.
