@@ -1389,8 +1389,8 @@ fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
     );
 }
 
-/// The map takes the frame, and its levels are the breadcrumb: an either
-////or with the tree, not a column beside it.
+/// The map takes the frame, and its levels are the breadcrumb: an
+/// either/or with the tree, not a column beside it.
 #[test]
 fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     let mut view = surface(Path::new("/repo"), Vec::new(), 0);

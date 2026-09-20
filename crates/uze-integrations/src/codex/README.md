@@ -141,6 +141,11 @@ MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
 - No override of `exposure_name_candidates` (uses the fully-qualified-only
   trait default), unlike Claude/OpenCode which both try the bare name first
   for Skills. Not confirmed whether this is deliberate.
+- Codex caps how much of a project doc it reads (`project_doc_max_bytes`,
+  32 KiB when the vendor docs were last read for this, 2026-08-21) and skips
+  empty files. A contributed `AGENTS.md` region past that cap is truncated by
+  Codex, silently: UZE neither measures nor reports it, so the same project
+  context can be shorter here than on every other harness.
 
 ## Evidence
 
@@ -162,8 +167,8 @@ MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
   explicit-native path's install/attach was separately confirmed live via
   `tests/shared_agent_skill_root_naming.rs`'s original (now-faked-for-CI)
   real-binary run.
-- Sources: ADR-005, ADR-006, ADR-007, ADR-009, ADR-013,
-  `docs/capabilities/overview.md`.
+- Sources: ADR-005, ADR-006, ADR-007, ADR-009, ADR-013, and
+  `web/content/docs/concepts/capabilities.mdx` for the capability map.
 
 ## Next
 

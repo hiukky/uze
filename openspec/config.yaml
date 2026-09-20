@@ -9,11 +9,12 @@ schema: adr-driven
 #     We use conventional commits
 #     Domain: e-commerce platform
 context: |
-  Architecture documentation: the system architecture is modeled in LikeC4
-  (C4 model DSL) under docs/architecture/likec4/ (specification + model +
-  views, `.c4` files) - this is the structured, diagrammable source of
-  truth. Validate with `<pkg-runner> arch:validate` (script name may differ
-  per project - check package.json/justfile/Makefile).
+  Architecture documentation: the system architecture is drawn as Mermaid
+  under docs/architecture/ (`.mmd`), which the workspace's own
+  architect surface renders - `agents.yaml`'s `artifacts:` points there.
+  This is the diagrammable source of truth, and it is load-bearing: the
+  architect's tests draw the real files, so a diagram that stops routing is
+  a red build. Validate with `cargo test -p uze-extensions`.
 
   Architecture decisions: significant, hard-to-reverse decisions get a
   numbered ADR under docs/adr/ (Nygard style: Context/Decision/
@@ -34,17 +35,18 @@ rules:
   design:
     - If this change adds/removes a container or component, adds an
       external dependency, or changes a relationship between them, update
-      the LikeC4 model under docs/architecture/likec4/ as part of this
-      change (not a follow-up), and note the update in this design doc.
+      the Mermaid diagrams under docs/architecture/ as part of
+      this change (not a follow-up), and note the update in this design
+      doc.
     - If this change makes an architecturally significant, hard-to-reverse
       decision (new external dependency, irreversible technology choice,
       a pattern costly to change later), flag it under a `## Candidate
       ADRs` note (title + one-line why) - don't write the full ADR now,
       the design can still change while the change is in flight.
   tasks:
-    - If design.md notes a required LikeC4 model update, include a task
-      for it that runs the project's arch-validate script before
-      considering the change done.
+    - If design.md notes a required diagram update, include a task for it
+      that runs `cargo test -p uze-extensions` before considering the
+      change done.
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.

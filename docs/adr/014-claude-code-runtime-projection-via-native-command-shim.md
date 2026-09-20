@@ -13,8 +13,8 @@ own file (`CLAUDE.md`, `GEMINI.md`).
 UZE already has one answer to that gap: `uze context reconcile` maintains a
 persistent, `text_region`-owned bridge — a managed `@AGENTS.md` import inside
 `CLAUDE.md`/`GEMINI.md` at the project root (`crates/uze-application/src/
-application.rs`'s `BRIDGE_INTEGRATIONS`; see `docs/capabilities/
-instructions-design.md` and `docs/capabilities/context-manager.md`). That
+application.rs`'s `BRIDGE_INTEGRATIONS`; see
+`docs/capabilities/context-manager.md`). That
 mechanism is real, tested, and unaffected by this decision. It also has a
 cost this ADR exists to address: it requires every UZE-managed project to
 carry a vendor-specific file, forever, in its own working tree, just to

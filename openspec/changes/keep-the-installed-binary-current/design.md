@@ -127,11 +127,11 @@ check would reach the Internet and could draw a notice no journey expects.
 The runner sets `UZE_AUTOUPDATE=off`. `CI` defaults to off for the same
 reason on any disposable machine.
 
-### The architecture model
+### The architecture diagrams
 
-`docs/architecture/likec4/model.c4` gains GitHub Releases as an external
-system and the relationship from UZE to it, since the binary now reaches it
-on its own.
+`docs/architecture/system-context.mmd` gains GitHub Releases as an
+external system and the relationship from UZE to it, since the binary now
+reaches it on its own.
 
 ## Candidate ADRs
 

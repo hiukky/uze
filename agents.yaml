@@ -24,7 +24,7 @@ worktrees:
 # draws these, and its tests draw them too — a diagram here that stops
 # routing is a red build.
 artifacts:
-  path: docs/architecture/diagrams
+  path: docs/architecture
 
 marketplaces:
   ai:

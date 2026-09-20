@@ -25,6 +25,7 @@ flowchart TD
     shared[shared<br/>process · path helpers]
   end
   git[uze-git<br/>the one Git transport]
+  document[uze-document<br/>the shape a record declares]
   store[(Store · ~/.uze)]
 
   cli --> app
@@ -47,3 +48,5 @@ flowchart TD
   package --> git
   project --> git
   package --> store
+  delivery --> document
+  terminal --> document

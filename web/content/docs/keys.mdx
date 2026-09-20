@@ -45,10 +45,10 @@ left holding a copy of the default — the default is not a thing to write down.
 never a key — which is the whole point.
 
 **A scope** is where an action is live: `global`, `plugins`, `workspace`,
-`appearance`, `git-changes`. The innermost open surface answers first, and a
-surface that seals — a dialog, a picker, the changes overlay — answers for
-everything except `global`. That is what keeps *leave* and *help* reachable
-from inside anything.
+`appearance`, `code`, `preserved-work`. The innermost open surface answers
+first, and a surface that seals — a dialog, a picker, the changes overlay —
+answers for everything except `global`. That is what keeps *leave* and *help*
+reachable from inside anything.
 
 **A chord** is what you press: `ctrl+o`, `alt+shift+i`, `f2`, `/`. Modifiers
 in any order and any case, joined with `+`; `alt+I` and `alt+shift+i` are the
@@ -93,6 +93,11 @@ when the terminal agrees (kitty, foot, WezTerm, ghostty, Alacritty, recent
 iTerm2 and Windows Terminal). Where it does not, the Shortcuts screen says the
 chord cannot be sent rather than binding it and leaving it dead.
 
+**On WSL specifically:** a Linux uze under Windows Terminal reads VT bytes from
+a pty — the Win32 console key API is not in the path — so it sees exactly what
+any Linux terminal sees. Every universal chord works, `Alt` works, and
+`Ctrl`+digit does not unless the protocol is on.
+
 <Callout type="info">
   **The answer that is actually true for your machine** is the Shortcuts screen's
   capture — it is a probe. Press the key you are wondering about; it says what
@@ -123,15 +128,14 @@ chord cannot be sent rather than binding it and leaving it dead.
 - **Mouse gestures.** Every action bound outside a pane is reachable with the
   pointer, and that is the floor the keyboard sits on rather than a fallback
   for it.
+- **Chord sequences and modal states.** One chord, one action. uze is not vim
+  and not tmux, and a prefix key is a course you have to take.
 
 <Callout type="warn">
   Windows Terminal keeps `Ctrl+Shift+*`, `Alt+Enter`, `Ctrl+Tab` and `Ctrl+V`
   for itself, and under tmux or screen the multiplexer's own prefix wins first.
   None of those ever reach uze, whatever you bind them to.
 </Callout>
-
-The full guide, including the file's every field, is
-[`docs/keymap.md`](https://github.com/hiukky/uze/blob/main/docs/keymap.md).
 
 <Cards>
   <Card title="Appearance" href="/docs/appearance" />

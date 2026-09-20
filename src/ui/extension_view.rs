@@ -1989,23 +1989,23 @@ mod tests {
         let artifacts: Vec<architect::Artifact> = [
             (
                 "containers.mmd",
-                include_str!("../../docs/architecture/diagrams/containers.mmd"),
+                include_str!("../../docs/architecture/containers.mmd"),
             ),
             (
                 "system-context.mmd",
-                include_str!("../../docs/architecture/diagrams/system-context.mmd"),
+                include_str!("../../docs/architecture/system-context.mmd"),
             ),
             (
                 "install-sequence.mmd",
-                include_str!("../../docs/architecture/diagrams/install-sequence.mmd"),
+                include_str!("../../docs/architecture/install-sequence.mmd"),
             ),
             (
                 "crate-layering.mmd",
-                include_str!("../../docs/architecture/diagrams/crate-layering.mmd"),
+                include_str!("../../docs/architecture/crate-layering.mmd"),
             ),
             (
                 "install-pipeline.mmd",
-                include_str!("../../docs/architecture/diagrams/install-pipeline.mmd"),
+                include_str!("../../docs/architecture/install-pipeline.mmd"),
             ),
         ]
         .map(|(origin, source)| architect::Artifact::read(origin, source))

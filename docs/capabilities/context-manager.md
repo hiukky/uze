@@ -4,9 +4,6 @@ The boundary that owns a *project's* instructions context, distinct from the
 Package Manager that owns a *machine's* installed bytes. It exposes three
 operations — `inspect`, `plan`, `reconcile` — and nothing else.
 
-The design record behind it is [instructions-design.md](instructions-design.md);
-this document is the current truth.
-
 ## Principles
 
 Invariants, not implementation details, and they hold for anything built on top
@@ -166,6 +163,39 @@ editing it would, and calls `context_reconcile`/`context_inspect` again to check
 that the deterministic layer agrees. Nothing in that flow requires `uze-core` or
 `uze-application` to grow LLM awareness: the agentic layer is purely a client of
 these three functions.
+
+## Why this shape
+
+Each of these was decided against a concrete alternative, and each is still in
+force:
+
+- **A region, never a file of uze's own.** A managed symlink
+  (`CLAUDE.md -> AGENTS.md`) only works where `CLAUDE.md` is absent or holds
+  nothing else, and the design cannot assume either. A one-line `@AGENTS.md`
+  import works in both cases, and is the interop path Claude's own
+  documentation prescribes.
+- **No harness's config array is edited.** OpenCode's `instructions` field and
+  the Gemini-family `context.fileName` are real second mechanisms, and both
+  were rejected: each needs a `ManagedArtifact` variant for a JSON-array edit
+  with undocumented order and conflict semantics, and each risks overwriting a
+  value the user set — to serve a harness that already has a zero-artifact
+  native path.
+- **`AGENTS.override.md` is never written.** It *replaces* rather than merges,
+  so writing one where a user override may later be expected is the silent
+  destruction ADR-009 exists to prevent.
+- **Order comes from the region identity, not from install order.** Identities
+  are held in a sorted set, so the same packages produce the same file on every
+  machine. Precedence is never a property of a package's content: no harness
+  lets a file declare its own rank — every vendor rule is about where the file
+  sits.
+- **Project scope, not global.** A global instructions file is one file per
+  user rather than a directory of discrete entries, so several packages meet the
+  same region-merge problem project scope already solves; and a global write
+  touches machine-wide configuration on every install. `AGENTS.md`'s own
+  convention is project-level and version-controlled.
+- **A package ships a plain `AGENTS.md` at its root** — not `instructions/`,
+  not a uze format. It is already the exact file two harnesses read natively,
+  it is usable without uze, and it decomposes into a region unchanged.
 
 ## Vendor-neutrality
 

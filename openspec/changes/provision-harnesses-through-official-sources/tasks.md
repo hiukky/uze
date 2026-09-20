@@ -52,4 +52,4 @@
 - [x] Cover the OpenCode legacy `opencode2` route: it must use the official
       installer instead of passing the stable-only `upgrade` subcommand.
 - [ ] Run cargo test, cargo clippy -- -D warnings, cargo fmt --check,
-      openspec validate --all --strict, likec4 validate, and git diff --check.
+      openspec validate --all --strict, and git diff --check.

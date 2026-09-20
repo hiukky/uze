@@ -8,6 +8,7 @@ C4Context
   System_Ext(harness, "Harnesses", "The coding-agent CLIs uze delivers into")
   System_Ext(market, "Marketplaces", "Git repositories holding marketplace.json and plugins")
   SystemDb_Ext(repo, "Project repository", "agents.yaml, agents.lock, AGENTS.md")
+  System_Ext(releases, "GitHub Releases", "One archive per platform, and the SHASUMS256.txt that authenticates them")
   Rel(dev, uze, "Installs, launches, reviews")
   Rel(uze, harness, "Delivers capabilities natively")
   Rel(uze, market, "Clones and resolves", "Git")
@@ -15,3 +16,4 @@ C4Context
   Rel(agent, uze, "Names and delivers work", "uze agent")
   Rel(harness, agent, "Runs")
   Rel(agent, repo, "Commits on its branch")
+  Rel(uze, releases, "Installs from, and keeps itself current from", "verified SHA-256")
