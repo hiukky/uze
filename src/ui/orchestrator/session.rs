@@ -463,6 +463,13 @@ impl Attach<'_> {
     /// nothing would otherwise tick itself off.
     fn act(&mut self, action: Action, viewport: &Viewport) -> Flow {
         self.asked_for_a_tab = false;
+        // The gesture, named the way the operator would name it, and the
+        // parent of everything it starts — the workspace's counterpart to
+        // the management screen's `tui.intent` (`src/ui/worker.rs`). Only
+        // a bound action opens one; a keystroke going into a pane is not a
+        // gesture UZE performed. Without it a journal has the work and not
+        // the ask, which is the half a report is written from.
+        let _span = tracing::info_span!("tui.gesture", action = %action.name()).entered();
         let flow = self.perform(action, viewport);
         if self.step_landed(action) && self.model.note_step(action) {
             self.model.remember_sidebar();
@@ -2190,6 +2197,10 @@ impl Attach<'_> {
         mouse: MouseEvent,
         viewport: &Viewport,
     ) -> Flow {
+        // The other half of the gesture: what was clicked, beside what was
+        // pressed (`Attach::act`). A report says "I clicked new agent", so
+        // the journal has to be readable in those words.
+        let _span = tracing::info_span!("tui.gesture", click = ?hit).entered();
         let Viewport {
             ref layout,
             columns,
@@ -2686,6 +2697,16 @@ impl Attach<'_> {
     /// space rooted at `$HOME` the owner of every project beneath it,
     /// which on most machines is all of them.
     fn land_agent_in_its_own_space(&mut self, pending: PendingAgentTab) {
+        // Which way this went, and what it was asked about: the difference
+        // between "the agent opened where I was" and "the agent opened a
+        // space of its own" is a root comparison nothing else records, and
+        // the roots it compared are what a report of the second one needs.
+        tracing::info!(
+            project = %pending.project.display(),
+            roots = ?self.model.space_roots(),
+            landed = self.model.space_rooted_at(&pending.project).is_some(),
+            "placing an agent's tab"
+        );
         match self.model.space_rooted_at(&pending.project) {
             Some(space) => {
                 let _ = send_request(&mut self.stream, &ClientRequest::SelectSpace { space });

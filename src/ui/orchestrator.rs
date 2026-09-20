@@ -737,6 +737,28 @@ enum PlacementRequest {
     },
 }
 
+impl PlacementRequest {
+    /// Which of the three was asked for, for the journal.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::New { .. } => "new",
+            Self::Isolate { .. } => "isolate",
+            Self::Resume { .. } => "resume",
+        }
+    }
+
+    /// The directory the answer is resolved against — the space's own
+    /// shell's, or the project a preserved task belongs to. The one field
+    /// that decides which space the agent ends up in, so it is the one
+    /// worth having written down.
+    fn from(&self) -> &Path {
+        match self {
+            Self::New { from, .. } | Self::Isolate { from, .. } => from,
+            Self::Resume { primary, .. } => primary,
+        }
+    }
+}
+
 /// Asks the application where an agent should start, off the frame:
 /// materializing a checkout may run the project's setup command, which is
 /// nothing a render loop waits on. `occupied` is every checkout a live
@@ -755,7 +777,17 @@ fn spawn_agent_placement(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.agent_placement").entered();
+        // What was asked for, beside how it was answered: the modal that
+        // takes the pick is not a gesture of its own (`Attach::press`
+        // resolves it inside its own guard), so this span is where the
+        // journal says which agent, on which harness, and from where.
+        let _span = tracing::info_span!(
+            "tui.agent_placement",
+            label = %label,
+            asked = request.name(),
+            from = %request.from().display(),
+        )
+        .entered();
         // Answered on every path, including the one that could not even
         // build an application: the request holds the only reservation
         // there is, and a silent return would leave this client unable to
@@ -2776,6 +2808,20 @@ impl WorkspaceModel {
             .find(|space| space.id == session.workspace.selected_space)
             .or_else(|| matching.first())
             .map(|space| space.id)
+    }
+
+    /// Every space's label and root, as `space_rooted_at` sees them. For
+    /// the journal alone: a lookup that answered `None` is only readable
+    /// afterwards beside what it was looking through.
+    fn space_roots(&self) -> Vec<(String, PathBuf)> {
+        self.session.as_ref().map_or_else(Vec::new, |session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .map(|space| (space.label.clone(), space.root.clone()))
+                .collect()
+        })
     }
 
     fn hit_at(&self, column: u16, row: u16) -> Option<WorkspaceHit> {
