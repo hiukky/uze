@@ -48,7 +48,7 @@ scenes:
         say: install and deliver it
     then:
       - link: "{home}/.agents/skills/flow:commit"
-        resolves_to: "/state/attachments/opencode/skills/flow/commit"
+        resolves_to: "/runtime/attachments/opencode/skills/flow/commit"
         about: the shared skill root points into the artifact UZE generated
 
   - scene: somebody repoints one of the artifacts at something else

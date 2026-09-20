@@ -1437,6 +1437,98 @@ published matrix reads that declaration rather than restating it.
 
 ---
 
+## What UZE persists (`redesign-persisted-state`)
+
+### A record written in a shape this build knows is carried across, silently
+
+Carrying a record across a version is the product working, not an event.
+What a version change means is written once, as a step from one shape to
+the next, where the next record can reach it — a release that moved three
+shapes at once cost an operator every space they had open over a
+difference of one field, because there was nowhere to say what the
+difference meant.
+
+> `crates/uze-document/src/lib.rs::tests::an_older_shape_climbs_every_rung_in_order`
+> `crates/uze-document/src/lib.rs::tests::a_record_with_no_version_at_all_is_the_first_shape`
+> `crates/uze-terminal/src/runtime.rs::tests::a_workspace_from_the_previous_release_is_carried_across_rather_than_set_aside`
+
+### A record from a newer build is never taken
+
+Two builds on one machine is the ordinary state of this repository. A rule
+without a direction has them taking turns destroying each other's records,
+each saying it had recovered — so a shape ahead of this build is left
+exactly as it is, and the operation that needed it is refused.
+
+> `crates/uze-document/src/lib.rs::tests::two_builds_run_alternately_never_destroy_each_others_records`
+> `crates/uze-terminal/src/runtime.rs::tests::a_workspace_from_a_newer_build_is_left_exactly_as_it_is`
+
+### What could not be carried is kept, and reaches the operator
+
+A record UZE cannot read is moved aside rather than deleted, under a name
+nothing reads as a record — and said, wherever the operator is. The
+terminal runtime is a different process from the screen, so it holds what
+it could not carry until a client is there to be told; a log that is off
+unless `UZE_LOG` is set is not somewhere an operator looks.
+
+> `crates/uze-document/src/lib.rs::tests::bytes_that_are_not_a_record_may_be_set_aside_and_are_kept`
+> `crates/uze-terminal/src/runtime.rs::tests::a_client_is_told_what_the_runtime_could_not_carry`
+> `crates/uze-core/src/delivery/leftovers.rs::tests::every_set_aside_record_is_found_wherever_it_was_kept`
+
+### The tier a thing sits in is what deleting it costs
+
+Records are what UZE was told or decided, and nothing else on the machine
+knows them. Everything else is observation: produced again, or observed
+again. A thing must not sit in a tier that claims a different cost than it
+has — generated harness content sat one letter from the ledger that
+describes it, authoritative-looking and entirely reproducible.
+
+> `crates/uze-core/src/machine/home.rs::tests::nothing_a_record_needs_sits_in_a_tier_that_can_be_deleted`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenants_and_nothing_else`
+
+### Every path UZE owns is named in one place
+
+A path composed where it happens to be used is one nothing can enumerate,
+and a sweep of what UZE persists — or a rule every document inherits — can
+only exist if one place knows them all.
+
+> `tests/architecture/layering.rs::every_path_uze_owns_is_named_in_the_map`
+
+### A project's records are one directory that names its own root
+
+The project id is a one-way hash. It keyed four directories and only one of
+them recorded what it meant, so the records could be enumerated and none of
+them resolved. One directory, with the root in it, is what makes a
+machine-wide sweep possible at all — and makes forgetting a project one
+removal.
+
+> `crates/uze-core/src/project/record.rs::tests::a_projects_records_name_the_repository_they_belong_to`
+> `crates/uze-core/src/project/record.rs::tests::forgetting_a_project_is_one_removal_and_touches_no_other`
+> `crates/uze-core/src/project/record.rs::tests::the_previous_layouts_records_are_carried_into_the_directory`
+
+### Where the work stands belongs to the agent, and to the checkout it is in
+
+Every agent reads where the work in its checkout stands, whether or not
+that checkout was cut for it. An isolated agent has one to itself, so the
+answer is its own; agents sharing the project's root all read the same
+one, which is the truth about where they are. Only *delivering* is
+withheld from them: the branch is the operator's, UZE did not cut it, and
+rebasing and pushing it is theirs to ask for.
+
+> `crates/uze-core/src/project/task.rs::tests::the_shape_that_kept_the_state_inside_the_isolation_is_carried_across`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::an_agent_in_the_root_creates_no_checkout_and_no_branch_and_shares_the_tree`
+
+### Preserved work answers for the machine, and resumes into its own project
+
+Work is bound to a project and never to a space: an agent's record carries
+a base, a branch, a checkout and a target, and nothing about a space. So
+the space it was left in can be closed and another opened on the same
+directory under another name, and the work still lands in it.
+
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::work_is_found_in_a_project_this_session_never_opened`
+> `crates/uze-application/src/application/services/tasks.rs::task_service_tests::two_projects_sharing_a_branch_name_stay_distinguishable`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_space_is_matched_by_its_root_whatever_it_is_called`
+> `src/ui/orchestrator/tests.rs::workspace_tests::a_space_rooted_above_the_project_does_not_match_it`
+
 ## Runtime projection lifecycle (ADR-014)
 
 ### A projection belongs to a project root, and no two share one
@@ -1467,14 +1559,17 @@ same terms, and rebuilt by the next launch that needs it.
 > `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_directory_that_names_no_root_is_swept`
 > `tests/integrations/runtime_projection.rs::a_swept_projection_is_rebuilt_by_the_next_launch`
 
-### The runtime tree has one tenant, and the sweep owns the rest
+### The runtime tree has two tenants, and the sweep owns the rest
 
 `runtime/projects/` holds derived projections that outlive every invocation
-and die with their project root. Anything else directly under `runtime/` is
-UZE's own output at a path nothing writes any more, so the sweep removes it,
-and nothing project-owned is reached through a projection it collects.
+and die with their project root. `runtime/attachments/` holds what UZE
+generates for a harness to read, whose lifetime is the attachment's rather
+than any project's — the receipt ledger is what answers for it. Anything
+else directly under `runtime/` is UZE's own output at a path nothing writes
+any more, so the sweep removes it, and nothing project-owned is reached
+through a projection it collects.
 
-> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenant_and_nothing_else`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_the_tenants_and_nothing_else`
 > `tests/integrations/runtime_projection.rs::sweeping_a_dead_projection_never_touches_the_project_it_pointed_at`
 > `tests/packages/store.rs::uze_home_derives_every_owned_path_from_one_root`
 

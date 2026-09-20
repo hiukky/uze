@@ -478,7 +478,7 @@ impl OpenCodeIntegration {
             return Vec::new();
         };
         let mut ids = Vec::new();
-        for (_, receipt) in ledger {
+        for receipt in ledger {
             if receipt.integration != self.id() {
                 continue;
             }

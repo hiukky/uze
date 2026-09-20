@@ -135,8 +135,8 @@ fn model_with_data() -> TuiModel {
             },
         }],
         ledger_error: None,
-        integration_state_error: None,
         provisioning_state_error: None,
+        leftovers: Default::default(),
         maintenance: MaintenanceReport::default(),
     });
     model.remembered.context_status = Some(ProjectContextStatus {
@@ -1656,8 +1656,8 @@ fn overview_alerts_classify_conflicts_as_high_and_missing_as_low() {
             },
         ],
         ledger_error: None,
-        integration_state_error: None,
         provisioning_state_error: None,
+        leftovers: Default::default(),
         maintenance: MaintenanceReport::default(),
     };
     let alerts = actionable_alerts(Some(&doctor));
@@ -2034,8 +2034,8 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
             },
         }],
         ledger_error: None,
-        integration_state_error: None,
         provisioning_state_error: None,
+        leftovers: Default::default(),
         maintenance: MaintenanceReport::default(),
     });
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();

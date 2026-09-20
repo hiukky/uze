@@ -72,7 +72,7 @@ scenes:
         in: sidebar
         occurrence: last
         expect: Isolate
-      - click: "Isolate with my changes"
+      - click: "Isolate"
         in: sidebar
         say: give it a tree of its own, carrying the operator's changes across
         expect: Claude Code v
@@ -106,7 +106,7 @@ scenes:
           run: |
             python3 -c "
             import glob, json
-            [record] = glob.glob('{uze_home}/state/conversations/*/*.json')
+            [record] = glob.glob('{uze_home}/state/projects/*/conversations/*.json')
             print(json.load(open(record))['agent'])
             print(record.rsplit('/', 1)[1])
             "

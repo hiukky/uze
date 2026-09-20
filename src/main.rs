@@ -601,7 +601,7 @@ fn run(cli: Cli) -> Result<()> {
         && std::io::stdout().is_terminal()
         && std::io::stdin().is_terminal();
     let sink = if opens_the_tui {
-        uze::telemetry::Sink::File(home.state_dir().join("logs").join("uze.log"))
+        uze::telemetry::Sink::File(home.logs_dir().join("uze.log"))
     } else {
         uze::telemetry::Sink::Stderr
     };
@@ -1363,7 +1363,7 @@ fn run_setup(
             println!("{}", msg);
         }
     }
-    let logs_dir = home.state_dir().join("logs");
+    let logs_dir = home.logs_dir();
     let _ = std::fs::create_dir_all(&logs_dir);
     let mut had_warning = false;
     let mut failed_harnesses: Vec<String> = Vec::new();
@@ -2400,11 +2400,32 @@ fn render_doctor(report: &DoctorReport) -> String {
     if let Some(error) = &report.ledger_error {
         text.push_str(&format!("\nLedger\n  blocked: {error}\n"));
     }
-    if let Some(error) = &report.integration_state_error {
-        text.push_str(&format!("\nIntegration state\n  blocked: {error}\n"));
-    }
     if let Some(error) = &report.provisioning_state_error {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
+    }
+    // One line counting them, so an operator finds this right after an
+    // update without reading the whole report, and the newest few beneath
+    // it — a report that names forty is one nobody reads.
+    if report.leftovers.total > 0 {
+        text.push_str(&format!(
+            "\nLeft by a previous version\n  {} record{} this build could not read\n",
+            report.leftovers.total,
+            if report.leftovers.total == 1 { "" } else { "s" }
+        ));
+        for record in &report.leftovers.set_aside {
+            text.push_str(&format!(
+                "  {}\n    {}\n",
+                record.path.display(),
+                record.remedy
+            ));
+        }
+        let listed = report.leftovers.set_aside.len();
+        if report.leftovers.total > listed {
+            text.push_str(&format!(
+                "  and {} older\n",
+                report.leftovers.total - listed
+            ));
+        }
     }
     if !report.maintenance.outcomes.is_empty() {
         text.push_str("\nMaintenance\n");

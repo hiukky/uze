@@ -3,6 +3,12 @@
 //! fingerprint-ttl-invalidation.md`) and `specs/cli-performance/spec.md`
 //! for the behavior contract this module implements the mechanism for.
 //!
+//! **Remembered, not recorded.** Every field here comes back from asking
+//! again, so this document declares no shape and climbs no ladder: one it
+//! cannot read is discarded and observed afresh, in silence. Only records
+//! — what UZE was told or decided — are carried across a version. See
+//! `uze_document` for that rule and `persistence` for the tiers.
+//!
 //! Two tiers, both fully automatic — there is no manual refresh:
 //! - **in-process memoization**, scoped to the lifetime of one
 //!   `DetectionCache` (one command invocation, or one TUI session):

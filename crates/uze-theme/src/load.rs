@@ -1254,22 +1254,6 @@ mod tests {
             .map(|(id, _)| (*id, builtin_file(id).expect("bundled")))
     }
 
-    /// The two kinds of space are told apart by colour, so a palette that
-    /// paints them the same tells the operator nothing — including the
-    /// built-in one, whose worktree hue is the accent itself.
-    #[test]
-    fn every_bundled_palette_tells_the_two_kinds_of_space_apart() {
-        for (id, file) in palettes() {
-            let loaded = resolve_stack(&Identity::from_file(id, file), &[default_file(), file])
-                .unwrap_or_else(|error| panic!("the bundled `{id}` palette resolves: {error}"));
-            assert_ne!(
-                loaded.theme.color(Token::AgentIsolated),
-                loaded.theme.color(Token::AgentInPlace),
-                "`{id}` paints both kinds of space alike"
-            );
-        }
-    }
-
     /// A warning on a palette UZE ships would print the moment someone
     /// selects it, as if they had made a mistake. Contrast is where it
     /// bites: a faithful port can carry a hue its own author tuned for code

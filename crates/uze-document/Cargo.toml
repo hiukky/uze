@@ -1,0 +1,16 @@
+[package]
+name = "uze-document"
+version.workspace = true
+edition = "2024"
+rust-version = "1.97"
+description = "How a record written by another build of UZE is read by this one: the shape it declares, the ladder that carries it across, and the floor beneath that"
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+# Reporting what was set aside; a no-op until the binary subscribes.
+tracing = "0.1"

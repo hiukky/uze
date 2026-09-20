@@ -5,9 +5,10 @@ pub mod bootstrap;
 
 pub use application::UzeApplication;
 pub use application::services::{
-    AgentIdentity, AgentNotice, AgentPlacement, Carry, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind, ProjectArtifacts,
-    Reconciliation, ReleasedTask, TaskStateView, TaskView, UpstreamSync, project_artifacts,
+    AgentIdentity, AgentNotice, AgentPlacement, AgentView, Carry, DeliveryOutcome,
+    DeliveryPolicyView, DeliveryReport, Evaluation, NamedTask, Placement, PlacementKind,
+    PreservedWork, ProjectArtifacts, Reconciliation, ReleasedTask, UpstreamSync, WorkStateView,
+    project_artifacts,
 };
 
 /// Types the read models above are made of. Presentation consumes these
@@ -16,7 +17,9 @@ pub use application::services::{
 /// making the caller find it elsewhere is what put `uze_core::` in the
 /// TUI's imports.
 pub use uze_core::{
-    Result, UzeError, UzeHome,
+    Result,
+    UzeError,
+    UzeHome,
     capability::CapabilityKind,
     client_layout::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
@@ -29,6 +32,10 @@ pub use uze_core::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,
     },
+    // The one writer for anything UZE owns. The binary writes its own
+    // update ledger, and doing that with a second atomic-rename of its own
+    // is how two conventions for one thing start.
+    persistence::write_atomic,
     preference::{
         Autonomy, AxisPlan, KeyPlan, ModelPreference, PlannedValue, PreferenceApplyOutcome,
         PreferenceAxis, PreferencePlan, Preferences, SandboxScope,

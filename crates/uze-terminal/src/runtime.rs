@@ -724,49 +724,96 @@ struct PersistedWorkspace {
 /// existed — version 1 by definition, for every kind of document UZE
 /// owns.
 fn first_workspace_schema() -> u32 {
-    1
+    uze_document::FIRST_SHAPE
 }
 
 /// What this build writes, and the only version it restores.
 const WORKSPACE_SCHEMA_VERSION: u32 = 2;
 
+impl uze_document::Shaped for PersistedWorkspace {
+    const SHAPE: u32 = WORKSPACE_SCHEMA_VERSION;
+    const KIND: &'static str = "workspace";
+
+    /// Shape 1 gave every space a kind of its own — isolated or not — and
+    /// `add-space-kinds` moved that choice onto the agent, where the domain
+    /// had already put it. Nothing else about a space moved: the root, the
+    /// tabs, each tab's directory and launch are the same fields.
+    ///
+    /// This is the rung whose absence cost an operator their spaces on
+    /// 2026-09-19. `serde` would have ignored the extra field on its own;
+    /// what set the document aside was the version guard having no way to
+    /// say "that difference does not matter". Dropping it explicitly is how
+    /// the next reader learns what the difference *was*.
+    fn ladder() -> uze_document::Ladder {
+        &[uze_document::Step {
+            from: 1,
+            to: 2,
+            climb: |mut document| {
+                if let Some(spaces) = document
+                    .get_mut("spaces")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for space in spaces {
+                        if let Some(space) = space.as_object_mut() {
+                            space.remove("kind");
+                        }
+                    }
+                }
+                Ok(document)
+            },
+        }]
+    }
+}
+
 /// Best-effort: a workspace with nothing persisted yet (first run, or the
 /// file is missing/unreadable/corrupt) is not an error — [`Server::new`]
 /// falls back to its ordinary fresh-bootstrap path exactly as if this
 /// returned `None` from the start.
-fn load_persisted_workspace() -> Option<PersistedWorkspace> {
-    let path = persisted_state_path();
-    let bytes = fs::read(&path).ok()?;
-    let persisted: PersistedWorkspace = serde_json::from_slice(&bytes).ok()?;
-    if persisted.schema_version == WORKSPACE_SCHEMA_VERSION {
-        return Some(persisted);
+/// The workspace at `path`, and what reading it cost.
+///
+/// A shape this build knows is carried across and the spaces survive —
+/// that is the first answer, and it is silent. Only a workspace that
+/// cannot be climbed at all is set aside: the bytes are kept under a name
+/// nothing reads as a workspace, the server starts from the seat it was
+/// given, and the caller is handed the [`SetAside`] so the operator can be
+/// told at the screen rather than in a log nobody turned on.
+///
+/// A workspace from a *newer* build is never touched. Two builds on one
+/// machine is ordinary here, and taking a newer one's record would have
+/// them destroying each other's in turn.
+fn load_persisted_workspace_at(
+    path: &Path,
+) -> (Option<PersistedWorkspace>, Option<uze_document::SetAside>) {
+    match uze_document::read::<PersistedWorkspace>(path) {
+        Ok(uze_document::Carried::Absent) => (None, None),
+        Ok(uze_document::Carried::Current(workspace)) => (Some(workspace), None),
+        Ok(uze_document::Carried::Climbed { record, from }) => {
+            tracing::debug!(
+                workspace = %path.display(),
+                from,
+                to = WORKSPACE_SCHEMA_VERSION,
+                "the persisted workspace was carried across"
+            );
+            (Some(record), None)
+        }
+        Err(reason) if uze_document::may_be_set_aside(&reason) => {
+            match uze_document::set_aside(
+                path,
+                <PersistedWorkspace as uze_document::Shaped>::KIND,
+                &reason,
+            ) {
+                Ok(moved) => (None, Some(moved)),
+                Err(error) => {
+                    tracing::warn!(%error, "the persisted workspace could not be set aside");
+                    (None, None)
+                }
+            }
+        }
+        Err(reason) => {
+            tracing::warn!(%reason, "the persisted workspace was written by a newer build; left as it is");
+            (None, None)
+        }
     }
-    // A workspace this build cannot read is rebuildable state: what is
-    // lost is the shape of spaces and tabs, never a checkout, a branch or
-    // a conversation. The bytes are kept beside it under a name nothing
-    // reads as a workspace, and the server starts from the seat it was
-    // given.
-    let moved = path.with_file_name(format!(
-        "{}.unreadable-{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("workspace.json"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or_default()
-    ));
-    match fs::rename(&path, &moved) {
-        Ok(()) => tracing::warn!(
-            workspace = %path.display(),
-            set_aside = %moved.display(),
-            found = persisted.schema_version,
-            expected = WORKSPACE_SCHEMA_VERSION,
-            "the persisted workspace was written by another build; set aside"
-        ),
-        Err(error) => tracing::warn!(%error, "the persisted workspace could not be set aside"),
-    }
-    None
 }
 
 /// Replaces `path`'s contents in one step, so a reader only ever sees the
@@ -775,7 +822,7 @@ fn load_persisted_workspace() -> Option<PersistedWorkspace> {
 /// The whole workspace is rewritten on every structural change, and a plain
 /// write truncates before it fills: a crash, a `kill -9`, a full disk or a
 /// power loss in that window leaves a half-written file, which
-/// [`load_persisted_workspace`] cannot parse and therefore reads as
+/// [`load_persisted_workspace_at`] cannot parse and therefore reads as
 /// "nothing persisted yet" — every space, tab and agent the person had,
 /// gone, with no error anywhere. The temporary is a sibling so the rename
 /// stays inside one filesystem, and the bytes reach the disk before the
@@ -1148,6 +1195,15 @@ struct Server {
     /// client changing theme changes the answer everywhere at once rather
     /// than only for panes opened afterwards.
     palette: Arc<Mutex<Palette>>,
+    /// The workspace this runtime could not carry across, held until a
+    /// client is there to be told.
+    ///
+    /// Held rather than logged, and held rather than dropped: the runtime
+    /// starts before any client attaches, and the one time this happened
+    /// the only record was a `tracing::warn!` to a file sink that is off
+    /// unless `UZE_LOG` is set. An operator watched every space disappear
+    /// with no sentence anywhere.
+    set_aside: Mutex<Option<uze_document::SetAside>>,
 }
 
 impl Server {
@@ -1162,7 +1218,8 @@ impl Server {
         // `persisted_state_path` for why a crash, a `kill -9`, or a reboot
         // still leaves this behind even though nothing else about a pane's
         // running state survives any of those.
-        let (session, launches) = load_persisted_workspace()
+        let (restored, set_aside) = load_persisted_workspace_at(&persisted_state_path());
+        let (session, launches) = restored
             .and_then(|persisted| Session::restore(persisted.spaces))
             .unwrap_or_else(|| {
                 let (columns, rows) = PLACEHOLDER_PANE_SIZE;
@@ -1182,6 +1239,7 @@ impl Server {
             persisting: Mutex::new(()),
             damage,
             palette: Arc::new(Mutex::new(Palette::default())),
+            set_aside: Mutex::new(set_aside),
         };
         for (pane, launch) in launches {
             // A persisted program is a guess (an agent binary that may
@@ -1369,6 +1427,17 @@ impl Server {
                     self.resize_pane(self.selected_pane_of(client), columns, rows);
                 }
                 self.broadcast_snapshot();
+                // Said once, to the first client that arrives. The runtime
+                // starts before anyone is watching, so this waits rather
+                // than going to a log nobody turned on — which is how an
+                // operator once watched every space disappear with no
+                // sentence anywhere.
+                if let Some(moved) = self.set_aside.lock().expect("set-aside poisoned").take() {
+                    events.reply(ClientEvent::WorkspaceSetAside {
+                        kept_at: moved.path,
+                        reason: moved.reason,
+                    });
+                }
                 Some(client)
             }
             Ok(Some(ClientRequest::Attach { .. })) => {
@@ -2755,7 +2824,7 @@ mod tests {
         ANSWERS_WITHIN, Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
         PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server,
         WORKSPACE_SCHEMA_VERSION, WorkspaceLock, arrival, bind_endpoint, held_by_a_server,
-        identify, identity_of, listener_at, load_persisted_workspace, persisted_state_path,
+        identify, identity_of, listener_at, load_persisted_workspace_at, persisted_state_path,
         read_event, read_message, relaunch_command_for_process, retire, send_request,
         serves_this_build, signalable, snapshot, socket_path, view_for, workspace_is_claimed,
         workspace_lock_path, write_atomically, write_message,
@@ -4133,13 +4202,16 @@ mod tests {
 
     /// The previous release wrote a kind per space. This build has no
     /// field for one, and `serde` would have dropped it without a word —
-    /// every space restored as something the operator never chose. The
-    /// version is read before the document, so the whole file is set
-    /// aside under a name nothing reads as a workspace and the operator
-    /// is told, rather than opening onto a workspace that lies.
+    /// which is why the version is read before the document.
+    ///
+    /// What that guard used to do about it was set the whole file aside,
+    /// and on 2026-09-19 that cost an operator every space they had open
+    /// over a difference of one field. The guard now climbs the rung
+    /// instead: the kind is dropped deliberately, every other field is
+    /// carried, and the spaces open.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn a_workspace_from_the_previous_release_is_set_aside_rather_than_half_read() {
+    fn a_workspace_from_the_previous_release_is_carried_across_rather_than_set_aside() {
         let scratch = uze_testkit::temp::socket_scratch("persprev");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
@@ -4151,34 +4223,49 @@ mod tests {
         let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         // Version 1 as the previous release wrote it: a kind per space.
+        // The space carries a tab, because a space with none is not a
+        // workspace anybody lost — `Session::restore` drops those, and the
+        // claim being proven here is that a space with work in it survives.
+        let kept = project.join("kept");
+        std::fs::create_dir_all(&kept).unwrap();
         std::fs::write(
             &path,
-            br#"{"spaces":[{"label":"demo","root":"/gone","kind":"worktree","tabs":[]}]}"#,
+            format!(
+                r#"{{"spaces":[{{"label":"demo","root":"{root}","kind":"worktree","tabs":[
+                     {{"label":"shell","cwd":"{root}","agent":null,"launch":"Shell"}}]}}]}}"#,
+                root = kept.display()
+            )
+            .as_bytes(),
         )
         .unwrap();
 
-        assert!(
-            load_persisted_workspace().is_none(),
-            "a document of another version restores nothing"
+        let (restored, _) = load_persisted_workspace_at(&path);
+        let restored = restored.expect("the previous release's spaces survive");
+        assert_eq!(
+            restored.spaces.len(),
+            1,
+            "the space is carried across, not thrown away"
         );
-        assert!(!path.exists(), "and is moved off the name a workspace has");
+        assert_eq!(restored.spaces[0].label, "demo");
+        assert!(
+            path.exists(),
+            "and the workspace keeps its own name: nothing was set aside"
+        );
         let beside: Vec<String> = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|name| name.contains("unreadable"))
             .collect();
-        assert_eq!(beside.len(), 1, "the bytes are kept beside it: {beside:?}");
+        assert!(beside.is_empty(), "nothing was set aside: {beside:?}");
 
         let socket = socket_path().unwrap();
         let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
         {
             let session = server.session.lock().expect("session poisoned");
             assert_eq!(
-                session.workspace.spaces.len(),
-                1,
-                "the server starts from the seat it was given"
+                session.workspace.spaces[0].root, kept,
+                "the server opens on the workspace it was left, not on the seat"
             );
-            assert_eq!(session.workspace.spaces[0].root, project);
         }
         server.stop_panes();
 
@@ -5283,6 +5370,186 @@ mod tests {
             let _ = self.process.wait();
             answered
         }
+    }
+
+    /// The incident of 2026-09-19: a release moved the workspace's shape,
+    /// the spaces were set aside, and the operator started from nothing.
+    /// The difference was one field — `kind` per space, which moved onto
+    /// the agent — and every other field mapped one to one.
+    #[test]
+    fn a_workspace_that_gave_every_space_a_kind_opens_on_this_build() {
+        let scratch = uze_testkit::temp::scratch("terminal-workspace-shape-1");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let path = scratch.join("workspace.json");
+        std::fs::write(
+            &path,
+            br#"{"spaces":[
+                 {"label":"uze","root":"/tmp/uze","kind":"worktree","tabs":[
+                   {"label":"shell","cwd":"/tmp/uze","agent":null,"launch":"Shell"}]},
+                 {"label":"home","root":"/tmp/home","kind":"plain","tabs":[]}]}"#,
+        )
+        .unwrap();
+
+        let (workspace, set_aside) = load_persisted_workspace_at(&path);
+        assert!(
+            set_aside.is_none(),
+            "a shape this build knows is carried across, not set aside"
+        );
+        let workspace = workspace.expect("the spaces survive the upgrade");
+        assert_eq!(workspace.schema_version, WORKSPACE_SCHEMA_VERSION);
+        let roots: Vec<_> = workspace
+            .spaces
+            .iter()
+            .map(|space| space.root.display().to_string())
+            .collect();
+        assert_eq!(roots, ["/tmp/uze", "/tmp/home"], "every space, in order");
+        assert_eq!(
+            workspace.spaces[0].tabs.len(),
+            1,
+            "and every tab the space carried"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Nothing persisted at all is a first run, not a loss.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_first_run_reports_nothing() {
+        let scratch = uze_testkit::temp::socket_scratch("setaside-first");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
+        assert!(
+            server
+                .set_aside
+                .lock()
+                .expect("set-aside poisoned")
+                .is_none(),
+            "there was nothing to lose, so there is nothing to say"
+        );
+        server.stop_panes();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The runtime starts before anyone is watching, and it is a different
+    /// process from the screen. So what it could not carry waits for the
+    /// first client and is said there — not in a log that is off unless
+    /// `UZE_LOG` is set, which is where the one that mattered went.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_client_is_told_what_the_runtime_could_not_carry() {
+        let scratch = uze_testkit::temp::socket_scratch("setaside-told");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let path = persisted_state_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not a workspace at all").unwrap();
+
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
+        let server = std::sync::Arc::new(server);
+
+        // A socket pair stands in for the endpoint: what is being proven
+        // is what a client is told once it attaches, not how it got there.
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                columns: 80,
+                rows: 24,
+                seating: crate::Seating::WhereItLeftOff,
+            },
+        )
+        .unwrap();
+
+        let mut told = None;
+        for _ in 0..8 {
+            match read_event(&mut reader) {
+                Ok(Some(crate::ClientEvent::WorkspaceSetAside { kept_at, .. })) => {
+                    told = Some(kept_at);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        let kept_at = told.expect("the client is told, rather than a log nobody turned on");
+        assert!(kept_at.exists(), "and told where the bytes were kept");
+        assert!(
+            !path.exists(),
+            "the workspace itself is out of the way, under a name nothing reads as one"
+        );
+
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        drop(writer);
+        let _ = serving.join();
+        server.stop_panes();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Two builds on one machine is the ordinary state of this repository.
+    /// A workspace a newer build wrote is not this one's to move.
+    #[test]
+    fn a_workspace_from_a_newer_build_is_left_exactly_as_it_is() {
+        let scratch = uze_testkit::temp::scratch("terminal-workspace-newer");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let path = scratch.join("workspace.json");
+        let bytes = br#"{"schema_version":99,"spaces":[]}"#;
+        std::fs::write(&path, bytes).unwrap();
+
+        let (workspace, set_aside) = load_persisted_workspace_at(&path);
+        assert!(
+            workspace.is_none(),
+            "this build starts from the seat it was given"
+        );
+        assert!(
+            set_aside.is_none(),
+            "and takes nothing away from the newer one"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "the bytes stay exactly where the newer build put them"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Bytes that are not a workspace at all are the one case that still
+    /// sets aside — and the bytes are kept, never deleted.
+    #[test]
+    fn a_workspace_that_cannot_be_read_is_kept_and_reported() {
+        let scratch = uze_testkit::temp::scratch("terminal-workspace-garbage");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let path = scratch.join("workspace.json");
+        std::fs::write(&path, b"not a workspace").unwrap();
+
+        let (workspace, set_aside) = load_persisted_workspace_at(&path);
+        assert!(workspace.is_none());
+        let set_aside = set_aside.expect("the runtime can say what it could not carry");
+        assert!(!path.exists(), "the workspace is out of the way");
+        assert!(set_aside.path.exists(), "and its bytes are kept");
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// The whole workspace is rewritten on every structural change, and a

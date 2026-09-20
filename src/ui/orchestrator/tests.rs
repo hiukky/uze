@@ -34,10 +34,10 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
-        AgentTabStatus, Attach, CommitDetailPopup, CommitDetailResolution, CompletionBehavior,
-        DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer, GitBadge, GitResolution,
-        PendingDrop, PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection,
-        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
+        AgentTabStatus, AgentView, Attach, CommitDetailPopup, CommitDetailResolution,
+        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer,
+        GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
+        ScrollDirection, TabDragGroup, UpstreamSync, Viewport, WorkResolution, WorkStateView,
         WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
         answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
         evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
@@ -210,8 +210,8 @@ mod workspace_tests {
 
     /// A task view as the application would answer it for the slot at
     /// `checkout`, in `state`.
-    fn task_in(checkout: &str, label: &str, state: TaskStateView, ahead: usize) -> TaskView {
-        TaskView {
+    fn task_in(checkout: &str, label: &str, state: WorkStateView, ahead: usize) -> AgentView {
+        AgentView {
             id: "t1".into(),
             label: label.into(),
             branch: "agent/t1".into(),
@@ -219,6 +219,7 @@ mod workspace_tests {
             checkout: Some(PathBuf::from(checkout)),
             state,
             completion: CompletionBehavior::Merge,
+            isolated: true,
             ahead,
             published_as: None,
             published_request: None,
@@ -229,7 +230,7 @@ mod workspace_tests {
 
     /// A one-agent session in the slot `/repo/.worktrees/ai`, whose task is
     /// in `state`.
-    fn agent_with_task(state: TaskStateView, ahead: usize) -> WorkspaceModel {
+    fn agent_with_task(state: WorkStateView, ahead: usize) -> WorkspaceModel {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         stamp_first_tab(&mut model, "t1");
         model.remembered.tasks.insert(
@@ -740,7 +741,7 @@ mod workspace_tests {
             .expect("the agent's own sidebar row");
         assert_eq!(
             tab_drag_group(&model, &identities_fixture(), &layout, sidebar_rect, first),
-            Some(TabDragGroup::Agents(space, AgentGroup::InTheRoot))
+            Some(TabDragGroup::Agents(space, AgentGroup::Isolated))
         );
 
         let strip_rect = model
@@ -776,7 +777,7 @@ mod workspace_tests {
             &model,
             &identities_fixture(),
             &layout,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
         );
         assert_eq!(
             agents.iter().map(|(_, tab)| *tab).collect::<Vec<_>>(),
@@ -830,7 +831,7 @@ mod workspace_tests {
             &model,
             &identities_fixture(),
             &layout,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
         );
         let origin = all
             .iter()
@@ -848,7 +849,7 @@ mod workspace_tests {
 
         let pending = pending_tab_drop(
             &members,
-            TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            TabDragGroup::Agents(space, AgentGroup::Isolated),
             second_label_row,
             origin,
         );
@@ -1026,7 +1027,7 @@ mod workspace_tests {
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         model.dragging_tab = Some(DraggingTab {
             tab: first,
-            group: TabDragGroup::Agents(space, AgentGroup::InTheRoot),
+            group: TabDragGroup::Agents(space, AgentGroup::Isolated),
             origin: 0,
             armed: true,
             pending: Some(PendingDrop::Before(second)),
@@ -1042,7 +1043,7 @@ mod workspace_tests {
             .expect("the drop target's own row");
         let column = gutter_column(&hits);
         assert!(
-            lit_gutter_rows(&buffer, column, false).contains(&second_row),
+            lit_gutter_rows(&buffer, column).contains(&second_row),
             "indicator on the target row: {rows:?}"
         );
 
@@ -1051,20 +1052,20 @@ mod workspace_tests {
             .map(|d| DraggingTab { armed: false, ..d });
         let buffer = sidebar(&model, &identities_fixture()).buffer;
         assert!(
-            !lit_gutter_rows(&buffer, column, false).contains(&second_row),
+            !lit_gutter_rows(&buffer, column).contains(&second_row),
             "no indicator before the drag is armed"
         );
     }
 
     #[test]
     fn a_ready_task_names_its_row_marks_it_and_offers_delivery() {
-        let model = agent_with_task(TaskStateView::Ready, 3);
+        let model = agent_with_task(WorkStateView::Ready, 3);
         let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent names its own row: {rows:?}");
-        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
+        let (ready, _) = task_mark(&WorkStateView::Ready).expect("ready is marked");
         assert!(
             name_row.contains(&ready),
             "ready carries its own mark: {name_row}"
@@ -1093,7 +1094,7 @@ mod workspace_tests {
     /// is rather than wherever the work will show up.
     #[test]
     fn a_header_button_answers_the_pointer_and_the_press() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         let deliver = WorkspaceHit::Deliver(model.selected_tab().expect("a selected tab"));
         let rect = hit_rect(&model, deliver);
         assert!(
@@ -1136,7 +1137,7 @@ mod workspace_tests {
     /// pointer, where a button is raised and does.
     #[test]
     fn a_report_in_the_actions_row_is_not_dressed_as_a_button() {
-        let mut model = agent_with_task(TaskStateView::Integrating, 3);
+        let mut model = agent_with_task(WorkStateView::Integrating, 3);
         model.tick = 3;
         let (rows, hits) = tab_strip(&model);
         let row = rows.join("\n");
@@ -1182,7 +1183,7 @@ mod workspace_tests {
     #[test]
     fn the_delivery_button_names_the_ending_the_project_asked_for() {
         let ending = |completion| {
-            let mut model = agent_with_task(TaskStateView::Ready, 3);
+            let mut model = agent_with_task(WorkStateView::Ready, 3);
             for task in model.remembered.tasks.values_mut().flatten() {
                 task.completion = completion;
             }
@@ -1217,7 +1218,7 @@ mod workspace_tests {
     /// sidebar, and cannot claim a request the press will not open.
     #[test]
     fn a_ready_task_is_marked_in_the_sidebar_and_named_on_its_button() {
-        let state = TaskStateView::Ready;
+        let state = WorkStateView::Ready;
         let model = agent_with_task(state.clone(), 3);
         let (mark, _) = super::render::task_mark(&state).expect("ready is marked");
         let sidebar = sidebar(&model, &identities_fixture()).rows;
@@ -1239,7 +1240,7 @@ mod workspace_tests {
     /// sync onto a named one once it does.
     #[test]
     fn a_published_request_turns_the_delivery_button_into_a_sync() {
-        let mut model = agent_with_task(TaskStateView::Ready, 4);
+        let mut model = agent_with_task(WorkStateView::Ready, 4);
         for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
         }
@@ -1271,7 +1272,7 @@ mod workspace_tests {
     /// already carried all six — a merge's question asked of a sync.
     #[test]
     fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
-        let mut model = agent_with_task(TaskStateView::Published, 6);
+        let mut model = agent_with_task(WorkStateView::Published, 6);
         for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
             task.published_as = Some("fix-auth-redirect".into());
@@ -1294,7 +1295,7 @@ mod workspace_tests {
         // Two commits later the button counts those two, not the six the
         // request has carried since the last sync.
         for task in model.remembered.tasks.values_mut().flatten() {
-            task.state = TaskStateView::Ready;
+            task.state = WorkStateView::Ready;
             task.unsynced = Some(2);
         }
         let (behind_by_two, _) = tab_strip(&model);
@@ -1309,7 +1310,7 @@ mod workspace_tests {
     /// stopped saying it.
     #[test]
     fn a_published_task_is_marked_as_gone_not_as_waiting_to_be_delivered() {
-        let mut model = agent_with_task(TaskStateView::Published, 6);
+        let mut model = agent_with_task(WorkStateView::Published, 6);
         for task in model.remembered.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
             task.published_request = Some(20);
@@ -1320,8 +1321,8 @@ mod workspace_tests {
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent names its own row");
-        let (published, _) = task_mark(&TaskStateView::Published).expect("published is marked");
-        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
+        let (published, _) = task_mark(&WorkStateView::Published).expect("published is marked");
+        let (ready, _) = task_mark(&WorkStateView::Ready).expect("ready is marked");
         assert!(
             name_row.contains(&published) && !name_row.contains(&ready),
             "the work is with its reviewer, not waiting on the operator: {name_row}"
@@ -1335,7 +1336,7 @@ mod workspace_tests {
     /// hour. The client that started it is the party that knows.
     #[test]
     fn a_delivery_in_flight_is_drawn_from_the_client_that_started_it() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         let task = model
             .remembered
             .tasks
@@ -1344,12 +1345,12 @@ mod workspace_tests {
             .next()
             .expect("the fixture has a task")
             .clone();
-        assert_eq!(model.drawn_state(&task), TaskStateView::Ready);
+        assert_eq!(model.drawn_state(&task), WorkStateView::Ready);
 
         model.remembered.delivery_pending.insert(task.id.clone());
-        assert_eq!(model.drawn_state(&task), TaskStateView::Integrating);
+        assert_eq!(model.drawn_state(&task), WorkStateView::Integrating);
 
-        let (delivering, _) = task_mark(&TaskStateView::Integrating).expect("delivering is marked");
+        let (delivering, _) = task_mark(&WorkStateView::Integrating).expect("delivering is marked");
         let rows = sidebar(&model, &identities_fixture()).rows;
         assert!(
             rows.iter().any(|row| row.contains(&delivering)),
@@ -1381,7 +1382,7 @@ mod workspace_tests {
     #[test]
     fn a_delivery_that_answered_nothing_still_gives_the_task_back() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-delivery-silence"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 3), &home);
         let task = driven
             .attach
             .model
@@ -1401,7 +1402,7 @@ mod workspace_tests {
             .insert(task.id.clone());
         assert_eq!(
             driven.attach.model.drawn_state(&task),
-            TaskStateView::Integrating
+            WorkStateView::Integrating
         );
 
         driven
@@ -1441,20 +1442,9 @@ mod workspace_tests {
     #[test]
     fn discarding_a_preserved_task_is_asked_for_rather_than_done_on_the_keystroke() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-discard-async"));
-        let mut model = agent_with_task(TaskStateView::Ready, 1);
-        let mut parked = task_in(
-            "/repo/.worktrees/old",
-            "yesterday",
-            TaskStateView::Parked,
-            0,
-        );
-        parked.id = "t2".into();
-        model
-            .remembered
-            .tasks
-            .get_mut(Path::new("/repo"))
-            .unwrap()
-            .push(parked);
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
+        model.remembered.preserved_work =
+            vec![preserved("/repo", "t2", "yesterday", WorkStateView::Parked)];
         model.preserved = Some(PreservedOverlay {
             selected: 0,
             confirm_discard: false,
@@ -1547,7 +1537,7 @@ mod workspace_tests {
     #[test]
     fn a_terminal_runtime_that_went_away_is_said_rather_than_waited_on() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-runtime-gone"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 3), &home);
         assert!(
             matches!(driven.pump(), Flow::Continue),
             "a live runtime is just a quiet one"
@@ -1574,7 +1564,7 @@ mod workspace_tests {
     #[test]
     fn pressing_deliver_says_it_once_and_leaves_no_message_behind() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-deliver-once"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 3), &home);
         let deliver =
             WorkspaceHit::Deliver(driven.attach.model.selected_tab().expect("a selected tab"));
         let rect = hit_rect(&driven.attach.model, deliver);
@@ -1615,7 +1605,7 @@ mod workspace_tests {
     /// looks, since the strip and the sidebar read the *tab's* label.
     #[test]
     fn a_task_that_acquired_a_name_renames_its_tab() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for tasks in model.remembered.tasks.values_mut() {
             tasks[0].branch = "fix/branch-naming".to_owned();
             tasks[0].label = "branch naming".to_owned();
@@ -1645,7 +1635,7 @@ mod workspace_tests {
     /// that tab is one this mechanism put there.
     #[test]
     fn a_task_renamed_again_carries_the_tab_it_already_named() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for tasks in model.remembered.tasks.values_mut() {
             tasks[0].label = "branch naming".to_owned();
         }
@@ -1672,7 +1662,7 @@ mod workspace_tests {
     /// adoption already follows.
     #[test]
     fn a_tab_the_user_named_is_never_renamed_by_its_task() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for tasks in model.remembered.tasks.values_mut() {
             tasks[0].label = "branch naming".to_owned();
         }
@@ -1684,7 +1674,7 @@ mod workspace_tests {
     /// A task still carrying its generated identifier has no name to give.
     #[test]
     fn an_unnamed_task_renames_nothing() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for tasks in model.remembered.tasks.values_mut() {
             let id = tasks[0].id.clone();
             tasks[0].label = id;
@@ -1701,7 +1691,7 @@ mod workspace_tests {
     /// gate on screen text, never assert it.
     #[test]
     fn a_named_task_reads_as_its_name_in_the_sidebar() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for tasks in model.remembered.tasks.values_mut() {
             tasks[0].branch = "fix/branch-naming".to_owned();
             tasks[0].label = "branch naming".to_owned();
@@ -1733,7 +1723,7 @@ mod workspace_tests {
     #[test]
     fn a_long_caption_is_elided_rather_than_run_off_the_sidebar() {
         const LONG: &str = "a-harness-named-longer-than-any-sidebar-column-could-hold";
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         for space in &mut model.session.as_mut().unwrap().workspace.spaces {
             for tab in &mut space.tabs {
                 tab.pane.process = LONG.to_owned();
@@ -1778,22 +1768,22 @@ mod workspace_tests {
     fn a_reused_slot_reads_the_task_in_it_now_not_the_one_before() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         stamp_first_tab(&mut model, "now");
-        let before = TaskView {
+        let before = AgentView {
             id: "before".into(),
             branch: "agent/before".into(),
             created_at_unix: 1,
             ..task_in(
                 "/repo/.worktrees/ai",
                 "before",
-                TaskStateView::Integrated,
+                WorkStateView::Integrated,
                 2,
             )
         };
-        let now = TaskView {
+        let now = AgentView {
             id: "now".into(),
             branch: "agent/now".into(),
             created_at_unix: 2,
-            ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
+            ..task_in("/repo/.worktrees/ai", "now", WorkStateView::Running, 0)
         };
         model
             .remembered
@@ -1801,7 +1791,7 @@ mod workspace_tests {
             .insert(PathBuf::from("/repo"), vec![before, now]);
 
         let rows = sidebar(&model, &identities_fixture()).rows;
-        let (delivered, _) = task_mark(&TaskStateView::Integrated).expect("integrated is marked");
+        let (delivered, _) = task_mark(&WorkStateView::Integrated).expect("integrated is marked");
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
@@ -1917,19 +1907,18 @@ mod workspace_tests {
 
     /// Two rows per agent and no gap between them, so what says which
     /// item the keyboard is on has to be the item itself: its two rows
-    /// carry a trace of the space's own hue over the panel every other
-    /// row sits on. Light enough to be read through — it is a selection,
-    /// not a highlight — and the kind's, so the tint says what the space
-    /// is as well as where you are.
+    /// carry a trace of the accent over the panel every other row sits
+    /// on. Light enough to be read through — it is a selection, not a
+    /// highlight.
     #[test]
-    fn the_agent_receiving_keystrokes_wears_its_kinds_hue_over_the_space() {
+    fn the_agent_receiving_keystrokes_wears_the_accent_over_the_space() {
         let model = agents_in_the_root_session();
         let Sidebar {
             buffer, hits, rows, ..
         } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
         let plain = theme::color(Token::SurfaceRaisedSubtle);
-        let tinted = crate::ui::theme::tinted(Token::AgentInPlace, Token::SurfaceRaisedSubtle);
+        let tinted = crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle);
         assert_ne!(tinted, plain, "the tint is a surface of its own");
 
         // `agent 2` is the space's context agent (see `agents_in_the_root_session`).
@@ -1986,18 +1975,18 @@ mod workspace_tests {
         } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits), false),
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
             vec![agents[2], agents[3]],
             "an agent in the root lights the hue of its group: {rows:?}"
         );
 
-        let tree = agent_with_task(TaskStateView::Ready, 1);
+        let tree = agent_with_task(WorkStateView::Ready, 1);
         let Sidebar {
             rows, hits, buffer, ..
         } = sidebar(&tree, &identities_fixture());
         let agents = agent_rows(&hits);
         assert_eq!(
-            lit_gutter_rows(&buffer, gutter_column(&hits), true),
+            lit_gutter_rows(&buffer, gutter_column(&hits)),
             vec![agents[0], agents[1]],
             "and an isolated one the other: {rows:?}"
         );
@@ -2112,7 +2101,7 @@ mod workspace_tests {
             vec![task_in(
                 "/repo/.worktrees/ai",
                 "fix-auth-redirect",
-                TaskStateView::Running,
+                WorkStateView::Running,
                 0,
             )],
         );
@@ -2288,12 +2277,12 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo/.worktrees/ai");
         let tab = first_tab(&model).id;
         stamp_first_tab(&mut model, "now");
-        let before = TaskView {
+        let before = AgentView {
             id: "before".into(),
             ..task_in(
                 "/repo/.worktrees/ai",
                 "nerd font symbols",
-                TaskStateView::Integrated,
+                WorkStateView::Integrated,
                 2,
             )
         };
@@ -2307,10 +2296,10 @@ mod workspace_tests {
             "the task placed here is not listed yet, and nothing stands in for it"
         );
 
-        let now = TaskView {
+        let now = AgentView {
             id: "now".into(),
             created_at_unix: 2,
-            ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
+            ..task_in("/repo/.worktrees/ai", "now", WorkStateView::Running, 0)
         };
         model
             .remembered
@@ -2330,7 +2319,7 @@ mod workspace_tests {
     /// agent read as "Agent" in the sidebar and as its task slug up top.
     #[test]
     fn an_agent_carries_its_own_name_in_both_the_sidebar_and_the_strip() {
-        let model = agent_with_task(TaskStateView::Ready, 1);
+        let model = agent_with_task(WorkStateView::Ready, 1);
         assert!(
             sidebar(&model, &identities_fixture())
                 .rows
@@ -2350,19 +2339,19 @@ mod workspace_tests {
 
     /// Every state a slot can be in, for the tests that have to cover the
     /// whole table rather than one interesting case.
-    fn every_task_state() -> Vec<TaskStateView> {
+    fn every_task_state() -> Vec<WorkStateView> {
         vec![
-            TaskStateView::Running,
-            TaskStateView::Uncommitted,
-            TaskStateView::Ready,
-            TaskStateView::Published,
-            TaskStateView::Integrating,
-            TaskStateView::Conflicted {
+            WorkStateView::Running,
+            WorkStateView::Uncommitted,
+            WorkStateView::Ready,
+            WorkStateView::Published,
+            WorkStateView::Integrating,
+            WorkStateView::Conflicted {
                 files: vec![PathBuf::from("src/lib.rs")],
             },
-            TaskStateView::GateFailed,
-            TaskStateView::Integrated,
-            TaskStateView::Parked,
+            WorkStateView::GateFailed,
+            WorkStateView::Integrated,
+            WorkStateView::Parked,
         ]
     }
 
@@ -2432,7 +2421,7 @@ mod workspace_tests {
     /// in front of the name is not a second door to the same popup.
     #[test]
     fn only_the_task_mark_opens_the_catalog() {
-        let model = agent_with_task(TaskStateView::Ready, 1);
+        let model = agent_with_task(WorkStateView::Ready, 1);
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let anchors: Vec<Rect> = hits
             .iter()
@@ -2453,7 +2442,7 @@ mod workspace_tests {
             .nth(anchor.x as usize)
             .expect("the anchor is inside the row")
             .to_string();
-        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
+        let (ready, _) = task_mark(&WorkStateView::Ready).expect("ready is marked");
         assert_eq!(glyph, ready, "the anchor is the task mark: {rows:?}");
         assert!(
             hits.iter()
@@ -2467,7 +2456,7 @@ mod workspace_tests {
     /// naming the harness.
     #[test]
     fn a_task_mark_is_pinned_to_the_sidebars_right_column() {
-        let model = agent_with_task(TaskStateView::Ready, 1);
+        let model = agent_with_task(WorkStateView::Ready, 1);
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let mark = hits
             .iter()
@@ -2499,7 +2488,7 @@ mod workspace_tests {
     /// space's `⇄` is the header's alone and does not touch it.
     #[test]
     fn an_agents_caption_names_the_harness_running_it_never_its_branch() {
-        let mut model = agent_with_task(TaskStateView::Running, 0);
+        let mut model = agent_with_task(WorkStateView::Running, 0);
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let caption = agent_rows(&hits)[1] as usize;
         assert!(
@@ -2589,7 +2578,7 @@ mod workspace_tests {
             let (tab, pane) = (first_tab(&model).id, first_tab(&model).pane.id);
             assert!(model.tab_task(tab).is_none(), "nothing listed yet: {cwd}");
 
-            let mut task = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Running, 0);
+            let mut task = task_in("/repo/.worktrees/ai", "fix-auth", WorkStateView::Running, 0);
             model
                 .remembered
                 .tasks
@@ -2601,7 +2590,7 @@ mod workspace_tests {
             );
 
             task.checkout = None;
-            task.state = TaskStateView::Parked;
+            task.state = WorkStateView::Parked;
             model
                 .remembered
                 .tasks
@@ -2630,7 +2619,7 @@ mod workspace_tests {
             vec![task_in(
                 "/repo/.worktrees/ai",
                 "fix-auth",
-                TaskStateView::Running,
+                WorkStateView::Running,
                 0,
             )],
         );
@@ -2731,7 +2720,7 @@ mod workspace_tests {
             .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
         stamp_first_tab(&mut model, "t1");
         model.remembered.lost_checkouts.insert(pane);
-        let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Parked, 2);
+        let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", WorkStateView::Parked, 2);
         parked.checkout = None;
         model
             .remembered
@@ -2766,7 +2755,7 @@ mod workspace_tests {
         // dead one — no longer offers a second agent for it.
         let mut resumed = parked;
         resumed.checkout = Some(PathBuf::from("/repo/.worktrees/b2"));
-        resumed.state = TaskStateView::Running;
+        resumed.state = WorkStateView::Running;
         model
             .remembered
             .tasks
@@ -2813,7 +2802,7 @@ mod workspace_tests {
 
         // And an evaluation that found no working tree still answers, so
         // the reservation is released rather than left standing.
-        let resolution = TaskResolution {
+        let resolution = WorkResolution {
             key: evaluation_key(&nested),
             answered: None,
         };
@@ -2866,7 +2855,7 @@ mod workspace_tests {
             }
         }
         assert!(
-            task_mark(&TaskStateView::Running).is_none(),
+            task_mark(&WorkStateView::Running).is_none(),
             "the assertion below is only meaningful while Running is markless"
         );
         assert!(
@@ -2882,7 +2871,7 @@ mod workspace_tests {
     /// away mid-click.
     #[test]
     fn a_message_never_moves_an_action() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         model.remembered.git_badge = Some(GitBadge {
             cwd: PathBuf::from("/repo/.worktrees/ai"),
             summary: Some(uze_extensions::code::ChangeSummary {
@@ -2922,7 +2911,7 @@ mod workspace_tests {
     /// with nothing to report still finishes.
     #[test]
     fn the_header_carries_work_in_flight_and_lets_go_when_it_ends() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         model.set_busy_notice("delivering all".to_owned());
         model.tick = 3;
         let (rows, _) = tab_strip(&model);
@@ -2949,7 +2938,7 @@ mod workspace_tests {
     /// does not have to be chosen over the next one.
     #[test]
     fn an_outcome_is_never_drawn_in_the_header() {
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         model.raise_toast(
             crate::ui::widget::ToastKind::Done,
             "merged → main",
@@ -2967,7 +2956,7 @@ mod workspace_tests {
 
     #[test]
     fn a_running_task_offers_no_delivery_and_carries_no_mark() {
-        let model = agent_with_task(TaskStateView::Running, 0);
+        let model = agent_with_task(WorkStateView::Running, 0);
         let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         assert!(
@@ -2991,14 +2980,14 @@ mod workspace_tests {
     #[test]
     fn a_conflicted_task_is_marked_and_reported_but_not_a_button() {
         let model = agent_with_task(
-            TaskStateView::Conflicted {
+            WorkStateView::Conflicted {
                 files: vec![PathBuf::from("src/lib.rs")],
             },
             2,
         );
         let rows = sidebar(&model, &identities_fixture()).rows;
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
-        let (conflict, _) = task_mark(&TaskStateView::Conflicted { files: Vec::new() })
+        let (conflict, _) = task_mark(&WorkStateView::Conflicted { files: Vec::new() })
             .expect("a conflict is marked");
         assert!(name_row.contains(&conflict), "{name_row}");
         let (rows, hits) = tab_strip(&model);
@@ -3010,33 +2999,37 @@ mod workspace_tests {
         );
     }
 
+    fn preserved(
+        project: &str,
+        id: &str,
+        label: &str,
+        state: WorkStateView,
+    ) -> uze_application::PreservedWork {
+        uze_application::PreservedWork {
+            project: PathBuf::from(project),
+            id: id.to_owned(),
+            label: label.to_owned(),
+            branch: format!("agent/{id}"),
+            checkout: Some(PathBuf::from(project).join(".worktrees").join(id)),
+            state,
+            created_at_unix: 1,
+        }
+    }
+
+    /// The list answers from the machine's records and subtracts the tabs
+    /// this client is in front of. A tab standing in front of an agent is
+    /// not preserved work; delivered work is not either.
     #[test]
-    fn preserved_work_lists_tasks_without_a_live_tab_and_nothing_else() {
-        let mut model = agent_with_task(TaskStateView::Ready, 1);
-        let mut parked = task_in(
-            "/repo/.worktrees/old",
-            "yesterday",
-            TaskStateView::Parked,
-            0,
-        );
-        parked.id = "t2".into();
-        let mut delivered = task_in(
-            "/repo/.worktrees/gone",
-            "shipped",
-            TaskStateView::Integrated,
-            0,
-        );
-        delivered.id = "t3".into();
-        model
-            .remembered
-            .tasks
-            .get_mut(Path::new("/repo"))
-            .unwrap()
-            .extend([parked, delivered]);
+    fn preserved_work_lists_work_without_a_live_tab_and_nothing_else() {
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
+        model.remembered.preserved_work = vec![
+            preserved("/repo", "t2", "yesterday", WorkStateView::Uncommitted),
+            preserved("/other", "t3", "elsewhere", WorkStateView::Parked),
+        ];
 
         let preserved = model.preserved_tasks();
-        assert_eq!(preserved.len(), 1, "{preserved:?}");
-        assert_eq!(preserved[0].1.label, "yesterday");
+        assert_eq!(preserved.len(), 2, "{preserved:?}");
+        assert_eq!(preserved[0].label, "yesterday");
 
         model.preserved = Some(PreservedOverlay {
             selected: 0,
@@ -3065,8 +3058,8 @@ mod workspace_tests {
             "{text}"
         );
         assert!(
-            !text.contains("shipped"),
-            "delivered work is not preserved work"
+            text.contains("repo") && text.contains("other"),
+            "a list that crosses projects names each row's own: {text}"
         );
         let discard = uze_keys::active()
             .chord_for(
@@ -3103,6 +3096,48 @@ mod workspace_tests {
     }
 
     /// A one-agent session whose only tab runs in `cwd`.
+    /// Work is bound to a project and never to a space: an agent's record
+    /// carries its base, branch, checkout and target, and nothing about a
+    /// space. So a space is matched by its canonical root alone.
+    #[test]
+    fn a_space_is_matched_by_its_root_whatever_it_is_called() {
+        let scratch = uze_testkit::temp::scratch("orchestrator-space-by-root");
+        let project = scratch.join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let mut session = session(&project);
+        // The space the work was left in was closed; this is a different
+        // one, opened later on the same directory, under another name.
+        session.workspace.spaces[0].label = "something else entirely".into();
+        let model = model_of(session);
+
+        assert_eq!(
+            model.space_rooted_at(&project),
+            Some(model.session.as_ref().unwrap().workspace.spaces[0].id),
+            "the name and the identity have no say; the root does"
+        );
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    /// A space's root is what the sidebar, the badge and the changes
+    /// overlay all describe. One rooted at `$HOME` describes no repository,
+    /// so seating an isolated agent there would put it back in the wrong
+    /// place — and matching by containment would make that space the owner
+    /// of every project beneath it.
+    #[test]
+    fn a_space_rooted_above_the_project_does_not_match_it() {
+        let scratch = uze_testkit::temp::scratch("orchestrator-space-above");
+        let project = scratch.join("home").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let model = model_of(session(scratch.join("home")));
+
+        assert_eq!(
+            model.space_rooted_at(&project),
+            None,
+            "a space above the project is not the project's space"
+        );
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
     fn agent_session_in(cwd: &str) -> WorkspaceModel {
         let mut session = session("/repo");
         let tab = &mut session.workspace.spaces[0].tabs[0];
@@ -4076,7 +4111,7 @@ mod workspace_tests {
     #[test]
     fn the_manage_action_opens_the_modal_and_closes_it_again() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-toggle"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
 
         driven.press_key(key_event(manage_chord()));
         assert!(driven.attach.model.manage.is_some(), "the modal opened");
@@ -4111,7 +4146,7 @@ mod workspace_tests {
     #[test]
     fn the_header_control_opens_the_modal_and_a_click_beside_it_closes_it() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-click"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
         driven.frame();
         let more = driven
             .attach
@@ -4171,7 +4206,7 @@ mod workspace_tests {
     #[test]
     fn the_close_mark_on_the_modal_closes_it() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-close-mark"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
         driven.press_key(key_event(manage_chord()));
         driven.frame();
         let close = driven.attach.model.manage_chrome.expect("drawn").close;
@@ -4185,7 +4220,7 @@ mod workspace_tests {
     #[test]
     fn keys_inside_the_modal_are_the_modals() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-keys"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
         driven.press_key(key_event(manage_chord()));
         let keymap = uze_keys::active();
         let next = keymap
@@ -4252,7 +4287,7 @@ mod workspace_tests {
     #[test]
     fn the_modal_reopens_where_it_was_closed() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-memory"));
-        let mut driven = driven(agent_with_task(TaskStateView::Ready, 1), &home);
+        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
         driven.press_key(key_event(manage_chord()));
         let next = uze_keys::active()
             .chord_for(
@@ -4282,7 +4317,7 @@ mod workspace_tests {
     /// way into the other one, a rule between the two controls.
     #[test]
     fn the_sidebar_header_names_the_column_and_offers_the_modal() {
-        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
         let rows = frame_rows(&mut model);
         let header = &rows[0];
         assert!(header.contains("work"), "the surface is named: {header:?}");
@@ -4333,7 +4368,7 @@ mod workspace_tests {
             let column = header.find("new").expect("the control is drawn") as u16;
             buffer[(column, 0)].fg
         };
-        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
         assert_eq!(hue_of_new(&mut model), theme::color(Token::Accent));
 
         model.root_picker = Some(RootPicker::opened_in("~", None));
@@ -4719,12 +4754,8 @@ mod workspace_tests {
     /// The rows whose gutter is lit — drawn in the hue of the space's own
     /// kind, in the sidebar's leading column `column`, which every space's
     /// gutter runs down.
-    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16, isolated: bool) -> Vec<u16> {
-        let hue = theme::color(if isolated {
-            Token::AgentIsolated
-        } else {
-            Token::AgentInPlace
-        });
+    fn lit_gutter_rows(buffer: &ratatui::buffer::Buffer, column: u16) -> Vec<u16> {
+        let hue = theme::color(Token::Accent);
         (0..buffer.area.height)
             .filter(|row| {
                 let cell = &buffer[(column, *row)];
@@ -6130,7 +6161,7 @@ mod workspace_tests {
     /// the presentation state of the attach that ended must not.
     #[test]
     fn memory_carries_what_the_client_resolved_across_attaches() {
-        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
         model
             .remembered
             .branches
@@ -6464,6 +6495,109 @@ mod workspace_tests {
         model_of(session)
     }
 
+    /// Every space is a block, the ones nobody is working in included:
+    /// their ground is the same panel at part of its strength, so the
+    /// column reads as blocks rather than as rows floating on the
+    /// backdrop — and the space in front keeps the only ground at full
+    /// strength.
+    #[test]
+    fn a_space_nobody_is_working_in_is_a_fainter_block_of_its_own() {
+        let mut model = three_spaces();
+        model.first_steps_collapsed = true;
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        let active = space_header(&hits, SpaceId(3));
+        let resting = space_header(&hits, SpaceId(1));
+        let ground = |header: Rect, offset: u16| buffer[(header.x + 2, header.y + offset)].bg;
+
+        assert_eq!(
+            ground(active, 0),
+            theme::color(Token::SurfaceRaised),
+            "the space being worked in wears its header at full strength: {rows:?}"
+        );
+        assert_eq!(
+            ground(resting, 0),
+            crate::ui::theme::faded(Token::SurfaceRaised),
+            "and the others wear the same one, faded: {rows:?}"
+        );
+        assert_eq!(
+            ground(resting, 1),
+            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
+            "their rows are the panel, faded with them: {rows:?}"
+        );
+        assert_ne!(
+            ground(resting, 1),
+            theme::color(Token::SurfaceBackground),
+            "a block nobody is in is still a block"
+        );
+        assert_ne!(
+            ground(resting, 1),
+            theme::color(Token::SurfaceRaisedSubtle),
+            "and never reads as the one in front"
+        );
+    }
+
+    /// A space's own row is a target like any other: when it is the row
+    /// in front — its shell selected, or the space folded to its header —
+    /// it wears the same trace of the accent a selected agent row wears,
+    /// over its own lighter surface. With an agent in front it is the
+    /// plain surface again, because then the trace belongs to that agent.
+    #[test]
+    fn the_spaces_own_row_wears_the_agents_trace_when_it_is_the_one_in_front() {
+        let in_front = model_of(session("/repo"));
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&in_front, &identities_fixture());
+        let header = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle),
+            "the space's own row is the one selected, in the one overlay: {rows:?}"
+        );
+
+        let behind = agents_in_the_root_session();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&behind, &identities_in_the_root());
+        let header = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            theme::color(Token::SurfaceRaised),
+            "an agent is in front, so the header is the plain surface: {rows:?}"
+        );
+    }
+
+    /// A minimized space is two rows — its header and the caption saying
+    /// where its work is — and they are one item: when that item is the
+    /// one in front, the trace runs through both rows rather than
+    /// stopping halfway down it.
+    #[test]
+    fn a_minimized_space_in_front_is_lit_down_both_of_its_rows() {
+        let mut model = agents_in_the_root_session();
+        let root = model.session.as_ref().expect("session").workspace.spaces[0]
+            .root
+            .clone();
+        model.collapsed_space_roots.insert(root);
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_in_the_root());
+        let header = space_header(&hits, SpaceId(1));
+
+        let overlay = crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle);
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            overlay,
+            "the header is the row in front: {rows:?}"
+        );
+        assert_eq!(
+            buffer[(header.x + 2, header.y + 1)].bg,
+            overlay,
+            "and the caption under it carries the same one, with no step \
+             between the two rows of one item: {rows:?}"
+        );
+    }
+
     /// The header row a space was drawn at, by the frame's own hits.
     fn space_header(hits: &[(Rect, WorkspaceHit)], wanted: SpaceId) -> Rect {
         hits.iter()
@@ -6494,9 +6628,9 @@ mod workspace_tests {
 
     /// Every row of a space hangs off one muted gutter down its leading
     /// column, at no level of indent; only the selected agent's stretch of
-    /// it is heavier and in its own group's hue. An agent in the root sits
-    /// beside the trunk, so both of its rows are the trunk itself — the
-    /// group that branches off it is covered where the two groups are.
+    /// it is heavier and in the accent, whichever group it is in. An agent
+    /// in the root sits beside the trunk, so both of its rows are the
+    /// trunk itself.
     #[test]
     fn a_space_is_one_block_down_its_gutter() {
         let mut model = three_spaces();
@@ -6506,21 +6640,21 @@ mod workspace_tests {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
         use crate::ui::theme::{Symbol, Token};
-        let muted = theme::color(Token::TextMuted);
-        let in_place = theme::color(Token::AgentInPlace);
+        let resting = theme::color(Token::TextMuted);
+        let lit = theme::color(Token::Accent);
         // Space 1 is in the background; space 3 is selected, on its agent.
         for (space, branch, caption, hues) in [
             (
                 SpaceId(1),
                 Symbol::TreeVertical,
                 Symbol::TreeVertical,
-                [muted, muted, muted],
+                [resting, resting, resting],
             ),
             (
                 SpaceId(3),
                 Symbol::TreeVertical,
                 Symbol::TreeVertical,
-                [muted, in_place, in_place],
+                [resting, lit, lit],
             ),
         ] {
             let header = space_header(&hits, space);
@@ -6746,7 +6880,7 @@ mod workspace_tests {
                 rows, hits, buffer, ..
             } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, three).y;
-            let lit = lit_gutter_rows(&buffer, gutter_column(&hits), false).contains(&header);
+            let lit = lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header);
             (rows[header as usize].clone(), lit)
         };
         let (open, lit) = header_row(&model);
@@ -6953,7 +7087,7 @@ mod workspace_tests {
                 .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectSpace(_)))
                 .map(|(rect, _)| rect.y)
                 .expect("the space header");
-            lit_gutter_rows(&buffer, gutter_column(&hits), false).contains(&header)
+            lit_gutter_rows(&buffer, gutter_column(&hits)).contains(&header)
         };
         let mut on_shell = session("/repo");
         let space = on_shell.selected_space().id;
@@ -7074,16 +7208,40 @@ mod workspace_tests {
         );
 
         // A branch was read at the root: a directory with one is a
-        // repository with a commit.
+        // repository with a commit. One row, because the tree holds
+        // nothing to decide about.
         assert_eq!(
             menu_on(agents_in_the_root_session(), TabId(2)),
             vec![
                 uze_keys::Action::RenameSelection,
                 uze_keys::Action::IsolateAgent,
-                uze_keys::Action::IsolateAgentWithChanges,
                 uze_keys::Action::CloseTab,
             ],
-            "both answers to what becomes of this tree's uncommitted work"
+            "isolating takes the work with it, and says so in one row"
+        );
+
+        // The tree the agent stands in has uncommitted work, so leaving it
+        // behind is an answer worth offering — and only now.
+        let mut dirty = agents_in_the_root_session();
+        dirty.remembered.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![AgentView {
+                id: "a1".into(),
+                isolated: false,
+                checkout: Some(PathBuf::from("/repo")),
+                state: WorkStateView::Uncommitted,
+                ..task_in("/repo", "agent 1", WorkStateView::Uncommitted, 0)
+            }],
+        );
+        assert_eq!(
+            menu_on(dirty, TabId(2)),
+            vec![
+                uze_keys::Action::RenameSelection,
+                uze_keys::Action::IsolateAgent,
+                uze_keys::Action::IsolateAgentAtCommit,
+                uze_keys::Action::CloseTab,
+            ],
+            "the exception stands beside it where there is something to leave"
         );
 
         // An agent already in a checkout of its own has nothing to be
@@ -7282,17 +7440,26 @@ mod workspace_tests {
     fn agent_over_a_lost_checkout(
         checkout: &Path,
         primary: &Path,
-        task: TaskView,
+        task: AgentView,
     ) -> WorkspaceModel {
-        let mut model = agent_session_in(&format!("{} (deleted)", checkout.display()));
+        // The space is rooted at the project, as an operator working on it
+        // has it: an agent belongs to its project, and that is what decides
+        // which space its tab opens in.
+        let mut session = session(primary);
+        let tab = &mut session.workspace.spaces[0].tabs[0];
+        tab.label = "Agent".into();
+        tab.pane.process = "agent".into();
+        tab.pane.cwd = format!("{} (deleted)", checkout.display()).into();
+        let mut model = model_of(session);
         let pane = first_tab(&model).pane.id;
         // Rows under the one that lost its checkout: what the picker
         // opens over, and what its own rows have to answer ahead of.
         if let Some(session) = model.session.as_mut() {
             let space = session.workspace.selected_space;
             for label in ["Agent two", "Agent three"] {
-                let opened = session.add_tab(space, label.into(), None, 80, 24, "/repo".into());
-                session.update_pane_status(opened, "/repo".into(), "agent".into());
+                let opened =
+                    session.add_tab(space, label.into(), None, 80, 24, primary.to_path_buf());
+                session.update_pane_status(opened, primary.to_path_buf(), "agent".into());
             }
         }
         model
@@ -7309,8 +7476,8 @@ mod workspace_tests {
     }
 
     /// A task with no checkout left, waiting to be put back in one.
-    fn parked_task(id: &str, branch: &str) -> TaskView {
-        let mut task = task_in("/repo/.worktrees/ai", id, TaskStateView::Parked, 1);
+    fn parked_task(id: &str, branch: &str) -> AgentView {
+        let mut task = task_in("/repo/.worktrees/ai", id, WorkStateView::Parked, 1);
         task.id = id.to_owned();
         task.branch = branch.to_owned();
         task.checkout = None;
@@ -7441,6 +7608,74 @@ mod workspace_tests {
         assert_eq!(shape.sidebar.width, dragged);
     }
 
+    /// An attach draws the agents it finds before any evaluation has run,
+    /// and a slot is a fact the client already holds: the row belongs to
+    /// the isolated group from the first frame, not a Git pass later.
+    #[test]
+    fn an_agent_in_a_slot_is_drawn_isolated_before_its_record_is_read() {
+        let slot = "/repo/.worktrees/abc123";
+        let model = agent_session_in(slot);
+        let tab = model.tabs().next().expect("the agent has a tab").id;
+        assert!(
+            model.tab_task(tab).is_none(),
+            "no evaluation has answered yet"
+        );
+
+        assert_eq!(
+            render::agent_group(&model, tab),
+            render::AgentGroup::Isolated,
+            "the pane stands in a slot, so the row is in the slots' group"
+        );
+        assert_eq!(
+            render::agent_group(&agent_session_in("/repo"), TabId(1)),
+            render::AgentGroup::InTheRoot,
+            "and a pane in the project's own root is not"
+        );
+    }
+
+    /// The row a new agent is drawn as comes from the placement, not from
+    /// the evaluation that follows it.
+    ///
+    /// The evaluation is a Git pass over the whole repository; until it
+    /// answers, the column had only the record it could not see yet, and
+    /// drew a freshly isolated agent among the ones sharing the
+    /// operator's own checkout — a group it was never in.
+    #[test]
+    fn a_placed_agent_is_drawn_isolated_before_any_evaluation_answers() {
+        let repository = uze_testkit::git::Repository::new("orchestrator-placed-row");
+        let root = repository.root().to_path_buf();
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-placed-row-home"));
+        let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
+        let placement = app
+            .workspace()
+            .place_new_agent(
+                &root,
+                Some(uze_application::PlacementKind::Isolated),
+                "claude-code",
+                &[],
+            )
+            .expect("the agent is placed");
+        let agent = placement.placement.agent().as_str().to_owned();
+        let mut driven = driven(agent_session_in(&root.to_string_lossy()), &home);
+
+        driven.placements_answered(PlacementResolution {
+            label: "agent 2".to_owned(),
+            command: vec!["claude".to_owned()],
+            placement: Ok(placement),
+            replacing: None,
+        });
+
+        let (_, task) = driven
+            .attach
+            .model
+            .task_with_id(&agent)
+            .expect("the column knows the agent the instant it exists");
+        assert!(
+            task.isolated,
+            "and knows it has a checkout of its own: {task:?}"
+        );
+    }
+
     /// An agent that could not be placed as the space asked is not started
     /// anywhere else: the reason is said, and no tab is opened.
     #[test]
@@ -7565,6 +7800,12 @@ mod workspace_tests {
     /// Resuming a preserved task whose checkout is still there opens the
     /// agent in that checkout *and* names the task on the launch: a tab
     /// without the stamp is an agent no reader can bind to its work.
+    ///
+    /// And it opens it in a space rooted at the work's own project. The
+    /// client here is looking at a space rooted somewhere else entirely —
+    /// which is the ordinary case for a list that crosses projects — so a
+    /// space for the project is opened first, and the tab waits for it
+    /// rather than landing in the one in front of the operator.
     #[test]
     fn resuming_a_preserved_task_that_kept_its_checkout_opens_a_stamped_tab() {
         let repository = uze_testkit::git::Repository::new("orchestrator-resume-kept");
@@ -7581,12 +7822,11 @@ mod workspace_tests {
             )
             .unwrap();
         let task_id = placement.placement.agent().as_str().to_owned();
-        let primary = root.canonicalize().unwrap();
         let mut model = agent_session_in("/elsewhere");
-        model
-            .remembered
-            .tasks
-            .insert(primary.clone(), app.workspace().tasks(&primary));
+        // The list answers from the machine's records, so the resume path
+        // takes its project from the row rather than from wherever the
+        // client happens to be looking.
+        model.remembered.preserved_work = app.workspace().preserved_work();
         model.preserved = Some(PreservedOverlay {
             selected: 0,
             confirm_discard: false,
@@ -7618,6 +7858,29 @@ mod workspace_tests {
             uze_terminal::launch::AGENT_IDENTITY_VARIABLE.to_owned(),
             task_id,
         );
+        let project = root.canonicalize().unwrap();
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::CreateSpace { seat, .. } if seat.root == project
+            )),
+            "no space is open on the work's project, so one is: {sent:?}"
+        );
+        assert!(
+            !sent
+                .iter()
+                .any(|request| matches!(request, ClientRequest::CreateTab { .. })),
+            "and the tab waits for it rather than landing in the space the \
+             operator was looking at: {sent:?}"
+        );
+
+        // The session now has the space, as the runtime would have said.
+        let mut session = session(&project);
+        session.workspace.spaces[0].tabs.clear();
+        driven.attach.model.session = Some(session);
+        driven.attach.land_pending_agent_tab();
+
         let sent = driven.sent();
         assert!(
             sent.iter().any(|request| matches!(
@@ -7627,6 +7890,11 @@ mod workspace_tests {
             )),
             "the agent opens in its checkout, launched for its task: {sent:?}"
         );
+        assert!(
+            sent.iter()
+                .any(|request| matches!(request, ClientRequest::SelectSpace { .. })),
+            "in the space rooted at its own project: {sent:?}"
+        );
     }
 
     /// A message for an agent reaches the agent's own pane, never a shell
@@ -7635,7 +7903,7 @@ mod workspace_tests {
     #[test]
     fn a_notice_for_an_agent_skips_a_shell_standing_in_its_slot() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-notice-pane"));
-        let mut model = agent_with_task(TaskStateView::Running, 0);
+        let mut model = agent_with_task(WorkStateView::Running, 0);
         let space = &mut model.session.as_mut().unwrap().workspace.spaces[0];
         let mut shell = space.tabs[0].clone();
         shell.id = TabId(2);
@@ -7652,7 +7920,7 @@ mod workspace_tests {
             .channels
             .tasks
             .sender
-            .send(TaskResolution {
+            .send(WorkResolution {
                 key: PathBuf::from("/repo"),
                 answered: Some(super::EvaluationAnswer {
                     primary: PathBuf::from("/repo"),
@@ -7693,7 +7961,7 @@ mod workspace_tests {
     fn a_toast_lines_up_with_the_controls_above_it() {
         use crate::ui::widget::ToastKind;
 
-        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
         model.raise_toast(ToastKind::Done, "synced", "to main", None);
 
         let frame_area = Rect::new(0, 0, 120, 30);

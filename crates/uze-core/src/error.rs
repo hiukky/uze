@@ -303,4 +303,30 @@ impl std::fmt::Display for ProjectionConflictDetails {
     }
 }
 
+/// A record's own failures, in the domain's vocabulary.
+///
+/// `uze-document` is a leaf and names no domain, so the mapping lives here
+/// rather than there. Each variant has an exact counterpart already, which
+/// is why the durability rule could move out without the domain's error
+/// surface growing.
+impl From<uze_document::DocumentError> for UzeError {
+    fn from(error: uze_document::DocumentError) -> Self {
+        use uze_document::DocumentError;
+        match error {
+            DocumentError::Read { path, source } => Self::Read { path, source },
+            DocumentError::Write { path, source } => Self::Write { path, source },
+            DocumentError::Unreadable { path, source } => Self::Json { path, source },
+            DocumentError::UnsupportedShape {
+                path,
+                found,
+                expected,
+            } => Self::UnsupportedStateSchema {
+                path,
+                found,
+                expected,
+            },
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, UzeError>;

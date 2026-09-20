@@ -1,0 +1,116 @@
+journey: closing what an agent was working in does not take its work
+tags: [gate, tui, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  An agent's work is bound to the project it belongs to and never to what
+  it happened to be opened in: its record carries a base, a branch, a
+  checkout and a target, and nothing about a space or a tab. So closing
+  what the agent was in — by accident, or because the screen was getting
+  full — must cost nothing but that.
+
+  The surface that says so is the preserved-work list. It used to answer
+  only for the repositories the session had already looked at, which meant
+  a project with nothing open was invisible — precisely the case the list
+  exists for, since the thing being gone is *why* the work needs finding.
+
+  What the machine must show: after the agent's tab is closed and the agent
+  parked, the work is still on disk on its own branch, the records still
+  name the repository they belong to, and the list still has it.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      default: isolated
+      target: main
+      completion: handoff
+      slots: 3
+
+scenes:
+  - scene: an agent with work committed in a checkout of its own
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "+ │ ✦"
+        say: open the new-agent picker
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 1
+        expect_timeout: 90
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn kept() {}\n' > "$slot/src/kept.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): work worth keeping'
+        say: the agent commits work
+    then:
+      - agents: { count: 1, live: 1, isolated: 1 }
+        about: one agent, isolated, with a checkout of its own
+      - file: "{project}/.worktrees/*/src/kept.rs"
+        count: 1
+        about: and its work is on disk
+
+  - scene: what the agent was working in is closed, and the work is not
+    when:
+      - shell: |
+          set -e
+          python3 -c "
+          import json, glob
+          [store] = glob.glob('{uze_home}/state/projects/*/agents.json')
+          [agent] = [a for a in json.load(open(store))['agents'] if a.get('isolation')]
+          print(agent['isolation']['branch'])
+          " > {world}/branch
+        say: the branch the work is on, read from the record
+      - key: "C-w"
+        say: close the tab the agent was in, which parks it
+        # What the gesture *causes*: the agent is gone and its work is
+        # not, which is the toast UZE raises and the whole claim of this
+        # journey. `uze` proved only that a screen was still drawn — true
+        # on Linux by accident of what else was on it, and false on macOS.
+        expect: parked
+        expect_timeout: 25
+        pause: 2.0
+    then:
+      - cmd:
+          run: |
+            python3 -c "
+            import json, glob
+            [marker] = glob.glob('{uze_home}/state/projects/*/project.json')
+            print(json.load(open(marker))['root'])
+            "
+          stdout_contains: "{project}"
+        about: the records still name the repository they belong to
+      - cmd:
+          run: git -C {project} branch --list "$(cat {world}/branch)"
+          stdout_contains: agent/
+        about: and the branch the work is on is still in the repository
+      - file: "{project}/.worktrees/*/src/kept.rs"
+        count: 1
+        about: with the commit still in its checkout
+
+  - scene: the work is found again without the tab that held it
+    when:
+      - key: "M-p"
+        say: open the preserved-work list
+        expect: PRESERVED WORK
+        expect_timeout: 20
+        pause: 1.5
+    then:
+      # The gesture's `expect` is what proves the list opened and found
+      # something; what it *says* is asserted where that is cheaper and
+      # more precise, in `src/ui/`'s own TestBackend tests.
+      - tasks: { count: 1 }
+        about: the record is still the one agent's, untouched by the tab going
+      - agents: { count: 1, isolated: 1 }
+        about: and it is still isolated, on its own branch, with its own checkout

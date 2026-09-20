@@ -93,7 +93,7 @@ scenes:
           run: |
             python3 -c "
             import glob, json, os
-            isolated = sorted((agent for store in glob.glob('{uze_home}/state/tasks/*.json') for agent in json.load(open(store))['agents'] if agent.get('isolation')), key=lambda agent: agent['created_at_unix'])
+            isolated = sorted((agent for store in glob.glob('{uze_home}/state/projects/*/agents.json') for agent in json.load(open(store))['agents'] if agent.get('isolation')), key=lambda agent: agent['created_at_unix'])
             slot = isolated[-1]['isolation']['checkout']
             own = '{project}/.worktrees/%s/src/mine_%s.rs' % (slot, slot)
             print('gone from the selected agent' if not os.path.exists(own) else 'still in ' + own)

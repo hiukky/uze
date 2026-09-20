@@ -860,14 +860,28 @@ pub(super) fn agents_in_drawing_order<'a>(
 /// off the record UZE wrote rather than the shape of the directory the
 /// pane happens to sit in.
 pub(super) fn agent_group(model: &WorkspaceModel, tab: TabId) -> AgentGroup {
-    if model
-        .tab_task(tab)
-        .is_some_and(|task| !task.branch.is_empty())
-    {
-        AgentGroup::Isolated
-    } else {
-        AgentGroup::InTheRoot
+    // The record's own answer, not the branch: every agent is on one now,
+    // and an agent in the space's root would have grouped itself with the
+    // isolated ones the moment its row learnt what branch that was.
+    if let Some(task) = model.tab_task(tab) {
+        return if task.isolated {
+            AgentGroup::Isolated
+        } else {
+            AgentGroup::InTheRoot
+        };
     }
+    // Until there is one — the first frames of an attach, where the panes
+    // arrive from the runtime and the records are still being read — the
+    // directory the pane stands in is the only fact there is, and it is a
+    // fact rather than a guess: `.worktrees/<id>` is a layout UZE owns,
+    // and a slot is never a space of its own, so a pane in one was put
+    // there by a placement. Drawing every agent in the root's group until
+    // a Git pass answers says something untrue about where they are, and
+    // says it to an operator who just opened the client.
+    model
+        .tab(tab)
+        .filter(|tab| uze_application::is_isolated_checkout(&tab.pane.cwd))
+        .map_or(AgentGroup::InTheRoot, |_| AgentGroup::Isolated)
 }
 
 /// The two groups a space's column is drawn in, in the order it draws
@@ -1082,21 +1096,32 @@ fn render_space_caption(
     // header's own name leads stays the space's, and what it is about reads
     // as a caption to it rather than as another row of the tree. Lit along
     // with its header.
-    let mut spans = vec![space_gutter(
-        header_is_current(space, session, identities, model.space_folded(space)),
-        false,
-    )];
+    let is_current = header_is_current(space, session, identities, model.space_folded(space));
+    let mut spans = vec![space_gutter(is_current)];
     let hue = theme::color(Token::TextDim);
     row::push_trailing(&mut spans, rect.width, caption, hue);
-    if selected {
-        row::pad_to(
-            &mut spans,
-            rect.width,
-            theme::color(Token::SurfaceRaisedSubtle),
-        );
-    }
+    // A minimized space is its header and this row, and the two are one
+    // item: the trace the header wears when it is the row in front runs
+    // through this row too, or the item would be lit down half its height.
+    let ground = if is_current {
+        theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle)
+    } else {
+        block_ground(selected)
+    };
+    row::pad_to(&mut spans, rect.width, ground);
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
+}
+
+/// The ground under a space's rows: the panel itself where the operator
+/// is working, and the same panel faded where they are not. Every space
+/// is a block either way — what the fill says is which block is in front.
+fn block_ground(active: bool) -> Color {
+    if active {
+        theme::color(Token::SurfaceRaisedSubtle)
+    } else {
+        theme::faded(Token::SurfaceRaisedSubtle)
+    }
 }
 
 /// Each agent a two-row item — status and name over the harness running
@@ -1131,14 +1156,8 @@ fn draw_tree(
         if previous.is_some_and(|was| was != isolated)
             && let Some(gap) = rows.slot(1).visible()
         {
-            let mut spans = vec![space_gutter(false, false)];
-            if is_active_space {
-                row::pad_to(
-                    &mut spans,
-                    gap.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
-            }
+            let mut spans = vec![space_gutter(false)];
+            row::pad_to(&mut spans, gap.width, block_ground(is_active_space));
             frame.render_widget(Paragraph::new(Line::from(spans)), gap);
         }
         previous = Some(isolated);
@@ -1158,12 +1177,9 @@ fn draw_tree(
         // reads as "here" at a glance. Nothing outside the active space
         // is tinted: `is_current` is selected *and* receiving keystrokes.
         let surface = if agent.is_current {
-            Some(theme::tinted(
-                group_hue(isolated),
-                Token::SurfaceRaisedSubtle,
-            ))
+            Some(theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle))
         } else {
-            is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
+            Some(block_ground(is_active_space))
         };
         // One blank column between the connector and the status glyph, in
         // either group, so the two land in the same place: the tree's
@@ -1171,16 +1187,13 @@ fn draw_tree(
         // for the agent.
         let lead = || {
             if flat {
-                [space_gutter(lit, isolated), Span::raw("  ")]
+                [space_gutter(lit), Span::raw("  ")]
             } else {
                 let branch = theme::glyph(Symbol::TreeBranch);
                 let trunk = branch.chars().next().map_or(0, char::len_utf8);
                 [
-                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit, isolated)),
-                    Span::styled(
-                        format!("{} ", &branch[trunk..]),
-                        gutter_style(lit, isolated),
-                    ),
+                    Span::styled(branch[..trunk].to_owned(), gutter_style(lit)),
+                    Span::styled(format!("{} ", &branch[trunk..]), gutter_style(lit)),
                 ]
             }
         };
@@ -1226,7 +1239,7 @@ fn draw_tree(
         if let Some(detail_rect) = rows.slot(1).visible() {
             // Under the agent's name, past the connector's blank column
             // and the status column, in either kind.
-            let mut spans = vec![space_gutter(lit, isolated), Span::raw("    ")];
+            let mut spans = vec![space_gutter(lit), Span::raw("    ")];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1587,8 +1600,7 @@ pub(super) fn render_commit_detail(
 /// [`render_sidebar`]) gets a neutral background instead of a left accent
 /// bar, so the highlight reads as "this whole block is where you are"
 /// rather than a thin per-row marker or an on-brand "selected" tint
-/// (deliberately not `theme::color(Token::SurfaceSelected)` — that one
-/// borrows the accent hue for a different kind of selection). This header row itself stays at the lighter
+/// This header row itself stays at the lighter
 /// [`theme::color(Token::SurfaceRaised)`] while the rows it anchors go one
 /// step darker, [`theme::color(Token::SurfaceRaisedSubtle)`] — the title
 /// lifts slightly above the block it names instead of blending into it.
@@ -1619,7 +1631,7 @@ pub(super) fn render_space_header(
     let label_style = theme::fg(Token::TextInactive);
     let fold = mark::disclosure(!collapsed);
     let mut spans = vec![
-        space_gutter(is_current, false),
+        space_gutter(is_current),
         Span::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
     ];
     // The fold and the space after it: a target two cells wide, pushed
@@ -1660,9 +1672,28 @@ pub(super) fn render_space_header(
             push_root_toggle(&mut spans, hits, rect, space.id);
         }
     }
-    if selected {
-        row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
-    }
+    // The space's own row is a target like any other, so when it is the
+    // one in front it wears what a selected agent row wears: the same
+    // trace of the accent, over its own lighter surface. Everything else
+    // about the header is unchanged — the trace says "this row", not
+    // "this block", which is what the fill underneath already says.
+    let ground = if is_current {
+        // The one overlay: exactly what an agent row in front wears, and
+        // what the caption under a minimized header wears with it. A
+        // second tone for the same meaning would read as two states.
+        theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle)
+    } else {
+        theme::color(Token::SurfaceRaised)
+    };
+    row::pad_to(
+        &mut spans,
+        rect.width,
+        if selected {
+            ground
+        } else {
+            theme::fade(ground)
+        },
+    );
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
@@ -1674,32 +1705,22 @@ pub(super) fn render_space_header(
 /// behind it, louder.
 /// The vertical line down a space's leading column, from its header to its
 /// last row: the space as one block. Muted in every space, the one being
-/// worked in included; `lit`, in the hue of the space's own kind, only
-/// along what is selected in it.
-fn space_gutter(lit: bool, isolated: bool) -> Span<'static> {
-    Span::styled(
-        theme::glyph(Symbol::TreeVertical),
-        gutter_style(lit, isolated),
-    )
+/// worked in included; `lit`, in the theme's accent, only along what is
+/// selected in it.
+///
+/// One hue for every agent, whichever group it sits in: the groups are
+/// already told apart by where they stand in the column and by the
+/// connector on the isolated ones, and a second axis saying the same
+/// thing costs a colour that then means nothing else.
+fn space_gutter(lit: bool) -> Span<'static> {
+    Span::styled(theme::glyph(Symbol::TreeVertical), gutter_style(lit))
 }
 
-fn gutter_style(lit: bool, isolated: bool) -> Style {
+fn gutter_style(lit: bool) -> Style {
     if lit {
-        theme::fg(group_hue(isolated))
+        theme::fg(Token::Accent)
     } else {
         theme::fg(Token::TextMuted)
-    }
-}
-
-/// The hue an agent's group marks itself in, wherever it does: the
-/// gutter beside it, and the surface under the item the keyboard is on.
-/// The two groups of one space are told apart by colour before they
-/// are read.
-fn group_hue(isolated: bool) -> Token {
-    if isolated {
-        Token::AgentIsolated
-    } else {
-        Token::AgentInPlace
     }
 }
 
@@ -1783,32 +1804,32 @@ fn push_root_toggle(
 /// different things is what made the second column read as an echo of the
 /// first. It wears a mark of its own, `task.ready`, instead.
 /// [`render_status_catalog`] is this table's legend and must move with it.
-pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
+pub(super) fn task_mark(state: &WorkStateView) -> Option<(String, Color)> {
     let (symbol, hue) = match state {
         // Nothing to report, and for the same reason: a task that has not
         // committed yet and one whose agent left with nothing both hold
         // no work. `Closed` in particular must not wear `Integrated`'s
         // arrow — that arrow claims a delivery.
-        TaskStateView::Running | TaskStateView::Closed => return None,
-        TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
-        TaskStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
+        WorkStateView::Running | WorkStateView::Closed => return None,
+        WorkStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
+        WorkStateView::Ready => (Symbol::TaskReady, theme::color(Token::Accent)),
         // The one mark that points away from UZE, because the work does:
         // it is on the forge, and what happens to it next happens there.
         // Muted for the same reason the button is — nothing is being asked
         // of the operator — and deliberately not `Integrated`'s arrow,
         // which claims the work is in the target.
-        TaskStateView::Published => (Symbol::ArrowExternal, theme::color(Token::StatePublished)),
-        TaskStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
+        WorkStateView::Published => (Symbol::ArrowExternal, theme::color(Token::StatePublished)),
+        WorkStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
         // Split, where one warning mark used to cover both: a paused rebase
         // wants your hands in the slot, a failed gate wants the code fixed —
         // different work, and the sidebar was the one surface that never
         // said which (the strip's own button already did).
-        TaskStateView::Conflicted { .. } => {
+        WorkStateView::Conflicted { .. } => {
             (Symbol::MarkAttention, theme::color(Token::StateWarning))
         }
-        TaskStateView::GateFailed => (Symbol::MarkCross, theme::color(Token::StateDanger)),
-        TaskStateView::Integrated => (Symbol::ArrowUp, theme::color(Token::StateLanded)),
-        TaskStateView::Parked => (Symbol::Menu, theme::color(Token::TextMuted)),
+        WorkStateView::GateFailed => (Symbol::MarkCross, theme::color(Token::StateDanger)),
+        WorkStateView::Integrated => (Symbol::ArrowUp, theme::color(Token::StateLanded)),
+        WorkStateView::Parked => (Symbol::Menu, theme::color(Token::TextMuted)),
     };
     Some((theme::glyph(symbol), hue))
 }
@@ -1827,10 +1848,15 @@ pub(super) fn render_status_catalog(
     anchor: Rect,
     tick: usize,
 ) {
-    // The agent column answers "what is the process doing", the task
-    // column "what does its branch hold" — two questions about the same
-    // row, which is exactly why they are two columns and why one legend
-    // has to carry both.
+    // The agent column answers "what is the process doing", the work
+    // column "where does the work in its checkout stand" — two questions
+    // about the same row, which is exactly why they are two columns and
+    // why one legend has to carry both.
+    //
+    // Both answer for every agent. The work column used to be readable
+    // only for an isolated one, so an operator who launched an agent in
+    // the project's own root met eight marks that never appeared and
+    // reasonably concluded it was broken.
     let agent_rows: Vec<(String, Color, &str, &str)> = [
         (
             AgentTabStatus::Working,
@@ -1869,44 +1895,44 @@ pub(super) fn render_status_catalog(
     // here next.
     let task_rows: Vec<(String, Color, &str, &str)> = [
         (
-            TaskStateView::Uncommitted,
+            WorkStateView::Uncommitted,
             "uncommitted",
-            "changes in the slot, not committed",
+            "changes in the checkout, not committed",
         ),
         (
-            TaskStateView::Ready,
+            WorkStateView::Ready,
             "ready",
             "commits ahead on a clean tree — deliverable",
         ),
         (
-            TaskStateView::Published,
+            WorkStateView::Published,
             "published",
             "on the remote, level with it — with its reviewer",
         ),
         (
-            TaskStateView::Integrating,
+            WorkStateView::Integrating,
             "delivering",
             "the rebase, the gate and the push, in flight",
         ),
         (
-            TaskStateView::Conflicted { files: Vec::new() },
+            WorkStateView::Conflicted { files: Vec::new() },
             "conflict",
-            "the rebase stopped; resolve it in the slot",
+            "the rebase stopped; resolve it in the checkout",
         ),
         (
-            TaskStateView::GateFailed,
+            WorkStateView::GateFailed,
             "checks failed",
             "the gate failed on the rebased commits",
         ),
         (
-            TaskStateView::Integrated,
+            WorkStateView::Integrated,
             "delivered",
             "the work is in the target",
         ),
         (
-            TaskStateView::Parked,
+            WorkStateView::Parked,
             "parked",
-            "no agent left; the slot still holds work",
+            "no agent left; the work is still there",
         ),
     ]
     .into_iter()
@@ -1956,7 +1982,7 @@ pub(super) fn render_status_catalog(
         };
     section("AGENT", &agent_rows, &mut lines);
     lines.push(Line::from(""));
-    section("TASK", &task_rows, &mut lines);
+    section("WORK", &task_rows, &mut lines);
 
     let width = (content_width + 2 * CATALOG_H_PAD + 2).min(area.width);
     let height = (lines.len() as u16 + 2).min(area.height);
@@ -2231,8 +2257,8 @@ fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
 /// nothing to anything but the branch — the one question an operator has
 /// before pressing it (see [`delivery_ending`]).
 fn deliver_button(
-    task: &TaskView,
-    state: &TaskStateView,
+    task: &AgentView,
+    state: &WorkStateView,
     tick: usize,
 ) -> Option<(String, Color, bool)> {
     match state {
@@ -2240,12 +2266,12 @@ fn deliver_button(
         // the button reports the sync instead of counting commits the
         // request already carries. It stays pressable — the target moves,
         // and a re-sync is how the branch follows it.
-        TaskStateView::Published => Some((
+        WorkStateView::Published => Some((
             format!("{} {}", theme::glyph(Symbol::MarkOk), delivery_ending(task)),
             theme::color(Token::TextMuted),
             true,
         )),
-        TaskStateView::Ready => Some(match task.unsynced {
+        WorkStateView::Ready => Some(match task.unsynced {
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
@@ -2265,12 +2291,12 @@ fn deliver_button(
         }),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
-        TaskStateView::GateFailed => Some((
+        WorkStateView::GateFailed => Some((
             format!("{} retry", theme::glyph(Symbol::TaskRetry)),
             theme::color(Token::StateDanger),
             true,
         )),
-        TaskStateView::Conflicted { .. } => Some((
+        WorkStateView::Conflicted { .. } => Some((
             "! conflict".to_owned(),
             theme::color(Token::StateWarning),
             false,
@@ -2280,7 +2306,7 @@ fn deliver_button(
         // as the project's checks do, and a still word for that many
         // seconds reads as a screen that has stopped. The sidebar's mark
         // keeps `Symbol::Ellipsis` — a single cell has no room to turn.
-        TaskStateView::Integrating => Some((
+        WorkStateView::Integrating => Some((
             format!("{} delivering", agent_activity_frame(tick)),
             theme::color(Token::StateInFlight),
             false,
@@ -2299,7 +2325,7 @@ fn deliver_button(
 /// agent to open the request — and a sync from then on, pushing new
 /// commits onto a request that already exists. Naming the request is how
 /// the button says which of the two it has become.
-fn delivery_ending(task: &TaskView) -> String {
+fn delivery_ending(task: &AgentView) -> String {
     match task.completion {
         CompletionBehavior::Merge => {
             format!("merge {} {}", theme::glyph(Symbol::ArrowTo), task.target)
@@ -2371,43 +2397,32 @@ pub(super) fn render_preserved(
             theme::fg(Token::TextSecondary),
         )));
     }
-    for (index, (_, task)) in preserved.iter().enumerate() {
+    for (index, work) in preserved.iter().enumerate() {
         let selected = index == overlay.selected;
-        let state = model.drawn_state(task);
-        let (mark, hue) = task_mark(&state)
+        let (mark, hue) = task_mark(&work.state)
             .unwrap_or_else(|| (theme::glyph(Symbol::MarkDot), theme::color(Token::TextDim)));
-        let what = match &state {
-            TaskStateView::Ready => format!(
-                "{} commit{}, not delivered",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Published => match task.published_request {
-                Some(request) => format!("pushed to #{request}"),
-                None => "pushed, no request open".to_owned(),
-            },
-            TaskStateView::Parked if task.checkout.is_none() => format!(
-                "checkout removed, {} commit{} kept",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Parked if task.ahead > 0 => format!(
-                "{} commit{} kept",
-                task.ahead,
-                if task.ahead == 1 { "" } else { "s" }
-            ),
-            TaskStateView::Uncommitted | TaskStateView::Parked => "uncommitted changes".to_owned(),
-            TaskStateView::Conflicted { files } => format!(
-                "conflict in {} file{}",
-                files.len(),
-                if files.len() == 1 { "" } else { "s" }
-            ),
-            TaskStateView::GateFailed => "checks failed".to_owned(),
-            TaskStateView::Running => "no commits yet".to_owned(),
-            TaskStateView::Integrating => "delivering".to_owned(),
-            TaskStateView::Integrated => "delivered".to_owned(),
-            TaskStateView::Closed => "nothing to deliver".to_owned(),
+        // What the *record* says, which is all this list asks. How far a
+        // branch is ahead and what the forge holds are questions about the
+        // project you are in, and asking them here would put one Git read
+        // per project on the machine behind a keystroke.
+        let what = match &work.state {
+            WorkStateView::Parked if work.checkout.is_none() => "checkout removed".to_owned(),
+            WorkStateView::Parked => "nobody is there".to_owned(),
+            WorkStateView::Uncommitted => "uncommitted changes".to_owned(),
+            WorkStateView::Conflicted { .. } => "conflict to resolve".to_owned(),
+            WorkStateView::GateFailed => "checks failed".to_owned(),
+            WorkStateView::Running => "was running".to_owned(),
+            WorkStateView::Integrating => "delivering".to_owned(),
+            _ => work.branch.clone(),
         };
+        // The project, because this list crosses them: two agents carrying
+        // a branch of the same name in two repositories are one row twice
+        // without it.
+        let project = work
+            .project
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| work.project.display().to_string());
         let spans = vec![
             Span::styled(
                 if selected {
@@ -2419,13 +2434,14 @@ pub(super) fn render_preserved(
             ),
             Span::styled(format!("{mark} "), Style::default().fg(hue)),
             Span::styled(
-                task.label.clone(),
+                work.label.clone(),
                 Style::default().fg(if selected {
                     theme::color(Token::TextBright)
                 } else {
                     theme::color(Token::TextPrimary)
                 }),
             ),
+            Span::styled(format!("  {project}"), theme::fg(Token::TextMuted)),
             Span::styled(format!("  {what}"), theme::fg(Token::TextSecondary)),
         ];
         if selected {
@@ -2812,6 +2828,11 @@ pub(super) fn render_tab_strip(
     // to find again.
     if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
+        // Only what UZE cut. An agent in the project's own root is on the
+        // operator's branch, and rebasing it onto the target, running the
+        // gate over it and pushing it is theirs to ask for. Its state is
+        // still drawn — where the work stands is a fact either way.
+        && task.isolated
         && let Some((text, hue, clickable)) =
             deliver_button(task, &model.drawn_state(task), model.tick)
     {

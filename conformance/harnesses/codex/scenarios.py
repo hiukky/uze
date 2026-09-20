@@ -534,7 +534,7 @@ def phase_skill_invocation_policy(cfg, prov_ip):
     """
     final = """
 echo '===== sidecar in the generated envelope ====='
-find /work/home/.uze/state/attachments/codex/generated -path '*/skills/review/agents/openai.yaml' 2>/dev/null
+find /work/home/.uze/runtime/attachments/codex/generated -path '*/skills/review/agents/openai.yaml' 2>/dev/null
 echo '===== sidecar in the codex plugin cache ====='
 find /work/home/.codex/plugins/cache -path '*/skills/review/agents/openai.yaml' 2>/dev/null
 echo '===== prompt-input (policy present) ====='

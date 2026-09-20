@@ -182,6 +182,7 @@ pub fn record(
     let Some(entry) = PromptEntry::new(origin, raw_prompt) else {
         return Ok(());
     };
+    crate::record::ensure(home, workspace_root)?;
     let file = path(home, workspace_root);
     let mut line = serde_json::to_vec(&entry).expect("prompt entry serialization is infallible");
     line.push(b'\n');
@@ -213,9 +214,7 @@ pub fn clear(home: &UzeHome, workspace_root: &Path) -> Result<()> {
 }
 
 fn path(home: &UzeHome, workspace_root: &Path) -> PathBuf {
-    home.state_dir()
-        .join("prompt-history")
-        .join(format!("{}.json", project_id_for(workspace_root)))
+    home.prompt_history_path(&project_id_for(workspace_root))
 }
 
 /// Oldest first — the order the file is written in.

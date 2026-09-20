@@ -87,7 +87,7 @@ pub fn prune_empty_package_dir(artifact: &Path, root: &Path) {
 /// it means instead of relying on which sibling module a same-named
 /// helper came from.
 pub(crate) fn attachment_root(uze_home: &UzeHome, vendor: &str) -> PathBuf {
-    uze_home.state_dir().join("attachments").join(vendor)
+    uze_home.generated_attachments_dir(vendor)
 }
 
 /// Removes a generated wrapper directory once nothing in `skills_dir`

@@ -71,7 +71,8 @@ pub fn reconcile_package_with(
     };
     let receipts = entries
         .into_iter()
-        .map(|(ledger_key, receipt)| {
+        .map(|receipt| {
+            let ledger_key = receipt.cache_key();
             let inspection = integrations
                 .iter()
                 .find(|integration| integration.id() == receipt.integration)
@@ -190,7 +191,7 @@ mod tests {
                 target: expected,
             },
         };
-        state::record_receipt(&home, "plugin:test:skill".to_owned(), receipt).unwrap();
+        state::record_receipt(&home, receipt).unwrap();
         let integration = TestIntegration;
         let report = reconcile_package(&home, "plugin", &[&integration]);
         assert!(matches!(

@@ -11,7 +11,7 @@ use crate::{PaneId, Session, SpaceId, TabId};
 /// [`crate::attach`] replaces a server of another build before connecting;
 /// this is what a client that connects without it — a `uze` nested in a
 /// pane, a test — still meets.
-pub const PROTOCOL_VERSION: u16 = 16;
+pub const PROTOCOL_VERSION: u16 = 17;
 
 /// The colours a client draws a pane's default and indexed cells in. Plain
 /// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
@@ -234,6 +234,23 @@ pub enum ClientEvent {
     Damage(PaneDamage),
     Detached,
     Stopped,
+    /// The workspace the runtime was left could not be carried across to
+    /// the shape this build reads, so it started from nothing.
+    ///
+    /// Its own event rather than an [`ClientEvent::Error`] because it is
+    /// not one: the runtime is working, and what the operator needs is to
+    /// know their spaces did not simply vanish and where the bytes were
+    /// kept. It exists at all because the runtime and the screen are
+    /// different processes — the one time this mattered, it was a
+    /// `tracing::warn!` to a sink nobody had turned on, and an operator
+    /// watched every space disappear with no sentence anywhere.
+    WorkspaceSetAside {
+        /// Where the bytes are now. Nothing reads them again; they are
+        /// kept because a workspace UZE cannot understand is still not one
+        /// it may throw away.
+        kept_at: std::path::PathBuf,
+        reason: String,
+    },
     Error {
         message: String,
     },

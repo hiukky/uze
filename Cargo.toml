@@ -23,6 +23,7 @@ members = [
   "crates/uze-testkit",
   "crates/uze-terminal",
   "crates/uze-theme",
+  "crates/uze-document",
   "crates/uze-keys",
 ]
 default-members = ["."]

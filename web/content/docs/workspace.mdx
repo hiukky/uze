@@ -122,12 +122,17 @@ that keeps a conversation under the directory it ran in — Claude Code does —
 cannot resume it somewhere else, so the agent picks up in the new checkout
 with a fresh conversation. Isolate early if the thread matters.
 
-It comes in two rows: **Isolate**, and **Isolate with my changes** — which
-copies whatever your tree has uncommitted into the new checkout — edits to
-tracked files and new files git isn't ignoring alike. A copy: your own tree is
-exactly what you left it, either way. Both rows are always there,
-because whether your tree is dirty is a question only Git answers and the
-sidebar never waits on one; on a clean tree they do the same thing.
+**Isolate** takes your uncommitted work with it — edits to tracked files and
+new files git isn't ignoring alike. A copy: your own tree is exactly what you
+left it. That is the default because what the tree holds when you move an
+agent is usually what *that agent* was doing, and a checkout without it is one
+where the file it was mid-edit on went back to its last commit.
+
+**Isolate clean** stands beside it when your tree has uncommitted work, and
+cuts the checkout from the last commit instead — the changes stay where they
+are. It is the row for the case uze cannot see: a tree dirty from something
+other than this agent. On a clean tree there is nothing to decide, so only the
+one row is there.
 
 ## An isolated agent gets its own checkout
 
@@ -236,14 +241,21 @@ identifier, and everything above is off.
 
 ## Readiness is read, not announced
 
-A task's state comes from Git in its own checkout — never from something the
-agent claims:
+Where an agent's work stands comes from Git in the checkout it sits in —
+never from something the agent claims.
+
+Every agent has one. An isolated agent has a checkout to itself, so the
+answer is its own; agents working in the project's root share one with you
+and with each other, and all read the same answer, which is the truth
+about where they are. What only an isolated agent has is a branch UZE cut,
+and therefore a delivery UZE may run — so the deliver button is drawn for
+those alone:
 
 | State | What it means |
 | --- | --- |
 | `Running` | Live, nothing observed yet |
 | `Uncommitted` | Changes in the checkout that aren't committed |
-| `Ready` | Commits ahead of the base, clean tree — delivery may be offered |
+| `Ready` | Commits ahead of the base, clean tree — deliverable, if UZE cut the branch |
 | `Integrating` | Delivery in progress |
 | `Conflicted` | A rebase stopped; it stays paused in the agent's own checkout |
 | `GateFailed` | The declared gate failed on the rebased commits |
@@ -251,7 +263,10 @@ agent claims:
 | `Parked` | The agent is gone and the checkout still holds work |
 | `Closed` | The agent is gone and had nothing to deliver |
 
-Only `Ready` and `GateFailed` can be delivered. A conflict returns the task to
+Only `Ready` and `GateFailed` can be delivered, and only for an isolated
+agent: the branch an agent in your own checkout is on is yours, and
+rebasing it onto the target and pushing it is yours to ask for. A conflict
+returns the task to
 the agent that owns it — that agent is the one holding the intent behind the
 change — rather than asking you to resolve someone else's rebase.
 

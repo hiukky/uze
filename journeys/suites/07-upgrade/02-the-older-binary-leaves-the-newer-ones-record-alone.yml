@@ -1,0 +1,87 @@
+journey: a release older than this build never takes this build's records
+tags: [upgrade, cli, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  Recovery moves in one direction. A record older than this build is this
+  build's to carry across or, failing that, to set aside. A record *newer*
+  than a build is not that build's to touch at all — and the reason is
+  mundane rather than theoretical: two binaries on one machine is the
+  ordinary state of this project's own development, `target/debug/uze`
+  beside the one on `PATH`. A rule without a direction has them taking
+  turns destroying each other's records, each saying it had recovered.
+
+  Every other test of this writes the two shapes itself. This runs the two
+  binaries: this build records an agent, and then the release a user has
+  installed — which predates every shape here — is asked to read it.
+
+  What the machine must show: the newer build's records are byte-for-byte
+  what they were, and nothing was set aside.
+
+world:
+  project: demo-app
+  released: v0.0.0-alpha.6
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 2
+
+scenes:
+  - scene: this build records an agent
+    when:
+      - open: "{uze}"
+        say: this build opens on the project
+        expect: demo-app
+        expect_timeout: 30
+        pause: 1.5
+      - click: "+ │ ✦"
+        say: open the new-agent picker
+        in: strip
+        offset: 4
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: agent 1
+        expect_timeout: 90
+        pause: 1.5
+      - shell: |
+          set -e
+          cat {uze_home}/state/projects/*/agents.json > {world}/recorded-before
+        say: keep the record exactly as this build wrote it
+      - shell: "{uze} terminal stop"
+        say: this build lets go of the workspace
+        check: false
+    then:
+      - agents: { count: 1 }
+        about: one agent, recorded under this build's own shape
+
+  - scene: the older release is asked to read it, and does not take it
+    when:
+      - shell: "{released_uze} status || true"
+        say: the release a user has installed reads the project
+      - shell: "{released_uze} doctor || true"
+        say: and is asked for its own report of the machine
+    then:
+      - cmd:
+          run: |
+            python3 -c "
+            import glob
+            [store] = glob.glob('{uze_home}/state/projects/*/agents.json')
+            before = open('{world}/recorded-before').read()
+            print('unchanged' if open(store).read() == before else 'REWRITTEN')
+            "
+          stdout_contains: unchanged
+        about: |
+          the record is byte-for-byte what this build wrote. An older
+          binary that had rewritten it — or emptied it, or recorded the
+          project again from the machine — would have taken work it could
+          not even read the shape of.
+      - cmd:
+          run: ls {uze_home}/state/projects/*/ | grep -c unreadable || true
+          stdout_contains: "0"
+        about: and nothing was set aside
+      - agents: { count: 1 }
+        about: the agent this build recorded is still the one that is there

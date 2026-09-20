@@ -423,8 +423,16 @@ def record(body, path, method):
             except Exception:
                 struct = []
         struct.append({"method": method, "path": path, "seq": n, "summary": summary})
-        with open(STRUCT_PATH, "w") as f:
+        # Written whole or not at all: the file is rewritten on every
+        # request and a scenario reads it from outside this container
+        # with `cat`, so a reader landing mid-write would see a truncated
+        # document — which `provider_struct` cannot tell from "no request
+        # carried that marker", and which fails a check about the harness
+        # over something that never had to do with it.
+        pending = f"{STRUCT_PATH}.pending"
+        with open(pending, "w") as f:
             json.dump(struct, f, indent=1)
+        os.replace(pending, STRUCT_PATH)
     print(f"[codex-provider] {method} {path} req#{n}", flush=True)
 
 

@@ -246,9 +246,14 @@ struct PackageRegistry {
 /// `PackageRegistry` (keyed by the strict `PackageId`, valued by the strict
 /// `Registration`) is the wrong tool here: one bad entry would fail the
 /// whole map instead of just that entry.
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct RawPackageRegistry {
     packages: BTreeMap<String, serde_json::Value>,
+}
+
+impl uze_document::Shaped for RawPackageRegistry {
+    const SHAPE: u32 = uze_document::FIRST_SHAPE;
+    const KIND: &'static str = "packages";
 }
 
 /// A `packages.json` entry this UZE cannot read, and why.
@@ -579,12 +584,13 @@ impl UzeStore {
                 Vec::new(),
             ));
         }
-        let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-            path: path.clone(),
-            source,
-        })?;
-        let raw: RawPackageRegistry =
-            serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
+        // A record: what the operator registered, which nothing else on the
+        // machine knows. Read through the one rule, so a shape this build
+        // understands is carried across rather than read as a registry with
+        // no packages in it.
+        let raw: RawPackageRegistry = uze_document::read::<RawPackageRegistry>(&path)?
+            .record()
+            .unwrap_or_default();
         let mut packages = BTreeMap::new();
         let mut quarantined = Vec::new();
         for (key, value) in raw.packages {

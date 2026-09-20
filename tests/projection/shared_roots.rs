@@ -361,14 +361,13 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
         let shared_entry_receipt = |integration: &str| {
             receipts
                 .iter()
-                .find(|(_, r)| {
+                .find(|r| {
                     r.integration == integration
                         && matches!(
                             r.artifact,
                             uze_core::integration::ManagedArtifact::SymlinkReference { .. }
                         )
                 })
-                .map(|(_, r)| r)
                 .unwrap()
         };
         let codex_receipt = shared_entry_receipt("codex");
@@ -443,7 +442,7 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         // wrapper predates the superset: it claims the shared name but
         // carries no vendor encoding at all.
         let legacy_wrapper = uze_home
-            .state_dir()
+            .runtime_dir()
             .join("attachments/codex/skills/flow/legacy");
         fs::create_dir_all(&legacy_wrapper).unwrap();
         fs::write(
@@ -467,7 +466,6 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         .identity();
         uze_core::state::record_receipt(
             &uze_home,
-            "flow/codex/skill:flow:legacy".to_owned(),
             uze_core::integration::AttachmentReceipt {
                 package_id: "flow".to_owned(),
                 resource_identity: Some(resource_identity),
@@ -682,7 +680,7 @@ fn user_only_skill_codex_only_is_model_hidden() {
             "the envelope covers the skill; no shared-root entry is created"
         );
         let envelope_skill = uze_home
-            .state_dir()
+            .runtime_dir()
             .join("attachments/codex/generated/flow@local/skills/review");
         assert_eq!(
             fs::read_to_string(envelope_skill.join("agents/openai.yaml")).unwrap(),
@@ -755,7 +753,7 @@ fn repeated_setup_is_idempotent() {
     // still Matched — repeated setup never churns the physical entry.
     let root = temp("idempotent");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -783,8 +781,7 @@ fn repeated_setup_is_idempotent() {
         let receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .find(|(_, r)| r.integration == "opencode")
-            .map(|(_, r)| r)
+            .find(|r| r.integration == "opencode")
             .unwrap();
         assert_eq!(
             OpenCodeIntegration::new(
@@ -808,7 +805,7 @@ fn detach_codex_preserves_opencode_consumer() {
     // touch the shared entry OpenCode still consumes.
     let root = temp("detach-codex");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -827,14 +824,13 @@ fn detach_codex_preserves_opencode_consumer() {
         let codex_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .find(|(_, r)| {
+            .find(|r| {
                 r.integration == "codex"
                     && matches!(
                         r.artifact,
                         uze_core::integration::ManagedArtifact::IntegrationOwned { .. }
                     )
             })
-            .map(|(_, r)| r)
             .unwrap();
         let detached = CodexIntegration::new(agents_home.clone(), uze_home.clone())
             .detach_receipt(&codex_receipt)
@@ -858,8 +854,7 @@ fn detach_codex_preserves_opencode_consumer() {
         let opencode_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .find(|(_, r)| r.integration == "opencode")
-            .map(|(_, r)| r)
+            .find(|r| r.integration == "opencode")
             .unwrap();
         assert_eq!(
             OpenCodeIntegration::new(
@@ -882,7 +877,7 @@ fn detach_opencode_preserves_codex_consumer() {
     // leaves Codex's own representation — the generated envelope — intact.
     let root = temp("detach-opencode");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -901,8 +896,7 @@ fn detach_opencode_preserves_codex_consumer() {
         let opencode_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .find(|(_, r)| r.integration == "opencode")
-            .map(|(_, r)| r)
+            .find(|r| r.integration == "opencode")
             .unwrap();
         let default_target = match &opencode_receipt.artifact {
             uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
@@ -937,7 +931,7 @@ fn detach_opencode_preserves_codex_consumer() {
             uze_core::state::receipts(&uze_home, Some("flow@local"))
                 .unwrap()
                 .iter()
-                .any(|(_, r)| r.integration == "codex"),
+                .any(|r| r.integration == "codex"),
             "Codex's own receipt stays recorded"
         );
         fs::remove_dir_all(&root).unwrap();
@@ -951,7 +945,7 @@ fn detach_last_consumer_cleans_projection() {
     // fully gone: no entry, no wrapper, no generated envelope.
     let root = temp("detach-last");
     let (app, agents_home, uze_home) = shared_user_only_app(&root, true);
-    let generated_root = uze_home.state_dir().join("attachments/codex/generated");
+    let generated_root = uze_home.runtime_dir().join("attachments/codex/generated");
     let marketplaces = format!(
         r#"{{"marketplaces":[{{"name":"uze-store","root":"{}"}}]}}"#,
         generated_root.display()
@@ -970,7 +964,6 @@ fn detach_last_consumer_cleans_projection() {
         let receipts: Vec<_> = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .map(|(_, r)| r)
             .collect();
         let opencode = OpenCodeIntegration::new(
             agents_home.clone(),
@@ -999,8 +992,8 @@ fn detach_last_consumer_cleans_projection() {
         let stale_opencode = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
-            .find(|(_, r)| r.integration == "opencode")
-            .map(|(_, r)| opencode.inspect_receipt(&r).state)
+            .find(|r| r.integration == "opencode")
+            .map(|r| opencode.inspect_receipt(&r).state)
             .unwrap();
         assert_eq!(
             stale_opencode,

@@ -58,34 +58,81 @@ impl UzeHome {
         self.state_dir().join("packages.json")
     }
 
-    /// A project's task graph — every agent launch UZE has made in it, keyed
-    /// on the project id so removing a checkout can never remove history.
-    pub fn tasks_path(&self, project_id: &str) -> PathBuf {
-        self.state_dir()
-            .join("tasks")
-            .join(format!("{project_id}.json"))
+    /// Everything UZE records about one project, in one directory.
+    ///
+    /// It used to be four: `state/tasks/<id>.json`,
+    /// `state/conversations/<id>/`, `state/prompt-history/<id>.json` and
+    /// `runtime/projects/<id>/`, each keyed by the same
+    /// `harness_runtime::project_id_for` — a one-way hash — and only the
+    /// last of them recording what the hash *meant*. So the records could
+    /// be enumerated and none of them resolved: a sweep of the machine
+    /// could see every project's agents and locate not one checkout.
+    ///
+    /// One directory answers that by holding
+    /// [`Self::project_marker_path`], and it pays twice more: forgetting a
+    /// project becomes a single removal, and this mirrors
+    /// [`Self::runtime_project_dir`] under the same id, so which of the two
+    /// is safe to delete is legible from the layout alone.
+    pub fn project_dir(&self, project_id: &str) -> PathBuf {
+        self.state_dir().join("projects").join(project_id)
     }
 
-    /// One task's recorded conversations, beside the task store and keyed
-    /// the same way. A directory per project rather than a flat
-    /// `<project>-<task>.json`, so forgetting a project is one removal and
-    /// a task's own document is one write.
+    /// The canonical root a project's records were written for — what
+    /// makes the id reversible, and the whole input to a sweep of every
+    /// project UZE knows.
+    ///
+    /// The same answer `harness_runtime::PROJECTION_MARKER` already gives
+    /// the generated tree: name the root, so a sweep is a `readdir` rather
+    /// than an exercise in inverting a hash.
+    pub fn project_marker_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("project.json")
+    }
+
+    /// Every project UZE has recorded an agent for, one directory each —
+    /// the whole input to a machine-wide sweep.
+    pub fn projects_dir(&self) -> PathBuf {
+        self.state_dir().join("projects")
+    }
+
+    /// A project's agents — every launch UZE has made in it, isolated or
+    /// not — keyed on the project id so removing a checkout can never
+    /// remove history.
+    pub fn tasks_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("agents.json")
+    }
+
+    /// One agent's recorded conversations, beside the agents that name it.
+    /// A file per agent rather than one document for the project, so a
+    /// launch is one write and forgetting a project is still one removal.
     pub fn conversation_path(&self, project_id: &str, task_id: &str) -> PathBuf {
-        self.state_dir()
+        self.project_dir(project_id)
             .join("conversations")
-            .join(project_id)
             .join(format!("{task_id}.json"))
     }
 
-    /// Per-harness machine integration setup facts. Ownership of individual
-    /// package attachments lives exclusively in `attachments.json`.
-    pub fn integrations_state_path(&self) -> PathBuf {
-        self.state_dir().join("integrations.json")
+    /// What UZE last observed about each harness's machine-level setup:
+    /// the version it answered with, and the strategy UZE delivers to it
+    /// by.
+    ///
+    /// Remembered, not recorded. Every field comes back from probing the
+    /// harness again — every command records each detected harness on its
+    /// way in — so deleting it costs a probe and nothing else. Ownership of
+    /// individual package attachments is a different question entirely, and
+    /// lives in `attachments.json`, which nothing re-derives.
+    pub fn harnesses_cache_path(&self) -> PathBuf {
+        self.cache_dir().join("harnesses.json")
     }
 
     /// Secret-free record of an explicit vendor executable provisioning
     /// attempt. It is deliberately separate from integration preparation and
     /// package attachment ownership.
+    ///
+    /// A record, unlike [`Self::harnesses_cache_path`] beside it, and the
+    /// difference is worth stating because the two look alike: this is the
+    /// *history* of an attempt UZE made — what it did, whether it worked,
+    /// when — and no probe brings history back. The two `version` fields
+    /// are not one fact twice: that one is what is installed now, this one
+    /// is what this attempt put there.
     pub fn provisioning_state_path(&self) -> PathBuf {
         self.state_dir().join("provisioning.json")
     }
@@ -144,6 +191,69 @@ impl UzeHome {
     /// it.
     pub fn keymap_path(&self) -> PathBuf {
         self.root.join("keys.json")
+    }
+
+    /// The ledger of which package UZE attached where, per integration.
+    ///
+    /// The one record ownership lives in: an artifact on a harness's disk
+    /// says what it is, never who put it there, so nothing else on the
+    /// machine can answer this and nothing re-derives it.
+    pub fn attachments_path(&self) -> PathBuf {
+        self.state_dir().join("attachments.json")
+    }
+
+    /// The process-wide mutation guard for this home (see
+    /// [`crate::persistence::MutationLock`]). A lock, not a record: it
+    /// carries no shape and nothing reads it across versions.
+    pub fn mutation_lock_path(&self) -> PathBuf {
+        self.state_dir().join("mutation.lock")
+    }
+
+    /// What UZE remembers about its own binary between runs: when it last
+    /// asked for the latest release, and what the operator was told.
+    pub fn binary_path(&self) -> PathBuf {
+        self.state_dir().join("update.json")
+    }
+
+    /// The receipt `install.sh` leaves: the file it placed and the release
+    /// it was. Inbound — UZE reads it and never writes it — which is why it
+    /// is a document of its own rather than part of [`Self::binary_path`].
+    pub fn install_receipt_path(&self) -> PathBuf {
+        self.state_dir().join("install.json")
+    }
+
+    /// Where an update keeps the revision it is replacing, under UZE's own
+    /// state rather than beside the plugins: nothing that reads the Store
+    /// may mistake it for an installed package. Generated — removing it
+    /// costs nothing.
+    pub fn superseded_dir(&self) -> PathBuf {
+        self.state_dir().join("superseded")
+    }
+
+    /// One project's prompt history, beside its other records.
+    pub fn prompt_history_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("prompt-history.json")
+    }
+
+    /// Where UZE writes its own log when asked to. Disposable, which is
+    /// why it sits with the caches rather than with the records.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.cache_dir().join("logs")
+    }
+
+    /// Everything UZE *generates* for one harness to read: generated
+    /// marketplaces, staged skill directories, the wrappers a bridge is
+    /// made of.
+    ///
+    /// Under the runtime tree rather than beside the records, because that
+    /// is what it is. It used to live at `state/attachments/`, one letter
+    /// from `attachments.json` — the ledger that says who owns what in
+    /// here — so the directory read as authoritative while every byte in
+    /// it is produced again from the Store and the Engine alone. An
+    /// operator deciding what is safe to delete had no way to tell the two
+    /// apart, and the answer is opposite for each.
+    pub fn generated_attachments_dir(&self, vendor: &str) -> PathBuf {
+        self.runtime_dir().join("attachments").join(vendor)
     }
 
     pub fn cache_dir(&self) -> PathBuf {
@@ -214,6 +324,17 @@ impl UzeHome {
     /// end.
     pub fn runtime_projection_dir(&self, integration: &str, project_id: &str) -> PathBuf {
         self.runtime_project_dir(project_id).join(integration)
+    }
+
+    /// Everything UZE generates for another program to read, and
+    /// everything it remembered from observing. Deleting either costs
+    /// nothing: the first is produced again, the second observed again.
+    ///
+    /// Named together because that is the one question an operator staring
+    /// at `~/.uze` actually has — *can I delete this* — and the layout
+    /// answers it by which directory a thing is in.
+    pub fn rebuildable_dirs(&self) -> [PathBuf; 2] {
+        [self.runtime_dir(), self.cache_dir()]
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
@@ -305,6 +426,67 @@ mod tests {
             UzeHome::from_values(None, Some("".into())),
             Err(UzeError::MissingHomeDirectory)
         ));
+    }
+
+    /// The tier a thing sits in is a promise about what deleting it costs,
+    /// and the promise is only worth making if the layout keeps it: every
+    /// path UZE owns lands in exactly one tier, and the two rebuildable
+    /// ones hold nothing a record needs.
+    #[test]
+    fn nothing_a_record_needs_sits_in_a_tier_that_can_be_deleted() {
+        let home = UzeHome::at("/tmp/uze-tiers");
+        let rebuildable = home.rebuildable_dirs();
+
+        let records = [
+            home.registry_path(),
+            home.marketplaces_path(),
+            home.attachments_path(),
+            home.profiles_path(),
+            home.client_layout_path(),
+            home.active_theme_path(),
+            home.provisioning_state_path(),
+            home.binary_path(),
+            home.tasks_path("abc"),
+            home.conversation_path("abc", "def"),
+            home.prompt_history_path("abc"),
+        ];
+        for record in records {
+            assert!(
+                record.starts_with(home.state_dir()),
+                "a record belongs with the records: {}",
+                record.display()
+            );
+            for tier in &rebuildable {
+                assert!(
+                    !record.starts_with(tier),
+                    "{} is a record and must not sit where deleting costs nothing",
+                    record.display()
+                );
+            }
+        }
+
+        // And the things that *are* rebuildable say so by where they are.
+        for rebuilt in [
+            home.harnesses_cache_path(),
+            home.harness_detection_cache_path(),
+            home.inspection_cache_path(),
+            home.marketplace_cache_dir(),
+            home.logs_dir(),
+            home.generated_attachments_dir("claude"),
+            home.runtime_project_dir("abc"),
+        ] {
+            assert!(
+                rebuildable.iter().any(|tier| rebuilt.starts_with(tier)),
+                "{} is produced or observed again, so it belongs in a tier \
+                 that says deleting it costs nothing",
+                rebuilt.display()
+            );
+        }
+
+        // The shims are the one exception, and it is about `PATH`, not
+        // about cost: `which claude` reading `~/.uze/shims/claude` says
+        // what it is where `~/.uze/runtime/shims/claude` says less.
+        assert_eq!(home.shims_dir(), home.root().join("shims"));
     }
 
     /// A relative root is the same failure spread over time: the same home

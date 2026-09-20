@@ -42,7 +42,7 @@ use crate::{
     persistence::write_atomic, worktree::BRANCH_PREFIX,
 };
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Long enough to read, short enough for a sidebar.
 const LABEL_MAX_CHARS: usize = 40;
@@ -112,7 +112,7 @@ pub enum Base {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
-pub enum TaskState {
+pub enum WorkState {
     /// The agent is live and nothing has been observed yet.
     Running,
     /// The last evaluation found uncommitted changes in the checkout.
@@ -151,11 +151,25 @@ pub struct Agent {
     pub created_at_unix: u64,
     /// When no live pane carried this agent any more. `None` while live.
     pub ended_at_unix: Option<u64>,
+    /// Where the work stands in the checkout this agent sits in.
+    ///
+    /// The *checkout's*, not this agent's alone. An isolated agent has a
+    /// checkout to itself, so the two coincide and always did. An agent in
+    /// the project's own root shares one with the operator and with any
+    /// sibling agent, and they all read the same answer — which is the
+    /// truth about where they are, and a better answer than the nothing
+    /// this used to give them.
+    ///
+    /// It lived inside [`Isolation`] until this shape, on the argument
+    /// that `Ready` is not representable without a checkout to be ready
+    /// in. Every agent has a checkout to be ready in; only an isolated one
+    /// has a checkout *of its own*. That is a fact about ownership, and
+    /// this is a fact about work.
+    pub state: WorkState,
     /// The checkout of its own, once it has one. `None` is an agent
     /// working in the project's root, on whatever branch the operator is
-    /// on: it has no branch of its own to deliver, nothing to be ready,
-    /// and nothing to preserve — which is why every one of those facts
-    /// lives inside this and not beside it.
+    /// on: it has no branch of its own to deliver and nothing to preserve,
+    /// which is why those facts live inside this and not beside it.
     pub isolation: Option<Isolation>,
 }
 
@@ -172,7 +186,6 @@ pub struct Isolation {
     pub target: String,
     pub branch: String,
     pub checkout: Option<CheckoutId>,
-    pub state: TaskState,
     /// The readable name UZE published the branch under, when that is not
     /// the branch's own name. The one half of publication that Git cannot
     /// be asked for: an unnamed agent's branch leaves under a name derived
@@ -282,6 +295,7 @@ impl Agent {
             harness: harness.to_owned(),
             created_at_unix: now_unix(),
             ended_at_unix: None,
+            state: WorkState::Running,
             isolation: None,
         }
     }
@@ -313,7 +327,6 @@ impl Isolation {
             target,
             branch: generated_branch(id),
             checkout: None,
-            state: TaskState::Running,
             published_as: None,
             published_request: None,
             request_branch: None,
@@ -384,7 +397,7 @@ pub fn label_from_prompt(prompt: &str, fallback: &AgentId) -> String {
 /// one sweep, because a launch is the same event either way and a reader
 /// handed an identifier does not know yet which it names.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TaskStore {
+pub struct AgentStore {
     pub schema_version: u32,
     /// Every agent this project's launches recorded, isolated or not.
     /// One collection, because one identifier names one agent: a reader
@@ -394,7 +407,7 @@ pub struct TaskStore {
     pub agents: Vec<Agent>,
 }
 
-impl Default for TaskStore {
+impl Default for AgentStore {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
@@ -403,7 +416,7 @@ impl Default for TaskStore {
     }
 }
 
-impl TaskStore {
+impl AgentStore {
     pub fn get(&self, id: &AgentId) -> Option<&Agent> {
         self.agents.iter().find(|agent| &agent.id == id)
     }
@@ -474,131 +487,107 @@ pub fn store_path(home: &UzeHome, project_root: &Path) -> PathBuf {
 }
 
 /// The project's tasks; empty when nothing was ever recorded.
-pub fn load(home: &UzeHome, project_root: &Path) -> Result<TaskStore> {
+pub fn load(home: &UzeHome, project_root: &Path) -> Result<AgentStore> {
     Ok(read_document(&store_path(home, project_root))?.unwrap_or_default())
 }
 
-/// The one shape every version of the document shares, read before the
-/// document itself.
+/// The document at `path`, or `None` when nothing was ever recorded
+/// there. A shape this build knows is carried across; an error says this
+/// build cannot read what is there.
 ///
-/// Every field of a [`Task`] is required, so a document written under an
-/// older schema fails to deserialize — `missing field ...` — long before
-/// the version guard below could look at it: the guard was dead for
-/// exactly the case it exists for, and what the operator saw instead was
-/// a parse error about a file they never wrote.
-#[derive(Deserialize)]
-struct DeclaredSchema {
-    schema_version: u32,
+/// The shape is read before the document, and a document with no shape at
+/// all is shape 1 — both of which `uze-document` now holds for every
+/// record, having first been learnt here: every field of an [`Agent`] is
+/// required, so a document written under an older schema failed to
+/// deserialize — `missing field ...` — long before a guard comparing
+/// versions could look at it. The guard was dead for exactly the case it
+/// exists for, and what the operator saw was a parse error about a file
+/// they never wrote.
+fn read_document(path: &Path) -> Result<Option<AgentStore>> {
+    Ok(uze_document::read::<AgentStore>(path)?.record())
 }
 
-/// The document at `path`, or `None` when nothing was ever recorded
-/// there. An error says this build cannot read what is there: the schema
-/// it declares is not this one, or the bytes are not the document at all.
-fn read_document(path: &Path) -> Result<Option<TaskStore>> {
-    if !path.exists() {
-        return Ok(None);
+/// A record: which agent worked where, on what branch, under what label.
+/// Git still has the branches and the checkouts — which is what makes the
+/// floor beneath the ladder worth having — but the labels, the publication
+/// and the base a branch was cut from are only ever here.
+impl uze_document::Shaped for AgentStore {
+    const SHAPE: u32 = SCHEMA_VERSION;
+    const KIND: &'static str = "agents";
+
+    /// Shape 3 kept where the work stood *inside* the isolation, on the
+    /// argument that `Ready` is not representable without a checkout to be
+    /// ready in. Every agent has a checkout to be ready in; only an
+    /// isolated one has a checkout of its own. So the state moved beside
+    /// the isolation rather than inside it, and an agent in the project's
+    /// own root — which had no state at all, and therefore no mark on any
+    /// surface — now reads the one the checkout it sits in has.
+    ///
+    /// The rung lifts it. An agent that had none was in the root and had
+    /// nothing observed of it yet, which is exactly `Running`.
+    fn ladder() -> uze_document::Ladder {
+        &[uze_document::Step {
+            from: 3,
+            to: 4,
+            climb: |mut document| {
+                if let Some(agents) = document
+                    .get_mut("agents")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for agent in agents {
+                        let Some(agent) = agent.as_object_mut() else {
+                            continue;
+                        };
+                        let lifted = agent
+                            .get_mut("isolation")
+                            .and_then(serde_json::Value::as_object_mut)
+                            .and_then(|isolation| isolation.remove("state"))
+                            .unwrap_or_else(|| serde_json::json!({ "state": "running" }));
+                        agent.insert("state".to_owned(), lifted);
+                    }
+                }
+                Ok(document)
+            },
+        }]
     }
-    let bytes = fs::read(path).map_err(|source| UzeError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let declared: DeclaredSchema =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    if declared.schema_version != SCHEMA_VERSION {
-        return Err(UzeError::UnsupportedStateSchema {
-            path: path.to_path_buf(),
-            found: declared.schema_version,
-            expected: SCHEMA_VERSION,
-        });
-    }
-    let store: TaskStore = serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(Some(store))
 }
 
 /// What reading the document had to do before it could answer.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Recovery {
-    /// The document this build could not read, moved out of the way with
-    /// the reason it could not be read.
+    /// The document this build could not carry across, moved out of the
+    /// way with the reason it could not be read.
     pub set_aside: Option<SetAside>,
 }
 
 /// A document UZE could not read, kept rather than overwritten.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SetAside {
-    /// Where the bytes are now. Nothing reads them again; they are kept
-    /// because a document UZE cannot understand is still not one it may
-    /// throw away. The name deliberately stops being a `.json` in this
-    /// directory: what is set aside must not read as a second task
-    /// document to anything that lists the directory.
-    pub path: PathBuf,
-    pub reason: String,
-}
-
-/// Whether a document this build cannot read is one it may set aside.
-///
-/// Bytes that are not the document at all, and a document from a schema
-/// this build is *ahead* of: what is lost there is bookkeeping this build
-/// would rewrite anyway.
-///
-/// Never a document from a schema ahead of this one. Setting that aside
-/// takes a newer UZE's record away from it, and two builds on one machine
-/// — the ordinary state of this repository, `target/debug/uze` beside
-/// `~/.cargo/bin/uze` — would then take turns destroying each other's
-/// records, one adoption at a time. The older build reports and leaves it
-/// where it is.
-fn may_be_set_aside(reason: &UzeError) -> bool {
-    match reason {
-        UzeError::Json { .. } => true,
-        UzeError::UnsupportedStateSchema {
-            found, expected, ..
-        } => found < expected,
-        _ => false,
-    }
-}
+pub type SetAside = uze_document::SetAside;
 
 /// Moves the document aside so the project can be recorded again, and
 /// says what was moved.
 ///
-/// Only ever reached under the mutation lock: with the lock held no other
-/// pass is publishing the file, so bytes that do not read are genuinely
-/// unreadable rather than a write caught halfway. What the project loses
-/// is UZE's own labels and publication records — `checkout::reconcile`
-/// adopts every checkout Git still registers on the same pass, and the
-/// work itself was never in this file to begin with.
-fn set_aside(path: &Path, reason: &UzeError) -> Result<Recovery> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("tasks.json");
-    let moved = path.with_file_name(format!("{name}.unreadable-{}", now_unix()));
-    fs::rename(path, &moved).map_err(|source| UzeError::Write {
-        path: moved.clone(),
-        source,
-    })?;
-    tracing::warn!(
-        document = %path.display(),
-        set_aside = %moved.display(),
-        reason = %reason,
-        "the project's task document could not be read and was set aside"
-    );
+/// The floor beneath the ladder, reached only by a shape with no rung.
+/// Only ever under the mutation lock: with the lock held no other pass is
+/// publishing the file, so bytes that do not read are genuinely unreadable
+/// rather than a write caught halfway. What the project loses is UZE's own
+/// labels and publication records — `checkout::reconcile` adopts every
+/// checkout Git still registers on the same pass, and the work itself was
+/// never in this file to begin with.
+fn set_aside(path: &Path, reason: &uze_document::DocumentError) -> Result<Recovery> {
+    let moved = uze_document::set_aside(path, <AgentStore as uze_document::Shaped>::KIND, reason)?;
     Ok(Recovery {
-        set_aside: Some(SetAside {
-            path: moved,
-            reason: reason.to_string(),
-        }),
+        set_aside: Some(moved),
     })
 }
 
 /// Replaces the document atomically: readers see the previous version or
 /// this one, never a truncated file.
-pub fn save(home: &UzeHome, project_root: &Path, store: &TaskStore) -> Result<()> {
+pub fn save(home: &UzeHome, project_root: &Path, store: &AgentStore) -> Result<()> {
+    // Marked before it is written, so a project that has records always
+    // has the marker that says which repository they are about. A sweep
+    // meeting one without the other could enumerate agents it could not
+    // locate, which is the state this replaced.
+    crate::record::ensure(home, project_root)?;
     let payload = serde_json::to_vec_pretty(store).expect("task store serialization is infallible");
     write_atomic(&store_path(home, project_root), &payload)
 }
@@ -640,7 +629,7 @@ const MUTATION_RETRY: Duration = Duration::from_millis(20);
 pub fn locked<T>(
     home: &UzeHome,
     project_root: &Path,
-    mutate: impl FnOnce(&mut TaskStore) -> Result<T>,
+    mutate: impl FnOnce(&mut AgentStore) -> Result<T>,
 ) -> Result<T> {
     locked_reporting(home, project_root, mutate).map(|(outcome, _)| outcome)
 }
@@ -660,16 +649,20 @@ pub fn locked<T>(
 pub fn locked_reporting<T>(
     home: &UzeHome,
     project_root: &Path,
-    mutate: impl FnOnce(&mut TaskStore) -> Result<T>,
+    mutate: impl FnOnce(&mut AgentStore) -> Result<T>,
 ) -> Result<(T, Recovery)> {
     let path = store_path(home, project_root);
     let _held = MutationGuard::acquire(&path)?;
-    let (mut store, recovery) = match read_document(&path) {
-        Ok(document) => (document.unwrap_or_default(), Recovery::default()),
-        Err(reason) if may_be_set_aside(&reason) => {
-            (TaskStore::default(), set_aside(&path, &reason)?)
+    // Read in the document crate's own vocabulary rather than through
+    // `read_document`, so the direction rule — which shape may be set
+    // aside and which may never be — is asked of the one place that holds
+    // it instead of being restated here.
+    let (mut store, recovery) = match uze_document::read::<AgentStore>(&path) {
+        Ok(carried) => (carried.or_default(), Recovery::default()),
+        Err(reason) if uze_document::may_be_set_aside(&reason) => {
+            (AgentStore::default(), set_aside(&path, &reason)?)
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let outcome = mutate(&mut store)?;
     save(home, project_root, &store)?;
@@ -830,7 +823,7 @@ mod tests {
         let home = home("tasks-relabel");
         let root = uze_testkit::temp::scratch("tasks-relabel-project");
         let original = task("first name");
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         store.upsert(original.clone());
         save(&home, &root, &store).unwrap();
 
@@ -853,8 +846,8 @@ mod tests {
         fs::create_dir_all(&checkout_dir).unwrap();
         let mut task = task("work that outlives its directory");
         task.isolation_mut().unwrap().checkout = Some(CheckoutId::generate());
-        task.isolation_mut().unwrap().state = TaskState::Ready;
-        let mut store = TaskStore::default();
+        task.state = WorkState::Ready;
+        let mut store = AgentStore::default();
         store.upsert(task.clone());
         save(&home, &root, &store).unwrap();
 
@@ -872,7 +865,7 @@ mod tests {
     fn a_missing_document_is_an_empty_store_and_an_unknown_schema_is_refused() {
         let home = home("tasks-schema");
         let root = uze_testkit::temp::scratch("tasks-schema-project");
-        assert_eq!(load(&home, &root).unwrap(), TaskStore::default());
+        assert_eq!(load(&home, &root).unwrap(), AgentStore::default());
 
         let path = store_path(&home, &root);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -917,7 +910,7 @@ mod tests {
             agent.own_directory(Path::new("/repo")),
             Some(PathBuf::from("/repo/.worktrees/slot-1"))
         );
-        assert_eq!(isolation(&agent).state, TaskState::Running);
+        assert_eq!(agent.state, WorkState::Running);
         assert!(isolation(&agent).branch.starts_with(BRANCH_PREFIX));
 
         agent.take_name("fix/the-redirect".to_owned());
@@ -970,6 +963,46 @@ mod tests {
     /// used to refuse every mutation of the project, so no agent could be
     /// placed at all — over a file nobody authored. It is moved aside,
     /// the bytes are kept, and the work carries on.
+    /// Shape 3 kept where the work stood inside the isolation, so an
+    /// agent in the project's own root had no state at all — and therefore
+    /// no mark on any surface. The rung lifts it out, and gives the one
+    /// that never had a place to keep it the state its checkout has.
+    #[test]
+    fn the_shape_that_kept_the_state_inside_the_isolation_is_carried_across() {
+        let home = home("task-shape-3");
+        let root = uze_testkit::temp::scratch("task-shape-3-project");
+        let path = store_path(&home, &root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            br#"{"schema_version":3,"agents":[
+              {"id":"isolated","harness":"claude","label":"a","created_at_unix":1,
+               "ended_at_unix":null,
+               "isolation":{"base":{"kind":"ref","value":"main"},"base_commit":"",
+                 "target":"main","branch":"agent/isolated","checkout":"slot",
+                 "state":{"state":"ready"},"published_as":null,"published_request":null,
+                 "request_branch":null,"request_asked_at_unix":null}},
+              {"id":"inroot","harness":"codex","label":"b","created_at_unix":2,
+               "ended_at_unix":null,"isolation":null}]}"#,
+        )
+        .unwrap();
+
+        let store = load(&home, &root).expect("a shape this build knows is carried across");
+        let isolated = store.get(&AgentId("isolated".to_owned())).unwrap();
+        assert_eq!(
+            isolated.state,
+            WorkState::Ready,
+            "what the isolation held is now beside it, unchanged"
+        );
+        assert!(isolated.isolation().is_some());
+        let in_the_root = store.get(&AgentId("inroot".to_owned())).unwrap();
+        assert_eq!(
+            in_the_root.state,
+            WorkState::Running,
+            "and the agent that had nowhere to keep one starts from nothing observed"
+        );
+    }
+
     #[test]
     fn a_document_this_build_cannot_read_is_set_aside_rather_than_refused() {
         let home = home("tasks-set-aside");
@@ -1070,8 +1103,7 @@ mod tests {
                     // Long enough that an unlocked pass would certainly
                     // have read this document before it is written back.
                     std::thread::sleep(Duration::from_millis(80));
-                    store.get_mut(&id).unwrap().isolation_mut().unwrap().state =
-                        TaskState::Integrated;
+                    store.get_mut(&id).unwrap().state = WorkState::Integrated;
                     Ok(())
                 })
                 .unwrap();
@@ -1082,7 +1114,7 @@ mod tests {
             std::thread::spawn(move || {
                 locked(&home, &root, |store| {
                     std::thread::sleep(Duration::from_millis(80));
-                    store.get_mut(&id).unwrap().isolation_mut().unwrap().state = TaskState::Ready;
+                    store.get_mut(&id).unwrap().state = WorkState::Ready;
                     Ok(())
                 })
                 .unwrap();
@@ -1092,14 +1124,8 @@ mod tests {
         evaluator.join().unwrap();
 
         let store = load(&home, &root).unwrap();
-        assert_eq!(
-            store.get(&first.id).unwrap().isolation().unwrap().state,
-            TaskState::Integrated
-        );
-        assert_eq!(
-            store.get(&second.id).unwrap().isolation().unwrap().state,
-            TaskState::Ready
-        );
+        assert_eq!(store.get(&first.id).unwrap().state, WorkState::Integrated);
+        assert_eq!(store.get(&second.id).unwrap().state, WorkState::Ready);
     }
 
     /// A mutation that gives up writes nothing, so a caller can abandon a
@@ -1116,25 +1142,14 @@ mod tests {
         .unwrap();
 
         let refused = locked(&home, &root, |store| {
-            store
-                .get_mut(&seed.id)
-                .unwrap()
-                .isolation_mut()
-                .unwrap()
-                .state = TaskState::Integrated;
+            store.get_mut(&seed.id).unwrap().state = WorkState::Integrated;
             Err::<(), _>(UzeError::UnknownTask("gave up".into()))
         });
 
         assert!(refused.is_err());
         assert_eq!(
-            load(&home, &root)
-                .unwrap()
-                .get(&seed.id)
-                .unwrap()
-                .isolation()
-                .unwrap()
-                .state,
-            TaskState::Running
+            load(&home, &root).unwrap().get(&seed.id).unwrap().state,
+            WorkState::Running
         );
     }
 
@@ -1151,7 +1166,7 @@ mod tests {
         };
         let home = UzeHome::at(home);
         let root = PathBuf::from(root);
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut task = task("seed");
         let mut round = 0u64;
         loop {

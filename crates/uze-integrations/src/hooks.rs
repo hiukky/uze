@@ -1154,7 +1154,7 @@ fn prune_shared_wrapper(uze_home: &UzeHome, integration_id: &str, target: HookTa
     // authorized by an unreadable ledger, which is exactly what receipts
     // exist to refuse.
     let still_used = match uze_core::state::receipts(uze_home, None) {
-        Ok(ledger) => ledger.iter().any(|(_, receipt)| {
+        Ok(ledger) => ledger.iter().any(|receipt| {
             receipt.integration == integration_id && entry_is_attached(receipt, target)
         }),
         Err(_) => true,
@@ -1271,7 +1271,7 @@ pub(crate) fn previous_hook_entry_content(
     };
     Ok(ledger
         .into_iter()
-        .filter(|(_, receipt)| {
+        .filter(|receipt| {
             receipt.integration == integration_id
                 && matches!(
                     &receipt.artifact,
@@ -1281,7 +1281,7 @@ pub(crate) fn previous_hook_entry_content(
                     } if entry_name == hook_entry_name
                 )
         })
-        .filter_map(|(_, receipt)| match receipt.artifact {
+        .filter_map(|receipt| match receipt.artifact {
             uze_core::integration::ManagedArtifact::HookConfigEntry { expected, .. } => {
                 Some(expected)
             }
@@ -2549,7 +2549,6 @@ mod tests {
             merge_named_entry(&config, name, &entry).unwrap();
             uze_core::state::record_receipt(
                 &home,
-                name.to_owned(),
                 hook_receipt(&config, name, &expected, &wrapper),
             )
             .unwrap();
@@ -2589,7 +2588,6 @@ mod tests {
         merge_named_entry(&config, "pkg@market:protect-env", &entry).unwrap();
         uze_core::state::record_receipt(
             &home,
-            "pkg@market:protect-env".to_owned(),
             hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper),
         )
         .unwrap();
@@ -2631,8 +2629,7 @@ mod tests {
         merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[]).unwrap();
         let mut receipt = hook_receipt(&config, "pkg@market:protect-env", &expected, &wrapper);
         receipt.integration = "claude".to_owned();
-        uze_core::state::record_receipt(&home, "pkg@market:protect-env".to_owned(), receipt)
-            .unwrap();
+        uze_core::state::record_receipt(&home, receipt).unwrap();
 
         // The user edits the timeout: the entry no longer matches the
         // receipt, and still runs the wrapper on every tool call.

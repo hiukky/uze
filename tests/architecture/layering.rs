@@ -899,3 +899,81 @@ fn collect_rust_files(directory: &std::path::Path, out: &mut Vec<PathBuf>) {
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
+
+/// Every path under `$UZE_HOME` is named in one place.
+///
+/// `UzeHome` is the map of what UZE owns, and it was *almost* the map: the
+/// receipt ledger, the mutation lock, the superseded directory, the prompt
+/// history, the logs and the binary's own ledger each joined their own name
+/// onto `state_dir()` where they happened to be used. That is how a reader
+/// comes to have no way to enumerate what UZE persists — which is what
+/// makes a machine-wide sweep, and a rule every document inherits,
+/// impossible to write.
+///
+/// The test finds the writers rather than checking a list somebody
+/// maintains: a new `state_dir().join("…")` anywhere but the map fails it,
+/// so the next document is named where every other one is.
+#[test]
+fn every_path_uze_owns_is_named_in_the_map() {
+    /// The map itself, which is the one place these may be composed.
+    const THE_MAP: &str = "crates/uze-core/src/machine/home.rs";
+
+    /// `uze-terminal` depends on no other crate in this workspace by
+    /// design — it is the local terminal runtime, and a pane surviving a
+    /// client leaving is what that boundary buys. It therefore cannot ask
+    /// `UzeHome` where the workspace goes and composes its own path. The
+    /// durability *rule* it obeys is shared (`uze-document`); only the
+    /// path is its own.
+    const SANCTIONED: &[&str] = &["crates/uze-terminal/src"];
+
+    let root = repository_root();
+    let mut offenders = Vec::new();
+    for scope in ["crates", "src"] {
+        for (path, source) in production_sources(&root.join(scope)) {
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            if relative.replace('\\', "/") == THE_MAP
+                || SANCTIONED
+                    .iter()
+                    .any(|allowed| relative.replace('\\', "/").starts_with(allowed))
+            {
+                continue;
+            }
+            // Whitespace-insensitive: a chain broken over several lines by
+            // `rustfmt` is the same composition, and the first version of
+            // this test missed exactly one that way.
+            let source: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
+            let source = source.replace(" .join(", ".join(").replace("() .", "().");
+            for anchor in ["state_dir()", "cache_dir()", "runtime_dir()"] {
+                let joined = format!("{anchor}.join(");
+                let mut rest = source.as_str();
+                while let Some(at) = rest.find(&joined) {
+                    let tail = &rest[at + joined.len()..];
+                    // A literal name is a path being composed here. A
+                    // variable is a caller passing one the map already gave
+                    // it, which is the map doing its job.
+                    if tail.trim_start().starts_with('"') {
+                        offenders.push(relative.clone());
+                        break;
+                    }
+                    rest = &rest[at + joined.len()..];
+                }
+            }
+        }
+    }
+    offenders.sort();
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "architecture rule violated: every path UZE owns is named in the map\n\n  \
+         these compose a path under $UZE_HOME themselves: {offenders:?}\n\n  \
+         Why: a path built where it happens to be used is one nothing can \
+         enumerate. A sweep of what UZE persists — and a durability rule every \
+         document inherits — can only exist if one place knows them all.\n\n  \
+         Fix: add the path to `{THE_MAP}` with the reason it exists, and call \
+         that."
+    );
+}

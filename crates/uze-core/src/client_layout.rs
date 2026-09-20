@@ -20,7 +20,6 @@
 //! start over its own layout would be trading the product for a preference.
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -129,11 +128,20 @@ pub struct ManagementLayout {
     pub collapsed_marketplaces: BTreeSet<String>,
 }
 
+/// Best-effort on purpose: what the TUI was left looking like is worth
+/// restoring and worth nothing to refuse over, so a layout this build
+/// cannot read opens the default rather than stopping the client.
 pub fn load(home: &UzeHome) -> ClientLayout {
-    fs::read(home.client_layout_path())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    uze_document::read::<ClientLayout>(&home.client_layout_path())
+        .map(uze_document::Carried::or_default)
         .unwrap_or_default()
+}
+
+/// A record: where the operator left every drawer and column. Nothing else
+/// on the machine knows it, and no probe brings it back.
+impl uze_document::Shaped for ClientLayout {
+    const SHAPE: u32 = uze_document::FIRST_SHAPE;
+    const KIND: &'static str = "layout";
 }
 
 pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
@@ -147,6 +155,8 @@ pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 

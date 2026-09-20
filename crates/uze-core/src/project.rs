@@ -23,6 +23,7 @@ pub mod manifest;
 pub mod project_context;
 pub mod project_lock;
 pub mod project_root;
+pub mod record;
 pub mod task;
 pub mod text_region;
 pub mod workspace;

@@ -31,8 +31,8 @@ use std::{
 };
 use uze_application::AgentIdentity;
 use uze_application::{
-    CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
-    UpstreamSync,
+    AgentView, CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, UpstreamSync,
+    WorkStateView,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -274,7 +274,7 @@ const TOAST_TTL: Duration = Duration::from_secs(6);
 const MAX_TOASTS: usize = 4;
 
 /// What a background evaluation answered.
-struct TaskResolution {
+struct WorkResolution {
     /// The key [`WorkspaceModel::schedule_evaluation`] reserved, released
     /// on arrival whatever the answer was. It travels with the request
     /// because the two ends resolve a repository differently — the
@@ -311,7 +311,7 @@ struct EvaluationAnswer {
 struct DeliveryResolution {
     cwd: PathBuf,
     /// The task the press reserved in `delivery_pending`, carried the way
-    /// [`TaskResolution`] carries its key and released on arrival
+    /// [`WorkResolution`] carries its key and released on arrival
     /// whatever came back.
     ///
     /// Releasing by walking `reports` alone is only correct while there
@@ -323,6 +323,16 @@ struct DeliveryResolution {
     /// three things that keep it turning.
     reserved: Option<String>,
     reports: Vec<DeliveryReport>,
+}
+
+/// An agent's tab, and the project whose space it belongs in.
+struct PendingAgentTab {
+    project: PathBuf,
+    label: String,
+    command: Vec<String>,
+    cwd: PathBuf,
+    agent: String,
+    size: (u16, u16),
 }
 
 /// Open state of the preserved-work list: tasks holding work that no live
@@ -367,12 +377,41 @@ fn evaluation_key(cwd: &Path) -> PathBuf {
 
 /// Re-reads the tasks of the repository `cwd` belongs to, off the UI
 /// thread: every evaluation asks Git, and a delivery may run a gate.
+/// What a sweep of the machine's preserved work answered.
+struct PreservedResolution {
+    work: Vec<uze_application::PreservedWork>,
+}
+
+/// Re-reads every project's preserved work, off the UI thread.
+///
+/// Answers even when it found nothing, for the same reason the task
+/// evaluation does: a request that returns in silence never clears its
+/// pending flag, and the sweep is then never asked for again.
+fn spawn_preserved_sweep(home: &UzeHome, sender: mpsc::Sender<PreservedResolution>) {
+    let home = home.clone();
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.preserved_sweep").entered();
+        let work = answered_or(
+            || {
+                super::tui_application(home)
+                    .ok()
+                    .map(|app| app.workspace().preserved_work())
+                    .unwrap_or_default()
+            },
+            Vec::new(),
+        );
+        let _ = sender.send(PreservedResolution { work });
+    });
+}
+
 fn spawn_task_evaluation(
     home: &UzeHome,
     key: PathBuf,
     cwd: PathBuf,
     occupied: Vec<PathBuf>,
-    sender: mpsc::Sender<TaskResolution>,
+    sender: mpsc::Sender<WorkResolution>,
 ) {
     let home = home.clone();
     let parent = tracing::Span::current();
@@ -409,7 +448,7 @@ fn spawn_task_evaluation(
             },
             None,
         );
-        let _ = sender.send(TaskResolution { key, answered });
+        let _ = sender.send(WorkResolution { key, answered });
     });
 }
 
@@ -455,14 +494,14 @@ fn spawn_delivery(
 
 /// What a preserved task is asked to become.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TaskMutation {
+enum WorkMutation {
     /// Closed, its slot released. The work itself is kept.
     Finish,
     /// Thrown away: the checkout removed, the branch deleted.
     Discard,
 }
 
-impl TaskMutation {
+impl WorkMutation {
     /// What the operator is told while it runs, and what they are told
     /// when it is done.
     fn underway(self) -> &'static str {
@@ -488,7 +527,7 @@ struct MutationResolution {
     /// follows.
     task: String,
     label: String,
-    mutation: TaskMutation,
+    mutation: WorkMutation,
     outcome: std::result::Result<(), String>,
 }
 
@@ -505,7 +544,7 @@ fn spawn_task_mutation(
     cwd: PathBuf,
     task: String,
     label: String,
-    mutation: TaskMutation,
+    mutation: WorkMutation,
     sender: mpsc::Sender<MutationResolution>,
 ) {
     let home = home.clone();
@@ -519,8 +558,8 @@ fn spawn_task_mutation(
             || {
                 tui_application(home)
                     .and_then(|app| match mutation {
-                        TaskMutation::Finish => app.workspace().finish_task(&cwd, &task),
-                        TaskMutation::Discard => app.workspace().discard_task(&cwd, &task),
+                        WorkMutation::Finish => app.workspace().finish_task(&cwd, &task),
+                        WorkMutation::Discard => app.workspace().discard_task(&cwd, &task),
                     })
                     .map_err(|error| error.to_string())
             },
@@ -2033,7 +2072,7 @@ pub(crate) struct WorkspaceMemory {
 #[derive(Default)]
 struct Channels {
     support: Answers<SupportResolution>,
-    tasks: Answers<TaskResolution>,
+    tasks: Answers<WorkResolution>,
     deliveries: Answers<DeliveryResolution>,
     /// Finishing and discarding a preserved task. Off-thread for the same
     /// reason a delivery is: a discard is `git worktree remove` and a
@@ -2048,6 +2087,10 @@ struct Channels {
     /// The surface's file reads and writes, off-thread for the same
     /// reason its changes are.
     code_files: Answers<FileResolution>,
+    /// Preserved work across the machine. Off-thread like every other
+    /// read: it opens `$UZE_HOME` and walks every project UZE has
+    /// recorded, which is not something a frame may wait on.
+    preserved: Answers<PreservedResolution>,
     occupancy: Answers<OccupancyResolution>,
     placements: Answers<PlacementResolution>,
     artifacts: Answers<ArtifactsResolution>,
@@ -2098,9 +2141,16 @@ struct Remembered {
     /// being rewritten while nobody is looking; within a session it is
     /// worth returning to, and across runs it is worth nothing.
     code_places: BTreeMap<PathBuf, code::CodePlace>,
+    /// Preserved work across the machine, as last swept. The last good
+    /// answer stays drawn while a new one is in flight, so opening the
+    /// list never shows an empty one it is about to fill.
+    preserved_work: Vec<uze_application::PreservedWork>,
+    /// Whether a sweep is out, so the list asks once rather than once per
+    /// frame.
+    preserved_pending: bool,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
-    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    tasks: BTreeMap<PathBuf, Vec<AgentView>>,
     /// The branch checked out at each evaluation key (see
     /// [`evaluation_key`]) — the primary's for every slot of a repository,
     /// a directory's own outside any slot. Read for an agent outside any
@@ -2339,6 +2389,12 @@ struct WorkspaceModel {
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
     recently_quiet: Vec<PaneId>,
+    /// An agent's tab waiting for the space it belongs in to exist.
+    ///
+    /// `CreateSpace` answers on the session's own clock, and a `CreateTab`
+    /// sent before that lands in whichever space is selected — which is
+    /// the bug this whole path exists to fix, reintroduced by racing it.
+    pending_agent_tab: Option<PendingAgentTab>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
     /// Everything that can be done here, each with the key that reaches
@@ -2536,6 +2592,20 @@ impl WorkspaceModel {
                 self.prune_dragging_space();
                 self.occupancy_stale = true;
             }
+            ClientEvent::WorkspaceSetAside { kept_at, reason } => {
+                // A toast, beside the one an adopted task store already
+                // raises. The runtime is a different process from this
+                // one, so without an event of its own the only record was
+                // a log nobody had turned on — and an operator watched
+                // every space disappear with nothing said anywhere.
+                self.raise_toast(
+                    ToastKind::Warned,
+                    format!("kept at {}", kept_at.display()),
+                    "the workspace could not be opened".to_owned(),
+                    None,
+                );
+                tracing::warn!(%reason, kept_at = %kept_at.display(), "the workspace was set aside");
+            }
             ClientEvent::Damage(damage) => {
                 if is_incremental_repaint(&damage) {
                     self.note_agent_output(damage.pane, identities, Instant::now());
@@ -2684,6 +2754,28 @@ impl WorkspaceModel {
             && self.action_index.is_none()
             && self.manage.is_none()
             && !self.commit_detail_open()
+    }
+
+    /// The open space rooted at `project`, by canonical root.
+    ///
+    /// Prefers the selected space when several are rooted there — which
+    /// the first round of `add-space-kinds` allowed on purpose — because
+    /// the one the operator is looking at is the one they meant.
+    fn space_rooted_at(&self, project: &Path) -> Option<SpaceId> {
+        let canonical = |root: &Path| root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let wanted = canonical(project);
+        let session = self.session.as_ref()?;
+        let matching: Vec<&Space> = session
+            .workspace
+            .spaces
+            .iter()
+            .filter(|space| canonical(&space.root) == wanted)
+            .collect();
+        matching
+            .iter()
+            .find(|space| space.id == session.workspace.selected_space)
+            .or_else(|| matching.first())
+            .map(|space| space.id)
     }
 
     fn hit_at(&self, column: u16, row: u16) -> Option<WorkspaceHit> {
@@ -3046,7 +3138,7 @@ impl WorkspaceModel {
     }
 
     /// The task listed for an identity, whichever repository listed it.
-    fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &TaskView)> {
+    fn task_with_id(&self, id: &str) -> Option<(&PathBuf, &AgentView)> {
         self.remembered.tasks.iter().find_map(|(primary, tasks)| {
             tasks
                 .iter()
@@ -3055,10 +3147,31 @@ impl WorkspaceModel {
         })
     }
 
+    /// Puts the row a placement answered with on the column, before any
+    /// evaluation has run.
+    ///
+    /// Not a stand-in: it is the record UZE has just written, derived the
+    /// way the evaluation that replaces it derives every row. What it
+    /// spares the operator is the second in which a freshly isolated
+    /// agent is drawn among the ones sharing their own checkout — the one
+    /// thing about a new agent nobody should have to watch settle.
+    pub(super) fn seed_task(&mut self, project: &Path, view: AgentView) {
+        let tasks = self
+            .remembered
+            .tasks
+            .entry(project.to_path_buf())
+            .or_default();
+        match tasks.iter_mut().find(|task| task.id == view.id) {
+            Some(known) => *known = view,
+            None => tasks.push(view),
+        }
+        self.dirty = true;
+    }
+
     /// The task a tab is for: the one the launch named, once an evaluation
     /// lists it. Nothing stands in for it before that — a slot's previous
     /// occupant is not this agent's task, whatever the directory says.
-    pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {
+    pub(super) fn tab_task(&self, tab: TabId) -> Option<&AgentView> {
         let id = self.tab_agent_id(tab)?;
         self.task_with_id(id).map(|(_, task)| task)
     }
@@ -3069,7 +3182,7 @@ impl WorkspaceModel {
     /// resolves. Only
     /// while the task is waiting for a slot: once resumed it has one, and
     /// the row that lost its own is nobody's way back in any more.
-    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &TaskView)> {
+    pub(super) fn lost_task(&self, tab: TabId) -> Option<(&PathBuf, &AgentView)> {
         let tab = self.tab(tab)?;
         if !self.remembered.lost_checkouts.contains(&tab.pane.id) {
             return None;
@@ -3078,7 +3191,7 @@ impl WorkspaceModel {
         let resumable = task.checkout.is_none()
             && !matches!(
                 task.state,
-                TaskStateView::Integrating | TaskStateView::Integrated
+                WorkStateView::Integrating | WorkStateView::Integrated
             );
         resumable.then_some((primary, task))
     }
@@ -3089,15 +3202,15 @@ impl WorkspaceModel {
     /// A delivery runs in this client's own thread — rebase, then a gate
     /// that may take half an hour, then a push — and for all of it the
     /// record on disk still says whatever it said before the press.
-    /// `TaskState::Integrating` is set by `landing::deliver` in memory and
+    /// `WorkState::Integrating` is set by `landing::deliver` in memory and
     /// overwritten by the outcome before the store is ever saved, so no
     /// evaluation can ever read it back: the client that started the
     /// delivery is the only party that knows one is running, which is why
     /// this is the one state drawn from the client rather than from the
     /// view it was handed.
-    pub(super) fn drawn_state(&self, task: &TaskView) -> TaskStateView {
+    pub(super) fn drawn_state(&self, task: &AgentView) -> WorkStateView {
         if self.remembered.delivery_pending.contains(&task.id) {
-            return TaskStateView::Integrating;
+            return WorkStateView::Integrating;
         }
         task.state.clone()
     }
@@ -3117,25 +3230,24 @@ impl WorkspaceModel {
             .map(|tab| tab.pane.id)
     }
 
-    /// Tasks holding work that no live agent tab is in front of, with the
-    /// repository each belongs to — what "preserved from yesterday" lists.
-    pub(super) fn preserved_tasks(&self) -> Vec<(PathBuf, TaskView)> {
-        let mut preserved: Vec<(PathBuf, TaskView)> = self
-            .remembered
-            .tasks
+    /// Work no live agent tab is in front of, wherever on this machine it
+    /// is — what the preserved-work list shows.
+    ///
+    /// Answered by a sweep of every project UZE has recorded, not by the
+    /// per-session evaluation cache beside it: that cache is filled only
+    /// for directories the sidebar already names, so it could never see a
+    /// project with no space open — which is the case the list exists for.
+    ///
+    /// Liveness is still this client's own question, asked by launch stamp:
+    /// the service hands over everything still preserved and the tabs
+    /// standing in front of an agent are what subtracts.
+    pub(super) fn preserved_tasks(&self) -> Vec<uze_application::PreservedWork> {
+        self.remembered
+            .preserved_work
             .iter()
-            .flat_map(|(primary, tasks)| tasks.iter().map(move |task| (primary, task)))
-            .filter(|(_, task)| {
-                !matches!(
-                    task.state,
-                    TaskStateView::Integrated | TaskStateView::Closed
-                )
-            })
-            .filter(|(_, task)| self.pane_for_agent(&task.id).is_none())
-            .map(|(primary, task)| (primary.clone(), task.clone()))
-            .collect();
-        preserved.sort_by_key(|(_, task)| task.created_at_unix);
-        preserved
+            .filter(|work| self.pane_for_agent(&work.id).is_none())
+            .cloned()
+            .collect()
     }
 
     /// Every directory the sidebar names a branch for — each space's root
@@ -3169,7 +3281,7 @@ impl WorkspaceModel {
         &mut self,
         home: &UzeHome,
         cwd: PathBuf,
-        sender: &mpsc::Sender<TaskResolution>,
+        sender: &mpsc::Sender<WorkResolution>,
     ) {
         let key = evaluation_key(&cwd);
         if !self.remembered.task_eval_pending.insert(key.clone()) {
@@ -4183,6 +4295,19 @@ fn deliver_selected_tab(
         );
         return;
     };
+    // Only what UZE cut. The button is not drawn for an agent in the
+    // project's own root, but the key still reaches here — and a key that
+    // silently did nothing, or handed the operator a `NotReady` from deep
+    // in delivery, is worse than one that says whose branch it is.
+    if !task.isolated {
+        model.raise_toast(
+            ToastKind::Told,
+            "this branch is yours, not UZE's",
+            "isolate the agent to have UZE deliver its work",
+            None,
+        );
+        return;
+    }
     // The drawn state, not the recorded one: a second press while the
     // first delivery is still running is answered with what is happening
     // rather than with nothing at all.
@@ -4223,7 +4348,7 @@ fn sync_slot_occupancy(
     model: &mut WorkspaceModel,
     home: &UzeHome,
     sender: &mpsc::Sender<OccupancyResolution>,
-    tasks: &mpsc::Sender<TaskResolution>,
+    tasks: &mpsc::Sender<WorkResolution>,
 ) {
     if !model.occupancy_stale || model.occupancy_pending {
         return;

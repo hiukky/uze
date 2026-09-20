@@ -78,27 +78,27 @@ scenes:
         say: provision every registered harness
         check: false
     then:
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.claude-code.version
         exists: true
         about: claude-code is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.codex.version
         exists: true
         about: codex is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.opencode.version
         exists: true
         about: opencode is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.antigravity.version
         exists: true
         about: antigravity is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.*
         count: 4
         about: and nothing else — a record is what installed means
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.antigravity.version
         equals: "9.9.9"
         about: with the version the harness itself reported

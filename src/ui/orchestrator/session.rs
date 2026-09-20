@@ -619,10 +619,17 @@ impl Attach<'_> {
             Action::TogglePreservedWork => {
                 self.model.preserved = match self.model.preserved {
                     Some(_) => None,
-                    None => Some(PreservedOverlay {
-                        selected: 0,
-                        confirm_discard: false,
-                    }),
+                    None => {
+                        // Asked for on opening, and drawn from the last
+                        // answer while this one is out: an empty list that
+                        // fills a moment later reads as work having been
+                        // lost, which is the opposite of what this says.
+                        self.sweep_preserved_work();
+                        Some(PreservedOverlay {
+                            selected: 0,
+                            confirm_discard: false,
+                        })
+                    }
                 };
                 self.model.dirty = true;
             }
@@ -900,22 +907,22 @@ impl Attach<'_> {
                 overlay.confirm_discard = false;
             }
             Action::DeliverTask => {
-                if let Some((cwd, task)) = preserved.get(overlay.selected) {
+                if let Some(work) = preserved.get(overlay.selected) {
                     self.model
                         .remembered
                         .delivery_pending
-                        .insert(task.id.clone());
+                        .insert(work.id.clone());
                     spawn_delivery(
                         self.home,
-                        cwd.clone(),
-                        Some(task.id.clone()),
+                        work.project.clone(),
+                        Some(work.id.clone()),
                         self.channels.deliveries.sender.clone(),
                     );
                 }
             }
             Action::FinishTask => {
-                if let Some((cwd, task)) = preserved.get(overlay.selected) {
-                    self.mutate_task(cwd.clone(), task, TaskMutation::Finish);
+                if let Some(work) = preserved.get(overlay.selected) {
+                    self.mutate_preserved(work, WorkMutation::Finish);
                 }
             }
             // Placement answers with the task's own slot when it still has
@@ -923,10 +930,10 @@ impl Attach<'_> {
             // checkout removed by hand took only the uncommitted work.
             // Either way the launch carries the task's identity.
             Action::ResumeTask => {
-                if let Some((primary, task)) = preserved.get(overlay.selected) {
+                if let Some(work) = preserved.get(overlay.selected) {
                     let resume = ResumeTarget {
-                        primary: primary.clone(),
-                        task: task.id.clone(),
+                        primary: work.project.clone(),
+                        task: work.id.clone(),
                         // Asked for from the list, not from a row: there is
                         // no dead tab behind it.
                         replacing: None,
@@ -946,8 +953,8 @@ impl Attach<'_> {
             Action::ConfirmDiscard if overlay.confirm_discard => {
                 overlay.confirm_discard = false;
                 let selected = overlay.selected;
-                if let Some((cwd, task)) = preserved.get(selected) {
-                    self.mutate_task(cwd.clone(), task, TaskMutation::Discard);
+                if let Some(work) = preserved.get(selected) {
+                    self.mutate_preserved(work, WorkMutation::Discard);
                 }
             }
             _ => overlay.confirm_discard = false,
@@ -963,22 +970,47 @@ impl Attach<'_> {
     /// only thing said until the answer lands: unlike a delivery there is
     /// no button drawn for this, so silence would read as the key doing
     /// nothing.
-    fn mutate_task(&mut self, cwd: PathBuf, task: &TaskView, mutation: TaskMutation) {
+    /// Re-reads every project's preserved work, off the UI thread.
+    ///
+    /// Asked once at a time: the sweep opens `$UZE_HOME` and walks every
+    /// project UZE has recorded, and a second one in flight would answer
+    /// the same question twice.
+    fn sweep_preserved_work(&mut self) {
+        if self.model.remembered.preserved_pending {
+            return;
+        }
+        self.model.remembered.preserved_pending = true;
+        spawn_preserved_sweep(self.home, self.channels.preserved.sender.clone());
+    }
+
+    /// Finishes or discards one piece of preserved work, off this thread.
+    ///
+    /// The row carries the project it belongs to, rather than borrowing
+    /// whichever one the operator happens to be looking at — which is what
+    /// lets this list cross projects at all.
+    ///
+    /// Reserved under the work's own id, because a discard removes a whole
+    /// checkout and a second Enter arriving while the first removal is
+    /// still walking it must not start another. The busy notice is the only
+    /// thing said until the answer lands: unlike a delivery there is no
+    /// button drawn for this, so silence would read as the key doing
+    /// nothing.
+    fn mutate_preserved(&mut self, work: &uze_application::PreservedWork, mutation: WorkMutation) {
         if !self
             .model
             .remembered
             .task_mutation_pending
-            .insert(task.id.clone())
+            .insert(work.id.clone())
         {
             return;
         }
         self.model
-            .set_busy_notice(format!("{}: {}", task.label, mutation.underway()));
+            .set_busy_notice(format!("{}: {}", work.label, mutation.underway()));
         spawn_task_mutation(
             self.home,
-            cwd,
-            task.id.clone(),
-            task.label.clone(),
+            work.project.clone(),
+            work.id.clone(),
+            work.label.clone(),
             mutation,
             self.channels.mutations.sender.clone(),
         );
@@ -1860,15 +1892,27 @@ impl Attach<'_> {
                     // given, and a directory that is no repository has
                     // nothing to cut one from.
                     if self.can_isolate(tab) {
-                        // Both rows, always. Whether the tree holds
-                        // uncommitted changes is a Git question, and
-                        // nothing the client draws waits on Git — a row
-                        // gated on the last evaluation's answer is absent
-                        // exactly when the operator has just edited
-                        // something, which is when they want it. On a
-                        // clean tree the two rows do the same thing.
+                        // Isolating takes the work with it: at the moment
+                        // an agent is moved, what the tree holds is
+                        // usually what that agent was doing, and a
+                        // checkout without it is one where the file it
+                        // was mid-edit on went back to its last commit.
                         items.push(Action::IsolateAgent);
-                        items.push(Action::IsolateAgentWithChanges);
+                        // Starting from the commit instead is the
+                        // exception, and it is offered only where it is
+                        // one: a tree the last evaluation found dirty.
+                        // Gated this way round on purpose — the answer
+                        // can be up to a refresh old, and a stale *clean*
+                        // reading costs the operator nothing, where a
+                        // stale reading on the carrying row would take
+                        // away the very thing they had just edited.
+                        if self
+                            .model
+                            .tab_task(tab)
+                            .is_some_and(|task| task.state == WorkStateView::Uncommitted)
+                        {
+                            items.push(Action::IsolateAgentAtCommit);
+                        }
                     }
                     if can_close_tab_from_menu(&self.model, &self.identities, tab) {
                         items.push(Action::CloseTab);
@@ -2535,11 +2579,9 @@ impl Attach<'_> {
         if launched_agent_id(found).is_none() {
             return false;
         }
-        if self
-            .model
-            .tab_task(tab)
-            .is_some_and(|task| !task.branch.is_empty())
-        {
+        // Already isolated: there is nothing to offer. Asked of the
+        // record rather than of the branch, which every agent has.
+        if self.model.tab_task(tab).is_some_and(|task| task.isolated) {
             return false;
         }
         // Whether a slot can be cut here is a Git question, and nothing
@@ -2561,9 +2603,11 @@ impl Attach<'_> {
     /// somewhere else.
     fn perform_menu_action(&mut self, target: MenuTarget, action: Action) {
         match action {
-            Action::IsolateAgent => self.isolate_agent(target, uze_application::Carry::Nothing),
-            Action::IsolateAgentWithChanges => {
+            Action::IsolateAgent => {
                 self.isolate_agent(target, uze_application::Carry::CopyOfChanges)
+            }
+            Action::IsolateAgentAtCommit => {
+                self.isolate_agent(target, uze_application::Carry::Nothing)
             }
             _ => dispatch_menu_action(
                 &mut self.stream,
@@ -2620,6 +2664,80 @@ impl Attach<'_> {
             command,
             Some(tab),
             self.channels.placements.sender.clone(),
+        );
+    }
+
+    /// Opens an agent's tab in a space rooted at its own project, opening
+    /// that space when none is.
+    ///
+    /// Work is bound to a *project* and never to a space: an agent's
+    /// record carries its base, its branch, its checkout and its target,
+    /// and nothing about a space. So the match is on the canonical root
+    /// alone — a space's name, its identity and when it was opened have no
+    /// say, which is what lets an operator close the space their work was
+    /// in, open another on the same directory, and find the work waiting
+    /// in it.
+    ///
+    /// A space rooted *above* the project does not match. A space's root
+    /// is what the sidebar, the Git badge and the changes overlay all
+    /// describe, so seating an isolated agent in a space that describes no
+    /// repository puts it back in the wrong place — which is the thing
+    /// this is fixing. Matching by containment instead would make one
+    /// space rooted at `$HOME` the owner of every project beneath it,
+    /// which on most machines is all of them.
+    fn land_agent_in_its_own_space(&mut self, pending: PendingAgentTab) {
+        match self.model.space_rooted_at(&pending.project) {
+            Some(space) => {
+                let _ = send_request(&mut self.stream, &ClientRequest::SelectSpace { space });
+                self.open_agent_tab(
+                    pending.label,
+                    pending.command,
+                    pending.cwd,
+                    &pending.agent,
+                    pending.size,
+                );
+            }
+            None => {
+                // The space has to exist before a tab can be opened in it,
+                // and `CreateSpace` answers on the session's own clock. So
+                // the tab waits for the update that names it, the way every
+                // other background answer here is waited for — rather than
+                // being sent now and landing in whichever space is selected.
+                let _ = send_request(
+                    &mut self.stream,
+                    &ClientRequest::CreateSpace {
+                        label: None,
+                        seat: uze_terminal::SpaceSeat {
+                            root: pending.project.clone(),
+                        },
+                        columns: pending.size.0,
+                        rows: pending.size.1,
+                    },
+                );
+                self.model.pending_agent_tab = Some(pending);
+            }
+        }
+    }
+
+    /// Opens the tab a space was created for, once the session says the
+    /// space is there. Does nothing until then, and gives up if the space
+    /// never appears — the placement already happened, so the work is on
+    /// disk either way.
+    pub(super) fn land_pending_agent_tab(&mut self) {
+        let Some(pending) = self.model.pending_agent_tab.take() else {
+            return;
+        };
+        let Some(space) = self.model.space_rooted_at(&pending.project) else {
+            self.model.pending_agent_tab = Some(pending);
+            return;
+        };
+        let _ = send_request(&mut self.stream, &ClientRequest::SelectSpace { space });
+        self.open_agent_tab(
+            pending.label,
+            pending.command,
+            pending.cwd,
+            &pending.agent,
+            pending.size,
         );
     }
 
@@ -2684,6 +2802,12 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
         }
+        // Before the evaluation is even asked for: it is a Git pass over
+        // the whole repository, and until it answers the column would
+        // draw this agent in the group it is not in.
+        if let Some(view) = placement.view.clone() {
+            self.model.seed_task(&placement.project, view);
+        }
         self.model.schedule_evaluation(
             self.home,
             placement.cwd.clone(),
@@ -2696,7 +2820,15 @@ impl Attach<'_> {
         // keeps in step with the layout.
         let agent = placement.placement.agent().as_str().to_owned();
         let size = self.model.last_size;
-        self.open_agent_tab(label, command, placement.cwd, &agent, size);
+        let pending = PendingAgentTab {
+            project: placement.project,
+            label,
+            command,
+            cwd: placement.cwd,
+            agent,
+            size,
+        };
+        self.land_agent_in_its_own_space(pending);
         // The agent this one took over from stood in a directory that no
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
@@ -2805,6 +2937,15 @@ impl Attach<'_> {
             self.model.remembered.agent_support = Some(resolution);
             self.model.dirty = true;
         }
+        // A space this client asked for may have arrived; the tab that was
+        // waiting for it goes in now rather than into whichever space is
+        // selected.
+        self.land_pending_agent_tab();
+        while let Ok(resolution) = self.channels.preserved.receiver.try_recv() {
+            self.model.remembered.preserved_pending = false;
+            self.model.remembered.preserved_work = resolution.work;
+            self.model.dirty = true;
+        }
         while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
             self.model
                 .remembered
@@ -2856,7 +2997,7 @@ impl Attach<'_> {
             // said instead.
             if let Some(reason) = evaluation.unreadable {
                 self.model
-                    .raise_toast(ToastKind::Failed, "tasks unreadable", reason, None);
+                    .raise_toast(ToastKind::Failed, "agents unreadable", reason, None);
                 continue;
             }
             // Said before the tasks are taken, because it is what those
@@ -2980,6 +3121,9 @@ impl Attach<'_> {
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.channels.tasks.sender);
+            // A finish or a discard changes what is preserved, and the
+            // list may well be the surface the operator is looking at.
+            self.sweep_preserved_work();
             self.model.dirty = true;
         }
         // Readiness is a Git fact, read when a pane goes quiet and, less

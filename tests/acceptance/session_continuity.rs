@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     UzeHome,
     checkout::CheckoutId,
-    task::{self, Agent, Base, TaskStore},
+    task::{self, Agent, AgentStore, Base},
 };
 use uze_testkit::fake_harness::{Action, FakeHarness};
 use uze_testkit::temp::TestEnvironment;
@@ -50,7 +50,7 @@ fn managed_slot(env: &TestEnvironment) -> (PathBuf, PathBuf, String) {
         .expect("an isolated agent carries its isolation")
         .checkout = Some(CheckoutId::adopted("slot-1"));
     let id = recorded.id.as_str().to_owned();
-    let mut store = TaskStore::default();
+    let mut store = AgentStore::default();
     store.upsert(recorded);
     task::save(&UzeHome::at(&env.uze_home), &primary, &store).unwrap();
     (primary, slot, id)

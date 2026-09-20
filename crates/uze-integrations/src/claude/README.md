@@ -55,7 +55,7 @@ Skill/MCP resources NOT declared: fall through to the paths below, unchanged
 Store plugin (no explicit envelope, but skills/ dir and/or mcp.json present)  [Generated Native Package, ADR-013]
         │
         ▼
-$UZE_HOME/state/attachments/claude/generated/<id>/.claude-plugin/plugin.json
+$UZE_HOME/runtime/attachments/claude/generated/<id>/.claude-plugin/plugin.json
    (UZE-synthesized: name/version/description from canonical plugin.json,
     skills symlinked from the Store, mcp.json's mcpServers copied verbatim)
         │

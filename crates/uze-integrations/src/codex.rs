@@ -78,11 +78,7 @@ impl CodexIntegration {
         Self {
             skills_dir: agents_home.join("skills"),
             agents_dir: command_home.join(".codex").join("agents"),
-            generated_agents_dir: uze_home
-                .state_dir()
-                .join("attachments")
-                .join("codex")
-                .join("agents"),
+            generated_agents_dir: uze_home.generated_attachments_dir("codex").join("agents"),
             command_home,
             uze_home,
         }

@@ -147,15 +147,29 @@ impl Health<'_> {
         let ledger_error = state::receipts(&self.0.home, None)
             .err()
             .map(|error| error.to_string());
-        let integration_state_error = state::load(&self.0.home)
-            .err()
-            .map(|error| error.to_string());
+        // What UZE last observed about each harness is remembered, not
+        // recorded: one it cannot read is discarded and observed again on
+        // the next command. There is nothing for the operator to do about
+        // it, so there is nothing to report.
         let provisioning_state_error = self
             .0
             .integrations
             .iter()
             .find_map(|integration| state::provisioning(&self.0.home, integration.id()).err())
             .map(|error| error.to_string());
+        let found = uze_core::leftovers::set_aside(&self.0.home);
+        let leftovers = UpgradeLeftovers {
+            total: found.len(),
+            set_aside: found
+                .into_iter()
+                .take(uze_core::leftovers::REPORTED)
+                .map(|leftover| SetAsideRecord {
+                    path: leftover.path,
+                    set_aside_at_unix: leftover.set_aside_at_unix,
+                    remedy: uze_core::leftovers::Leftover::REMEDY,
+                })
+                .collect(),
+        };
         DoctorReport {
             uze_home: self.0.home.root().to_path_buf(),
             store,
@@ -163,8 +177,8 @@ impl Health<'_> {
             harnesses,
             attachments: Vec::new(),
             ledger_error,
-            integration_state_error,
             provisioning_state_error,
+            leftovers,
             maintenance: MaintenanceReport::default(),
         }
     }
@@ -499,7 +513,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
@@ -553,7 +566,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,
@@ -603,7 +615,6 @@ mod tests {
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
             &home,
-            "flow:counting:native".to_owned(),
             AttachmentReceipt {
                 package_id: package_id.as_str().to_owned(),
                 resource_identity: None,

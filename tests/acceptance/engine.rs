@@ -16,7 +16,7 @@ use std::{
 };
 
 use uze_application::{
-    DeliveryOutcome, Placement, PlacementKind, TaskStateView, UzeApplication, UzeHome,
+    DeliveryOutcome, Placement, PlacementKind, UzeApplication, UzeHome, WorkStateView,
 };
 use uze_terminal::{
     ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, open_space, read_event,
@@ -278,7 +278,7 @@ impl Engine {
         send_request(&mut self.stream, &ClientRequest::Input { pane, bytes }).unwrap();
     }
 
-    fn state_of(&self, id: &str) -> TaskStateView {
+    fn state_of(&self, id: &str) -> WorkStateView {
         self.app()
             .workspace()
             .tasks(self.project())
@@ -360,7 +360,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
 }
 
 /// Evaluates until every listed task reads as `wanted`, or fails.
-fn wait_for_states(engine: &Engine, ids: &[&str], wanted: &TaskStateView) {
+fn wait_for_states(engine: &Engine, ids: &[&str], wanted: &WorkStateView) {
     wait_until(&format!("tasks {ids:?} read as {wanted:?}"), || {
         engine.evaluate();
         ids.iter().all(|id| &engine.state_of(id) == wanted)
@@ -396,7 +396,7 @@ fn three_agents_deliver_into_a_linear_target_around_the_operators_edits() {
         3
     );
 
-    wait_for_states(&engine, &[&a.0, &b.0, &c.0], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&a.0, &b.0, &c.0], &WorkStateView::Ready);
     let reports = engine.app().workspace().deliver_ready(&project);
     assert_eq!(reports.len(), 3, "{reports:?}");
     assert!(
@@ -428,7 +428,7 @@ fn three_agents_deliver_into_a_linear_target_around_the_operators_edits() {
         "only the operator's own changes: {status}"
     );
     for id in [&a.0, &b.0, &c.0] {
-        assert_eq!(engine.state_of(id), TaskStateView::Integrated);
+        assert_eq!(engine.state_of(id), WorkStateView::Integrated);
     }
 }
 
@@ -450,7 +450,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     assert!(!released[0].parked, "the checkout held nothing");
     assert_eq!(
         engine.state_of(&empty),
-        TaskStateView::Closed,
+        WorkStateView::Closed,
         "it ended holding nothing, which is not the same as delivered"
     );
 
@@ -478,7 +478,7 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
         .release_abandoned_tasks(&project, &occupied, &[]);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(released[0].parked, "it holds uncommitted work");
-    assert_eq!(engine.state_of(&unsaved), TaskStateView::Parked);
+    assert_eq!(engine.state_of(&unsaved), WorkStateView::Parked);
     assert!(kept.join("draft.rs").is_file(), "every file is preserved");
 
     let (_, fresh) = engine.launch("true\n");
@@ -527,7 +527,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
     );
     assert_eq!(
         engine.state_of(&live),
-        TaskStateView::Running,
+        WorkStateView::Running,
         "and its task is untouched"
     );
     assert_eq!(
@@ -535,7 +535,7 @@ fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
         1,
         "and its repository is reported once, not once per name: {reconciliation:?}"
     );
-    assert_eq!(engine.state_of(&empty), TaskStateView::Closed);
+    assert_eq!(engine.state_of(&empty), WorkStateView::Closed);
 
     let quiet = engine
         .app()
@@ -557,11 +557,11 @@ fn a_slots_status_follows_the_agent_through_a_delivery_and_past_it() {
     let project = engine.project().to_path_buf();
 
     let (id, slot) = engine.launch("printf 'draft\\n' > draft.rs\n");
-    wait_for_states(&engine, &[&id], &TaskStateView::Uncommitted);
+    wait_for_states(&engine, &[&id], &WorkStateView::Uncommitted);
 
     engine.git(&slot, &["add", "draft.rs"]);
     engine.git(&slot, &["commit", "--quiet", "-m", "draft"]);
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
 
     let report = engine
         .app()
@@ -569,22 +569,22 @@ fn a_slots_status_follows_the_agent_through_a_delivery_and_past_it() {
         .deliver_task(&project, &id)
         .unwrap();
     assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
-    assert_eq!(engine.state_of(&id), TaskStateView::Integrated);
+    assert_eq!(engine.state_of(&id), WorkStateView::Integrated);
 
     engine.evaluate();
     assert_eq!(
         engine.state_of(&id),
-        TaskStateView::Integrated,
+        WorkStateView::Integrated,
         "nothing new leaves the delivery standing"
     );
 
     // The same agent carries on in the same slot.
     fs::write(slot.join("after.rs"), "fn after() {}\n").unwrap();
-    wait_for_states(&engine, &[&id], &TaskStateView::Uncommitted);
+    wait_for_states(&engine, &[&id], &WorkStateView::Uncommitted);
 
     engine.git(&slot, &["add", "after.rs"]);
     engine.git(&slot, &["commit", "--quiet", "-m", "after"]);
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
 
     let report = engine
         .app()
@@ -600,7 +600,7 @@ fn a_conflict_goes_to_the_agents_pane_and_comes_back_resolved() {
     let mut engine = Engine::start("  completion: merge\n");
     let project = engine.project().to_path_buf();
     let (id, slot) = engine.launch(&commit_script("shared.rs", "agent\\n"));
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
     // The target moves under the task, on the same file.
     fs::write(project.join("shared.rs"), "operator\n").unwrap();
     engine.git(&project, &["add", "shared.rs"]);
@@ -613,7 +613,7 @@ fn a_conflict_goes_to_the_agents_pane_and_comes_back_resolved() {
     assert_eq!(notice.checkout, slot);
     assert!(matches!(
         engine.state_of(&id),
-        TaskStateView::Conflicted { .. }
+        WorkStateView::Conflicted { .. }
     ));
     assert_eq!(engine.git(&project, &["rev-parse", "main"]), target_before);
 
@@ -629,7 +629,7 @@ fn a_conflict_goes_to_the_agents_pane_and_comes_back_resolved() {
     let resolved = engine.scripts.join(format!("{name}.resolved"));
     wait_until("the agent resolved the rebase", || resolved.exists());
 
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
     let report = engine
         .app()
         .workspace()
@@ -647,7 +647,7 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
     let mut engine = Engine::start("  completion: handoff\n");
     let project = engine.project().to_path_buf();
     let (id, slot) = engine.launch(&commit_script("kept.rs", "kept\\n"));
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
     // A checkout from before task state existed, with work in it.
     engine.git(
         &project,
@@ -675,14 +675,14 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
         .iter()
         .find(|task| task.id == id)
         .expect("the task outlived the server");
-    assert_eq!(kept.state, TaskStateView::Ready);
+    assert_eq!(kept.state, WorkStateView::Ready);
     assert_eq!(kept.checkout.as_deref(), Some(slot.as_path()));
     let legacy = evaluation
         .tasks
         .iter()
         .find(|task| task.branch == "agent/agent-2")
         .expect("the legacy checkout was adopted");
-    assert_eq!(legacy.state, TaskStateView::Parked);
+    assert_eq!(legacy.state, WorkStateView::Parked);
     assert_eq!(legacy.label, "agent-2");
     assert_eq!(
         fs::read_to_string(project.join(".worktrees/agent-2/half-done.rs")).unwrap(),
@@ -710,7 +710,7 @@ fn pr_publishes_then_hands_the_request_to_its_agent_and_syncs_it_after() {
     uze_testkit::git::publish_to_origin(&project, "main");
 
     let (id, slot) = engine.launch(&commit_script("feature.rs", "feature\\n"));
-    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+    wait_for_states(&engine, &[&id], &WorkStateView::Ready);
     let local_target = engine.git(&project, &["rev-parse", "main"]);
 
     let report = engine

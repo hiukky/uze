@@ -1,6 +1,12 @@
 //! Cache for per-receipt attachment inspection on READ paths — the
 //! mechanism behind ADR 018.
 //!
+//! **Remembered, not recorded.** Every field here comes back from asking
+//! again, so this document declares no shape and climbs no ladder: one it
+//! cannot read is discarded and observed afresh, in silence. Only records
+//! — what UZE was told or decided — are carried across a version. See
+//! `uze_document` for that rule and `persistence` for the tiers.
+//!
 //! The expensive half of `Health::report` is per-receipt
 //! `IntegrationPort::inspect_receipt`: several integrations verify their
 //! attachments by running vendor CLIs (`codex plugin list`, `claude

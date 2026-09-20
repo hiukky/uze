@@ -470,7 +470,7 @@ fn an_update_replaces_the_previous_version_of_the_samed_group() {
         .attach_receipt(protect)
         .expect("attach succeeds")
         .expect("attach produces a receipt");
-    state::record_receipt(&home, "claude-update-1".to_owned(), first.clone()).unwrap();
+    state::record_receipt(&home, first.clone()).unwrap();
 
     // The package is updated: same group id, new timeout. Ledger-driven
     // re-attach replaces the old entry instead of duplicating it.
@@ -539,7 +539,6 @@ fn reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones() {
     .unwrap();
     state::record_receipt(
         &home,
-        "claude-reproject-1".to_owned(),
         AttachmentReceipt {
             package_id: "hook-demo@local".to_owned(),
             resource_identity: Some(protect.identity()),
@@ -766,7 +765,7 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
         .expect("attach produces a receipt");
     // Production records the receipt right after the attach; inspection is
     // receipt-driven, so mirror that exactly.
-    state::record_receipt(&home.clone(), "oc-lifecycle-1".to_owned(), receipt.clone()).unwrap();
+    state::record_receipt(&home.clone(), receipt.clone()).unwrap();
     let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact else {
         panic!("OpenCode hook receipt is a ManagedHookFile");
     };
@@ -854,9 +853,9 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     let receipt_first = integration.attach_receipt(&first).unwrap().unwrap();
     // Production records each receipt right after its attach, so the next
     // group's attach can see the sibling as active — mirror that here.
-    state::record_receipt(&home.clone(), "multi-1".to_owned(), receipt_first.clone()).unwrap();
+    state::record_receipt(&home.clone(), receipt_first.clone()).unwrap();
     let receipt_second = integration.attach_receipt(&second).unwrap().unwrap();
-    state::record_receipt(&home, "multi-2".to_owned(), receipt_second.clone()).unwrap();
+    state::record_receipt(&home, receipt_second.clone()).unwrap();
     assert_eq!(
         receipt_first.artifact, receipt_second.artifact,
         "one owned bridge per package"
@@ -882,7 +881,7 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     );
     // Production forgets a receipt only after a successful detach; the
     // sibling's later detach must not see the forgotten group as active.
-    state::forget_receipt(&home.clone(), "multi-1").unwrap();
+    state::forget_receipt(&home.clone(), &receipt_first).unwrap();
     let source = fs::read_to_string(&bridge).unwrap();
     assert!(
         !source.contains("observe-first"),
@@ -982,7 +981,7 @@ fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
     );
     let wrapper = wrapper.as_path();
     assert!(
-        wrapper.ends_with("state/attachments/antigravity/hooks/exec"),
+        wrapper.ends_with("runtime/attachments/antigravity/hooks/exec"),
         "a shared config file has no plugin root, so the wrapper lives under UZE state: {}",
         wrapper.display()
     );

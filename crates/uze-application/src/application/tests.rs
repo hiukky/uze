@@ -281,7 +281,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
     symlink(&expected, &managed).unwrap();
     state::record_receipt(
         &home,
-        "receipt".to_owned(),
         AttachmentReceipt {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
@@ -313,7 +312,6 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
     symlink(&foreign, &managed).unwrap();
     state::record_receipt(
         &home,
-        "receipt".to_owned(),
         AttachmentReceipt {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
@@ -429,7 +427,6 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
     symlink(&foreign, &managed).unwrap();
     state::record_receipt(
         &home,
-        "receipt".to_owned(),
         AttachmentReceipt {
             package_id: alpha_id.clone(),
             resource_identity: None,
@@ -737,12 +734,21 @@ pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
     let root = uze_testkit::temp::scratch("doctor");
     let home = UzeHome::at(&root);
     home.ensure_layout().unwrap();
-    fs::write(home.state_dir().join("attachments.json"), "bad").unwrap();
-    fs::write(home.integrations_state_path(), "bad").unwrap();
+    fs::write(home.attachments_path(), "bad").unwrap();
+    fs::write(home.harnesses_cache_path(), "bad").unwrap();
     let app = UzeApplication::new(home, vec![Box::new(SymlinkIntegration)]);
     let report = app.health().report();
-    assert!(report.ledger_error.is_some());
-    assert!(report.integration_state_error.is_some());
+    assert!(
+        report.ledger_error.is_some(),
+        "ownership is a record: nothing else knows it, so an unreadable one \
+         is the operator's to hear about"
+    );
+    assert!(
+        report.provisioning_state_error.is_none(),
+        "and an unreadable harness cache is not an upgrade problem: what \
+         UZE last observed is remembered, not recorded, so one it cannot \
+         read costs a probe and is never reported"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -886,10 +892,7 @@ pub(crate) fn multi_mcp_package_has_independent_receipts_through_safe_removal() 
         .unwrap();
     let receipts = state::receipts(&home, Some("multi-mcp-plugin@local")).unwrap();
     assert_eq!(receipts.len(), 2);
-    assert_ne!(
-        receipts[0].1.resource_identity,
-        receipts[1].1.resource_identity
-    );
+    assert_ne!(receipts[0].resource_identity, receipts[1].resource_identity);
     assert!(matches!(
         app.plugins().remove("multi-mcp-plugin").unwrap(),
         RemovePluginReport::Removed { .. }
@@ -1702,7 +1705,7 @@ fn setup_continues_when_one_harness_has_foreign_state_and_other_succeeds() {
     let healthy_receipts = state::receipts(&home, None)
         .unwrap()
         .into_iter()
-        .filter(|(_, r)| r.integration == "healthy-harness")
+        .filter(|r| r.integration == "healthy-harness")
         .count();
     assert!(
         healthy_receipts >= 1,
@@ -1740,7 +1743,7 @@ fn attach_stored_packages_to_is_per_package_resilient() {
     // But the non-conflicting package must still have been attempted and
     // recorded — per-package resilience, not abort-on-first.
     let receipts = state::receipts(&home, None).unwrap();
-    let has_fixture_receipt = receipts.iter().any(|(_, r)| {
+    let has_fixture_receipt = receipts.iter().any(|r| {
         r.integration == "antigravity"
             && r.package_id == "uze-agent-skill-conformance@local"
             && r.resource_identity.is_some()

@@ -19,6 +19,7 @@ pub mod continuity;
 pub mod engine;
 pub mod exposure;
 pub mod integration;
+pub mod leftovers;
 pub mod persistence;
 pub mod reconciliation;
 pub mod router;

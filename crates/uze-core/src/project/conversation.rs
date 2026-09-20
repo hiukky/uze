@@ -229,20 +229,31 @@ pub fn store_path(home: &UzeHome, project_root: &Path, agent: &AgentId) -> PathB
 
 /// What was recorded for `agent`, or an empty record. Never fails: see the
 /// module's note on why continuity state is advisory.
+/// Best-effort: a conversation nobody can read costs a resumed session,
+/// never work, so this answers with an empty record rather than refusing.
+///
+/// What it must not do — and used to — is discard a record of a shape this
+/// build *knows*, in silence. A shape with a rung is carried across; only
+/// what has none falls back to empty.
 pub fn load(home: &UzeHome, project_root: &Path, agent: &AgentId) -> ConversationRecord {
     let path = store_path(home, project_root, agent);
-    let empty = || ConversationRecord::new(agent.clone());
-    let Ok(bytes) = fs::read(&path) else {
-        return empty();
-    };
-    match serde_json::from_slice::<ConversationRecord>(&bytes) {
-        Ok(record) if record.schema_version == SCHEMA_VERSION => record,
-        _ => empty(),
-    }
+    uze_document::read::<ConversationRecord>(&path)
+        .ok()
+        .and_then(uze_document::Carried::record)
+        .unwrap_or_else(|| ConversationRecord::new(agent.clone()))
+}
+
+/// A record: which harness session this agent was last carrying. The
+/// harness has its own sessions, but which one belonged to which agent is
+/// only ever here.
+impl uze_document::Shaped for ConversationRecord {
+    const SHAPE: u32 = SCHEMA_VERSION;
+    const KIND: &'static str = "conversation";
 }
 
 /// Replaces the document atomically.
 pub fn save(home: &UzeHome, project_root: &Path, record: &ConversationRecord) -> Result<()> {
+    crate::record::ensure(home, project_root)?;
     let payload =
         serde_json::to_vec_pretty(record).expect("conversation record serialization is infallible");
     write_atomic(&store_path(home, project_root, &record.agent), &payload)
@@ -311,7 +322,7 @@ pub fn owner_of(home: &UzeHome, claim: Claim<'_>) -> Option<Owner> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Agent, Base, TaskStore};
+    use crate::task::{Agent, AgentStore, Base};
 
     fn home(label: &str) -> UzeHome {
         UzeHome::at(uze_testkit::temp::scratch(label))
@@ -449,7 +460,7 @@ mod tests {
         let primary = project("conversation-no-owner-project");
         let slot = primary.join(".worktrees").join("slot-1");
         fs::create_dir_all(&slot).unwrap();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let task = task_named("slot-1");
         let id = task.id.as_str().to_owned();
         store.upsert(task);
@@ -499,7 +510,7 @@ mod tests {
         let nested = slot.join("src").join("deep");
         fs::create_dir_all(&nested).unwrap();
 
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let previous = task_named("slot-1");
         let current = task_named("slot-1");
         let previous_id = previous.id.clone();
@@ -541,7 +552,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         let agent = Agent::in_the_root("claude-code");
         let id = agent.id.clone();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         store.upsert(agent);
         task::save(&home, &root, &store).unwrap();
 

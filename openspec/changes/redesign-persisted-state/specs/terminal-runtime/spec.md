@@ -97,3 +97,48 @@ neither exists it SHALL say so rather than reporting a missing file.
   replaced on disk
 - **THEN** the server SHALL be started from the installed `uze`
 - **AND THEN** no error naming a deleted path SHALL reach the operator
+
+### Requirement: A workspace written by an earlier build opens on this one
+
+The persisted workspace SHALL be carried across to the shape this build
+reads, keeping every space, its root, its tabs and each tab's directory
+and launch. A field an earlier shape carried that this one dropped SHALL
+be the only thing lost. Spaces SHALL NOT be lost because the workspace was
+written by an earlier build whose shape this one knows.
+
+#### Scenario: Upgrading with spaces open
+
+- **WHEN** UZE is upgraded and the persisted workspace was written by an
+  earlier shape this build knows
+- **THEN** the same spaces SHALL open, with the same roots, tabs and
+  directories
+- **AND THEN** nothing SHALL be reported
+
+#### Scenario: The shape that carried a kind per space
+
+- **WHEN** the workspace was written when a space carried a kind of its
+  own
+- **THEN** every space SHALL open without it
+- **AND THEN** nothing else about the workspace SHALL change
+
+### Requirement: The runtime says what it could not carry across
+
+When the terminal runtime cannot carry the persisted workspace across and
+starts from nothing, it SHALL tell the client, and the client SHALL show
+the operator what happened and where the previous workspace was kept.
+
+Reporting it only where a log would have to be turned on SHALL NOT satisfy
+this: the runtime and the screen are different processes, and the operator
+is at the screen.
+
+#### Scenario: A workspace that could not be read
+
+- **WHEN** the runtime starts from nothing because the persisted workspace
+  could not be read or carried across
+- **THEN** the operator SHALL be told on screen
+- **AND THEN** they SHALL be told where the previous workspace is kept
+
+#### Scenario: A first run
+
+- **WHEN** the runtime starts with no workspace persisted at all
+- **THEN** nothing SHALL be reported: there was nothing to lose

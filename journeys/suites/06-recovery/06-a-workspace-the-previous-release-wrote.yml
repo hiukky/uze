@@ -1,4 +1,4 @@
-journey: a workspace the previous release wrote opens on this build rather than lying
+journey: a workspace the previous release wrote opens on this build with its spaces
 tags: [gate, tui, recovery]
 proves: web/content/docs/workspace.mdx
 about: |
@@ -7,16 +7,17 @@ about: |
   document outlives the binary that wrote it: installing a newer UZE
   replaces the binary, never the state.
 
-  The previous release wrote a kind per space. This build has no field
-  for one, and a parser that simply drops what it does not know would
-  restore every space as something the operator never chose. So the
-  version is read before the document: a workspace from another build is
-  set aside whole, and uze opens on the directory it was started in.
+  The previous release wrote a kind per space. This build has no field for
+  one, and a parser that simply dropped what it did not know would restore
+  every space as something the operator never chose. So the shape is read
+  before the document — and then it is *climbed*: the kind is dropped
+  deliberately, every other field is carried, and the spaces open.
 
-  What the machine must show: the old bytes are still there under a name
-  nothing reads as a workspace, the current document is this build's own,
-  and the operator can create an agent — the product is not wedged by a
-  file they never wrote.
+  This is the journey the whole change is named for. The release that moved
+  this shape set the document aside instead, and an operator lost every
+  space they had open over a difference of one field. What the machine must
+  show is the opposite: the spaces are there, nothing was set aside, and
+  the document on disk is this build's own.
 
 world:
   project: demo-app
@@ -33,9 +34,10 @@ scenes:
           set -e
           mkdir -p {uze_home}/state/terminal
           cat > {uze_home}/state/terminal/workspace.json <<'JSON'
-          {"spaces":[{"label":"from-before","root":"/gone","kind":"worktree","tabs":[]}]}
+          {"spaces":[{"label":"from-before","root":"{project}","kind":"worktree","tabs":[
+            {"label":"shell","cwd":"{project}","agent":null,"launch":"Shell"}]}]}
           JSON
-        say: a workspace of the previous shape, rooted at a directory that no longer exists
+        say: a workspace of the previous shape, with a space the operator was working in
     then:
       - file: "{uze_home}/state/terminal/workspace.json"
         contains: '"kind"'
@@ -45,15 +47,15 @@ scenes:
           stdout_contains: "0"
         about: and nothing has been set aside yet
 
-  - scene: uze opens on the project, and the old document is kept beside the new one
+  - scene: uze opens on the workspace it was left, not on the seat it was given
     when:
       - open: "{uze}"
-        say: uze opens, reads the document it cannot use, and starts from the seat it was given
-        expect: demo-app
+        say: uze opens, carries the document across, and restores what it held
+        expect: from-before
         expect_timeout: 25
         pause: 2.0
       - click: "+ │ ✦"
-        say: the product still works — place an agent
+        say: the product works — place an agent
         in: strip
         offset: 4
         expect: new agent
@@ -67,36 +69,36 @@ scenes:
         pause: 1.5
     then:
       - cmd:
-          run: ls {uze_home}/state/terminal/ | grep -c 'workspace.json.unreadable-'
-          stdout_contains: "1"
-        about: the bytes uze could not read are kept beside the document
-      - cmd:
-          run: |
-            python3 -c "
-            import glob, json
-            [kept] = glob.glob('{uze_home}/state/terminal/workspace.json.unreadable-*')
-            print(json.load(open(kept))['spaces'][0]['kind'])
-            "
-          stdout_contains: worktree
-        about: unchanged, so nothing about the operator's old workspace was destroyed
+          run: ls {uze_home}/state/terminal/ | grep -c 'workspace.json.unreadable-' || true
+          stdout_contains: "0"
+        about: nothing was set aside — a shape this build knows is carried, not discarded
       - cmd:
           run: |
             python3 -c "
             import json
             document = json.load(open('{uze_home}/state/terminal/workspace.json'))
             print('schema %d' % document['schema_version'])
-            print('\n'.join(space['root'] for space in document['spaces']))
+            print('kind ' + str(any('kind' in space for space in document['spaces'])))
             "
           stdout_contains: "schema 2"
-        about: and the document now on that name is this build's own
+        about: and the document on that name is now this build's own shape
       - cmd:
           run: |
             python3 -c "
             import json
             document = json.load(open('{uze_home}/state/terminal/workspace.json'))
-            print('\n'.join(space['root'] for space in document['spaces']))
+            print('kind ' + str(any('kind' in space for space in document['spaces'])))
             "
-          stdout_contains: "{project}"
-        about: rooted where uze was started, not at the directory that no longer exists
+          stdout_contains: "kind False"
+        about: with the one field the shapes disagreed about dropped, deliberately
+      - cmd:
+          run: |
+            python3 -c "
+            import json
+            document = json.load(open('{uze_home}/state/terminal/workspace.json'))
+            print('\n'.join(space['label'] for space in document['spaces']))
+            "
+          stdout_contains: from-before
+        about: the space the operator was working in is still there, under its own name
       - agents: { count: 1, live: 1 }
         about: and the agent the operator asked for was placed

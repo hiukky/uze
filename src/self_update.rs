@@ -619,12 +619,17 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The installer's own receipt, not a record of UZE's.
+///
+/// `install.sh` writes it, which is why it stays a document of its own
+/// rather than folding into the ledger below: a different writer and a
+/// different lifetime. UZE only ever reads it.
 fn receipt_path(home: &UzeHome) -> PathBuf {
-    home.state_dir().join("install.json")
+    home.install_receipt_path()
 }
 
 fn ledger_path(home: &UzeHome) -> PathBuf {
-    home.state_dir().join("update.json")
+    home.binary_path()
 }
 
 /// Read, changed and written back in one step rather than from a copy held
@@ -641,13 +646,13 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
+/// The one writer, like everything else UZE owns: a reader afterwards sees
+/// the previous content or the new one, never half of either. This module
+/// used to carry its own atomic rename, which is how two conventions for
+/// one thing start.
 fn write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let staged = path.with_extension(format!("json.{}", std::process::id()));
-    fs::write(&staged, serde_json::to_vec_pretty(value)?)?;
-    fs::rename(&staged, path)
+    uze_application::write_atomic(path, &serde_json::to_vec_pretty(value)?)
+        .map_err(std::io::Error::other)
 }
 
 fn unix_now() -> u64 {

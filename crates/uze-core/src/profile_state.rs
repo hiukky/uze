@@ -2,7 +2,7 @@
 //! existing keyed-registry-in-one-JSON-file shape exactly: load whole,
 //! mutate, save whole via `persistence::write_atomic`.
 
-use std::{collections::BTreeMap, fs};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -142,15 +142,14 @@ pub fn set_active(home: &UzeHome, id: &str) -> Result<()> {
 }
 
 fn load_store(home: &UzeHome) -> Result<ProfileStore> {
-    let path = home.profiles_path();
-    if !path.exists() {
-        return Ok(ProfileStore::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+    Ok(uze_document::read::<ProfileStore>(&home.profiles_path())?.or_default())
+}
+
+/// A record: durable user intent, never reconstructable from a harness's
+/// own config — the harness files are projections of this, not its source.
+impl uze_document::Shaped for ProfileStore {
+    const SHAPE: u32 = uze_document::FIRST_SHAPE;
+    const KIND: &'static str = "profiles";
 }
 
 fn save_store(home: &UzeHome, store: &ProfileStore) -> Result<()> {
@@ -162,6 +161,8 @@ fn save_store(home: &UzeHome, store: &ProfileStore) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::preference::{Autonomy, ModelPreference, SandboxScope};
 

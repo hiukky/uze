@@ -222,9 +222,16 @@ pub fn project_id_for(canonical_project_root: &Path) -> String {
 /// and no vendor's own output is obliged to state it.
 pub const PROJECTION_MARKER: &str = "project.json";
 
-/// The one tenant of `runtime/`. Anything else directly beneath it is
-/// unowned and swept — see `prune_projections`.
-const RUNTIME_TENANT: &str = "projects";
+/// The tenants of `runtime/`. Anything else directly beneath it is unowned
+/// and swept — see `prune_projections`.
+///
+/// `projects` holds one directory per project UZE has projected into, each
+/// swept when its root goes. `attachments` holds what UZE generates for a
+/// harness to *read* — generated marketplaces, staged skill directories,
+/// the wrappers a bridge is made of — whose lifetime is the attachment's
+/// rather than any project's, and which the receipt ledger already answers
+/// for. Sweeping it here would delete a live delivery on the next `doctor`.
+const RUNTIME_TENANTS: &[&str] = &["projects", "attachments"];
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ProjectionMarker {
@@ -289,7 +296,7 @@ pub fn prune_projections(home: &UzeHome) -> Vec<String> {
     let mut pruned = Vec::new();
     for entry in read_dir(&home.runtime_dir()) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name == RUNTIME_TENANT {
+        if RUNTIME_TENANTS.contains(&name.as_str()) {
             continue;
         }
         if remove(&entry.path()) {
@@ -555,17 +562,27 @@ mod tests {
     /// beside the tenant is UZE's own derived output at a path nothing
     /// writes to any more, and rebuildable wherever it does belong.
     #[test]
-    fn the_sweep_keeps_the_tenant_and_nothing_else() {
+    fn the_sweep_keeps_the_tenants_and_nothing_else() {
         let (project, home) = projected("projection-tenants", "fake-harness");
         let abandoned = home.runtime_dir().join("fake-harness").join("projects");
         fs::create_dir_all(&abandoned).unwrap();
         fs::write(home.runtime_dir().join("stray.json"), b"{}").unwrap();
+        // What UZE generates for a harness to read lives here too, and its
+        // lifetime is the attachment's rather than any project's — the
+        // receipt ledger answers for it. Sweeping it would delete a live
+        // delivery on the next `doctor`.
+        let generated = home.generated_attachments_dir("fake-harness");
+        fs::create_dir_all(&generated).unwrap();
 
         let mut pruned = prune_projections(&home);
         pruned.sort();
         assert_eq!(pruned, ["fake-harness", "stray.json"]);
 
         assert!(!abandoned.exists());
+        assert!(
+            generated.is_dir(),
+            "a delivery the ledger still owns must survive the sweep"
+        );
         assert!(
             home.runtime_project_dir(&project_id_for(&project)).is_dir(),
             "a live project must survive its neighbours being swept"

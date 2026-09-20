@@ -659,7 +659,9 @@ mod lifecycle_tests {
         let uze_home = UzeHome::at(root.join("uze"));
         let integration = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
         fs::create_dir_all(&integration.skills_dir).unwrap();
-        let shim = uze_home.state_dir().join("attachments/claude/uze-example");
+        let shim = uze_home
+            .generated_attachments_dir("claude")
+            .join("uze-example");
         fs::create_dir_all(shim.join(".claude-plugin")).unwrap();
         fs::write(shim.join(".claude-plugin/plugin.json"), "{}").unwrap();
         let source = root.join("source/SKILL.md");

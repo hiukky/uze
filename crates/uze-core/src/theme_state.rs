@@ -64,15 +64,14 @@ pub fn set_glyphs(home: &UzeHome, id: &str) -> Result<()> {
 /// and replacing its own half. Writing a fresh record instead is how
 /// choosing a palette would silently forget the operator's glyphs.
 fn read(home: &UzeHome) -> Result<ThemeSelection> {
-    let path = home.active_theme_path();
-    if !path.exists() {
-        return Ok(ThemeSelection::default());
-    }
-    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+    Ok(uze_document::read::<ThemeSelection>(&home.active_theme_path())?.or_default())
+}
+
+/// A record: what the operator chose, which nothing else on the machine
+/// knows and no probe re-derives.
+impl uze_document::Shaped for ThemeSelection {
+    const SHAPE: u32 = uze_document::FIRST_SHAPE;
+    const KIND: &'static str = "theme";
 }
 
 fn write(home: &UzeHome, selection: &ThemeSelection) -> Result<()> {

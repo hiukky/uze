@@ -42,19 +42,19 @@ scenes:
         say: provision every registered harness
         check: false
     then:
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.claude-code.version
         exists: true
         about: claude-code is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.codex.version
         exists: true
         about: codex is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.opencode.version
         exists: true
         about: opencode is recorded with the version it reported
-      - json: "{uze_home}/state/integrations.json"
+      - json: "{uze_home}/cache/harnesses.json"
         at: integrations.antigravity.version
         exists: true
         about: antigravity is recorded with the version it reported
@@ -96,10 +96,10 @@ scenes:
 
   - scene: every harness reads it where that harness reads things
     then:
-      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+      - dir: "{uze_home}/runtime/attachments/claude/generated/flow@demo"
         exists: true
         about: Claude Code gets a generated native package
-      - dir: "{uze_home}/state/attachments/codex/generated"
+      - dir: "{uze_home}/runtime/attachments/codex/generated"
         exists: true
         about: Codex gets its own generated catalogue entry
       - file: "{home}/.gemini/config/plugins/flow/plugin.json"

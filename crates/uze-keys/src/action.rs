@@ -208,11 +208,13 @@ actions! {
     NewAgent => "new-agent", false,
         "New agent", "Start an agent in this space";
     IsolateAgent => "isolate-agent", false,
-        "Isolate", "Give this agent a checkout of its own, cut from where this tree stands";
-    IsolateAgentWithChanges => "isolate-agent-with-changes", false,
-        "Isolate with my changes",
-        "Give this agent a checkout of its own, carrying a copy of whatever \
-         this tree has uncommitted";
+        "Isolate",
+        "Give this agent a checkout of its own, taking a copy of whatever this \
+         tree has uncommitted";
+    IsolateAgentAtCommit => "isolate-agent-at-commit", false,
+        "Isolate clean",
+        "Cut the checkout from the last commit instead; the uncommitted work \
+         stays only here";
     NewSpace => "new-space", false,
         "New space", "Open a space at a directory";
     RenameSelection => "rename-selection", false,

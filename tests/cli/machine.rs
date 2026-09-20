@@ -9,7 +9,7 @@ fn contains_fixture_skill_wrapper(entries: &[PathBuf], uze_home: &std::path::Pat
         let Ok(target) = std::fs::read_link(entry) else {
             return false;
         };
-        target.starts_with(uze_home.join("state/attachments"))
+        target.starts_with(uze_home.join("runtime/attachments"))
             && std::fs::read_to_string(target.join("SKILL.md")).is_ok_and(|skill| {
                 skill.starts_with("---\nname: uze-agent-skill-conformance:uze-e2e\n")
             })
@@ -573,7 +573,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         claude_skills_entries.is_empty(),
         "no package should decompose into .claude/skills once generatable, got {claude_skills_entries:?}"
     );
-    let generated_root = uze_home.join("state/attachments/claude/generated");
+    let generated_root = uze_home.join("runtime/attachments/claude/generated");
     assert!(
         generated_root
             .join("uze-agent-skill-conformance@test/.claude-plugin/plugin.json")
@@ -648,7 +648,7 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         "the qualified fixture skill wrapper should be present alongside the default plugin"
     );
 
-    let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
+    let integrations = std::fs::read_to_string(uze_home.join("cache/harnesses.json")).unwrap();
     assert!(integrations.contains("\"opencode\""));
 
     let _ = std::fs::remove_dir_all(home);
@@ -707,14 +707,14 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();
-    let receipts = ledger["receipts"].as_object().unwrap();
+    let receipts = ledger["receipts"].as_array().unwrap();
     assert!(receipts.len() >= 2);
     // With the default `uze` seeded, attachments also contain its own
     // package-level receipts (the default package is generatable too, see
     // the skill-fixture CLI test); filter to this MCP package's receipts
     // before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
-        .values()
+        .iter()
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance@test")
         .collect();
     assert!(

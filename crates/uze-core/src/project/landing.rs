@@ -23,7 +23,7 @@ use std::{
 use crate::{
     checkout::{self, commits_ahead, is_dirty},
     subprocess::run_shell_bounded,
-    task::{Isolation, TaskState},
+    task::{Agent, Isolation, WorkState},
     worktree::CompletionBehavior,
 };
 
@@ -141,7 +141,7 @@ pub fn slot_path(primary: &Path, isolation: &Isolation) -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
-/// Reads the task's state from its checkout.
+/// Reads where an isolated agent's work stands, from its own checkout.
 ///
 /// The base is the newest of the recorded one and the target's local tip
 /// when the branch already descends from it — the case after an agent
@@ -163,6 +163,37 @@ pub fn readiness(primary: &Path, isolation: &Isolation) -> Readiness {
         Readiness::Running
     } else {
         Readiness::Ready { ahead, base }
+    }
+}
+
+/// Where the work stands in a checkout nobody cut for an agent — the
+/// project's own root, where an agent sits beside the operator.
+///
+/// The same three questions readiness asks of a slot, asked of a directory
+/// instead: a rebase paused there, a dirty tree, commits the target lacks.
+/// What it cannot ask is whose they are, and it deliberately does not try:
+/// the answer is about the checkout, and every agent in it reads the same
+/// one. That is the truth about where they are, and a better answer than
+/// the nothing they used to get.
+pub fn readiness_of_checkout(checkout: &Path, target: &str) -> Readiness {
+    if let Some(files) = paused_rebase(checkout) {
+        return Readiness::Rebasing { files };
+    }
+    if is_dirty(checkout) {
+        return Readiness::Uncommitted;
+    }
+    let Some(branch) = checkout::current_branch(checkout) else {
+        // Mid-rebase, or a detached head: nothing to be ahead of.
+        return Readiness::Running;
+    };
+    let ahead = commits_ahead(checkout, target, &branch);
+    if ahead == 0 {
+        Readiness::Running
+    } else {
+        Readiness::Ready {
+            ahead,
+            base: target.to_owned(),
+        }
     }
 }
 
@@ -443,40 +474,51 @@ fn fast_forward(primary: &Path, target: &str, source: &str) -> Result<(), String
 /// lock. Updates `task` to say what happened, whatever that was.
 pub fn deliver(
     primary: &Path,
-    isolation: &mut Isolation,
+    agent: &mut Agent,
     policy: &Policy<'_>,
 ) -> Result<Delivered, DeliveryFailure> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
-        deliver_locked(primary, isolation, policy)
+        deliver_locked(primary, agent, policy)
     })
     .map_err(|error| DeliveryFailure::Git(error.to_string()))?
 }
 
 fn deliver_locked(
     primary: &Path,
-    isolation: &mut Isolation,
+    agent: &mut Agent,
     policy: &Policy<'_>,
 ) -> Result<Delivered, DeliveryFailure> {
+    // Split rather than borrowed one at a time: the state and the branch
+    // are disjoint fields of one record, and delivery writes both.
+    let Agent {
+        state, isolation, ..
+    } = agent;
+    let Some(isolation) = isolation.as_mut() else {
+        // Only what UZE cut is UZE's to deliver. An agent in the project's
+        // own root is on the operator's branch, and rebasing or pushing it
+        // is theirs to ask for.
+        return Err(DeliveryFailure::NotReady(Readiness::Running));
+    };
     match readiness(primary, isolation) {
         Readiness::Ready { base, .. } => isolation.base_commit = base,
         other => return Err(DeliveryFailure::NotReady(other)),
     }
     let slot =
         slot_path(primary, isolation).ok_or(DeliveryFailure::NotReady(Readiness::Running))?;
-    isolation.state = TaskState::Integrating;
+    *state = WorkState::Integrating;
     let tip = target_tip(primary, isolation, policy.completion)?;
     // Merged elsewhere — squashed on the forge before the local target
     // heard of it — the work is in the tip under commits of its own, and
     // rebasing would replay it onto itself.
     if checkout::is_integrated(primary, &tip, &isolation.branch) {
-        mark_delivered(primary, isolation);
+        mark_delivered(primary, state, isolation);
         return Err(DeliveryFailure::AlreadyDelivered);
     }
-    rebase_in_slot(primary, &slot, isolation, &tip)?;
+    rebase_in_slot(primary, &slot, state, isolation, &tip)?;
     for step in policy.gate {
         let (passed, output) = run_shell_bounded(&slot, step, GATE_TIMEOUT);
         if !passed {
-            isolation.state = TaskState::GateFailed;
+            *state = WorkState::GateFailed;
             return Err(DeliveryFailure::GateFailed {
                 command: step.clone(),
                 output,
@@ -485,27 +527,27 @@ fn deliver_locked(
     }
     match policy.completion {
         CompletionBehavior::Handoff => {
-            isolation.state = TaskState::Ready;
+            *state = WorkState::Ready;
             Ok(Delivered::Handoff)
         }
         CompletionBehavior::Merge => {
             let overlap = overlapping_files(primary, &tip, &isolation.branch);
             if !overlap.is_empty() {
-                isolation.state = TaskState::Ready;
+                *state = WorkState::Ready;
                 return Err(DeliveryFailure::Overlap { files: overlap });
             }
             fast_forward(primary, &isolation.target, &isolation.branch).map_err(|reason| {
-                isolation.state = TaskState::Ready;
+                *state = WorkState::Ready;
                 DeliveryFailure::Git(format!("fast-forward refused: {reason}"))
             })?;
-            isolation.state = TaskState::Integrated;
+            *state = WorkState::Integrated;
             Ok(Delivered::Merged {
                 target_tip: checkout::tip_of(primary, &isolation.target),
             })
         }
         CompletionBehavior::Pr => {
             let published = publish(primary, isolation)?;
-            isolation.state = TaskState::Ready;
+            *state = WorkState::Ready;
             Ok(published)
         }
     }
@@ -520,7 +562,14 @@ fn deliver_locked(
 /// for on every tick of every task. `pr` reaches the remote's tip twice
 /// anyway — where the target is brought in line before an agent is placed
 /// on it, and at delivery, which is the one that decides.
-pub fn refresh(primary: &Path, isolation: &mut Isolation) -> Result<bool, DeliveryFailure> {
+/// Takes the state beside the branch rather than the whole agent: this
+/// runs inside a pass that is already holding one, and two disjoint
+/// fields borrowed apart is what lets it.
+pub fn refresh(
+    primary: &Path,
+    state: &mut WorkState,
+    isolation: &mut Isolation,
+) -> Result<bool, DeliveryFailure> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
         let slot =
             slot_path(primary, isolation).ok_or(DeliveryFailure::NotReady(Readiness::Running))?;
@@ -537,7 +586,7 @@ pub fn refresh(primary: &Path, isolation: &mut Isolation) -> Result<bool, Delive
         if checkout::is_integrated(primary, &tip, &isolation.branch) {
             return Ok(false);
         }
-        rebase_in_slot(primary, &slot, isolation, &tip)
+        rebase_in_slot(primary, &slot, state, isolation, &tip)
     })
     .map_err(|error| DeliveryFailure::Git(error.to_string()))?
 }
@@ -588,6 +637,7 @@ fn target_tip(
 fn rebase_in_slot(
     primary: &Path,
     slot: &Path,
+    state: &mut WorkState,
     isolation: &mut Isolation,
     tip: &str,
 ) -> Result<bool, DeliveryFailure> {
@@ -616,7 +666,7 @@ fn rebase_in_slot(
         }
         Ok(output) => {
             if let Some(files) = paused_rebase(slot) {
-                isolation.state = TaskState::Conflicted {
+                *state = WorkState::Conflicted {
                     files: files.clone(),
                 };
                 Err(DeliveryFailure::Conflict {
@@ -624,12 +674,12 @@ fn rebase_in_slot(
                     target_moved: moved,
                 })
             } else {
-                isolation.state = TaskState::Ready;
+                *state = WorkState::Ready;
                 Err(DeliveryFailure::Git(output.stderr.trim().to_owned()))
             }
         }
         Err(error) => {
-            isolation.state = TaskState::Ready;
+            *state = WorkState::Ready;
             Err(DeliveryFailure::Git(error.to_string()))
         }
     }
@@ -676,7 +726,7 @@ pub fn paused_rebase(slot: &Path) -> Option<Vec<PathBuf>> {
 /// Only for a task that has something to settle — one parked, or with a
 /// rebase paused: a branch with no commits of its own reads as integrated
 /// too, and a live agent that has committed nothing yet is not done.
-pub fn settle_delivered(primary: &Path, isolation: &mut Isolation) -> bool {
+pub fn settle_delivered(primary: &Path, state: &mut WorkState, isolation: &mut Isolation) -> bool {
     if !checkout::branch_exists(primary, &isolation.branch)
         || !checkout::is_integrated(primary, &isolation.target, &isolation.branch)
     {
@@ -690,7 +740,7 @@ pub fn settle_delivered(primary: &Path, isolation: &mut Isolation) -> bool {
             return false;
         }
     }
-    mark_delivered(primary, isolation);
+    mark_delivered(primary, state, isolation);
     true
 }
 
@@ -698,8 +748,8 @@ pub fn settle_delivered(primary: &Path, isolation: &mut Isolation) -> bool {
 /// the target carries under commits of its own. The branch's tip becomes
 /// its base: everything up to it is in the target, so an agent that keeps
 /// committing on the same branch is measured, and moved, by what it adds.
-pub fn mark_delivered(primary: &Path, isolation: &mut Isolation) {
-    isolation.state = TaskState::Integrated;
+pub fn mark_delivered(primary: &Path, state: &mut WorkState, isolation: &mut Isolation) {
+    *state = WorkState::Integrated;
     let tip = checkout::tip_of(primary, &isolation.branch);
     if !tip.is_empty() {
         isolation.base_commit = tip;
@@ -1037,7 +1087,7 @@ mod tests {
     use super::*;
     use crate::{
         checkout::{acquire, tip_of},
-        task::{Base, TaskStore},
+        task::{AgentStore, Base},
     };
     use std::fs;
     use uze_testkit::git::Repository;
@@ -1060,7 +1110,10 @@ mod tests {
     /// An agent launched in a slot of its own, the way the application
     /// does it. The tests here are about the branch, so they are handed
     /// the isolation and the store keeps the agent.
-    fn launch(repository: &Repository, store: &mut TaskStore, label: &str) -> Isolation {
+    /// Answers with the whole agent, not its isolation: where the work
+    /// stands lives beside the branch now, and a test that held only one
+    /// of the two could not say what it was asserting about.
+    fn launch(repository: &Repository, store: &mut AgentStore, label: &str) -> Agent {
         let primary = repository.root();
         let mut agent = crate::task::Agent::isolated(
             "claude",
@@ -1072,12 +1125,16 @@ mod tests {
         let isolation = agent
             .isolation_mut()
             .expect("an isolated agent carries its isolation");
-        let acquired =
-            acquire(primary, store, isolation, &isolation.base_commit, None, &[]).unwrap();
+        let base = isolation.base_commit.clone();
+        let acquired = acquire(primary, store, isolation, &base, None, &[]).unwrap();
         isolation.checkout = Some(acquired.id);
-        let taken = isolation.clone();
-        store.upsert(agent);
-        taken
+        store.upsert(agent.clone());
+        agent
+    }
+
+    /// The branch half of an agent, for the helpers that only read it.
+    fn work(agent: &Agent) -> &Isolation {
+        agent.isolation().expect("an isolated agent in these tests")
     }
 
     /// The agent commits a file on its branch.
@@ -1125,18 +1182,18 @@ mod tests {
     fn readiness_is_read_from_the_checkout() {
         let repository = repository("landing-readiness");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let isolation = launch(&repository, &mut store, "readiness");
-        assert_eq!(readiness(primary, &isolation), Readiness::Running);
+        assert_eq!(readiness(primary, work(&isolation)), Readiness::Running);
 
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         fs::write(slot.join("draft.rs"), "").unwrap();
-        assert_eq!(readiness(primary, &isolation), Readiness::Uncommitted);
+        assert_eq!(readiness(primary, work(&isolation)), Readiness::Uncommitted);
 
         repository.git_in(&slot, &["add", "."]);
         repository.git_in(&slot, &["commit", "-qm", "draft"]);
         assert!(matches!(
-            readiness(primary, &isolation),
+            readiness(primary, work(&isolation)),
             Readiness::Ready { ahead: 1, .. }
         ));
     }
@@ -1145,9 +1202,9 @@ mod tests {
     fn handoff_never_touches_the_target() {
         let repository = repository("landing-handoff");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "handoff");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         let before = tip_of(primary, TARGET);
 
         assert_eq!(
@@ -1155,17 +1212,17 @@ mod tests {
             Ok(Delivered::Handoff)
         );
         assert_eq!(tip_of(primary, TARGET), before);
-        assert_eq!(isolation.state, TaskState::Ready);
+        assert_eq!(isolation.state, WorkState::Ready);
     }
 
     #[test]
     fn merge_advances_the_target_linearly_after_the_gate() {
         let repository = repository("landing-merge");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "merge");
-        agent_commits(&repository, &isolation, "a.rs", "");
-        agent_commits(&repository, &isolation, "b.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
+        agent_commits(&repository, work(&isolation), "b.rs", "");
         // The target moved underneath, without touching the same files.
         repository.commit_file("elsewhere.txt", "moved on");
 
@@ -1176,8 +1233,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(delivered, Delivered::Merged { .. }));
-        assert_eq!(isolation.state, TaskState::Integrated);
-        assert_eq!(tip_of(primary, TARGET), tip_of(primary, &isolation.branch));
+        assert_eq!(isolation.state, WorkState::Integrated);
+        assert_eq!(
+            tip_of(primary, TARGET),
+            tip_of(primary, &work(&isolation).branch)
+        );
         let log = repository.git(&["log", "--format=%p", "-n", "3"]);
         assert!(
             log.lines()
@@ -1196,9 +1256,9 @@ mod tests {
     fn merge_moves_the_target_while_the_primary_stands_on_a_detached_head() {
         let repository = repository("landing-merge-detached");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "detached");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         let parked_at = tip_of(primary, TARGET);
         repository.git(&["checkout", "--quiet", "--detach", &parked_at]);
 
@@ -1206,13 +1266,13 @@ mod tests {
         assert_eq!(
             delivered,
             Delivered::Merged {
-                target_tip: tip_of(primary, &isolation.branch)
+                target_tip: tip_of(primary, &work(&isolation).branch)
             }
         );
-        assert_eq!(isolation.state, TaskState::Integrated);
+        assert_eq!(isolation.state, WorkState::Integrated);
         assert_eq!(
             tip_of(primary, TARGET),
-            tip_of(primary, &isolation.branch),
+            tip_of(primary, &work(&isolation).branch),
             "the declared target is what a delivery moves"
         );
         assert_eq!(
@@ -1229,16 +1289,16 @@ mod tests {
     fn merge_never_moves_the_branch_the_primary_happens_to_be_on() {
         let repository = repository("landing-merge-third-branch");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "third branch");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         repository.git(&["checkout", "--quiet", "-b", "release/1.0"]);
         let release_tip = tip_of(primary, "release/1.0");
 
         deliver(primary, &mut isolation, &merge(&[])).unwrap();
         assert_eq!(
             tip_of(primary, TARGET),
-            tip_of(primary, &isolation.branch),
+            tip_of(primary, &work(&isolation).branch),
             "the declared target moved"
         );
         assert_eq!(
@@ -1254,9 +1314,9 @@ mod tests {
     fn the_gate_runs_after_the_rebase_not_before() {
         let repository = repository("landing-gate-order");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "gate order");
-        agent_commits(&repository, &isolation, "feature.rs", "");
+        agent_commits(&repository, work(&isolation), "feature.rs", "");
         repository.commit_file("from-target.txt", "only on the target after launch");
 
         let outcome = deliver(
@@ -1274,9 +1334,9 @@ mod tests {
     fn a_gate_failure_leaves_the_target_untouched_and_returns_to_the_owner() {
         let repository = repository("landing-gate-fails");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "gate fails");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         let before = tip_of(primary, TARGET);
 
         let failure = deliver(
@@ -1290,9 +1350,9 @@ mod tests {
             "{failure:?}"
         );
         assert_eq!(tip_of(primary, TARGET), before);
-        assert_eq!(isolation.state, TaskState::GateFailed);
+        assert_eq!(isolation.state, WorkState::GateFailed);
         assert!(
-            gate_failure_message(&isolation, "cargo test", "assertion failed: x")
+            gate_failure_message(work(&isolation), "cargo test", "assertion failed: x")
                 .contains("assertion failed")
         );
     }
@@ -1303,10 +1363,10 @@ mod tests {
     fn a_multi_step_gate_stops_at_the_first_failure_and_names_it() {
         let repository = repository("landing-gate-steps");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "gate steps");
-        agent_commits(&repository, &isolation, "a.rs", "");
-        let slot = slot_path(primary, &isolation).unwrap();
+        agent_commits(&repository, work(&isolation), "a.rs", "");
+        let slot = slot_path(primary, work(&isolation)).unwrap();
 
         let failure = deliver(
             primary,
@@ -1336,9 +1396,14 @@ mod tests {
     fn a_conflict_leaves_the_rebase_paused_and_the_target_untouched() {
         let repository = repository("landing-conflict");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "conflict");
-        agent_commits(&repository, &isolation, "shared.rs", "agent's version\n");
+        agent_commits(
+            &repository,
+            work(&isolation),
+            "shared.rs",
+            "agent's version\n",
+        );
         repository.commit_file("shared.rs", "operator's version\n");
         let before = tip_of(primary, TARGET);
 
@@ -1353,20 +1418,20 @@ mod tests {
         assert_eq!(files, &[PathBuf::from("shared.rs")]);
         assert_eq!(*target_moved, 1);
         assert_eq!(tip_of(primary, TARGET), before);
-        assert!(matches!(isolation.state, TaskState::Conflicted { .. }));
-        let slot = slot_path(primary, &isolation).unwrap();
+        assert!(matches!(isolation.state, WorkState::Conflicted { .. }));
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         assert!(
             paused_rebase(&slot).is_some(),
             "the rebase waits for the owner"
         );
-        let message = conflict_message(&isolation, files, *target_moved);
+        let message = conflict_message(work(&isolation), files, *target_moved);
         assert!(message.contains("shared.rs") && message.contains("rebase --continue"));
         assert!(
             !message.contains('\n'),
             "one submission for a harness prompt"
         );
         assert_eq!(
-            readiness(primary, &isolation),
+            readiness(primary, work(&isolation)),
             Readiness::Rebasing {
                 files: files.clone()
             }
@@ -1379,20 +1444,25 @@ mod tests {
     fn a_resolved_conflict_reads_as_ready_on_the_next_evaluation() {
         let repository = repository("landing-resolved");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "resolved");
-        agent_commits(&repository, &isolation, "shared.rs", "agent's version\n");
+        agent_commits(
+            &repository,
+            work(&isolation),
+            "shared.rs",
+            "agent's version\n",
+        );
         repository.commit_file("shared.rs", "operator's version\n");
         deliver(primary, &mut isolation, &merge(&[])).unwrap_err();
 
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         fs::write(slot.join("shared.rs"), "both versions\n").unwrap();
         repository.git_in(&slot, &["add", "shared.rs"]);
         repository
             .try_git_in(&slot, &["-c", "core.editor=true", "rebase", "--continue"])
             .unwrap();
 
-        let ready = readiness(primary, &isolation);
+        let ready = readiness(primary, work(&isolation));
         let Readiness::Ready { ahead, base } = ready else {
             panic!("{ready:?}");
         };
@@ -1412,27 +1482,30 @@ mod tests {
     fn the_second_task_sees_the_first() {
         let repository = repository("landing-sequence");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut first = launch(&repository, &mut store, "first");
         let mut second = launch(&repository, &mut store, "second");
-        agent_commits(&repository, &first, "first.rs", "");
-        agent_commits(&repository, &second, "second.rs", "");
+        agent_commits(&repository, work(&first), "first.rs", "");
+        agent_commits(&repository, work(&second), "second.rs", "");
 
         deliver(primary, &mut first, &merge(&[])).unwrap();
         deliver(primary, &mut second, &merge(&steps(&["test -f first.rs"]))).unwrap();
         assert!(primary.join("first.rs").is_file() && primary.join("second.rs").is_file());
-        assert_eq!(second.base_commit, tip_of(primary, &first.branch));
+        assert_eq!(
+            work(&second).base_commit,
+            tip_of(primary, &work(&first).branch)
+        );
     }
 
     #[test]
     fn overlap_with_the_operators_uncommitted_work_refuses_and_writes_nothing() {
         let repository = repository("landing-overlap");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "overlap");
         agent_commits(
             &repository,
-            &isolation,
+            work(&isolation),
             "README.md",
             "the agent rewrote it\n",
         );
@@ -1449,20 +1522,20 @@ mod tests {
             fs::read_to_string(primary.join("README.md")).unwrap(),
             "the operator is editing it\n"
         );
-        assert_eq!(isolation.state, TaskState::Ready);
+        assert_eq!(isolation.state, WorkState::Ready);
     }
 
     #[test]
     fn a_task_without_commits_is_not_delivered() {
         let repository = repository("landing-not-ready");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "empty");
         assert_eq!(
             deliver(primary, &mut isolation, &merge(&[])),
             Err(DeliveryFailure::NotReady(Readiness::Running))
         );
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         fs::write(slot.join("wip"), "").unwrap();
         assert_eq!(
             deliver(primary, &mut isolation, &merge(&[])),
@@ -1474,22 +1547,40 @@ mod tests {
     fn a_live_task_follows_the_target_when_clean_and_is_left_alone_when_dirty() {
         let repository = repository("landing-refresh");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "refresh");
-        agent_commits(&repository, &isolation, "mine.rs", "");
+        agent_commits(&repository, work(&isolation), "mine.rs", "");
         repository.commit_file("theirs.rs", "");
         let target = tip_of(primary, TARGET);
 
-        assert_eq!(refresh(primary, &mut isolation), Ok(true));
-        assert_eq!(isolation.base_commit, target);
-        let slot = slot_path(primary, &isolation).unwrap();
+        assert_eq!(
+            refresh(
+                primary,
+                &mut isolation.state,
+                isolation.isolation.as_mut().unwrap()
+            ),
+            Ok(true)
+        );
+        assert_eq!(work(&isolation).base_commit, target);
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         assert!(slot.join("theirs.rs").is_file() && slot.join("mine.rs").is_file());
-        assert_eq!(refresh(primary, &mut isolation), Ok(false));
+        assert_eq!(
+            refresh(
+                primary,
+                &mut isolation.state,
+                isolation.isolation.as_mut().unwrap()
+            ),
+            Ok(false)
+        );
 
         fs::write(slot.join("editing"), "").unwrap();
         repository.commit_file("more.rs", "");
         assert_eq!(
-            refresh(primary, &mut isolation),
+            refresh(
+                primary,
+                &mut isolation.state,
+                isolation.isolation.as_mut().unwrap()
+            ),
             Err(DeliveryFailure::NotReady(Readiness::Uncommitted))
         );
         assert!(
@@ -1580,15 +1671,15 @@ mod tests {
     fn a_named_task_publishes_under_its_own_name() {
         let repository = repository("landing-named-publish");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "anything");
         agent_commits_saying(
             &repository,
-            &isolation,
+            work(&isolation),
             "auth.rs",
             "fix(auth): stop the redirect loop",
         );
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["branch", "--move", "fix/chosen-by-the-agent"]);
         store
             .agents
@@ -1596,19 +1687,19 @@ mod tests {
             .find(|agent| {
                 agent
                     .isolation()
-                    .is_some_and(|it| it.branch == isolation.branch)
+                    .is_some_and(|it| it.branch == work(&isolation).branch)
             })
             .unwrap()
             .take_name("fix/chosen-by-the-agent".to_owned());
-        isolation.branch = "fix/chosen-by-the-agent".to_owned();
+        isolation.isolation.as_mut().unwrap().branch = "fix/chosen-by-the-agent".to_owned();
 
         assert_eq!(
-            readable_branch_name(primary, &isolation),
+            readable_branch_name(primary, work(&isolation)),
             "fix/stop-the-redirect-loop",
             "the derivation still has an answer of its own"
         );
         assert!(
-            !isolation.branch.starts_with("agent/"),
+            !work(&isolation).branch.starts_with("agent/"),
             "but the isolation carries a name, so publish never asks for it"
         );
     }
@@ -1619,12 +1710,17 @@ mod tests {
     fn a_subject_without_a_type_keeps_the_prefix() {
         let repository = repository("landing-plain-subject");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let isolation = launch(&repository, &mut store, "anything");
-        agent_commits_saying(&repository, &isolation, "auth.rs", "make the thing work");
+        agent_commits_saying(
+            &repository,
+            work(&isolation),
+            "auth.rs",
+            "make the thing work",
+        );
 
         assert_eq!(
-            readable_branch_name(primary, &isolation),
+            readable_branch_name(primary, work(&isolation)),
             "agent/make-the-thing-work"
         );
     }
@@ -1635,12 +1731,12 @@ mod tests {
     fn a_branch_with_no_commits_falls_back_to_the_identifier() {
         let repository = repository("landing-no-commits");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let isolation = launch(&repository, &mut store, "anything");
 
         assert_eq!(
-            readable_branch_name(primary, &isolation),
-            isolation.branch.clone()
+            readable_branch_name(primary, work(&isolation)),
+            work(&isolation).branch.clone()
         );
     }
 
@@ -1653,14 +1749,14 @@ mod tests {
         let origin = repository.with_origin(TARGET);
 
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "Fix the auth redirect");
         // The published name comes from the *work*, not from the launch
         // prompt: this is the first commit's subject, which is the only
         // place the agent wrote down what it was doing.
         agent_commits_saying(
             &repository,
-            &isolation,
+            work(&isolation),
             "auth.rs",
             "fix(auth): stop the redirect loop",
         );
@@ -1697,13 +1793,13 @@ mod tests {
             "the agent is told which branch and which target: {instruction}"
         );
         assert_eq!(
-            publication(primary, &isolation).map(|published| published.branch),
+            publication(primary, work(&isolation)).map(|published| published.branch),
             Some("fix/stop-the-redirect-loop".to_owned()),
             "the branch is on the remote, and that is read from Git"
         );
-        assert_eq!(isolation.published_request, None);
+        assert_eq!(work(&isolation).published_request, None);
         assert_eq!(
-            isolation.published_as.as_deref(),
+            work(&isolation).published_as.as_deref(),
             Some("fix/stop-the-redirect-loop")
         );
         let remote_branches = repository.git_in(&other, &["ls-remote", "--heads", REMOTE]);
@@ -1712,7 +1808,7 @@ mod tests {
             "{remote_branches}"
         );
         assert!(
-            !remote_branches.contains(&isolation.branch),
+            !remote_branches.contains(&work(&isolation).branch),
             "the local id never leaves the machine"
         );
         assert_eq!(
@@ -1724,7 +1820,7 @@ mod tests {
         // The agent opened it: the forge now publishes the request's head
         // under its own namespace, which is the only thing UZE reads to
         // learn the number — no CLI, no token, no forge named.
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
@@ -1739,10 +1835,10 @@ mod tests {
             },
             "a published branch with a request open for it is a sync"
         );
-        assert_eq!(isolation.published_request, Some(11));
+        assert_eq!(work(&isolation).published_request, Some(11));
         assert_eq!(
-            publication(primary, &isolation).map(|published| published.tip),
-            Some(tip_of(primary, &isolation.branch)),
+            publication(primary, work(&isolation)).map(|published| published.tip),
+            Some(tip_of(primary, &work(&isolation).branch)),
             "what the request carries, so a surface can tell a sync that \
              would send something from one that would send nothing"
         );
@@ -1756,11 +1852,11 @@ mod tests {
         repository.with_origin(TARGET);
 
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "Fix the auth redirect");
         agent_commits_saying(
             &repository,
-            &isolation,
+            work(&isolation),
             "auth.rs",
             "fix(auth): stop the redirect loop",
         );
@@ -1769,7 +1865,7 @@ mod tests {
             gate: &[],
         };
         deliver(primary, &mut isolation, &policy).unwrap();
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
@@ -1794,33 +1890,34 @@ mod tests {
     fn a_branch_its_own_agent_pushed_is_published_and_in_sync() {
         let (repository, _other) = published("landing-agent-push");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let isolation = launch(&repository, &mut store, "agent push");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         assert_eq!(
-            publication(primary, &isolation),
+            publication(primary, work(&isolation)),
             None,
             "nothing is on the remote yet"
         );
 
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
 
-        let published = publication(primary, &isolation).expect("the agent's own push is a push");
-        assert_eq!(published.branch, isolation.branch);
-        assert_eq!(published.tip, tip_of(primary, &isolation.branch));
+        let published =
+            publication(primary, work(&isolation)).expect("the agent's own push is a push");
+        assert_eq!(published.branch, work(&isolation).branch);
+        assert_eq!(published.tip, tip_of(primary, &work(&isolation).branch));
         assert_eq!(
-            commits_ahead(primary, &published.tip, &isolation.branch),
+            commits_ahead(primary, &published.tip, &work(&isolation).branch),
             0,
             "nothing is left to sync"
         );
 
-        agent_commits(&repository, &isolation, "b.rs", "");
+        agent_commits(&repository, work(&isolation), "b.rs", "");
         assert_eq!(
             commits_ahead(
                 primary,
-                &publication(primary, &isolation).unwrap().tip,
-                &isolation.branch
+                &publication(primary, work(&isolation)).unwrap().tip,
+                &work(&isolation).branch
             ),
             1,
             "and a commit made after the push is one commit to sync"
@@ -1834,23 +1931,25 @@ mod tests {
     fn a_request_the_agent_opened_is_discovered_on_the_evaluation_pass() {
         let (repository, _other) = published("landing-agent-request");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "agent request");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
 
-        observe_and_adopt(primary, &mut isolation);
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
         assert_eq!(
-            isolation.published_request, None,
+            work(&isolation).published_request,
+            None,
             "an unpublished branch is never asked about"
         );
         assert_eq!(
-            isolation.request_asked_at_unix, None,
+            work(&isolation).request_asked_at_unix,
+            None,
             "and the round trip is not spent"
         );
 
-        let slot = slot_path(primary, &isolation).unwrap();
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
@@ -1858,9 +1957,9 @@ mod tests {
             &format!("{tip}:refs/merge-requests/7/head"),
         ]);
 
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, Some(7));
-        assert!(isolation.request_asked_at_unix.is_some());
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, Some(7));
+        assert!(work(&isolation).request_asked_at_unix.is_some());
     }
 
     /// The question that leaves the machine is asked on a clock, and stops
@@ -1869,40 +1968,49 @@ mod tests {
     fn the_remote_is_asked_about_a_missing_request_at_most_once_a_minute() {
         let (repository, _other) = published("landing-request-clock");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "request clock");
-        agent_commits(&repository, &isolation, "a.rs", "");
-        let slot = slot_path(primary, &isolation).unwrap();
+        agent_commits(&repository, work(&isolation), "a.rs", "");
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
 
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, None, "no request is open");
-        let asked = isolation
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(
+            work(&isolation).published_request,
+            None,
+            "no request is open"
+        );
+        let asked = work(&isolation)
             .request_asked_at_unix
             .expect("the remote was asked");
 
         // The request appears, but the minute has not passed.
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
             REMOTE,
             &format!("{tip}:refs/pull/9/head"),
         ]);
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, None);
-        assert_eq!(isolation.request_asked_at_unix, Some(asked));
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, None);
+        assert_eq!(work(&isolation).request_asked_at_unix, Some(asked));
 
-        isolation.request_asked_at_unix = Some(asked - REQUEST_INTERVAL.as_secs());
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, Some(9));
+        isolation.isolation.as_mut().unwrap().request_asked_at_unix =
+            Some(asked - REQUEST_INTERVAL.as_secs());
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, Some(9));
 
         // Answered, and never asked again: the number does not change.
         repository.git(&["push", "--quiet", REMOTE, ":refs/pull/9/head"]);
-        isolation.request_asked_at_unix = None;
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, Some(9));
-        assert_eq!(isolation.request_asked_at_unix, None, "nothing was asked");
+        isolation.isolation.as_mut().unwrap().request_asked_at_unix = None;
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, Some(9));
+        assert_eq!(
+            work(&isolation).request_asked_at_unix,
+            None,
+            "nothing was asked"
+        );
     }
 
     /// A isolation outlives its first request: the agent that delivered keeps
@@ -1912,20 +2020,20 @@ mod tests {
     fn a_request_answers_for_the_branch_it_was_found_on() {
         let (repository, _other) = published("landing-request-branch");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "first request");
-        agent_commits(&repository, &isolation, "a.rs", "");
-        let slot = slot_path(primary, &isolation).unwrap();
+        agent_commits(&repository, work(&isolation), "a.rs", "");
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
             REMOTE,
             &format!("{tip}:refs/pull/51/head"),
         ]);
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, Some(51));
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, Some(51));
 
         // The agent moves to new work on a new branch — what evaluation
         // reads off the checkout's HEAD and takes as the isolation's name.
@@ -1933,25 +2041,26 @@ mod tests {
         std::fs::write(slot.join("b.rs"), "").unwrap();
         repository.git_in(&slot, &["add", "."]);
         repository.git_in(&slot, &["commit", "-qm", "feat: auto-update"]);
-        isolation.branch = "feat/auto-update".to_owned();
+        isolation.isolation.as_mut().unwrap().branch = "feat/auto-update".to_owned();
 
-        observe_and_adopt(primary, &mut isolation);
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
         assert_eq!(
-            isolation.published_request, None,
+            work(&isolation).published_request,
+            None,
             "the merged request is not this branch's"
         );
 
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
             REMOTE,
             &format!("{tip}:refs/pull/60/head"),
         ]);
-        observe_and_adopt(primary, &mut isolation);
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
         assert_eq!(
-            isolation.published_request,
+            work(&isolation).published_request,
             Some(60),
             "the new branch's own"
         );
@@ -1963,26 +2072,26 @@ mod tests {
     fn a_request_recorded_without_its_branch_is_asked_again() {
         let (repository, _other) = published("landing-request-unowned");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "old record");
-        agent_commits(&repository, &isolation, "a.rs", "");
-        let slot = slot_path(primary, &isolation).unwrap();
+        agent_commits(&repository, work(&isolation), "a.rs", "");
+        let slot = slot_path(primary, work(&isolation)).unwrap();
         repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
-        let tip = tip_of(primary, &isolation.branch);
+        let tip = tip_of(primary, &work(&isolation).branch);
         repository.git(&[
             "push",
             "--quiet",
             REMOTE,
             &format!("{tip}:refs/pull/60/head"),
         ]);
-        isolation.published_request = Some(51);
-        isolation.request_branch = None;
+        isolation.isolation.as_mut().unwrap().published_request = Some(51);
+        isolation.isolation.as_mut().unwrap().request_branch = None;
 
-        observe_and_adopt(primary, &mut isolation);
-        assert_eq!(isolation.published_request, Some(60));
+        observe_and_adopt(primary, isolation.isolation.as_mut().unwrap());
+        assert_eq!(work(&isolation).published_request, Some(60));
         assert_eq!(
-            isolation.request_branch.as_deref(),
-            Some(isolation.branch.as_str())
+            work(&isolation).request_branch.as_deref(),
+            Some(work(&isolation).branch.as_str())
         );
     }
 
@@ -1990,9 +2099,9 @@ mod tests {
     fn pr_without_a_remote_is_refused_before_anything_moves() {
         let repository = repository("landing-pr-no-remote");
         let primary = repository.root();
-        let mut store = TaskStore::default();
+        let mut store = AgentStore::default();
         let mut isolation = launch(&repository, &mut store, "no remote");
-        agent_commits(&repository, &isolation, "a.rs", "");
+        agent_commits(&repository, work(&isolation), "a.rs", "");
         let policy = Policy {
             completion: CompletionBehavior::Pr,
             gate: &[],
@@ -2001,6 +2110,6 @@ mod tests {
             deliver(primary, &mut isolation, &policy),
             Err(DeliveryFailure::NoRemote)
         );
-        assert_eq!(publication(primary, &isolation), None);
+        assert_eq!(publication(primary, work(&isolation)), None);
     }
 }
