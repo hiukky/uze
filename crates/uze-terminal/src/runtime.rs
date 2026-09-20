@@ -1612,12 +1612,26 @@ impl Server {
                     // the prompt asked for a space, and one repository is
                     // routinely worth two — one per branch, one per thing
                     // being tried. `ensure_space` is the other question.
-                    let created = self.session.lock().expect("session poisoned").create_space(
-                        label,
-                        seat,
-                        within_pane_bounds(columns),
-                        within_pane_bounds(rows),
-                    );
+                    let root = seat.root.clone();
+                    let (created, named) = {
+                        let mut session = self.session.lock().expect("session poisoned");
+                        let created = session.create_space(
+                            label,
+                            seat,
+                            within_pane_bounds(columns),
+                            within_pane_bounds(rows),
+                        );
+                        let named = session
+                            .space(created.space)
+                            .map(|space| space.label.clone())
+                            .unwrap_or_default();
+                        (created, named)
+                    };
+                    // The one record of a space appearing, with the name it
+                    // ended up with: a repeated label is numbered here, and
+                    // "where did `project 2` come from" is a question only
+                    // this line can answer after the fact.
+                    tracing::info!(root = %root.display(), label = %named, "a space was created");
                     self.spawn_new_space(client, created, &events);
                     self.broadcast_session();
                 }
