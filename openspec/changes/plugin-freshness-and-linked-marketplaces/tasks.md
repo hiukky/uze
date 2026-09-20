@@ -54,152 +54,156 @@
 
 ## 3. Freshness, computed once
 
-- [ ] 3.1 `Freshness` read model: `UpToDate`, `Behind { commits }`,
+- [x] 3.1 `Freshness` read model: `UpToDate`, `Behind { commits }`,
       `Linked { checkout }`, `Unpinned`, `NotChecked` — each carrying when it
       was established (`application/read_models.rs`)
-- [ ] 3.2 Head of the declared ref and `rev-list --count <locked>..<head>`
-      from the cached repository, no clone (`acquisition/marketplace.rs`)
-- [ ] 3.3 The embedded package keeps `bootstrap::has_update` and maps onto
+- [x] 3.2a The mirror records the head its declared ref resolved to; the
+      comparison is that against the installed commit — a JSON read, because
+      one `rev-parse` per package put the machine snapshot over its budget
+      (`performance_tests::machine_snapshot_meets_the_budget` caught it)
+- [ ] 3.2b The commit distance, where the detail view can afford to ask for
+      it: `mirror::distance` is written and tested, and nothing calls it yet
+- [x] 3.3 The embedded package keeps `bootstrap::has_update` and maps onto
       `UpToDate`/`Behind`; a `local`-marketplace package reports `Unpinned`
-- [ ] 3.4 Remember the answer under `cache/` — a new path named in
-      `UzeHome`, no shape, discarded when unreadable;
-      `every_path_uze_owns_is_named_in_the_map` still passes
-- [ ] 3.5 Replace `update_available` on both summaries with the freshness
+- [x] 3.4 Remember the answer under `cache/` — done by the mirror's own
+      `catalogue.json`, which already records the commit and when it was
+      fetched, so no new path and no new record were needed
+- [x] 3.5 Replace `update_available` on both summaries with the freshness
       state; update every consumer
 - [ ] 3.6 Every read surface reports the state and its date, writes nothing,
       and answers offline (`tests/cli/`)
-## 3. `uze update`
+## 4. `uze update`
 
-- [ ] 3.1 `Project::update(root, plugin: Option<&str>, authority)` —
+- [ ] 4.1 `Project::update(root, plugin: Option<&str>, authority)` —
       re-resolve the declared ref through `resolve_into_lock`, rewrite
       `agents.lock`, reconcile the context, per-plugin trust
       (`application/project_environment.rs`)
-- [ ] 3.2 `uze update [plugin]` in the CLI, project-scoped per ADR-019, with
+- [ ] 4.2 `uze update [plugin]` in the CLI, project-scoped per ADR-019, with
       text and JSON output (`src/main.rs`)
-- [ ] 3.3 Classify it in `src/command_performance.rs` — `JustifiedSlow`,
+- [ ] 4.3 Classify it in `src/command_performance.rs` — `JustifiedSlow`,
       with the reason
-- [ ] 3.4 Tests: install leaves a moved ref pinned; update moves it and
+- [ ] 4.4 Tests: install leaves a moved ref pinned; update moves it and
       records where it landed; updating one plugin leaves every other lock
       entry byte-identical; a revision introducing execution is refused and
       the rest proceed (`tests/lifecycle/`)
 
-## 4. Linked marketplaces
+## 5. Linked marketplaces
 
-- [ ] 4.1 The link record in machine state — marketplace name to checkout
+- [ ] 5.1 The link record in machine state — marketplace name to checkout
       path — with its own path in `UzeHome` (`delivery/state.rs`)
-- [ ] 4.2 `uze market link <name> <path>` / `uze market unlink <name>`;
+- [ ] 5.2 `uze market link <name> <path>` / `uze market unlink <name>`;
       linking refuses a checkout whose repository identity is not the
       marketplace's (`src/main.rs`, `application/marketplace.rs`)
-- [ ] 4.3 Split `resolve_into_lock`: acquiring and installing stays shared by
+- [ ] 5.3 Split `resolve_into_lock`: acquiring and installing stays shared by
       `add`/`install`/`update`; what is written to the lock becomes the
       caller's, so a linked marketplace writes nothing without a branch
       inside the shared function
-- [ ] 4.3b Resolution prefers the linked checkout's working tree, re-ingesting
+- [ ] 5.3b Resolution prefers the linked checkout's working tree, re-ingesting
       when its content differs from the Store's; no network, no commit
       (`application/project_environment.rs`)
-- [ ] 4.3c A linked checkout's content is what Git does not ignore — tracked
+- [ ] 5.3c A linked checkout's content is what Git does not ignore — tracked
       plus untracked-not-ignored — for both the digest and the ingest, so an
       editor's temporary file or a build artifact never becomes package
       content. Tests for both sides
-- [ ] 4.3d An mtime/size pass short-circuits before the digest, so an
+- [ ] 5.3d An mtime/size pass short-circuits before the digest, so an
       unchanged linked checkout costs a stat per file, not two full tree
       reads (`digest.rs:54-90`)
-- [ ] 4.4 `install` and `update` never write a lock entry resolved from a
+- [ ] 5.4 `install` and `update` never write a lock entry resolved from a
       linked checkout, and say why the pin did not move
-- [ ] 4.5 `market list`, `market inspect` and the plugins screen say a
+- [ ] 5.5 `market list`, `market inspect` and the plugins screen say a
       marketplace is linked and to where
-- [ ] 4.6 Tests: an edit in the checkout reaches the Store with no commit;
+- [ ] 5.6 Tests: an edit in the checkout reaches the Store with no commit;
       the lock is byte-identical across an update while linked; linking to a
       foreign repository is refused
 
-## 5. Marketplace honesty
+## 6. Marketplace honesty
 
-- [ ] 5.1 `install` and `update` skip a plugin whose marketplace this
+- [ ] 6.1 `install` and `update` skip a plugin whose marketplace this
       machine cannot reach, name every skip in their own report, and succeed;
       a reachable marketplace that fails is still an error
       (`application/project_environment.rs`)
-- [ ] 5.1b `uze status` reports a project declaring a marketplace with no
+- [ ] 6.1b `uze status` reports a project declaring a marketplace with no
       resolvable remote as not fully reproducible elsewhere, naming the
       marketplace and its plugins
-- [ ] 5.2 Classify an acquisition refused on credentials and report the
+- [ ] 6.2 Classify an acquisition refused on credentials and report the
       marketplace, the URL and that it is an access question
       (`uze-core::error`, `package/acquisition/`)
-- [ ] 5.3 Tests: a clone with one unreachable and one reachable marketplace
+- [ ] 6.3 Tests: a clone with one unreachable and one reachable marketplace
       gets the reachable half and a named skip; a local-only marketplace
       still installs, delivers and removes normally on the machine that has
       it; a reachable marketplace that fails still fails the command
-- [ ] 5.4 `uze --help` distinguishes the three update verbs in one line
+- [ ] 6.4 `uze --help` distinguishes the three update verbs in one line
       each — `update` (this project's pins), `plugin update` (one package on
       this machine), `self-update` (the binary); making `self-update` visible
       is task 4.3 of `keep-the-installed-binary-current`
-- [ ] 5.5 `uze update` outside a project, or naming a plugin the project does
+- [ ] 6.5 `uze update` outside a project, or naming a plugin the project does
       not declare, fails with an error naming `uze plugin update`, the way
       `uze remove` already names `uze plugin remove` (ADR-019 §3)
 
-## 6. The client's freshness worker
+## 7. The client's freshness worker
 
-- [ ] 6.1 `Plugins::update` resolves *outside* `MutationLock`; the lock
+- [ ] 7.1 `Plugins::update` resolves *outside* `MutationLock`; the lock
       covers ingest and attach only (`lifecycle/update.rs:17,29`)
-- [ ] 6.2 Split `spawn_startup`: `Refreshed` is sent before any freshness
+- [ ] 7.2 Split `spawn_startup`: `Refreshed` is sent before any freshness
       work, which arrives as its own later message
       (`src/ui/worker.rs:560-590`)
-- [ ] 6.3 `spawn_*`/`absorb_*` pair for the freshness refresh; every answer
+- [ ] 7.3 `spawn_*`/`absorb_*` pair for the freshness refresh; every answer
       carries its question, a late one is dropped
-- [ ] 6.4 Widen `auto_update` past `Embedded`, and rewrite
+- [ ] 7.4 Widen `auto_update` past `Embedded`, and rewrite
       `auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
       (`application/tests.rs:1104`) to hold what still stands: no CLI
       dispatch path re-resolves a network source
-- [ ] 6.5 Apply only a revision introducing no executable capability the
+- [ ] 7.5 Apply only a revision introducing no executable capability the
       installed one lacked; anything crossing the trust boundary is reported
       and never applied; no `agents.yaml`/`agents.lock` is written
-- [ ] 6.6 A mutating operator action during a background update is not
+- [ ] 7.6 A mutating operator action during a background update is not
       refused (test)
-- [ ] 6.7 Outcomes arrive as toasts, never in the header
-- [ ] 6.8 Plugins screen reads each row's state; "not checked", "unpinned"
+- [ ] 7.7 Outcomes arrive as toasts, never in the header
+- [ ] 7.8 Plugins screen reads each row's state; "not checked", "unpinned"
       and "up to date" read differently (`TestBackend` tests)
-- [ ] 6.9 The architecture suite still passes
+- [ ] 7.9 The architecture suite still passes
 
-## 7. Journeys
+## 8. Journeys
 
 Per `journeys/README.md`: every `then` reads the filesystem, Git or the
 process table — never UZE's own report — and screen text is a gate, never an
 assertion.
 
-- [ ] 7.1 `journeys/worlds/`: a verb for "this fixture is a repository with N
+- [ ] 8.1 `journeys/worlds/`: a verb for "this fixture is a repository with N
       commits". Three of the journeys below need it, which is the project's
       own threshold for lifting a world
-- [ ] 8.2 `02-packages/05-the-author-edits-and-the-harness-follows.yml` —
+- [ ] 9.2 `02-packages/05-the-author-edits-and-the-harness-follows.yml` —
       linking adopts the checkout (and UZE runs no Git on it: `git status
       --porcelain` stays empty) · an edit reaches the harness with `rev-parse
       HEAD` unchanged · `uze update` leaves `agents.lock` byte-identical
-- [ ] 8.3 `02-packages/06-a-pin-the-ref-moved-past.yml` — `install`
+- [ ] 9.3 `02-packages/06-a-pin-the-ref-moved-past.yml` — `install`
       reproduces commit A after the marketplace moved to B · `update` moves
       it, checked against `git rev-parse` · updating one plugin leaves the
       other lock entries byte-identical
-- [ ] 8.4 `02-packages/07-a-marketplace-this-machine-cannot-reach.yml` — the
+- [ ] 9.4 `02-packages/07-a-marketplace-this-machine-cannot-reach.yml` — the
       reachable half installs, the unreachable is named, exit 0 · `status`
       says the project does not fully reproduce
-- [ ] 8.5 `06-recovery/08-a-reference-into-a-path-that-moved.yml` — **the
+- [ ] 9.5 `06-recovery/08-a-reference-into-a-path-that-moved.yml` — **the
       reported bug**: a reference repointed by hand at a path that does not
       exist is adopted and the install succeeds · one repointed at content
       that exists is preserved untouched
-- [ ] 7.6 `01-first-run/04-what-the-plugins-screen-says-about-age.yml`
+- [ ] 8.6 `01-first-run/04-what-the-plugins-screen-says-about-age.yml`
       (`[tui]`, nightly) — the gesture proves the route opened; the claim is
       `plugin list --format json` beside `git rev-list --count`
-- [ ] 7.7 Update the journeys the grammar change breaks — `02-packages/01,
+- [ ] 8.7 Update the journeys the grammar change breaks — `02-packages/01,
       02, 03`, `03-context/01`, `06-recovery/01`, `01-first-run/01` — once
       that change lands; `06-recovery/01` proves machine-scope removal and
       keeps its claim through `uze remove <p> --machine`
 
-## 8. Diagrams and gate
+## 9. Diagrams and gate
 
-- [ ] 8.1 `docs/architecture/attachment-lifecycle.mmd` — split the DRIFTED
+- [ ] 9.1 `docs/architecture/attachment-lifecycle.mmd` — split the DRIFTED
       branch into adopted (resolves to nothing) and refused (still resolves)
-- [ ] 7.2 `docs/architecture/install-pipeline.mmd` — `uze update` entering at
+- [ ] 8.2 `docs/architecture/install-pipeline.mmd` — `uze update` entering at
       resolution with the declared ref, and a linked marketplace re-ingesting
       without touching `agents.lock`
-- [ ] 7.3 `cargo test -p uze-extensions` passes, so both diagrams still route
-- [ ] 7.4 `docs/architecture/invariants.md` — record the adoption rule and
+- [ ] 8.3 `cargo test -p uze-extensions` passes, so both diagrams still route
+- [ ] 8.4 `docs/architecture/invariants.md` — record the adoption rule and
       the linked-marketplace pin refusal, each naming the test that holds it
-- [ ] 7.5 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
+- [ ] 8.5 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
       tests, coverage floor, `cargo deny`, `openspec validate --all --strict`)

@@ -230,7 +230,7 @@ impl TuiModel {
             Action::UpdatePlugin => {
                 if let Some(id) = self
                     .selected_marketplace_plugin()
-                    .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
+                    .filter(|plugin| plugin.installed && plugin.freshness.behind())
                     .map(|plugin| self.marketplace_plugin_id(&plugin))
                 {
                     self.overlay = Overlay::Confirm {

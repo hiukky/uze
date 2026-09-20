@@ -958,7 +958,11 @@ pub(crate) fn bootstrap_never_mutates_an_already_installed_default_plugin() {
     let summary = app
         .plugin_summary(&app.package_by_name("uze").unwrap())
         .unwrap();
-    assert_eq!(summary.update_available, Some(true));
+    assert!(
+        summary.freshness.behind(),
+        "the drift is still visible, read-only: {:?}",
+        summary.freshness
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1053,13 +1057,17 @@ pub(crate) fn a_corrupted_stored_copy_reports_unknown_update_status_without_pani
     let summary = app
         .plugin_summary(&app.package_by_name("uze").unwrap())
         .unwrap();
-    assert_eq!(summary.update_available, Some(true));
+    assert!(summary.freshness.behind(), "{:?}", summary.freshness);
 
     fs::remove_dir_all(&package.root).unwrap();
     let summary = app
         .plugin_summary(&app.package_by_name("uze").unwrap())
         .unwrap();
-    assert_eq!(summary.update_available, None);
+    assert_eq!(
+        summary.freshness.state,
+        crate::application::FreshnessState::NotChecked,
+        "a comparison that could not be made is not an answer"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1075,11 +1083,11 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
     let manifest = package.root.join("plugin.json");
     let pristine = fs::read_to_string(&manifest).unwrap();
     fs::write(&manifest, "{\"name\":\"uze\",\"stale\":true}").unwrap();
-    assert_eq!(
+    assert!(
         app.plugin_summary(&app.package_by_name("uze").unwrap())
             .unwrap()
-            .update_available,
-        Some(true)
+            .freshness
+            .behind()
     );
 
     let outcomes = app.plugins().auto_update();
@@ -1091,8 +1099,9 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
     assert_eq!(
         app.plugin_summary(&app.package_by_name("uze").unwrap())
             .unwrap()
-            .update_available,
-        Some(false),
+            .freshness
+            .state,
+        crate::application::FreshnessState::UpToDate,
         "the update it just applied must stop being reported as pending"
     );
     // Idempotent: nothing left to do on the next launch.

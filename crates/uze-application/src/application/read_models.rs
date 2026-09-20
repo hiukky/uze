@@ -90,14 +90,73 @@ pub struct PluginSummary {
     pub source: String,
     pub store_path: PathBuf,
     pub capability_count: usize,
-    /// Whether the official marketplace snapshot currently carries
-    /// different content than what's installed — a pure read, computed by
-    /// comparing directory trees, never re-applied automatically (see
-    /// `ensure_default_plugins`). `None` for any package this composition
-    /// root has no offline way to compare (anything not sourced from the
-    /// embedded marketplace) — never re-acquired over the network or from
-    /// a mutable local path just to answer this question.
-    pub update_available: Option<bool>,
+    /// Whether the one installed is the one that exists, and when that was
+    /// last established.
+    pub freshness: Freshness,
+}
+
+/// What UZE can say about whether an installed package is current.
+///
+/// Every surface reports one of these, and `NotChecked` must never be drawn
+/// the way `UpToDate` is: "we have not looked" and "we looked and it is
+/// current" are different facts, and collapsing them is what made
+/// "Installed" mean both.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Freshness {
+    pub state: FreshnessState,
+    /// When the comparison behind `state` was made — for a marketplace,
+    /// when its mirror was last brought up to date. `None` when nothing was
+    /// compared, which is the only honest answer for `Unpinned` and
+    /// `NotChecked`.
+    pub established_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FreshnessState {
+    /// The installed revision is the one the marketplace's declared ref
+    /// points at.
+    UpToDate,
+    /// A newer revision exists. `commits` is how many, when the history to
+    /// count them is on this machine; `None` when it is not — a snapshot
+    /// compared by content rather than by history, or a mirror whose
+    /// history was rewritten under the pin. A distance that might be wrong
+    /// is worse than no distance, and "there is something newer" is true
+    /// either way.
+    Behind { commits: Option<usize> },
+    /// The marketplace is a checkout this machine develops: its working
+    /// tree is what exists, so "newer" means nothing.
+    Linked { checkout: PathBuf },
+    /// Nothing to compare against — a package installed straight from a
+    /// path or a URL, which belongs to no marketplace catalogue. Distinct
+    /// from `NotChecked`: there is no question to answer, rather than an
+    /// answer UZE does not have.
+    Unpinned,
+    /// UZE has not established it, or tried and could not. Never a guess.
+    NotChecked,
+}
+
+impl Freshness {
+    pub fn not_checked() -> Self {
+        Self {
+            state: FreshnessState::NotChecked,
+            established_at_unix: None,
+        }
+    }
+
+    pub fn unpinned() -> Self {
+        Self {
+            state: FreshnessState::Unpinned,
+            established_at_unix: None,
+        }
+    }
+
+    /// Whether a newer revision exists — the one question every caller
+    /// asking "is there an update" is really asking, answered without any
+    /// of them re-deriving it from the state.
+    pub fn behind(&self) -> bool {
+        matches!(self.state, FreshnessState::Behind { .. })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -130,9 +189,9 @@ pub struct MarketplacePluginSummary {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub installed: bool,
-    /// `None` when not installed (nothing to compare against) or when the
-    /// comparison could not be made — never a guess.
-    pub update_available: Option<bool>,
+    /// The installed package's freshness. `NotChecked` when the plugin is
+    /// not installed at all: there is nothing of it here to be current.
+    pub freshness: Freshness,
     /// Whether `bootstrap::DEFAULT_PLUGIN_IDS` installs this plugin on a
     /// fresh `UZE_HOME` — product policy, not a marketplace fact.
     pub is_default: bool,

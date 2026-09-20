@@ -335,15 +335,16 @@ impl Marketplace<'_> {
             // installed from an entirely different marketplace.
             let installed_package =
                 installed.get(format!("{}@{BUILT_IN_MARKETPLACE}", entry.name).as_str());
-            let update_available = installed_package
-                .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
+            let freshness = installed_package
+                .map(|package| self.0.freshness_of(package))
+                .unwrap_or_else(Freshness::not_checked);
             MarketplacePluginSummary {
                 marketplace: BUILT_IN_MARKETPLACE.to_owned(),
                 name: entry.name.clone(),
                 description: entry.description,
                 keywords: entry.keywords,
                 installed: installed_package.is_some(),
-                update_available,
+                freshness,
                 is_default: bootstrap::DEFAULT_PLUGIN_IDS.contains(&entry.name.as_str()),
             }
         }));
@@ -360,9 +361,9 @@ impl Marketplace<'_> {
                     description: entry.description,
                     keywords: entry.keywords,
                     installed: installed_package.is_some(),
-                    // Update-comparison only exists for the embedded
-                    // snapshot's own offline directory-tree diff.
-                    update_available: None,
+                    freshness: installed_package
+                        .map(|package| self.0.freshness_of(package))
+                        .unwrap_or_else(Freshness::not_checked),
                     is_default: false,
                 }
             }));

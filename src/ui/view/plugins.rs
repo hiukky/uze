@@ -26,7 +26,9 @@ use ratatui::{
 };
 
 use uze_application::CapabilityKind;
-use uze_application::application::{DoctorReport, MarketplacePluginSummary, PluginCapability};
+use uze_application::application::{
+    DoctorReport, FreshnessState, MarketplacePluginSummary, PluginCapability,
+};
 
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
@@ -367,17 +369,32 @@ fn plugin_line<'a>(
             "Available"
         }
     );
-    // "Updated" and "Update available" are the same slot and mutually
-    // exclusive by construction: the badge is only ever raised by an update
-    // that just landed, which is exactly what clears `update_available`.
-    // The remaining "Update available" therefore always means one uze
-    // declined to apply on its own — press `u`.
+    // One slot, and "Updated" wins it: the badge is only ever raised by an
+    // update that just landed, which is exactly what makes the row current.
+    //
+    // Every other word here is a different fact, and none of them may read
+    // like another. "Not checked" in particular must not look like being
+    // current — that collapse is what made "Installed" mean both "this is
+    // the one that exists" and "nobody has looked".
     let (update, update_style) = if just_updated {
-        ("Updated", theme::fg(Token::Accent))
-    } else if plugin.update_available == Some(true) {
-        ("Update available", theme::fg(Token::StateWarning))
+        ("Updated".to_owned(), theme::fg(Token::Accent))
     } else {
-        ("", Style::default())
+        match &plugin.freshness.state {
+            FreshnessState::Behind { commits: None } => (
+                "Update available".to_owned(),
+                theme::fg(Token::StateWarning),
+            ),
+            FreshnessState::Behind {
+                commits: Some(commits),
+            } => (format!("{commits} behind"), theme::fg(Token::StateWarning)),
+            FreshnessState::Linked { .. } => ("Linked".to_owned(), theme::fg(Token::Accent)),
+            FreshnessState::NotChecked if plugin.installed => {
+                ("Not checked".to_owned(), theme::fg(Token::TextDim))
+            }
+            FreshnessState::UpToDate | FreshnessState::Unpinned | FreshnessState::NotChecked => {
+                (String::new(), Style::default())
+            }
+        }
     };
     let update = format!("{update:<UPDATE_WIDTH$}");
     let mut spans = vec![
@@ -571,11 +588,29 @@ fn render_plugin_drawer(
                 headline: "Updated",
                 subtitle: "Brought up to date automatically when uze started",
             }
-        } else if plugin.update_available == Some(true) {
+        } else if plugin.freshness.behind() {
             DrawerStatus {
                 color: theme::color(Token::StateWarning),
                 headline: "Update available",
                 subtitle: "Needs your confirmation to apply",
+            }
+        } else if matches!(plugin.freshness.state, FreshnessState::NotChecked) {
+            DrawerStatus {
+                color: theme::color(Token::TextDim),
+                headline: "Not checked",
+                subtitle: "Nothing has compared this against its marketplace yet",
+            }
+        } else if matches!(plugin.freshness.state, FreshnessState::Linked { .. }) {
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Linked",
+                subtitle: "Follows a checkout on this machine",
+            }
+        } else if matches!(plugin.freshness.state, FreshnessState::Unpinned) {
+            DrawerStatus {
+                color: theme::color(Token::TextDim),
+                headline: "Installed",
+                subtitle: "From a source no marketplace tracks",
             }
         } else {
             DrawerStatus {

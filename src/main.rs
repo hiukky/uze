@@ -2080,6 +2080,26 @@ fn terminal_error(error: impl std::fmt::Display) -> uze_application::UzeError {
     uze_application::UzeError::TerminalRuntime(error.to_string())
 }
 
+/// The one word each freshness state reads as, everywhere.
+///
+/// "not checked" is spelled out rather than left blank: a listing that says
+/// nothing about a plugin reads as a plugin with nothing to say, which is
+/// exactly the collapse this replaces — `update_available: None` drew the
+/// same as "current".
+fn freshness_label(freshness: &uze_application::application::Freshness) -> String {
+    use uze_application::application::FreshnessState;
+    match &freshness.state {
+        FreshnessState::UpToDate => "up to date".to_owned(),
+        FreshnessState::Behind { commits: None } => "behind".to_owned(),
+        FreshnessState::Behind {
+            commits: Some(commits),
+        } => format!("{commits} behind"),
+        FreshnessState::Linked { checkout } => format!("linked to {}", checkout.display()),
+        FreshnessState::Unpinned => "unpinned".to_owned(),
+        FreshnessState::NotChecked => "not checked".to_owned(),
+    }
+}
+
 fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -> String {
     let title = progress::report_title("Plugins", Some("Installed on this machine"));
     if plugins.is_empty() {
@@ -2097,6 +2117,7 @@ fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -
                 progress::title(&plugin.active_name),
                 origin,
                 format!("{} capabilities", plugin.capability_count),
+                progress::label(freshness_label(&plugin.freshness)),
             ]
         })
         .collect();

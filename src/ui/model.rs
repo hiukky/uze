@@ -915,7 +915,7 @@ impl TuiModel {
                 description: None,
                 keywords: Vec::new(),
                 installed: true,
-                update_available: plugin.update_available,
+                freshness: plugin.freshness.clone(),
                 is_default: false,
             })
             .collect()
