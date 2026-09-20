@@ -74,8 +74,12 @@ scenes:
         say: the branch the work is on, read from the record
       - key: "C-w"
         say: close the tab the agent was in, which parks it
-        expect: uze
-        expect_timeout: 20
+        # What the gesture *causes*: the agent is gone and its work is
+        # not, which is the toast UZE raises and the whole claim of this
+        # journey. `uze` proved only that a screen was still drawn — true
+        # on Linux by accident of what else was on it, and false on macOS.
+        expect: parked
+        expect_timeout: 25
         pause: 2.0
     then:
       - cmd:
