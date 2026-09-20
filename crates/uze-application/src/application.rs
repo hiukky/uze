@@ -67,8 +67,8 @@ pub use uze_core::workspace::WorkspaceKind;
 /// `PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
 /// project's shared `AGENTS.md` only through an explicit bridge region
 /// written into their own native file *inside the project's working tree*,
-/// rather than natively — see `docs/capabilities/instructions-design.md`
-/// Fase 4. Which harness needs a bridge is now each integration's own
+/// rather than natively — see `docs/capabilities/context-manager.md`.
+/// Which harness needs a bridge is now each integration's own
 /// `context_delivery()` declaration; this Application holds only the
 /// bridge protocol itself (region identity + content), shared by every
 /// bridge-needing harness.
