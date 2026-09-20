@@ -154,7 +154,7 @@ declare to the model, captured with the Lab's `--discovery` mode. A
 
 The `sh` wrapper is one file per harness, byte-identical for every package,
 and depends on `sh` and `jq`. Claude, Codex and Antigravity each keep one
-copy under `$UZE_HOME/state/attachments/<harness>/hooks/exec` — a shared
+copy under `$UZE_HOME/runtime/attachments/<harness>/hooks/exec` — a shared
 vendor config file has no plugin root to resolve against, so every entry
 names the wrapper by absolute path.
 

@@ -106,7 +106,7 @@ scenes:
           run: |
             python3 -c "
             import glob, json
-            [record] = glob.glob('{uze_home}/state/conversations/*/*.json')
+            [record] = glob.glob('{uze_home}/state/projects/*/conversations/*.json')
             print(json.load(open(record))['agent'])
             print(record.rsplit('/', 1)[1])
             "

@@ -61,7 +61,7 @@ scenes:
         exists: true
       - file: "{home}/.gemini/config/plugins/flow/plugin.json"
         exists: true
-      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+      - dir: "{uze_home}/runtime/attachments/claude/generated/flow@demo"
         exists: true
         about: the three harness-owned trees each gained this plugin
 
@@ -79,7 +79,7 @@ scenes:
       - dir: "{home}/.gemini/config/plugins/flow"
         exists: false
         about: the byte copy staged by the vendor CLI is gone
-      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+      - dir: "{uze_home}/runtime/attachments/claude/generated/flow@demo"
         exists: false
         about: the generated native package is gone
       - json: "{uze_home}/state/attachments.json"

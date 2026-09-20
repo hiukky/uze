@@ -43,9 +43,11 @@ AGENT_IDENTITY_VARIABLE = "UZE_AGENT"
 FIRST_MARKER = "UZE_CONFORMANCE_ACORN"
 SECOND_MARKER = "UZE_CONFORMANCE_WALNUT"
 
-#: UZE's own state, keyed the way `uze-core` keys it: the task document at
-#: `state/tasks/<project id>.json`, where the project id is the FNV-1a-64
-#: digest of the canonical project root, in fixed-width hex.
+#: UZE's own state, keyed the way `uze-core` keys it: a project's records
+#: live in one directory at `state/projects/<project id>/`, where the
+#: project id is the FNV-1a-64 digest of the canonical project root, in
+#: fixed-width hex, and the directory names that root back in
+#: `project.json` — which is what makes the digest reversible at all.
 UZE_HOME = "/work/home/.uze"
 
 
@@ -65,8 +67,16 @@ def project_id(root: str) -> str:
 
 def prelude(harness):
     """The shell that lays the scene down: a repository with one slot, a
-    task record naming it, and UZE's launcher for this harness."""
-    tasks = f"{UZE_HOME}/state/tasks/{project_id(PROJECT)}.json"
+    project directory holding the record that names it, and UZE's launcher
+    for this harness.
+
+    The marker beside the record is not decoration. A project's id is a
+    one-way digest, so the directory naming its own root is the only thing
+    that lets anything resolve the record back to a repository — and a
+    scene that seeded the record without it would be seeding a state UZE
+    itself never writes.
+    """
+    records = f"{UZE_HOME}/state/projects/{project_id(PROJECT)}"
     return f"""
 mkdir -p {PROJECT} && cd {PROJECT}
 git init -q -b main .
@@ -76,8 +86,11 @@ printf '# Lab project\\n' > AGENTS.md
 git add . && git commit -q -m init
 git worktree add -q -b agent/{SLOT_NAME} .worktrees/{SLOT_NAME} HEAD
 printf '/.worktrees/\\n' >> .git/info/exclude
-mkdir -p {UZE_HOME}/state/tasks {UZE_HOME}/shims
-cat > {tasks} <<'UZE_EOF'
+mkdir -p {records} {UZE_HOME}/shims
+cat > {records}/project.json <<'UZE_EOF'
+{{ "root": "{PROJECT}" }}
+UZE_EOF
+cat > {records}/agents.json <<'UZE_EOF'
 {{
   "schema_version": 3,
   "agents": [
