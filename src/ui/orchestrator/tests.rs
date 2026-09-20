@@ -345,6 +345,62 @@ mod workspace_tests {
         assert!(!strip.contains("Agent one"), "{strip}");
     }
 
+    /// The way into an agent's support belongs to the context, not to
+    /// whichever of its tabs is in front of the person. Every chip on the
+    /// strip is contextual to the agent leading it — that is what the
+    /// strip *is* — so stepping into a shell the agent opened is still
+    /// being in the agent's context, and the badge cannot blink out on
+    /// the way. The one row with no agent to support is the space's own,
+    /// which holds shells and nothing else.
+    #[test]
+    fn the_agent_badge_follows_the_context_and_not_the_selected_tab() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        let badge_is_drawn = |model: &WorkspaceModel| {
+            tab_strip(model)
+                .1
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::OpenAgentSupport(_)))
+        };
+        let (shell, bootstrap) = {
+            let space = model.session.as_ref().expect("session").selected_space();
+            let shell = space
+                .tabs
+                .iter()
+                .find(|tab| tab.agent == Some(first))
+                .expect("the agent's own shell")
+                .id;
+            let bootstrap = space
+                .tabs
+                .iter()
+                .find(|tab| tab.agent.is_none() && tab.pane.process != "agent")
+                .expect("the space's bootstrap shell")
+                .id;
+            (shell, bootstrap)
+        };
+
+        model.session.as_mut().expect("session").select_tab(first);
+        assert!(
+            badge_is_drawn(&model),
+            "the agent itself offers the way into its support"
+        );
+
+        model.session.as_mut().expect("session").select_tab(shell);
+        assert!(
+            badge_is_drawn(&model),
+            "and so does a shell it opened — the same agent is still the context"
+        );
+
+        model
+            .session
+            .as_mut()
+            .expect("session")
+            .select_tab(bootstrap);
+        assert!(
+            !badge_is_drawn(&model),
+            "only the space's own row has no agent to support"
+        );
+    }
+
     /// A tab number means "that chip", so it is counted along the strip —
     /// which is contextual — and never along the space's own tab list.
     ///
@@ -663,29 +719,162 @@ mod workspace_tests {
         );
     }
 
-    /// The changes chip is a badge that is also a door: it says how much
-    /// changed, so with nothing to say it says nothing. What that must
-    /// not cost is reachability — the code chip is always there, and the
-    /// diff is one mode switch away inside the surface it opens.
+    /// A group of buttons is one ground with a seam where the fills
+    /// meet, and the seam is the only divider it has. A glyph drawn
+    /// between two members belongs to neither: hovering one leaves that
+    /// column wearing the resting fill, a sliver of a third material
+    /// wedged between two buttons — which is what the pair at the tab
+    /// side's end looked like, and what the pair at the other end never
+    /// did. One construction now answers for both.
     #[test]
-    fn the_changes_chip_comes_with_the_work_and_the_code_chip_never_leaves() {
+    fn a_button_group_is_divided_by_where_its_fill_changes_and_by_nothing_drawn() {
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
+        let grounds = |model: &WorkspaceModel, rect: Rect| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_tab_strip(
+                        frame,
+                        frame.area(),
+                        model,
+                        &identities_fixture(),
+                        &mut Vec::new(),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (rect.x..rect.right())
+                .map(|column| buffer[(column, rect.y)].bg)
+                .collect::<Vec<_>>()
+        };
+
+        for (left, right) in [
+            (WorkspaceHit::NewTab, WorkspaceHit::NewAgentMenu),
+            (WorkspaceHit::OpenArchitect, WorkspaceHit::OpenFiles),
+        ] {
+            let (first, second) = (hit_rect(&model, left), hit_rect(&model, right));
+            assert_eq!(
+                first.right(),
+                second.x,
+                "the members meet — there is no column between them"
+            );
+
+            model.hovered = Some(left);
+            let lit = grounds(&model, first);
+            let rest = grounds(&model, second);
+            assert!(
+                lit.iter().all(|ground| *ground == lit[0]),
+                "the hovered member lights whole, padding included: {lit:?}"
+            );
+            assert!(
+                rest.iter().all(|ground| *ground == rest[0]),
+                "and its neighbour stays whole at rest: {rest:?}"
+            );
+            assert_ne!(
+                lit[0], rest[0],
+                "so the boundary between them is where the fill changes"
+            );
+        }
+    }
+
+    /// The changes count is a door that is not dressed as one. Three
+    /// filled controls in a row and a count that grew a plate the moment
+    /// the pointer went near it read as a third button; the hue does the
+    /// work instead — held back at rest and restored under the pointer —
+    /// and no ground is ever drawn behind it.
+    ///
+    /// The colour cannot simply be dropped at rest the way a grey label's
+    /// could: green is additions and red is deletions, so the hue *is*
+    /// the badge's message. Muted, then, never grey.
+    #[test]
+    fn the_changes_count_answers_with_its_hue_and_never_with_a_ground() {
+        let mut model = agent_with_task(WorkStateView::Ready, 3);
+        model.remembered.git_badge = Some(GitBadge {
+            cwd: PathBuf::from("/repo"),
+            summary: Some(uze_extensions::code::ChangeSummary {
+                additions: 476,
+                deletions: 286,
+            }),
+            timeline: None,
+            timeline_checked_at: Instant::now(),
+            checked_at: Instant::now(),
+        });
+        let (_, hits) = tab_strip(&model);
+        let rect = hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenChanges)
+            .expect("work to report brings the count")
+            .0;
+
+        // Read off the cells rather than off the code that chose them, so
+        // the test proves what reaches the screen. The additions sit one
+        // column past the badge's own leading pad.
+        let cells = |model: &WorkspaceModel| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_tab_strip(
+                        frame,
+                        frame.area(),
+                        model,
+                        &identities_fixture(),
+                        &mut Vec::new(),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let cell = &buffer[(rect.x + 1, rect.y)];
+            (cell.fg, cell.bg)
+        };
+
+        assert_eq!(
+            cells(&model),
+            (theme::color(Token::StateSuccessMuted), Color::Reset),
+            "at rest: the hue held back, and the strip's own backdrop under it"
+        );
+
+        model.hovered = Some(WorkspaceHit::OpenChanges);
+        assert_eq!(
+            cells(&model),
+            (theme::color(Token::StateSuccess), Color::Reset),
+            "under the pointer: the hue restored, and still no ground"
+        );
+
+        model.hovered = None;
+        model.pressed = Some((WorkspaceHit::OpenChanges, Instant::now()));
+        assert_eq!(
+            cells(&model).1,
+            Color::Reset,
+            "and a press draws no plate either"
+        );
+    }
+
+    /// The changes badge is a count that is also a door: it says how much
+    /// changed, so with nothing to say it says nothing. Two things that
+    /// must not cost: reachability — the code button never leaves the
+    /// pair, and the diff is one mode switch away inside the surface it
+    /// opens — and steadiness, since the badge comes and goes on a Git
+    /// read nobody asked for. It takes its room to the left, so the pair
+    /// sits at the same columns whether or not there is work to report.
+    #[test]
+    fn the_changes_badge_comes_with_the_work_and_the_code_button_never_leaves() {
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
 
-        model.remembered.git_badge = None;
-        full_frame(&mut model);
-        assert!(
+        let button = |model: &WorkspaceModel, wanted: WorkspaceHit| {
             model
                 .hits
                 .iter()
-                .any(|(_, hit)| *hit == WorkspaceHit::OpenFiles),
-            "a clean checkout still offers its files"
-        );
+                .find(|(_, hit)| *hit == wanted)
+                .map(|(rect, _)| *rect)
+        };
+
+        model.remembered.git_badge = None;
+        full_frame(&mut model);
+        let clean = button(&model, WorkspaceHit::OpenFiles)
+            .expect("a clean checkout still offers its files");
         assert!(
-            !model
-                .hits
-                .iter()
-                .any(|(_, hit)| *hit == WorkspaceHit::OpenChanges),
+            button(&model, WorkspaceHit::OpenChanges).is_none(),
             "and says nothing about changes rather than saying zero"
         );
 
@@ -700,21 +889,17 @@ mod workspace_tests {
             checked_at: Instant::now(),
         });
         full_frame(&mut model);
-        let changes = model
-            .hits
-            .iter()
-            .find(|(_, hit)| *hit == WorkspaceHit::OpenChanges)
-            .expect("work arriving brings the badge")
-            .0;
-        let files = model
-            .hits
-            .iter()
-            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
-            .expect("the code chip is still there")
-            .0;
+        let changes =
+            button(&model, WorkspaceHit::OpenChanges).expect("work arriving brings the badge");
+        let files = button(&model, WorkspaceHit::OpenFiles)
+            .expect("and leaves the code button where it was");
         assert!(
-            files.right() <= changes.x,
-            "the badge arrives to the right of the code chip, so it never moves it"
+            changes.right() <= files.x,
+            "the badge takes its room to the left of the buttons"
+        );
+        assert_eq!(
+            files, clean,
+            "so the pair never moves under the pointer when work arrives"
         );
     }
 
@@ -1076,10 +1261,7 @@ mod workspace_tests {
         );
 
         let (rows, hits) = tab_strip(&model);
-        assert!(
-            rows.iter().any(|row| row.contains("3 merge → main")),
-            "{rows:?}"
-        );
+        assert!(rows.iter().any(|row| row.contains("→ main ⇡3")), "{rows:?}");
         assert!(
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
@@ -1142,8 +1324,8 @@ mod workspace_tests {
         let (rows, hits) = tab_strip(&model);
         let row = rows.join("\n");
         assert!(
-            row.contains(&format!("{} delivering", agent_activity_frame(3))),
-            "{row}"
+            row.contains(&format!("→ main {}", agent_activity_frame(3))),
+            "the report names the delivery and turns while it runs: {row}"
         );
         assert!(
             !hits
@@ -1192,32 +1374,34 @@ mod workspace_tests {
         };
 
         assert!(
-            ending(CompletionBehavior::Merge).contains("3 merge → main"),
+            ending(CompletionBehavior::Merge).contains("→ main ⇡3"),
             "{}",
             ending(CompletionBehavior::Merge)
         );
+        // A request with no number yet is still a request, and "#" is the
+        // idiom both forges write — where `pr`/`mr` is one vendor's word
+        // for the other's thing.
         assert!(
-            ending(CompletionBehavior::Pr).contains("3 pr → main"),
+            ending(CompletionBehavior::Pr).contains("# ⇡3"),
             "{}",
             ending(CompletionBehavior::Pr)
         );
         assert!(
-            ending(CompletionBehavior::Handoff).contains("3 hand off"),
+            ending(CompletionBehavior::Handoff).contains("hand off ⇡3"),
             "a completion that writes to nothing names no target: {}",
             ending(CompletionBehavior::Handoff)
         );
     }
 
-    /// Readiness is marked once, in the sidebar; the delivery button says
-    /// it in words — the count and where a press sends it.
-    ///
-    /// The two used to share a mark, and drifted into two marks for one
-    /// state the moment a glyph set drew them differently. The `nerd` set
-    /// then drew a pull-request icon in front of every button, including
-    /// the ones that merge or only hand off. Words cannot drift from the
-    /// sidebar, and cannot claim a request the press will not open.
+    /// `Ready` is the one state whose sidebar mark the strip may not
+    /// borrow. That mark is the vocabulary's "there is work to hand
+    /// over", and the patched set draws it as a create-a-request icon —
+    /// true for the completion that opens one, a lie in front of a button
+    /// about to fast-forward the target or to touch nothing outside the
+    /// branch. The strip says the commits instead, which is what a press
+    /// sends whatever the ending.
     #[test]
-    fn a_ready_task_is_marked_in_the_sidebar_and_named_on_its_button() {
+    fn a_ready_task_is_marked_in_the_sidebar_but_never_by_that_mark_on_the_strip() {
         let state = WorkStateView::Ready;
         let model = agent_with_task(state.clone(), 3);
         let (mark, _) = super::render::task_mark(&state).expect("ready is marked");
@@ -1228,10 +1412,10 @@ mod workspace_tests {
         );
         let (rows, _) = tab_strip(&model);
         let strip = rows.join("\n");
-        assert!(strip.contains("3 merge → main"), "{strip}");
+        assert!(strip.contains("→ main ⇡3"), "{strip}");
         assert!(
             !strip.contains(mark.trim()),
-            "the button carries no mark: {strip}"
+            "and never the mark that would claim a request this press does not open: {strip}"
         );
     }
 
@@ -1246,7 +1430,7 @@ mod workspace_tests {
         }
         let (before, _) = tab_strip(&model);
         let before = before.join("\n");
-        assert!(before.contains("4 pr → main"), "{before}");
+        assert!(before.contains("# ⇡4"), "{before}");
         assert!(
             !before.contains(&crate::ui::theme::glyph(
                 crate::ui::theme::Symbol::TaskReady
@@ -1259,10 +1443,10 @@ mod workspace_tests {
         }
         let (after, _) = tab_strip(&model);
         let after = after.join("\n");
-        assert!(after.contains("4 #11"), "{after}");
+        assert!(after.contains("#11 ⇡4"), "{after}");
         assert!(
-            !after.contains("pr → main"),
-            "a request that exists is not opened again: {after}"
+            !after.contains("# ⇡4"),
+            "a request that exists is named by its number, not by the placeholder: {after}"
         );
     }
 
@@ -1281,9 +1465,9 @@ mod workspace_tests {
         }
         let (synced, hits) = tab_strip(&model);
         let synced = synced.join("\n");
-        assert!(synced.contains("✓ #20"), "{synced}");
+        assert!(synced.contains("#20 ↗"), "{synced}");
         assert!(
-            !synced.contains("6 #20"),
+            !synced.contains("⇡6"),
             "the target is still six commits away, and that is not this button's question: {synced}"
         );
         assert!(
@@ -1300,7 +1484,7 @@ mod workspace_tests {
         }
         let (behind_by_two, _) = tab_strip(&model);
         let behind_by_two = behind_by_two.join("\n");
-        assert!(behind_by_two.contains("2 #20"), "{behind_by_two}");
+        assert!(behind_by_two.contains("#20 ⇡2"), "{behind_by_two}");
     }
 
     /// The sidebar and the header answer the same question, so they had
@@ -1359,7 +1543,10 @@ mod workspace_tests {
 
         let (strip, hits) = tab_strip(&model);
         let strip = strip.join("\n");
-        assert!(strip.contains("delivering"), "{strip}");
+        assert!(
+            strip.contains(&format!("→ main {}", agent_activity_frame(model.tick))),
+            "{strip}"
+        );
         assert!(
             !hits
                 .iter()
@@ -1584,9 +1771,9 @@ mod workspace_tests {
         );
         let (rows, _) = tab_strip(&driven.attach.model);
         assert_eq!(
-            rows.join("\n").matches("delivering").count(),
+            rows.join("\n").matches("→ main").count(),
             1,
-            "one delivery, one word for it: {rows:?}"
+            "one delivery, one place saying so: {rows:?}"
         );
     }
 
@@ -2991,7 +3178,11 @@ mod workspace_tests {
             .expect("a conflict is marked");
         assert!(name_row.contains(&conflict), "{name_row}");
         let (rows, hits) = tab_strip(&model);
-        assert!(rows.iter().any(|row| row.contains("conflict")), "{rows:?}");
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&format!("→ main {}", conflict.trim()))),
+            "the strip wears the same mark the row does: {rows:?}"
+        );
         assert!(
             !hits
                 .iter()

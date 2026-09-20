@@ -1968,22 +1968,37 @@ fn workspace_has_active_agent_operation(
     })
 }
 
-/// The selected tab's agent, paired with that tab's focused pane's own
-/// working directory — `None` for a tab that is not running a recognized
-/// agent, which is also what hides the "✦" badge.
+/// The agent the workspace is *about*, paired with that agent's own
+/// pane's working directory.
+///
+/// The context agent ([`context_agent`]), never whichever tab is
+/// selected: a shell opened alongside an agent is part of that agent's
+/// context — the whole reason the strip it sits on is the agent's own —
+/// so stepping into one must not take the "✦" away and must not change
+/// which agent the support dropdown is about. Reading the selected tab
+/// instead made the badge blink out on every hop to a shell and back.
+///
+/// `None` is the one context with no agent to support: the space's own
+/// row, which holds shells and nothing else.
 fn selected_agent_context(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
 ) -> Option<SupportKey> {
-    let tab = model.session.as_ref()?.selected_tab();
+    let session = model.session.as_ref()?;
+    let agent = context_agent(model, identities)?;
+    let tab = session
+        .selected_space()
+        .tabs
+        .iter()
+        .find(|tab| tab.id == agent)?;
     let identity = agent_for_tab(identities, tab)?;
     Some((identity.integration.to_owned(), tab.pane.cwd.clone()))
 }
 
 /// Every live agent pane as `(integration, directory)` — the same pair
-/// [`selected_agent_context`] resolves, for every tab rather than the
-/// selected one, since an agent nobody is looking at is exactly the one
-/// whose conversation would otherwise go unrecorded.
+/// [`selected_agent_context`] resolves, for every tab rather than for the
+/// one the workspace is about, since an agent nobody is looking at is
+/// exactly the one whose conversation would otherwise go unrecorded.
 fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<LaunchedAgent> {
     model
         .tabs()

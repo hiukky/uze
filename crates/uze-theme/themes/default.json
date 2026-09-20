@@ -26,8 +26,10 @@
 
     "accent": "#8fd19e",
     "state.success": "@accent",
+    "state.success-muted": "@state.success/c0",
     "state.warning": "#e0b567",
     "state.danger": "#e0765f",
+    "state.danger-muted": "@state.danger/c0",
     "state.info": "#7d97c9",
     "state.in-flight": "#7dbec2",
     "state.landed": "#a38fc9",
@@ -118,8 +120,8 @@
     "prompt": "❯",
     "menu": "≡",
     "manage": "=",
-    "code": "❐",
-    "architect": "⊞",
+    "code": "",
+    "architect": "",
 
     "text.ellipsis": "…",
     "text.em-dash": "—",

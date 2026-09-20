@@ -82,10 +82,23 @@ vocabulary! {
         /// Something worked. Aliases [`Accent`](Self::Accent) by default —
         /// the design's own `levelColor` uses one colour for both.
         StateSuccess = "state.success",
+        /// [`StateSuccess`](Self::StateSuccess) at rest: the same meaning,
+        /// held back until something asks for it. A count that is also a
+        /// control has to carry its hue — the hue *is* what it says — and
+        /// still not shout it across a row of buttons that are not
+        /// speaking. Pull it back here and let the pointer restore it,
+        /// rather than putting a plate under it and making a count look
+        /// like a third button.
+        StateSuccessMuted = "state.success-muted",
         /// Something needs attention but is not broken.
         StateWarning = "state.warning",
         /// Something failed, or will destroy work.
         StateDanger = "state.danger",
+        /// [`StateDanger`](Self::StateDanger) at rest, for the same reason
+        /// as [`StateSuccessMuted`](Self::StateSuccessMuted) — and the two
+        /// always travel together, since a pair of counts that dim by
+        /// different amounts reads as one of them meaning more.
+        StateDangerMuted = "state.danger-muted",
         /// The badge hue — a mark that classifies rather than warns, and so
         /// must not be mistakable for one.
         StateInfo = "state.info",

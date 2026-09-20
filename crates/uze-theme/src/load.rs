@@ -738,12 +738,18 @@ mod tests {
             let _ = theme.color(*token);
         }
         for symbol in Symbol::ALL {
-            // The `file.` family is the one place "draw nothing" is an
-            // answer rather than a hole: plain Unicode has no folder or
-            // document mark a terminal does not take from its emoji font,
-            // and this vocabulary carries no emoji. A patched font has
-            // them, which is one of the things installing one buys.
-            if symbol.to_string().starts_with("file.") {
+            // "Draw nothing" is an answer rather than a hole in exactly
+            // two places, for one reason: plain Unicode has no mark for
+            // the thing. The `file.` family is folders and documents,
+            // which a terminal only draws by reaching into its emoji
+            // font, and this vocabulary carries no emoji. The two
+            // surfaces are ideas — a checkout's code, a project's shape —
+            // and the nearest Unicode offers is a box or an arrow that
+            // means neither, which says less beside the word than nothing
+            // does. A patched font has real icons for both families,
+            // which is one of the things installing one buys.
+            let iconless = symbol.to_string();
+            if iconless.starts_with("file.") || matches!(iconless.as_str(), "code" | "architect") {
                 continue;
             }
             assert!(
