@@ -7,6 +7,7 @@
 //! than a thin route into `uze-core`, which is why it is the one that
 //! became a file.
 
+use std::cell::OnceCell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -750,6 +751,7 @@ impl Workspace<'_> {
             let pass = EvaluationPass {
                 primary: &primary,
                 target: &target,
+                in_the_root: OnceCell::new(),
                 occupied,
                 owners: store.slot_owners(),
                 vocabulary: &policy.branch,
@@ -1264,6 +1266,12 @@ struct EvaluationPass<'a> {
     /// What the project delivers onto, and what an agent in the root is
     /// measured against — it has no base of its own to be ahead of.
     target: &'a str,
+    /// Where the work in the project's own root stands, read once.
+    ///
+    /// It is the *checkout's* answer, and every agent in that checkout
+    /// reads the same one — so asking it per agent would run the same four
+    /// Git reads once for each of them and get the same result every time.
+    in_the_root: OnceCell<WorkState>,
     /// The checkout directories a live pane still sits in.
     occupied: &'a [PathBuf],
     owners: BTreeSet<AgentId>,
@@ -1284,12 +1292,17 @@ impl EvaluationPass<'_> {
             // the three questions a directory can answer are asked — a
             // delivery is UZE's to run only on a branch UZE cut.
             if is_agents_turn(&agent.state) {
-                agent.state = match landing::readiness_of_checkout(primary, self.target) {
-                    Readiness::Running => WorkState::Running,
-                    Readiness::Uncommitted => WorkState::Uncommitted,
-                    Readiness::Rebasing { files } => WorkState::Conflicted { files },
-                    Readiness::Ready { .. } => WorkState::Ready,
-                };
+                agent.state = self
+                    .in_the_root
+                    .get_or_init(
+                        || match landing::readiness_of_checkout(primary, self.target) {
+                            Readiness::Running => WorkState::Running,
+                            Readiness::Uncommitted => WorkState::Uncommitted,
+                            Readiness::Rebasing { files } => WorkState::Conflicted { files },
+                            Readiness::Ready { .. } => WorkState::Ready,
+                        },
+                    )
+                    .clone();
             }
             return None;
         }
