@@ -6495,6 +6495,79 @@ mod workspace_tests {
         model_of(session)
     }
 
+    /// Every space is a block, the ones nobody is working in included:
+    /// their ground is the same panel at part of its strength, so the
+    /// column reads as blocks rather than as rows floating on the
+    /// backdrop — and the space in front keeps the only ground at full
+    /// strength.
+    #[test]
+    fn a_space_nobody_is_working_in_is_a_fainter_block_of_its_own() {
+        let mut model = three_spaces();
+        model.first_steps_collapsed = true;
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        let active = space_header(&hits, SpaceId(3));
+        let resting = space_header(&hits, SpaceId(1));
+        let ground = |header: Rect, offset: u16| buffer[(header.x + 2, header.y + offset)].bg;
+
+        assert_eq!(
+            ground(active, 0),
+            theme::color(Token::SurfaceRaised),
+            "the space being worked in wears its header at full strength: {rows:?}"
+        );
+        assert_eq!(
+            ground(resting, 0),
+            crate::ui::theme::faded(Token::SurfaceRaised),
+            "and the others wear the same one, faded: {rows:?}"
+        );
+        assert_eq!(
+            ground(resting, 1),
+            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
+            "their rows are the panel, faded with them: {rows:?}"
+        );
+        assert_ne!(
+            ground(resting, 1),
+            theme::color(Token::SurfaceBackground),
+            "a block nobody is in is still a block"
+        );
+        assert_ne!(
+            ground(resting, 1),
+            theme::color(Token::SurfaceRaisedSubtle),
+            "and never reads as the one in front"
+        );
+    }
+
+    /// A space's own row is a target like any other: when it is the row
+    /// in front — its shell selected, or the space folded to its header —
+    /// it wears the same trace of the accent a selected agent row wears,
+    /// over its own lighter surface. With an agent in front it is the
+    /// plain surface again, because then the trace belongs to that agent.
+    #[test]
+    fn the_spaces_own_row_wears_the_agents_trace_when_it_is_the_one_in_front() {
+        let in_front = model_of(session("/repo"));
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&in_front, &identities_fixture());
+        let header = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            crate::ui::theme::tinted(Token::Accent, Token::SurfaceRaised),
+            "the space's own row is the one selected: {rows:?}"
+        );
+
+        let behind = agents_in_the_root_session();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&behind, &identities_in_the_root());
+        let header = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(header.x + 2, header.y)].bg,
+            theme::color(Token::SurfaceRaised),
+            "an agent is in front, so the header is the plain surface: {rows:?}"
+        );
+    }
+
     /// The header row a space was drawn at, by the frame's own hits.
     fn space_header(hits: &[(Rect, WorkspaceHit)], wanted: SpaceId) -> Rect {
         hits.iter()
@@ -6537,7 +6610,7 @@ mod workspace_tests {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
         use crate::ui::theme::{Symbol, Token};
-        let muted = theme::color(Token::TextMuted);
+        let resting = theme::color(Token::TextMuted);
         let lit = theme::color(Token::Accent);
         // Space 1 is in the background; space 3 is selected, on its agent.
         for (space, branch, caption, hues) in [
@@ -6545,13 +6618,13 @@ mod workspace_tests {
                 SpaceId(1),
                 Symbol::TreeVertical,
                 Symbol::TreeVertical,
-                [muted, muted, muted],
+                [resting, resting, resting],
             ),
             (
                 SpaceId(3),
                 Symbol::TreeVertical,
                 Symbol::TreeVertical,
-                [muted, lit, lit],
+                [resting, lit, lit],
             ),
         ] {
             let header = space_header(&hits, space);

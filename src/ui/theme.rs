@@ -175,6 +175,32 @@ pub(crate) fn tinted(token: Token, into: Token) -> Color {
     Color::Rgb(blended.0, blended.1, blended.2)
 }
 
+/// A ground at part of its strength: the same surface, let *through* onto
+/// the backdrop rather than laid on it.
+///
+/// What a space nobody is working in wears. Not a colour of its own —
+/// there is nothing a second surface would mean that this one does not —
+/// only less of the one the active space wears, so the block still reads
+/// as a block and the space being worked in keeps the only ground at full
+/// strength in the column.
+pub(crate) fn faded(token: Token) -> Color {
+    fade(color(token))
+}
+
+/// The same, for a colour already blended — a ground that is itself a
+/// wash, faded again for the space nobody is in.
+pub(crate) fn fade(drawn: Color) -> Color {
+    /// How much of the colour reaches the backdrop, out of 255. Enough
+    /// to find the block's edge against the panel, not enough to be
+    /// mistaken for the space in front.
+    const THROUGH: u8 = 84;
+
+    let backdrop = uze_theme::active().color(Token::SurfaceBackground);
+    let (red, green, blue) = channels(drawn, Token::SurfaceBackground);
+    let blended = uze_theme::Rgb(red, green, blue).over(backdrop, THROUGH);
+    Color::Rgb(blended.0, blended.1, blended.2)
+}
+
 /// The channels behind a drawn colour — for the one operation that has to
 /// do arithmetic on one rather than pass it through.
 fn channels(color: Color, absent: Token) -> (u8, u8, u8) {

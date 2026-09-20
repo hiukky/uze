@@ -1104,15 +1104,20 @@ fn render_space_caption(
     ))];
     let hue = theme::color(Token::TextDim);
     row::push_trailing(&mut spans, rect.width, caption, hue);
-    if selected {
-        row::pad_to(
-            &mut spans,
-            rect.width,
-            theme::color(Token::SurfaceRaisedSubtle),
-        );
-    }
+    row::pad_to(&mut spans, rect.width, block_ground(selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
+}
+
+/// The ground under a space's rows: the panel itself where the operator
+/// is working, and the same panel faded where they are not. Every space
+/// is a block either way — what the fill says is which block is in front.
+fn block_ground(active: bool) -> Color {
+    if active {
+        theme::color(Token::SurfaceRaisedSubtle)
+    } else {
+        theme::faded(Token::SurfaceRaisedSubtle)
+    }
 }
 
 /// Each agent a two-row item — status and name over the harness running
@@ -1148,13 +1153,7 @@ fn draw_tree(
             && let Some(gap) = rows.slot(1).visible()
         {
             let mut spans = vec![space_gutter(false)];
-            if is_active_space {
-                row::pad_to(
-                    &mut spans,
-                    gap.width,
-                    theme::color(Token::SurfaceRaisedSubtle),
-                );
-            }
+            row::pad_to(&mut spans, gap.width, block_ground(is_active_space));
             frame.render_widget(Paragraph::new(Line::from(spans)), gap);
         }
         previous = Some(isolated);
@@ -1176,7 +1175,7 @@ fn draw_tree(
         let surface = if agent.is_current {
             Some(theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle))
         } else {
-            is_active_space.then(|| theme::color(Token::SurfaceRaisedSubtle))
+            Some(block_ground(is_active_space))
         };
         // One blank column between the connector and the status glyph, in
         // either group, so the two land in the same place: the tree's
@@ -1597,8 +1596,7 @@ pub(super) fn render_commit_detail(
 /// [`render_sidebar`]) gets a neutral background instead of a left accent
 /// bar, so the highlight reads as "this whole block is where you are"
 /// rather than a thin per-row marker or an on-brand "selected" tint
-/// (deliberately not `theme::color(Token::SurfaceSelected)` — that one
-/// borrows the accent hue for a different kind of selection). This header row itself stays at the lighter
+/// This header row itself stays at the lighter
 /// [`theme::color(Token::SurfaceRaised)`] while the rows it anchors go one
 /// step darker, [`theme::color(Token::SurfaceRaisedSubtle)`] — the title
 /// lifts slightly above the block it names instead of blending into it.
@@ -1670,9 +1668,25 @@ pub(super) fn render_space_header(
             push_root_toggle(&mut spans, hits, rect, space.id);
         }
     }
-    if selected {
-        row::pad_to(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
-    }
+    // The space's own row is a target like any other, so when it is the
+    // one in front it wears what a selected agent row wears: the same
+    // trace of the accent, over its own lighter surface. Everything else
+    // about the header is unchanged — the trace says "this row", not
+    // "this block", which is what the fill underneath already says.
+    let ground = if is_current {
+        theme::tinted(Token::Accent, Token::SurfaceRaised)
+    } else {
+        theme::color(Token::SurfaceRaised)
+    };
+    row::pad_to(
+        &mut spans,
+        rect.width,
+        if selected {
+            ground
+        } else {
+            theme::fade(ground)
+        },
+    );
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
