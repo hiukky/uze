@@ -149,14 +149,14 @@ binding should tighten.
 
 ## UZE's own vertical asserts the bridge only for a contributing project
 
-**Context.** `uze context reconcile` in a project with a hand-written
+**Context.** `uze agent context reconcile` in a project with a hand-written
 `AGENTS.md` and no installed plugins reports the Claude bridge as `Missing`
 and writes nothing. The code gates the bridge on a *package contribution*
 (`plan_action_for_region(would_have_contribution, …)`), so with no packages
 there is nothing to bridge.
 
 `AGENTS.md`'s own description reads more broadly — "`CLAUDE.md` is the one
-generated bridge (`@AGENTS.md`) produced by `uze context reconcile`" — with
+generated bridge (`@AGENTS.md`) produced by `uze agent context reconcile`" — with
 no mention of that condition.
 
 **Chosen.** The phase asserts that `reconcile` *names* the bridge and its

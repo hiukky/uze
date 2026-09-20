@@ -66,7 +66,7 @@ uze-application (the one layer where vendor names appear):
   context_reconcile(project_root)  writes
 
 src/main.rs:
-  uze context inspect | plan | reconcile [path] [--format json]
+  uze agent context inspect | plan | reconcile [path] [--format json]
 ```
 
 **The load-bearing rule, enforced by construction:** `reconcile_agents_md` calls

@@ -93,7 +93,7 @@ malformed, naming its two replacements.
 - [x] 9.13 `digest::tree_sha256` (SHA-256 over sorted, length-prefixed path+content pairs) is recorded from the Store's own bytes on add and verified on install, before ingest and before any harness sees anything. A mismatch is `UzeError::IntegrityMismatch`, naming both digests and saying nothing was installed. A source with no stable revision records no pin rather than one that would be wrong by the next save.
 - [x] 9.14 `project_lock::stale_against(manifest, lock)` compares the manifest's declarations against each entry's `requested` echo — no network, no re-resolution, so `status` still answers in a tunnel. A plugin the lock has never seen is stale; an entry predating the echo is deliberately *not* reported, since calling every existing project out of date for a reason nobody can act on is worse than saying nothing.
 - [x] 9.15 `add` declares in `agents.yaml` first and records the resolution in the lock second; `remove` undeclares and regenerates, deleting the lock when nothing is left to reproduce (`project_lock::remove_lock`). `declared_marketplace_for` maps a resolved `MarketplaceSource` back to the declaration that produced it, so a person reads what they asked for rather than what resolution made of it.
-- [x] 9.16 `REPLACED_KEYS` in `project_lock.rs` rejects a lock still carrying `worktrees`/`worktrees_dir`, naming `agents.yaml` and the regeneration step (`tests/lifecycle/manifest_and_lock.rs::a_lock_still_carrying_the_policy_is_refused_and_says_where_it_belongs`). This repo's own pair was split, and re-authored again for the 2026-09-06 schema — `uze context inspect` in this checkout was refusing its own manifest with `unknown field: plugins` until it was.
+- [x] 9.16 `REPLACED_KEYS` in `project_lock.rs` rejects a lock still carrying `worktrees`/`worktrees_dir`, naming `agents.yaml` and the regeneration step (`tests/lifecycle/manifest_and_lock.rs::a_lock_still_carrying_the_policy_is_refused_and_says_where_it_belongs`). This repo's own pair was split, and re-authored again for the 2026-09-06 schema — `uze agent context inspect` in this checkout was refusing its own manifest with `unknown field: plugins` until it was.
 - [ ] 9.17 Update `tests/_fixtures/scenarios/malformed-lock/` and every fixture writing an `agents.lock`; add a fixture for the pre-split shape.
 - [x] 9.18 `tests/lifecycle/manifest_and_lock.rs` (8 tests, product-level through `UzeApplication`): reading a project creates nothing; `install` writes the commented default and no lock when there is nothing to resolve; `install` twice is byte-identical; a manifest somebody authored is never rewritten; the declared behavior reaches the `AGENTS.md` projection; a lock still carrying the policy is refused naming `agents.yaml`; a typo is named. Plus 34 unit tests in `manifest`/`manifest::edit`.
 - [ ] 9.19 `openspec validate project-agent-environment --strict` and `add-portable-worktree-policy --strict` pass; `make check` clean.
@@ -244,7 +244,7 @@ says so.
   report says what it reconciled. This is what closes the policy hole:
   `worktrees:` is read live per placement, but agents read the projected
   text, so a policy change was in force for UZE and not for them until
-  somebody happened to run `uze context reconcile`.
+  somebody happened to run `uze agent context reconcile`.
 - [x] 12.8 `uze i` alias. Clap alias on the existing variant, not a
   second variant — and check `tests::every_cli_command_is_classified`
   before assuming an alias needs no entry of its own.

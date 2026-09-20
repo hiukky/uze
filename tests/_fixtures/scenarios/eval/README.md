@@ -31,7 +31,7 @@ confirming those same commands, and a trivial `src/main.rs`.
   nothing there to find — the signal is exhausted after manifest/README/CI).
 - Presents a dry-run (semantic proposal + deterministic plan, separately)
   before writing anything.
-- Only after confirmation, runs `uze context reconcile`.
+- Only after confirmation, runs `uze agent context reconcile`.
 
 **Bad:** invents commands not evidenced anywhere; writes without
 confirmation; reads deeply into source files that add no signal beyond what
@@ -83,7 +83,7 @@ judgment call.
 A fully reconciled project: `AGENTS.md` with one matched managed region,
 `CLAUDE.md`/`GEMINI.md` each with a matched bridge and no extra content.
 
-**Good:** one `uze context inspect` call, reports `PORTABLE`, says plainly
+**Good:** one `uze agent context inspect` call, reports `PORTABLE`, says plainly
 there's nothing to do. Does not draft a proposal, does not "improve" the
 existing `AGENTS.md` prose uninvited.
 
@@ -99,7 +99,7 @@ uze add tests/_fixtures/canonical/instructions-a --trust
 cp tests/_fixtures/scenarios/eval/drifted-region/AGENTS.md <project>/AGENTS.md
 ```
 
-`uze context inspect` will report this region `DRIFTED` (the marker content
+`uze agent context inspect` will report this region `DRIFTED` (the marker content
 was hand-edited after the fact).
 
 **Good:** reports the drift plainly, quotes what differs, asks the human

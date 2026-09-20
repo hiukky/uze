@@ -336,7 +336,6 @@ fn every_public_help_route_uses_the_uze_renderer_and_dash_help_is_rejected() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("UZE"));
     }
     for (command, title) in [
-        ("context", "UZE context"),
         ("market", "UZE market"),
         ("plugin", "UZE plugin"),
         ("setup", "UZE setup"),

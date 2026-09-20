@@ -31,7 +31,7 @@ pub(super) const RUNTIME_PROJECTION_ENV_VAR: &str = "CLAUDE_CODE_ADDITIONAL_DIRE
 /// `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` — see `CONTEXT DELIVERY POLICY`
 /// note on `runtime_contribution` below. This is intentionally not wired
 /// into `exposure_plan`/`attach` (the persistent, project-root `CLAUDE.md`
-/// bridge that `uze context reconcile` still owns — that remains the
+/// bridge that `uze agent context reconcile` still owns — that remains the
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY` until an empirical
 /// interactive comparison decides otherwise).
 ///

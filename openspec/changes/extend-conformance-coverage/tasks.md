@@ -73,7 +73,7 @@
 ## 4. Project-context projection
 
 - [ ] 4.1 Add the in-container disposable project phase: project-scoped
-      install, `uze context inspect`/`reconcile`, turn from the project cwd.
+      install, `uze agent context inspect`/`reconcile`, turn from the project cwd.
 - [ ] 4.2 Assert each harness's provider request carries the projected
       context markers (AGENTS.md baseline + the harness's own bridge).
 - [ ] 4.3 Verify the phase per harness and record evidence.

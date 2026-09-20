@@ -14,7 +14,7 @@
 //! This is `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY`: building
 //! this does not by itself decide that runtime projection replaces the
 //! existing project-root `CLAUDE.md` bridge
-//! (`uze context reconcile`'s persistent instruction bridge) — that remains
+//! (`uze agent context reconcile`'s persistent instruction bridge) — that remains
 //! a separate, later decision pending empirical comparison.
 
 use std::{

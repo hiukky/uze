@@ -7,7 +7,7 @@ delivered exactly the way any other Skill-only package is.
 It ships three Skills:
 
 - `skills/init/SKILL.md` — an agentic orchestrator that calls UZE's own
-  deterministic `uze context inspect|plan|reconcile` CLI to make a project's
+  deterministic `uze agent context inspect|plan|reconcile` CLI to make a project's
   instructions context portable.
 - `skills/worktree/SKILL.md` — coordinates isolated worktrees for concurrent
   agent work and safe integration, honouring the `worktrees:` policy the

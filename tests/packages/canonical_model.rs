@@ -3,7 +3,7 @@
 //!
 //! These are the non-probabilistic half of Fase 12: does the package
 //! install through the exact same pipeline as any other package, does it
-//! get discovered, does `status`/`context inspect`/`context plan` produce
+//! get discovered, does `status`/`agent context inspect`/`agent context plan` produce
 //! valid JSON. The Skill's actual *reasoning* (whether it makes good
 //! decisions about a real project) is not testable this way — see
 //! `docs/capabilities/uze-skill.md` for the agentic eval scenarios that
@@ -163,7 +163,7 @@ fn the_package_receives_no_special_treatment_a_renamed_copy_behaves_identically(
     fs::remove_dir_all(root).unwrap();
 }
 
-// --- status / context inspect / context plan produce valid, well-shaped JSON ---
+// --- status / agent context inspect / plan produce valid, well-shaped JSON ---
 
 #[test]
 fn status_context_inspect_and_context_plan_produce_valid_json() {

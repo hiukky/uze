@@ -71,7 +71,7 @@ behavior in that mode where the harness supports it.
 
 ### Requirement: Exercise project-context projection against real harnesses
 
-The Lab SHALL run `uze context reconcile` in a disposable project directory
+The Lab SHALL run `uze agent context reconcile` in a disposable project directory
 and assert that each real harness picks up the projected context — the
 `AGENTS.md` baseline and the harness's own bridge — when a turn runs from
 that project.

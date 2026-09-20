@@ -93,7 +93,7 @@ pub enum PublicationStatus {
 
 /// How an integration's harness consumes a project's shared `AGENTS.md`
 /// context — the delivery half of the Context Manager's per-harness model
-/// (`context inspect|plan|reconcile`). The Core only defines the
+/// (`agent context inspect|plan|reconcile`). The Core only defines the
 /// vocabulary; which harness has which delivery is each integration's own
 /// declaration, never the Application's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,7 +106,7 @@ pub enum ContextDelivery {
     Native { files: &'static [&'static str] },
     /// Reaches the shared context only through a delimited bridge region
     /// (an `@AGENTS.md` import) inside the harness's own native file, which
-    /// `context inspect|plan|reconcile` maintain.
+    /// `agent context inspect|plan|reconcile` maintain.
     Bridge { file_name: &'static str },
     /// No project-context delivery is modeled for this harness; `context`
     /// commands never report it.
@@ -293,7 +293,7 @@ pub trait IntegrationPort {
     }
 
     /// How this harness consumes a project's shared `AGENTS.md` context
-    /// (see [`ContextDelivery`]). Drives `context inspect|plan|reconcile`;
+    /// (see [`ContextDelivery`]). Drives `agent context inspect|plan|reconcile`;
     /// the default `None` keeps an integration that has not declared a
     /// delivery unreported rather than inheriting another harness's.
     fn context_delivery(&self) -> ContextDelivery {

@@ -74,22 +74,22 @@ scenes:
 
   - scene: the read-only commands write nothing at all
     when:
-      - shell: "{uze} context inspect"
+      - shell: "{uze} agent context inspect"
         say: inspect the current context
-      - shell: "{uze} context plan"
+      - shell: "{uze} agent context plan"
         say: preview what reconciling would change
     then:
       - tree: "{project}"
         same_as: project
         about: the project is byte-identical after inspect and plan
       - cmd:
-          run: "{uze} context plan"
+          run: "{uze} agent context plan"
           stdout_contains: ATTACH
         about: and the plan says the contribution is not attached yet
 
   - scene: reconciling composes the contribution into a region UZE owns
     when:
-      - shell: "{uze} context reconcile"
+      - shell: "{uze} agent context reconcile"
         say: apply the plan
     then:
       - file: "{project}/AGENTS.md"
@@ -120,7 +120,7 @@ scenes:
           name: reconciled
           tree: "{project}"
       - cmd:
-          run: "{uze} context reconcile"
+          run: "{uze} agent context reconcile"
         about: a second reconcile succeeds
       - tree: "{project}"
         same_as: reconciled
@@ -135,13 +135,13 @@ scenes:
         contains: Always run `make check` before committing.
         about: a machine-scoped command never edits a project's page
       - cmd:
-          run: "{uze} context plan"
+          run: "{uze} agent context plan"
           stdout_contains: REMOVE
         about: the project's own command is what reports the region as orphaned
 
   - scene: and reconciling takes the region back, leaving the team's page as it was
     when:
-      - shell: "{uze} context reconcile"
+      - shell: "{uze} agent context reconcile"
         say: reconcile the project again
     then:
       - file: "{project}/AGENTS.md"
@@ -164,7 +164,7 @@ scenes:
           that it is right. `text_region::detach` will not delete a file it
           cannot prove UZE created (its own test pins that: a user's
           pre-existing empty file must survive attach/detach), so the region
-          goes and the file stays. `uze context inspect` then reports the
+          goes and the file stays. `uze agent context inspect` then reports the
           bridge as `Missing` while an empty file sits in the repository
           disagreeing with it. Making the file's existence a tracked
           artifact — a receipt, the way every other managed artifact is —

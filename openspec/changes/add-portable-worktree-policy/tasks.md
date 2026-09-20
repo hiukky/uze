@@ -20,7 +20,7 @@
 ## 4. Projection and reporting
 
 - [x] 4.1 Project the declaration into a marker-owned region of `AGENTS.md`, keyed on the rendered content so it stays editable.
-- [x] 4.2 Report the region and completion behavior from `context inspect|plan|reconcile` and render them in the CLI.
+- [x] 4.2 Report the region and completion behavior from `agent context inspect|plan|reconcile` and render them in the CLI.
 - [x] 4.3 Cover the projection: never triggering a harness's own isolation, drift refused, edits superseding.
 
 ## 5. Deletions
@@ -95,7 +95,7 @@ green. Tests run against real repositories through `uze_testkit::git`.
 - [x] 12.1 Extend the projected text: already isolated, commit on your own branch, never write the target, delivery is UZE's; keep the no-top-level-worktree property and the content-keyed region identity.
 - [x] 12.2 Rewrite the `worktree` Skill for the slot model and drop its integration guidance.
 - [x] 12.3 Rewrite the "Concurrent work isolation" section of `docs/architecture/invariants.md`: every agent isolated, primary is the operator's, nothing holding work removed automatically, delivery serialized with the gate on rebased commits, target written only in deliver, identity immutable, replaced lock field rejected — each tied to its test.
-- [x] 12.4 Dogfood on this repository: three agents with the primary dirty, deliver all three, force a conflict, kill UZE mid-delivery and restart; the primary's uncommitted edit survives every step. Done as `tests/acceptance/engine.rs` against the real binary (three agents around a dirty primary, a conflict resolved from the pane, a server restart adopting a dirty legacy checkout, `pr` against a fake forge), plus `uze context reconcile` on this repository, which replaced the superseded region with the slot-model text. A kill *mid-delivery* is not scripted: the target is written only by `ff-only`, so there is no half-written state to observe, and the state file is atomic by its own test.
+- [x] 12.4 Dogfood on this repository: three agents with the primary dirty, deliver all three, force a conflict, kill UZE mid-delivery and restart; the primary's uncommitted edit survives every step. Done as `tests/acceptance/engine.rs` against the real binary (three agents around a dirty primary, a conflict resolved from the pane, a server restart adopting a dirty legacy checkout, `pr` against a fake forge), plus `uze agent context reconcile` on this repository, which replaced the superseded region with the slot-model text. A kill *mid-delivery* is not scripted: the target is written only by `ff-only`, so there is no half-written state to observe, and the state file is atomic by its own test.
 - [x] 12.5 Run the gate: formatting, clippy, the workspace suite, strict OpenSpec validation. Green, with one pre-existing red this change does not touch: `uze-application::application::tests::cache_warm_detect_cached_meets_the_performance_budget` misses its 50ms budget by a few ms on this VM, on clean `main` too.
 
 ## 13. End-to-end proof of the engine

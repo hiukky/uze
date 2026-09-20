@@ -86,7 +86,7 @@ worktrees:
 </Callout>
 
 The policy lives here rather than in machine state because
-`uze context reconcile` projects it into the tracked `AGENTS.md`: anything
+`uze install` projects it into the tracked `AGENTS.md`: anything
 resolved outside the project would rewrite a shared file to whichever machine
 ran the command. A worktree's own manifest is ignored for the same reason —
 the primary checkout owns the policy.

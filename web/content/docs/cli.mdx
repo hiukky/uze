@@ -22,9 +22,6 @@ uze <plugin>@<market>        # shorthand — add a plugin to this project
 uze install [path]           # resolve agents.yaml into agents.lock, then install it
 uze remove <plugin>          # remove a plugin from this project (never the machine Store)
 uze status [path]            # this project's environment readiness
-uze context inspect [path]   # what each harness currently sees of AGENTS.md — read-only
-uze context plan [path]      # exactly what reconcile would change — read-only
-uze context reconcile [path] # compose AGENTS.md and reconcile the harness bridges
 ```
 
 `uze <plugin>@<market>` is the only form that adds a plugin to a project. A bare
@@ -42,6 +39,30 @@ creates that file.
 | --- | --- | --- |
 | `--trust` | `install`, `<plugin>@<market>` | Authorize executable capabilities (hook and MCP commands) |
 | `--format json` | every command above | Machine-readable output, keyed on stable ids |
+
+`uze status` is where a person asks whether the project is ready: which file
+the context comes from, whether every detected harness reads it, what
+`agents.yaml` declares that nothing has caught up to yet, and the one command
+to run about it. `uze install` is the repair — it converges the manifest and
+leaves the context reconciled, so declaring an environment and projecting it
+are one command.
+
+## Agent surface
+
+Project-scoped, like everything above, but written for an agent UZE launched
+rather than for a person — so it is hidden from `uze --help` and documented in
+the instructions UZE projects into `AGENTS.md`. Nothing here is off-limits to a
+person; it simply answers at a detail only a writer of `AGENTS.md` acts on.
+
+```bash
+uze agent task name <type>/<subject>  # name the work, judged against agents.yaml's vocabulary
+uze agent context inspect [path]      # what each harness currently sees of AGENTS.md — read-only
+uze agent context plan [path]         # exactly what reconcile would change — read-only
+uze agent context reconcile [path]    # compose AGENTS.md and reconcile the harness bridges
+```
+
+`--format json` on all four. `uze agent task name` works only inside an agent
+UZE launched — a person's own shell has no task to name.
 
 ## Machine scope
 

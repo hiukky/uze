@@ -57,7 +57,7 @@ directory you are in.
 | **Agents** | Markdown agent profiles projected onto each harness's native agent surface — including a generated TOML file for Codex, which has no on-disk Markdown format. |
 | **Hooks** | One authored `hooks.json` and a shell-command ABI, so a hook works everywhere without a per-vendor runtime. |
 | **Instructions** | A package's own `AGENTS.md` is composed into the project's, one owned region per package. |
-| **Project context** | `AGENTS.md` is the baseline; `uze context inspect \| plan \| reconcile` keeps each harness's bridge in step. |
+| **Project context** | `AGENTS.md` is the baseline; `uze install` keeps each harness's bridge in step, and `uze status` says whether they are. |
 | **Project environment** | `agents.yaml` declares what the project wants; `agents.lock` records what resolving it produced. `git clone && uze install` rebuilds it. |
 | **Profiles** | Autonomy, sandbox and model preferences translated into each harness's own settings, with the fidelity reported per axis. |
 
@@ -87,7 +87,7 @@ directory you are in.
 ```bash
 $ uze setup                # detect + provision the four harnesses through official routes
 $ uze flow@my-marketplace  # add a plugin from a marketplace to this project
-$ uze context reconcile    # project context across every detected harness
+$ uze status               # context, environment and what is still owed
 $ uze doctor               # diagnostics: store, harnesses, attachment health
 ```
 

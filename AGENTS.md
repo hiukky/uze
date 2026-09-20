@@ -521,9 +521,9 @@ properties):
 - **Machine and project scope are independent**: `uze setup`, `uze doctor`,
   `uze theme`, `uze market …` and `uze plugin …` are machine-scoped
   (`~/.uze`); `uze <plugin>@<market>`, `uze install` (aliased `uze i`),
-  `uze remove`, `uze status`, `uze context inspect|plan|reconcile` and
-  `uze agent …` are project-scoped (`agents.yaml`, `agents.lock`,
-  `AGENTS.md`). Neither touches the other's state — see
+  `uze remove`, `uze status` and `uze agent …` (`agent task name`,
+  `agent context inspect|plan|reconcile`) are project-scoped
+  (`agents.yaml`, `agents.lock`, `AGENTS.md`). Neither touches the other's state — see
   `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
   `uze install` converges the manifest in both directions — a plugin dropped
   from `agents.yaml` leaves `agents.lock`, while the Store and every harness
@@ -548,7 +548,13 @@ properties):
 - **`uze agent …` is an audience, not a category**: its reader is an agent
   UZE launched, not a person, so it is hidden from `uze --help` and
   documented in the region UZE projects into `AGENTS.md` — each audience
-  reads one surface. `uze agent task name <type>/<subject>` is how work
+  reads one surface. `agent context inspect|plan|reconcile` sits there for
+  that reason and no other: the project scope is unchanged, but the
+  region-by-region detail it answers with is something only a writer of
+  `AGENTS.md` acts on. A person asks `uze status` whether the project is
+  ready and `uze install` to make it so, so anything a person needs to
+  know about the context belongs in `status`, never in a fourth verb of
+  their own. `uze agent task name <type>/<subject>` is how work
   acquires the branch a reviewer sees and the label an operator reads; the
   vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
   Work that reaches its first commit still unnamed is named from that
@@ -590,7 +596,7 @@ properties):
   add here.
 - **Project context bridging**: `AGENTS.md` is the portable baseline for
   project instructions. `CLAUDE.md` is the one generated bridge
-  (`@AGENTS.md`) produced by `uze context reconcile` — don't hand-edit
+  (`@AGENTS.md`) produced by `uze agent context reconcile` — don't hand-edit
   their managed regions in a *project uze manages*; this repository's own
   root `CLAUDE.md`/`AGENTS.md` are the exception, maintained directly since
   this is uze's own source, not a uze-managed target project.

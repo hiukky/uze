@@ -308,18 +308,20 @@ fn market_list_and_inspect_meet_the_budget_without_the_repository() {
 #[test]
 fn context_reads_and_reconcile_meet_the_budget() {
     let world = World::build("budget-context");
-    world.within_budget("context inspect", |app| {
+    world.within_budget("agent context inspect", |app| {
         app.context().inspect(&world.project)
     });
-    world.within_budget("context plan", |app| app.context().plan(&world.project));
+    world.within_budget("agent context plan", |app| {
+        app.context().plan(&world.project)
+    });
     let reconciles: Vec<Duration> = (0..ATTEMPTS)
         .map(|_| {
-            world.timed_once("context reconcile", |app| {
+            world.timed_once("agent context reconcile", |app| {
                 app.context().reconcile(&world.project).unwrap()
             })
         })
         .collect();
-    assert_best_within_budget("context reconcile", &reconciles);
+    assert_best_within_budget("agent context reconcile", &reconciles);
 }
 
 #[test]
