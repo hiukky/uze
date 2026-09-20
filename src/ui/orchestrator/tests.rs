@@ -7105,16 +7105,40 @@ mod workspace_tests {
         );
 
         // A branch was read at the root: a directory with one is a
-        // repository with a commit.
+        // repository with a commit. One row, because the tree holds
+        // nothing to decide about.
         assert_eq!(
             menu_on(agents_in_the_root_session(), TabId(2)),
             vec![
                 uze_keys::Action::RenameSelection,
                 uze_keys::Action::IsolateAgent,
-                uze_keys::Action::IsolateAgentWithChanges,
                 uze_keys::Action::CloseTab,
             ],
-            "both answers to what becomes of this tree's uncommitted work"
+            "isolating takes the work with it, and says so in one row"
+        );
+
+        // The tree the agent stands in has uncommitted work, so leaving it
+        // behind is an answer worth offering — and only now.
+        let mut dirty = agents_in_the_root_session();
+        dirty.remembered.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![AgentView {
+                id: "a1".into(),
+                isolated: false,
+                checkout: Some(PathBuf::from("/repo")),
+                state: WorkStateView::Uncommitted,
+                ..task_in("/repo", "agent 1", WorkStateView::Uncommitted, 0)
+            }],
+        );
+        assert_eq!(
+            menu_on(dirty, TabId(2)),
+            vec![
+                uze_keys::Action::RenameSelection,
+                uze_keys::Action::IsolateAgent,
+                uze_keys::Action::IsolateAgentAtCommit,
+                uze_keys::Action::CloseTab,
+            ],
+            "the exception stands beside it where there is something to leave"
         );
 
         // An agent already in a checkout of its own has nothing to be

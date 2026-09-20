@@ -122,12 +122,17 @@ that keeps a conversation under the directory it ran in — Claude Code does —
 cannot resume it somewhere else, so the agent picks up in the new checkout
 with a fresh conversation. Isolate early if the thread matters.
 
-It comes in two rows: **Isolate**, and **Isolate with my changes** — which
-copies whatever your tree has uncommitted into the new checkout — edits to
-tracked files and new files git isn't ignoring alike. A copy: your own tree is
-exactly what you left it, either way. Both rows are always there,
-because whether your tree is dirty is a question only Git answers and the
-sidebar never waits on one; on a clean tree they do the same thing.
+**Isolate** takes your uncommitted work with it — edits to tracked files and
+new files git isn't ignoring alike. A copy: your own tree is exactly what you
+left it. That is the default because what the tree holds when you move an
+agent is usually what *that agent* was doing, and a checkout without it is one
+where the file it was mid-edit on went back to its last commit.
+
+**Isolate clean** stands beside it when your tree has uncommitted work, and
+cuts the checkout from the last commit instead — the changes stay where they
+are. It is the row for the case uze cannot see: a tree dirty from something
+other than this agent. On a clean tree there is nothing to decide, so only the
+one row is there.
 
 ## An isolated agent gets its own checkout
 

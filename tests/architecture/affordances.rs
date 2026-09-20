@@ -135,8 +135,8 @@ fn affordances() -> BTreeMap<Action, Affordance> {
         Control("an agent row's actions, in a repository"),
     );
     put(
-        Action::IsolateAgentWithChanges,
-        Control("an agent row's actions, beside Isolate"),
+        Action::IsolateAgentAtCommit,
+        Control("an agent row's actions, where the tree is dirty"),
     );
     put(
         Action::RenameSelection,

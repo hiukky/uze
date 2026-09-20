@@ -82,21 +82,33 @@ stated.
 - **WHEN** isolating an agent and the checkout cap is reached, or Git refuses
 - **THEN** the agent keeps running where it was, and the operator is told why
 
-The operator SHALL choose, as part of the action, whether a copy of the
-root's uncommitted changes goes into the checkout. Both answers SHALL be
-offered wherever the action is, because whether the tree is dirty is a
-question only Git answers and the client SHALL NOT wait on one to draw;
-on a clean tree the two answers produce the same result.
+Isolating SHALL take a copy of the root's uncommitted changes into the
+checkout. At the moment an agent is moved, what the tree holds is
+usually what that agent was doing, and a checkout without it is one
+where the file it was mid-edit on has gone back to its last commit.
+
+Cutting from the last commit instead SHALL be offered as a second
+answer, and only where the tree is known to hold uncommitted work. The
+knowledge is the evaluation's, never a Git read taken while the surface
+draws, so it MAY be up to a refresh old — which is why it gates this
+answer and not the carrying one: a stale *clean* reading costs the
+operator nothing, where the same staleness on the carrying answer would
+take away the very thing they had just edited. Neither answer takes
+anything from the operator's own tree.
 
 #### Scenario: The work follows the agent
-- **WHEN** an agent is isolated while the space's root has uncommitted changes, carrying them
+- **WHEN** an agent is isolated while the space's root has uncommitted changes
 - **THEN** a copy of them is in the checkout — edits to tracked files and new files the repository does not ignore alike
 - **AND THEN** the root's own working tree is left exactly as it was, whichever answer is given
 - **AND THEN** nothing is discarded
 
-#### Scenario: A clean tree makes the two answers one
+#### Scenario: A clean tree asks nothing
 - **WHEN** an agent is isolated while the space's root has no uncommitted changes
-- **THEN** either answer isolates it, and neither tree gains or loses anything
+- **THEN** the action carries the one answer, and neither tree gains or loses anything
+
+#### Scenario: The work is not this agent's to take
+- **WHEN** the root is known to hold uncommitted changes and the operator cuts from the last commit
+- **THEN** the checkout holds the commit alone, and the changes stay in the root they were made in
 
 ### Requirement: An isolated agent is the subject of delivery
 The system SHALL treat an isolated agent exactly as a task is treated

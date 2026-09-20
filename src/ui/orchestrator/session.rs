@@ -1892,15 +1892,27 @@ impl Attach<'_> {
                     // given, and a directory that is no repository has
                     // nothing to cut one from.
                     if self.can_isolate(tab) {
-                        // Both rows, always. Whether the tree holds
-                        // uncommitted changes is a Git question, and
-                        // nothing the client draws waits on Git — a row
-                        // gated on the last evaluation's answer is absent
-                        // exactly when the operator has just edited
-                        // something, which is when they want it. On a
-                        // clean tree the two rows do the same thing.
+                        // Isolating takes the work with it: at the moment
+                        // an agent is moved, what the tree holds is
+                        // usually what that agent was doing, and a
+                        // checkout without it is one where the file it
+                        // was mid-edit on went back to its last commit.
                         items.push(Action::IsolateAgent);
-                        items.push(Action::IsolateAgentWithChanges);
+                        // Starting from the commit instead is the
+                        // exception, and it is offered only where it is
+                        // one: a tree the last evaluation found dirty.
+                        // Gated this way round on purpose — the answer
+                        // can be up to a refresh old, and a stale *clean*
+                        // reading costs the operator nothing, where a
+                        // stale reading on the carrying row would take
+                        // away the very thing they had just edited.
+                        if self
+                            .model
+                            .tab_task(tab)
+                            .is_some_and(|task| task.state == WorkStateView::Uncommitted)
+                        {
+                            items.push(Action::IsolateAgentAtCommit);
+                        }
                     }
                     if can_close_tab_from_menu(&self.model, &self.identities, tab) {
                         items.push(Action::CloseTab);
@@ -2591,9 +2603,11 @@ impl Attach<'_> {
     /// somewhere else.
     fn perform_menu_action(&mut self, target: MenuTarget, action: Action) {
         match action {
-            Action::IsolateAgent => self.isolate_agent(target, uze_application::Carry::Nothing),
-            Action::IsolateAgentWithChanges => {
+            Action::IsolateAgent => {
                 self.isolate_agent(target, uze_application::Carry::CopyOfChanges)
+            }
+            Action::IsolateAgentAtCommit => {
+                self.isolate_agent(target, uze_application::Carry::Nothing)
             }
             _ => dispatch_menu_action(
                 &mut self.stream,
