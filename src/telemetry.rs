@@ -43,6 +43,19 @@ pub const OTLP_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 /// the file answers about a build nobody is running any more.
 const JOURNAL_DAYS: usize = 7;
 
+/// The most a journal's whole history may take. A day's file is written
+/// by a process nobody is watching, at a volume set by how the code
+/// happens to be instrumented — which is a number no reviewer checks, and
+/// the one that quietly reached 64 MB in an afternoon. A ceiling in bytes
+/// is the only limit that stays true when somebody adds a span to a loop.
+///
+/// Days, not bytes, is still the *rule*; this is the floor under it. The
+/// current day's file is never one of the ones dropped, so a single day
+/// that exceeds this on its own is reported rather than truncated — a
+/// journal that cuts the run it is about would lose exactly the lines
+/// worth having.
+const JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Where the text layer writes.
 pub enum Sink {
     /// A command's diagnostics, where the person who typed it is looking.
@@ -185,6 +198,7 @@ where
     // A journal that cannot be opened is not a reason to fail the run the
     // journal is about: the process goes on with nothing written, exactly
     // as it did before there was one.
+    prune_to_size(&dir, &name, JOURNAL_BYTES);
     let appender = match tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(&name)
@@ -204,6 +218,42 @@ where
         .with_writer(writer)
         .boxed();
     (layer, Some(guard))
+}
+
+/// Drops the oldest days of `name`'s journal until what is left fits in
+/// `budget`, newest kept first. The newest is kept whatever it weighs: it
+/// is the run being started, or the one just before it.
+///
+/// Runs before the appender opens, which is the one moment nothing is
+/// writing. A file that cannot be read or removed is skipped — losing a
+/// journal costs nothing, and failing a run over one would be the tail
+/// wagging the dog.
+fn prune_to_size(dir: &std::path::Path, name: &str, budget: u64) {
+    let prefix = format!("{name}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut journals: Vec<(std::ffi::OsString, u64)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let file = entry.file_name();
+            let named = file.to_str()?;
+            if !named.starts_with(&prefix) || !named.ends_with(".log") {
+                return None;
+            }
+            Some((file.clone(), entry.metadata().ok()?.len()))
+        })
+        .collect();
+    // The rolled name ends in the date, so the name sorts the way the
+    // clock does — no timestamp is read, and none is trusted.
+    journals.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut kept = 0u64;
+    for (index, (file, bytes)) in journals.iter().enumerate() {
+        kept = kept.saturating_add(*bytes);
+        if index > 0 && kept > budget {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+    }
 }
 
 /// A layer that subscribes to nothing — what is installed when the journal
@@ -382,6 +432,42 @@ mod otlp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ceiling is in bytes because that is the quantity that ran away:
+    /// the oldest days go until the history fits, and the newest stays
+    /// whatever it weighs — it is the run being started.
+    #[test]
+    fn the_journal_drops_its_oldest_days_until_the_history_fits() {
+        let scratch = uze_testkit::temp::scratch("telemetry-budget");
+        let write = |name: &str, bytes: usize| {
+            std::fs::write(scratch.join(name), vec![b'x'; bytes]).expect("the journal is written");
+        };
+        write("probe.2026-09-17.log", 40);
+        write("probe.2026-09-18.log", 40);
+        write("probe.2026-09-19.log", 40);
+        write("other.2026-09-17.log", 40);
+
+        prune_to_size(&scratch, "probe", 90);
+
+        let left = |name: &str| scratch.join(name).exists();
+        assert!(left("probe.2026-09-19.log"), "the newest day stays");
+        assert!(left("probe.2026-09-18.log"), "and the one that still fits");
+        assert!(!left("probe.2026-09-17.log"), "the oldest goes");
+        assert!(left("other.2026-09-17.log"), "another journal is not ours");
+    }
+
+    /// A single day over the ceiling is reported, never truncated: cutting
+    /// the run the journal is about loses the lines worth having.
+    #[test]
+    fn a_single_day_over_the_ceiling_is_kept() {
+        let scratch = uze_testkit::temp::scratch("telemetry-budget-one");
+        std::fs::write(scratch.join("probe.2026-09-19.log"), vec![b'x'; 200])
+            .expect("the journal is written");
+
+        prune_to_size(&scratch, "probe", 50);
+
+        assert!(scratch.join("probe.2026-09-19.log").exists());
+    }
 
     /// The point of the journal: it is written because the process is one
     /// that keeps one, not because anybody set `UZE_LOG` beforehand. The

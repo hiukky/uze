@@ -171,9 +171,14 @@ pub(crate) fn dispatch(
     sender: &Sender<WorkerResult>,
     model: &mut TuiModel,
 ) {
-    if intent != Intent::None {
-        model.status_expires_at = None;
+    // Nothing is the commonest intent by a wide margin — it is what a tick
+    // that resolved to no action answers — and it has nothing to dispatch,
+    // clears no status and is worth no span: one around it is a record
+    // that nothing happened, thousands of times an hour.
+    if intent == Intent::None {
+        return;
     }
+    model.status_expires_at = None;
     // The key or click's span: every worker it starts captures this as its
     // parent, so a refresh's spans belong to the press that asked for it.
     let _span = tracing::info_span!("tui.intent", intent = intent.name()).entered();

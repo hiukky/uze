@@ -26,12 +26,24 @@ Under a root:
   acts on; a method that returns an error records it on the span;
 - `integration.detect` / `attach` / `inspect` / `republish` / `provision`
   / `install` around each `IntegrationPort` call, with the integration id;
-- `git` per Git invocation through `uze-git` (arguments, exit code),
-  `acquisition.git` per clone step, `vendor.cli` per vendor CLI the
+- `acquisition.git` per clone step, `vendor.cli` per vendor CLI the
   integrations run, `process.run` per provisioning process, `hook.handler`
   per hook handler, `store.ingest`, `marketplace.clone`;
-- at debug level: `engine.package_resources`, `persistence.write`, and the detection
-  cache's hit and miss events.
+- at debug level: `git` per Git invocation through `uze-git` (arguments,
+  exit code), the TUI's timer-driven refreshes (`tui.git_read`,
+  `tui.task_evaluation`, `tui.occupancy_reconcile`, `tui.support_refresh`,
+  `tui.conversation_refresh`, `tui.code_*`, `tui.architect_artifacts`,
+  `tui.preserved_sweep`), `engine.package_resources`, `persistence.write`,
+  and the detection cache's hit and miss events.
+
+**What decides the level is who asked, not what it cost.** A span a
+*person* opened — a gesture, a command, a placement, a delivery — is
+`info`; a span a *timer* opened is `debug`. The TUI refreshes its badge
+every 750 ms and evaluates its tasks every 20 s, so at `info` those two
+alone wrote four fifths of a 64 MB day and buried the gesture that a
+report is actually about. The operation's own span still carries what it
+cost, which is the number an operator reads; `UZE_LOG=uze_git=debug`
+brings every invocation back.
 
 A worker thread in the TUI enters the span that started it, so a refresh
 is a child of the key that asked for it. `tests/architecture/
@@ -49,10 +61,17 @@ without being asked:
 ```
 
 Rolled daily and pruned to seven days, at `info` — every action, every
-Git call with its exit code, every integration call, and every failure.
-Written from a thread of its own (`tracing-appender`'s non-blocking
-writer, never lossy), so a render loop never waits on a disk, and flushed
-by the `Telemetry` guard when the process ends.
+integration call, and every failure. Written from a thread of its own
+(`tracing-appender`'s non-blocking writer, never lossy), so a render loop
+never waits on a disk, and flushed by the `Telemetry` guard when the
+process ends.
+
+Seven days is the rule; 64 MB is the floor under it. Days alone bound the
+history by a number nobody checks — how much a day weighs is set by how
+the code happens to be instrumented — so the oldest days are also dropped
+until the history fits in the ceiling. The newest is never one of them: a
+single day over it is reported, never truncated, because cutting the run
+the journal is about loses exactly the lines worth having.
 
 It is on by default because the run worth reading is the one nobody
 expected to have to read: a switch turned on after the fact is a switch

@@ -198,7 +198,7 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.support_refresh").entered();
+        let _span = tracing::debug_span!("tui.support_refresh").entered();
         let support = answered_or(
             || {
                 super::tui_application(support_home).ok().and_then(|app| {
@@ -238,7 +238,7 @@ fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<LaunchedAgent>) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.conversation_refresh").entered();
+        let _span = tracing::debug_span!("tui.conversation_refresh").entered();
         let Ok(app) = tui_application(home) else {
             return;
         };
@@ -399,7 +399,7 @@ fn spawn_preserved_sweep(home: &UzeHome, sender: mpsc::Sender<PreservedResolutio
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.preserved_sweep").entered();
+        let _span = tracing::debug_span!("tui.preserved_sweep").entered();
         let work = answered_or(
             || {
                 super::tui_application(home)
@@ -424,7 +424,7 @@ fn spawn_task_evaluation(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.task_evaluation").entered();
+        let _span = tracing::debug_span!("tui.task_evaluation").entered();
         // Every path out of here answers, including the ones that found
         // nothing: a request that returns in silence never releases its
         // key, and the directory is then never evaluated again.
@@ -652,7 +652,7 @@ fn spawn_git_read(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.git_read").entered();
+        let _span = tracing::debug_span!("tui.git_read").entered();
         let answer = answered_or(
             || {
                 let summary = code::change_summary(&WorkspaceHost, &cwd);
@@ -860,7 +860,7 @@ fn spawn_occupancy_reconcile(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.occupancy_reconcile").entered();
+        let _span = tracing::debug_span!("tui.occupancy_reconcile").entered();
         let reconciliation = answered_or(
             || {
                 tui_application(home)
@@ -913,7 +913,7 @@ fn spawn_file_request(
     sender: mpsc::Sender<FileResolution>,
 ) {
     thread::spawn(move || {
-        let _span = tracing::info_span!("tui.code_file_request").entered();
+        let _span = tracing::debug_span!("tui.code_file_request").entered();
         // Highlighting runs syntect over whatever the tree listed, which
         // is the one read here whose input nobody controls.
         let silence = code::unanswered(&request, "reading it failed");
@@ -930,7 +930,7 @@ fn spawn_changes_refresh(
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.code_changes_refresh").entered();
+        let _span = tracing::debug_span!("tui.code_changes_refresh").entered();
         let silence =
             code::RefreshedChanges::failed(placement.clone(), "reading the changes".to_owned());
         let refreshed = answered_or(
@@ -964,7 +964,7 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.architect_artifacts").entered();
+        let _span = tracing::debug_span!("tui.architect_artifacts").entered();
         let silence = architect::ArtifactsAnswer {
             branch: String::new(),
             artifacts: architect::Artifacts::Nothing {
@@ -1005,7 +1005,7 @@ fn spawn_code_measure(root: PathBuf, sender: mpsc::Sender<MeasureResolution>) {
     let parent = tracing::Span::current();
     thread::spawn(move || {
         let _parent = parent.enter();
-        let _span = tracing::info_span!("tui.code_measure").entered();
+        let _span = tracing::debug_span!("tui.code_measure").entered();
         let measure = answered_or(|| code::measure(&WorkspaceHost, &root).ok(), None);
         let _ = sender.send(MeasureResolution { root, measure });
     });
