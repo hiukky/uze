@@ -12,27 +12,35 @@ fn opened() -> ArchitectView {
     let artifacts = vec![
         Artifact::read(
             "containers.mmd",
-            include_str!("../../../../docs/architecture/diagrams/containers.mmd"),
+            include_str!("../../../../docs/architecture/containers.mmd"),
         ),
         Artifact::read(
             "system-context.mmd",
-            include_str!("../../../../docs/architecture/diagrams/system-context.mmd"),
+            include_str!("../../../../docs/architecture/system-context.mmd"),
         ),
         Artifact::read(
             "install-sequence.mmd",
-            include_str!("../../../../docs/architecture/diagrams/install-sequence.mmd"),
+            include_str!("../../../../docs/architecture/install-sequence.mmd"),
         ),
         Artifact::read(
             "crate-layering.mmd",
-            include_str!("../../../../docs/architecture/diagrams/crate-layering.mmd"),
+            include_str!("../../../../docs/architecture/crate-layering.mmd"),
         ),
         Artifact::read(
             "install-pipeline.mmd",
-            include_str!("../../../../docs/architecture/diagrams/install-pipeline.mmd"),
+            include_str!("../../../../docs/architecture/install-pipeline.mmd"),
         ),
         Artifact::read(
             "core-components.mmd",
-            include_str!("../../../../docs/architecture/diagrams/core-components.mmd"),
+            include_str!("../../../../docs/architecture/core-components.mmd"),
+        ),
+        Artifact::read(
+            "agent-lifecycle.mmd",
+            include_str!("../../../../docs/architecture/agent-lifecycle.mmd"),
+        ),
+        Artifact::read(
+            "attachment-lifecycle.mmd",
+            include_str!("../../../../docs/architecture/attachment-lifecycle.mmd"),
         ),
     ];
     state.absorb(ArtifactsAnswer::Found {
@@ -281,7 +289,15 @@ fn a_list_offers_only_the_area_on_show() {
         .into_iter()
         .map(|artifact| state.catalog.get(artifact).unwrap().name.as_str())
         .collect();
-    assert_eq!(names, ["Crate layering", "Install pipeline"]);
+    assert_eq!(
+        names,
+        [
+            "Agent lifecycle",
+            "Attachment lifecycle",
+            "Crate layering",
+            "Install pipeline"
+        ]
+    );
 }
 
 #[test]
@@ -458,19 +474,6 @@ fn the_keys_walk_from_box_to_box() {
     );
 }
 
-fn areas_listed(state: &ArchitectView) -> Vec<String> {
-    view(state, SPACE)
-        .navigator
-        .expect("a menu")
-        .rows
-        .into_iter()
-        .filter_map(|row| match row {
-            NavigatorRow::Group { name, .. } => Some(name),
-            _ => None,
-        })
-        .collect()
-}
-
 /// The key that closes peels one level at a time. Anything else makes a
 /// surface that can be entered but not looked around in: one press and
 /// the viewer is back where they started with three levels of work gone.
@@ -519,7 +522,7 @@ fn the_footer_offers_the_way_up_only_once_something_has_been_entered() {
 fn a_selector_with_nothing_to_choose_stays_shut() {
     let lone = Artifact::read(
         "install-sequence.mmd",
-        include_str!("../../../../docs/architecture/diagrams/install-sequence.mmd"),
+        include_str!("../../../../docs/architecture/install-sequence.mmd"),
     );
     let mut state = ArchitectView::opening();
     state.absorb(ArtifactsAnswer::Found {

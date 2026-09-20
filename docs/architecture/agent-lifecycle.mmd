@@ -1,0 +1,32 @@
+---
+title: Agent lifecycle
+---
+flowchart TD
+  place([An agent is placed]) --> cut[git worktree add<br/>.worktrees/id on branch agent/id]
+  cut --> setup[The project's setup command runs]
+  setup --> name[uze agent task name type/subject<br/>or, still unnamed at the first commit,<br/>named from that commit's subject]
+  name --> running[Running]
+  running --> evaluate{What Git says, each pass}
+  evaluate -->|a dirty tree| uncommitted[Uncommitted]
+  evaluate -->|agent gone, work left| parked[Parked]
+  evaluate -->|agent gone, nothing to deliver| closed[Closed]
+  uncommitted -->|it commits| ready
+  evaluate -->|commits ahead, clean tree| ready[Ready]
+  ready -->|the pane went quiet| refresh[refresh<br/>rebase onto the local target]
+  ready --> deliver([The operator delivers one task])
+  deliver --> integrating[Integrating<br/>under the repository write lock]
+  integrating --> already{Already in the target's tip?}
+  already -->|squashed on the forge| integrated[Integrated]
+  already -->|no| rebase{Rebase onto the tip}
+  rebase -->|conflict, target untouched| conflicted[Conflicted<br/>the rebase stays paused in the checkout]
+  rebase -->|clean| gate{The declared gate, on the rebased commits}
+  gate -->|fails| failed[GateFailed]
+  conflicted --> back[Back to the agent that owns it:<br/>only it holds the intent]
+  failed --> back
+  gate -->|passes| completion{The project's completion behaviour}
+  completion -->|handoff| human[Ready<br/>a human integrates the branch]
+  completion -->|pr| published[Ready<br/>branch pushed, request open]
+  completion -->|merge| overlap{Files the target moved too?}
+  overlap -->|yes| human
+  overlap -->|no| forward[Fast-forward the target]
+  forward --> integrated

@@ -1,0 +1,19 @@
+---
+title: Attachment lifecycle
+---
+flowchart TD
+  plan([Exposure plan]) --> kinds[One ManagedArtifact per side effect<br/>a symlink, a vendor config entry,<br/>a region of a shared file, a hook entry,<br/>or one only its integration can read]
+  kinds --> attach[Attach: the owning integration writes it]
+  attach --> receipt[(A typed receipt in the ledger)]
+  receipt --> inspect{Inspect the harness as it is now}
+  inspect -->|it is as the receipt says| matched[MATCHED]
+  inspect -->|it is gone| missing[MISSING]
+  inspect -->|it changed under us| drifted[DRIFTED]
+  inspect -->|someone else owns that name| conflict[CONFLICT]
+  inspect -->|this build cannot verify it| blocked[BLOCKED]
+  ledger[An unreadable ledger] --> blocked
+  matched --> detach[Detach, and the harness stops carrying it]
+  missing --> noop[Nothing to undo, and nothing is claimed]
+  drifted --> refuse[Refuse the mutation, and report what was found]
+  conflict --> refuse
+  blocked --> refuse

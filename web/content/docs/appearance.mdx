@@ -19,6 +19,7 @@ and neither ever changes the other.
 uze theme list          # what this machine can draw with, marking the active one
 uze theme set dawn      # draw in it from now on, in the CLI and the TUI
 uze theme show          # the active theme's resolved values, and its warnings
+uze theme show dawn     # any theme's, whether or not it is active
 
 uze theme glyphs        # the glyph sets, each drawn in its own glyphs
 uze theme glyphs nerd   # draw every mark from that set, whatever theme is on
@@ -122,8 +123,27 @@ won" is a question you can answer rather than guess at.
 ~/.uze/state/theme.json      the palette and the glyph set you chose
 ```
 
-One theme is built in and needs no file: `default`. A file of your own named
-`default.json` wins over it.
+Five themes are built in and need no file:
+
+| Id | What it is |
+| --- | --- |
+| `default` | uze's own look: a near-black backdrop and one sage accent. |
+| `dracula` | [Dracula](https://draculatheme.com): a purple accent and neon states over a blue-grey night. |
+| `catppuccin-mocha` | [Catppuccin](https://catppuccin.com) Mocha: pastels over a deep indigo base. |
+| `tokyo-night` | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme): soft blues over deep navy. |
+| `tokyo-night-light` | Tokyo Night's light palette, the same hues deepened for a pale page. |
+
+The four ports are faithful: every colour is one the palette's authors
+publish, including the pane's sixteen, and where a palette's hue falls under
+the contrast floor for a meaning, another of *its* colours carries that
+meaning instead. That is also why Catppuccin's light flavour is not among
+them — Latte's yellow, peach and green all sit below 3:1 on its own page.
+Diff highlighting uses the nearest syntax set uze bundles, so code in a diff
+is close to the palette rather than identical to it. Where each palette comes
+from, and its licence, is in `CREDITS.md`.
+
+A file of your own with a built-in's id — `dracula.json` — wins over it: a
+theme you wrote is yours.
 
 ## A theme is partial
 
@@ -149,6 +169,30 @@ from the background you declared.
 than resolved colours: change the parent's background and every surface it
 derived from that background is recomputed against the new one.
 
+```json
+{
+  "extends": "dracula",
+  "name": "Dracula Soft",
+  "colors": { "surface.background": "#343746" }
+}
+```
+
+That is a whole theme, and it needs no `dracula.json` of your own —
+`"extends": "default"` works the same way. A chain that loops is refused with
+the loop written out, and uze stops following one more than eight deep.
+Glyphs are not something to extend a theme for: they are the other axis, and
+`uze theme glyphs` is where they are chosen.
+
+`uze theme show` prints what a theme resolved from, in the order it applied:
+
+```text
+resolved from the built-in default → the `nerd` glyphs → `dracula` → `dracula-soft` → ~/.uze/theme-overrides.json
+```
+
+`default.json` and `ascii.json` beside the schema are the worked examples, and
+the four palettes there are partial themes of exactly the shape above: uze
+loads them all through the same resolver it loads yours with.
+
 ## The five ways to write a colour
 
 | Form | Means |
@@ -165,6 +209,21 @@ a little black on a light page. Same intent, opposite colour. Writing `~17` says
 *how far to separate* and lets the loader decide which way, which is why
 declaring a light background is enough to get a light theme's whole surface
 stack.
+
+Aliases follow through *your* theme, not the default's values: `state.success`
+is `@accent` in the built-in theme, so repainting the accent repaints success
+with it. `@token/aa` is what lets a *tint* do the same — the selected row is
+`@accent/17`, so it follows your accent instead of carrying uze's own green
+into your theme.
+
+`surface.scrim` is the veil a modal's backdrop wears. The screen a modal
+interrupts is blended toward it, away from the theme's own polarity — a dark
+theme's backdrop lifts, a light theme's sinks — so the layer underneath is a
+different colour from the modal rather than more of it.
+
+Two rules the loader enforces: `surface.background` must be an opaque
+`#rrggbb`, because it is what everything else composites over; and an alias
+loop is refused with the loop written out.
 
 <Callout type="info">
   `ansi.1`–`ansi.6` and their bright forms are literal colours, not references: a
@@ -188,6 +247,11 @@ chevrons and arrows and inherits the rest — a patched font already draws `├�
 and `…` correctly, and an icon there would be a downgrade. `ascii` is the
 exception and declares all of them, because one Unicode glyph left in an
 otherwise-ASCII screen defeats the only reason to choose it.
+
+The one thing a theme cannot make ASCII is prose. Arrows and separators
+*inside* hint lines are notation — `"↑↓ select"` reads as itself in the source
+and is drawn in the active set's glyphs — but a sentence like "loading…" is
+content, and stays as written.
 
 ## Your own overrides
 
@@ -213,18 +277,32 @@ One choice changes all of these at once:
 It does **not** control layout — paddings and minimum widths are invariants of a
 keyboard-driven interface, not appearance — or anything but appearance.
 
+## What the warnings mean
+
+`uze theme show` prints anything the loader had to say:
+
+- **`x` is not a colour token this version of uze knows.** A typo, or a theme
+  written for a newer uze. Ignored, never fatal: a theme in the wild has to
+  keep loading when the vocabulary grows.
+- **`x` has 1.8:1 contrast against the background.** Reported, never
+  corrected — your colour is your decision. It fires on the failure mode a
+  partial theme makes easy: you repaint the background, and the state hues you
+  did not declare stay where they were. Every colour in your file looks fine;
+  the ones you inherited are the problem.
+
+Warnings are printed when you ask — `uze theme show`, and `uze theme set` as
+you choose the theme — and not on every command after that.
+
 <Callout type="warn">
-  A theme that will not load reports the token and value that broke it on every
-  run, because it silently is not in force until you fix it; uze keeps drawing in
-  the default meanwhile. Contrast and unknown-token warnings are printed when you
-  ask (`theme show`, `theme set`), never on every command.
+  A theme that will not load **at all** is different: it reports the token and
+  the value that broke it on every run, because it silently is not in force
+  until you fix it. uze keeps drawing in the default meanwhile rather than
+  refusing to run.
 </Callout>
 
 Point your editor at
 [`crates/uze-theme/themes/theme.schema.json`](https://github.com/hiukky/uze/blob/main/crates/uze-theme/themes/theme.schema.json)
-for completion over every token and symbol name. The full authoring guide,
-including every token and what each warning means, is
-[`docs/appearance.md`](https://github.com/hiukky/uze/blob/main/docs/appearance.md).
+for completion over every token and symbol name.
 
 <Cards>
   <Card title="Shortcuts" href="/docs/keys" />

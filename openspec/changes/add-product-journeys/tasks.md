@@ -170,6 +170,6 @@ already covers are ticked.
       rule, and why it is not named `e2e/`.
 - [x] 7.2 `journeys/README.md`: writing a journey, the full vocabulary,
       the evidence contract, the container, debugging a failure.
-- [ ] 7.3 `docs/architecture/likec4/model.c4`: add `journeyRunner` and its
-      relation; run the project's arch-validate script.
+- [ ] 7.3 `docs/architecture/`: add the journey runner and its
+      relation; `cargo test -p uze-extensions` draws them.
 - [x] 7.4 `openspec validate --all --strict` passes.

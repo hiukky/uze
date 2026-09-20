@@ -10,6 +10,7 @@ C4Container
     Container(core, "Core", "uze-core", "Store, Engine, Router, IntegrationPort")
     Container(integrations, "Integrations", "uze-integrations", "One vertical per harness")
     Container(terminal, "Terminal server", "uze-terminal", "Owns the PTYs so a pane outlives its client")
+    Container(shim, "Runtime shim", "src/shim.rs", "Dispatched by argv[0]; projects AGENTS.md into a harness without writing in the project")
     ContainerDb(store, "Store", "Filesystem", "Installed package bytes and typed receipts")
   }
   System_Ext(harness, "Harnesses", "The coding-agent CLIs uze delivers into")
@@ -26,3 +27,5 @@ C4Container
   Rel(core, git, "Reads and writes", "uze-git")
   Rel(integrations, harness, "Projects plugins, hooks, context")
   Rel(terminal, harness, "Hosts", "PTY")
+  Rel(shim, core, "Asks for the projection")
+  Rel(harness, shim, "Runs, from PATH")

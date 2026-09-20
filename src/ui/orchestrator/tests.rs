@@ -6354,11 +6354,11 @@ mod workspace_tests {
             artifacts: [
                 (
                     "crate-layering.mmd",
-                    include_str!("../../../docs/architecture/diagrams/crate-layering.mmd"),
+                    include_str!("../../../docs/architecture/crate-layering.mmd"),
                 ),
                 (
                     "install-pipeline.mmd",
-                    include_str!("../../../docs/architecture/diagrams/install-pipeline.mmd"),
+                    include_str!("../../../docs/architecture/install-pipeline.mmd"),
                 ),
             ]
             .map(|(origin, source)| architect::Artifact::read(origin, source))
