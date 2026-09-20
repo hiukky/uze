@@ -551,6 +551,13 @@ mod workspace_tests {
             })
             .unwrap();
         model.hits = hits;
+        // What the loop itself keeps from a frame — the extension surface
+        // reports the geometry a click has to be resolved against, and a
+        // test that dropped it would resolve clicks against the default.
+        if let Some(rendered) = metrics.code {
+            model.code_tree_scroll = rendered.navigator_scroll;
+            model.code_scrollbars = rendered;
+        }
         model.absorb_manage_frame(metrics.manage);
         compute_layout(area, model.sidebar_width)
     }
@@ -859,6 +866,64 @@ mod workspace_tests {
         });
         let (rect, _) = control.expect("the control can be pointed at");
         assert_eq!(rect.y, 1, "on that same row");
+    }
+
+    /// A click on the map lands on the column the pointer is over.
+    ///
+    /// A drawing has no line numbers and so no gutter, and the rule that
+    /// turned a pointer into a position assumed one either way: every
+    /// click resolved seven cells to the left of where it landed, which
+    /// on a map is a tile or two over — and against the right-hand edge,
+    /// a tile nobody could reach at all.
+    #[test]
+    fn a_click_on_the_map_resolves_to_the_column_under_the_pointer() {
+        use uze_extensions::{ExtensionHit, code, view::ViewHit};
+
+        let root = PathBuf::from("/repo/.worktrees/a");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, code::ContentMode::Contents);
+        let view = model.code.as_mut().expect("the surface is open");
+        view.absorb_measure(code::Measure {
+            root,
+            files: (0..6)
+                .map(|n| code::FileMeasure {
+                    path: format!("src/m{n}.rs"),
+                    lines: 400 + n * 100,
+                    commits: n,
+                    changed: false,
+                })
+                .collect(),
+        });
+        view.show(code::ContentMode::Map);
+        full_frame(&mut model);
+
+        assert_eq!(
+            model.code_scrollbars.content_gutter, 0,
+            "a drawing carries no line numbers, so it has no gutter"
+        );
+        let (rect, line, cell) = model
+            .hits
+            .iter()
+            .find_map(|(rect, hit)| match hit {
+                WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::PlaceCaret { line, cell })) => {
+                    Some((*rect, *line, *cell))
+                }
+                _ => None,
+            })
+            .expect("the map's rows are clickable");
+        let _ = line;
+        let far_right = rect.x + rect.width - 1;
+        assert_eq!(
+            crate::ui::extension_view::caret_cell_at(
+                rect,
+                cell,
+                far_right,
+                model.code_scrollbars.content_gutter,
+            ),
+            usize::from(rect.width - 1),
+            "the last column of a row is the last cell of the drawing"
+        );
     }
 
     /// A click inside the explorer has to resolve to the row the frame

@@ -742,14 +742,17 @@ mod tests {
             // two places, for one reason: plain Unicode has no mark for
             // the thing. The `file.` family is folders and documents,
             // which a terminal only draws by reaching into its emoji
-            // font, and this vocabulary carries no emoji. The two
-            // surfaces are ideas — a checkout's code, a project's shape —
-            // and the nearest Unicode offers is a box or an arrow that
-            // means neither, which says less beside the word than nothing
-            // does. A patched font has real icons for both families,
-            // which is one of the things installing one buys.
+            // font, and this vocabulary carries no emoji. The three are
+            // ideas — a checkout's code, a project's shape, a map of
+            // where its lines are — and the nearest Unicode offers is a
+            // box or an arrow that means none of them, which says less
+            // beside the word than nothing does. A patched font has real
+            // icons for all of them, which is one of the things
+            // installing one buys.
             let iconless = symbol.to_string();
-            if iconless.starts_with("file.") || matches!(iconless.as_str(), "code" | "architect") {
+            if iconless.starts_with("file.")
+                || matches!(iconless.as_str(), "code" | "architect" | "map" | "changes")
+            {
                 continue;
             }
             assert!(

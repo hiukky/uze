@@ -272,6 +272,17 @@ vocabulary! {
         Code = "code",
         /// The shape of a project — what the architect surface opens onto.
         Architect = "architect",
+        /// A checkout drawn as where its lines are — one of the code
+        /// surface's halves, beside its files and its changes.
+        Map = "map",
+        /// What a checkout differs from the branch it started from —
+        /// the half the review is read in.
+        ///
+        /// Its own mark rather than [`Symbol::FileGit`], which says "Git
+        /// keeps this file" beside a `.gitignore` in a tree. The two are
+        /// near enough to be confused and far enough apart to matter:
+        /// one classifies a file, the other names a half of a surface.
+        Changes = "changes",
 
         // ── typography ─────────────────────────────────────────────────
         /// Elided text.

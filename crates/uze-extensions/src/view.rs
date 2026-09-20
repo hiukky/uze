@@ -208,6 +208,14 @@ pub enum Layout {
 pub struct Mode {
     pub label: String,
     pub active: bool,
+    /// What this one is, for the mark drawn before its name.
+    ///
+    /// [`RowIcon::None`] where the words are the whole of it: a way of
+    /// *drawing* what is already on screen has nothing to be a picture
+    /// of, and a mark invented for it would be a second thing to learn.
+    /// The host draws none at all in a glyph set that has no icon for
+    /// it, so the control reads the same either way.
+    pub icon: RowIcon,
 }
 
 /// The left-hand list of things to choose between.
@@ -273,6 +281,10 @@ pub enum RowIcon {
     Archive,
     Git,
     Legal,
+    /// A checkout drawn as where its lines are.
+    Map,
+    /// What a checkout differs from the branch it started from.
+    Changes,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

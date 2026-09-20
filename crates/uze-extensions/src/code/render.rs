@@ -11,7 +11,7 @@
 //! it is easiest to break.
 
 use super::{
-    CodeView, ContentMode, Focus, MapShowing, NavigatorMode, Showing,
+    CodeView, ContentMode, Focus, Half, MapShowing, NavigatorMode, Showing,
     changes_tree::{FileTreeItem, file_tree_items, selected_tree_row},
     diff::content_line,
     editor::OpenFile,
@@ -162,6 +162,9 @@ fn modes(code: &CodeView) -> Vec<Mode> {
         .into_iter()
         .map(|showing| Mode {
             label: mode_label(showing),
+            // A way of drawing what is already on screen is not a thing
+            // to be a picture of.
+            icon: RowIcon::None,
             active: match showing {
                 Showing::Selection(mode) => code.content == mode,
                 Showing::Measured(map) => {
@@ -172,35 +175,47 @@ fn modes(code: &CodeView) -> Vec<Mode> {
         .collect()
 }
 
-/// The two things this surface can be about, named as the halves they
-/// are: the list of files, and the map of the checkout they are in.
+/// The halves of this surface, named as the three places they are: the
+/// checkout's files, a picture of where its lines are, and what changed
+/// in it.
 ///
-/// Not named after the *rendering* the map happens to be in — that is
-/// what the modes beside it are for, and a chip that said "ASCII" here
-/// would be answering a question nobody asked of this end of the row.
+/// Never named after the *rendering* the map happens to be in — that is
+/// what the control below is for, and a chip that said "ASCII" here
+/// would be answering a question nobody asked of this row.
 fn subjects(code: &CodeView) -> Vec<Mode> {
-    code.subjects()
+    let here = code.half();
+    code.halves()
         .into_iter()
-        .map(|showing| Mode {
-            label: match showing {
-                Showing::Selection(_) => "Files".to_owned(),
-                Showing::Measured(_) => "Map".to_owned(),
+        .map(|half| Mode {
+            label: match half {
+                Half::Files => "Files".to_owned(),
+                Half::Map => "Map".to_owned(),
+                Half::Changes => "Changes".to_owned(),
             },
-            active: match showing {
-                Showing::Selection(_) => code.content != ContentMode::Map,
-                Showing::Measured(_) => code.content == ContentMode::Map,
+            icon: match half {
+                Half::Files => RowIcon::Directory,
+                Half::Map => RowIcon::Map,
+                Half::Changes => RowIcon::Changes,
             },
+            active: half == here,
         })
         .collect()
 }
 
+/// What each way of drawing is called — the way itself, never the thing
+/// being drawn.
+///
+/// The measurement's first rendering is "Unicode", the same word the
+/// architect surface uses for the same choice, and not "Map": the nav
+/// above already carries that word for the half, and one word naming
+/// two things in one header is the header asking to be read twice.
 fn mode_label(showing: Showing) -> String {
     match showing {
         Showing::Selection(ContentMode::Preview) => "Preview".to_owned(),
         Showing::Selection(ContentMode::Contents) => "Source".to_owned(),
         Showing::Selection(ContentMode::Diff) => "Changes".to_owned(),
         Showing::Selection(ContentMode::Map) => "Map".to_owned(),
-        Showing::Measured(MapShowing::Unicode) => "Map".to_owned(),
+        Showing::Measured(MapShowing::Unicode) => "Unicode".to_owned(),
         Showing::Measured(MapShowing::Ascii) => "ASCII".to_owned(),
         Showing::Measured(MapShowing::Ranking) => "Ranking".to_owned(),
     }
@@ -235,11 +250,7 @@ fn footer(code: &CodeView) -> Vec<Command> {
         commands.push(Command::Edit);
         commands.push(Command::Delete);
     }
-    if code
-        .subjects()
-        .iter()
-        .any(|showing| matches!(showing, Showing::Measured(_)))
-    {
+    if code.has_map() {
         commands.push(Command::ToggleMap);
     }
     commands.push(Command::FocusNext);

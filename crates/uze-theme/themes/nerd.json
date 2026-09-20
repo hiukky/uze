@@ -124,6 +124,14 @@
       "glyph": "",
       "width": 1
     },
+    "map": {
+      "glyph": "󰕰",
+      "width": 1
+    },
+    "changes": {
+      "glyph": "",
+      "width": 1
+    },
     "file.directory": {
       "glyph": "󰉋",
       "width": 1

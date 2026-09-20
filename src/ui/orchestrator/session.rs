@@ -1606,7 +1606,12 @@ impl Attach<'_> {
                         })),
                     )) => Some(ViewHit::PlaceCaret {
                         line,
-                        cell: crate::ui::extension_view::caret_cell_at(rect, cell, mouse.column),
+                        cell: crate::ui::extension_view::caret_cell_at(
+                            rect,
+                            cell,
+                            mouse.column,
+                            self.model.code_scrollbars.content_gutter,
+                        ),
                     }),
                     Some((_, WorkspaceHit::Extension(ExtensionHit::Code(hit)))) => Some(hit),
                     _ => None,

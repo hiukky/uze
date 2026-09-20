@@ -986,6 +986,7 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
             .iter()
             .map(|&(showing, label)| Mode {
                 label: label.to_owned(),
+                icon: RowIcon::None,
                 active: showing == state.showing,
             })
             .collect(),

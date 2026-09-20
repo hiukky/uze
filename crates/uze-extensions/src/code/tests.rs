@@ -20,7 +20,7 @@ use super::{
 use crate::{
     DirEntry,
     code::highlight::FALLBACK_SYNTAX_THEME,
-    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size, Span},
+    view::{Command, Content, LineTone, NavigatorRow, Role, RowIcon, RowMark, Size, Span},
 };
 
 fn space() -> Size {
@@ -1565,6 +1565,48 @@ fn measured() -> map::Measure {
     }
 }
 
+/// A directory is a place the cursor can be, and no file to read.
+///
+/// Coming back to one asked the host to read it: the answer is "not
+/// readable as text", drawn in the colour of a failure, where what is
+/// true is that nothing is open. The same surface says exactly that
+/// when it opens on an empty selection, and it is what a reader who has
+/// selected nothing needs to be told.
+#[test]
+fn coming_back_to_a_directory_row_reads_nothing_and_says_nothing_is_open() {
+    let machine = FakeMachine::default()
+        .with_directory("/w/src")
+        .with_file("/w/src/main.rs", "fn main() {}\n")
+        .with_file("/w/notes.txt", "one\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    assert_eq!(
+        view.selected.as_deref(),
+        Some(Path::new("/w/src")),
+        "the tree opens on its first row, which is a directory"
+    );
+
+    let mut again = files_at("/w").resuming(view.place());
+    settle(&mut again, &machine);
+
+    assert!(again.open.is_none(), "a directory was never a file to open");
+    let Content::Message { role, hint, .. } = super::view(&again, space()).content else {
+        panic!("nothing is open, so the content is what to do about it");
+    };
+    assert_eq!(role, Role::Muted, "nothing failed");
+    assert!(hint.is_some(), "and there is something to do about it");
+
+    // The other way to the same read: leave the files half with the
+    // cursor on a directory, and come back to it.
+    again.show(ContentMode::Diff);
+    again.show(ContentMode::Contents);
+    settle(&mut again, &machine);
+    assert!(
+        again.open.is_none(),
+        "the half is the same one, and so is the row it was left on"
+    );
+}
+
 /// The map is a fourth way of looking at the same checkout, and the
 /// selection is what survives the switch: a tile followed is the file
 /// selected, read by whichever half was on show before the map.
@@ -1644,8 +1686,25 @@ fn the_header_offers_the_halves_on_one_side_and_the_renderings_on_the_other() {
     press(&mut view, Command::Activate);
     settle(&mut view, &machine);
     let drawn = render::view(&view, space());
-    assert_eq!(chips(&drawn.subjects), [("Files", true), ("Map", false)]);
+    assert_eq!(
+        chips(&drawn.subjects),
+        [("Files", true), ("Map", false), ("Changes", false)]
+    );
     assert_eq!(chips(&drawn.modes), [("Preview", true), ("Source", false)]);
+    // Each half is a thing, and says which. A way of *drawing* one is
+    // not a thing, and carries no mark at all.
+    assert_eq!(
+        drawn
+            .subjects
+            .iter()
+            .map(|mode| mode.icon)
+            .collect::<Vec<_>>(),
+        [RowIcon::Directory, RowIcon::Map, RowIcon::Changes]
+    );
+    assert!(
+        drawn.modes.iter().all(|mode| mode.icon == RowIcon::None),
+        "a rendering has nothing to be a picture of"
+    );
 
     // On anything else there is one way to read it, and a control with
     // one option is a label that can be clicked. Back to the tree first:
@@ -1655,7 +1714,12 @@ fn the_header_offers_the_halves_on_one_side_and_the_renderings_on_the_other() {
     press(&mut view, Command::Activate);
     settle(&mut view, &machine);
     let drawn = render::view(&view, space());
-    assert_eq!(chips(&drawn.subjects), [("Files", true), ("Map", false)]);
+    assert_eq!(
+        chips(&drawn.subjects),
+        [("Files", true), ("Map", false), ("Changes", false)],
+        "the halves never come and go — the row that says where you are \
+         is the one thing that may not move when it is used"
+    );
     assert!(drawn.modes.is_empty(), "nothing to choose between");
 }
 
@@ -1666,16 +1730,23 @@ fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     let mut view = surface(Path::new("/repo"), Vec::new(), 0);
     view.absorb_measure(measured());
 
-    // Not beside the diff: a map of the whole checkout answers a
-    // question nobody reviewing a change is asking.
+    // One of the three halves, so it is reachable from each of the
+    // others — including the changes, where going to the map is also
+    // leaving them, which is what the press said.
     assert!(
-        !render::view(&view, space())
+        render::view(&view, space())
             .footer
             .contains(&Command::ToggleMap),
-        "the changes half does not offer it"
+        "a measured checkout offers it wherever you are in it"
     );
     press(&mut view, Command::ToggleMap);
-    assert_eq!(view.showing(), ContentMode::Diff, "nor does its key");
+    assert_eq!(view.showing(), ContentMode::Map, "from the changes too");
+    press(&mut view, Command::ToggleMap);
+    assert_eq!(
+        view.showing(),
+        ContentMode::Diff,
+        "and back to the half it was opened over"
+    );
 
     view.show(ContentMode::Contents);
     press(&mut view, Command::ToggleMap);
@@ -1687,14 +1758,15 @@ fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     assert_eq!(steps, ["repo"], "the checkout, and nothing entered yet");
     assert_eq!(
         chips(&drawn.subjects),
-        [("Files", false), ("Map", true)],
-        "which half you are in, and the way back out as a chip somebody \
-         can point at rather than a key they have to know"
+        [("Files", false), ("Map", true), ("Changes", false)],
+        "which half you are in, and the way to the others as chips \
+         somebody can point at rather than keys they have to know"
     );
     assert_eq!(
         chips(&drawn.modes),
-        [("Map", true), ("ASCII", false), ("Ranking", false)],
-        "and beside the content, only the ways of drawing it"
+        [("Unicode", true), ("ASCII", false), ("Ranking", false)],
+        "and beside the content, only the ways of drawing it — named as \
+         what they are, since the nav above already says Map"
     );
 
     // Down a level, and the key that closes comes back up before it

@@ -104,6 +104,37 @@ pub(crate) fn clamp_navigator_width(width: u16, total_width: u16) -> u16 {
 /// inner height and its right-hand divider reaches edge to edge; only the
 /// content side is split again to carve out a footer that belongs to that
 /// column alone rather than reading as a global app bar.
+/// The surface's own nav row: where the control that says which half you
+/// are in is drawn, in every layout.
+///
+/// A fixed column of the frame rather than the head of whichever column
+/// happens to be beside it — the halves are not the list's, they are the
+/// surface's, and a control that moved a cell when it was used was one
+/// the eye had to find again after every press. It is also why the row
+/// is the list's and the content's alike: neither owns it.
+pub(crate) fn nav_row(frame_area: Rect) -> Rect {
+    // Under the title's own first letter, which is the leftmost thing
+    // the surface says: a row of controls indented past it reads as
+    // belonging to the column beneath rather than to the frame.
+    Rect::new(
+        frame_area.x + 2,
+        frame_area.y + 1,
+        frame_area.width.saturating_sub(4),
+        1,
+    )
+}
+
+/// Everything below the nav row — or from the frame's edge, for a surface
+/// that has no halves to offer.
+fn below_nav(rect: Rect, nav_rows: u16) -> Rect {
+    Rect::new(
+        rect.x,
+        rect.y.saturating_add(nav_rows),
+        rect.width,
+        rect.height.saturating_sub(nav_rows),
+    )
+}
+
 pub(crate) fn content_columns(
     frame_area: Rect,
     navigator_width_override: Option<u16>,
@@ -182,10 +213,26 @@ pub(crate) fn code_space(
     code: Option<&uze_extensions::code::CodeView>,
 ) -> Size {
     match code.map(uze_extensions::code::CodeView::showing) {
+        // The board's menu row *is* the nav row — the same cells, which
+        // is what makes the control stay put across the switch — so the
+        // board loses nothing to it.
         Some(uze_extensions::code::ContentMode::Map) => board_space(frame_area),
-        _ => content_space(frame_area, navigator_width_override),
+        // A row less: this surface always has halves to offer, so it
+        // always has the row that offers them.
+        _ => {
+            let space = content_space(frame_area, navigator_width_override);
+            Size {
+                height: space.height.saturating_sub(NAV_ROWS),
+                ..space
+            }
+        }
     }
 }
+
+/// How many rows the nav takes from a surface that has one. One, and it
+/// is a constant so the room an extension is told it has and the room it
+/// is drawn in cannot disagree.
+const NAV_ROWS: u16 = 1;
 
 pub(crate) fn content_space(frame_area: Rect, navigator_width_override: Option<u16>) -> Size {
     let (_, content, _) = content_columns(frame_area, navigator_width_override);
@@ -269,6 +316,15 @@ pub(crate) struct Rendered {
     pub(crate) navigator_scroll: NavigatorScroll,
     pub(crate) navigator_bar: Option<Scrollbar>,
     pub(crate) content_bar: Option<Scrollbar>,
+    /// How many columns of the content row the gutter took, so a click
+    /// on it can be turned into a position in the text.
+    ///
+    /// Reported rather than assumed: it is nothing at all for content
+    /// that is not numbered, and a click resolved as though it were
+    /// seven landed seven cells to the left of the pointer — which on
+    /// the map is a tile or two over, and near an edge is nothing at
+    /// all.
+    pub(crate) content_gutter: u16,
 }
 
 pub(crate) fn render(
@@ -322,6 +378,25 @@ pub(crate) fn render(
         return render_board(frame, view, area, scope, hits);
     }
     let (navigator_area, content_area, footer) = content_columns(area, navigator_width_override);
+    // The nav is the surface's, not the list's: it spans the frame, and
+    // both columns start below it.
+    let nav_rows = match view.subjects.is_empty() {
+        true => 0,
+        false => NAV_ROWS,
+    };
+    let nav = nav_row(area);
+    render_subjects(frame, nav, &view.subjects, hits);
+    // Where there is a nav row, the ways of drawing what it selected ride
+    // it: they are what this half can be *asked*, and a control of its
+    // own a row below reads as a second header rather than as the other
+    // end of the first.
+    let (nav_modes, column_modes) = match nav_rows {
+        0 => (&[][..], &view.modes[..]),
+        _ => (&view.modes[..], &[][..]),
+    };
+    render_modes(frame, nav, nav_modes, hits);
+    let navigator_area = below_nav(navigator_area, nav_rows);
+    let content_area = below_nav(content_area, nav_rows);
 
     let mut rendered = Rendered {
         navigator_scroll,
@@ -364,6 +439,7 @@ pub(crate) fn render(
             total,
             caret,
         } => {
+            rendered.content_gutter = gutter_width(lines);
             rendered.content_bar = render_lines(
                 frame,
                 content_area,
@@ -374,7 +450,7 @@ pub(crate) fn render(
                     lines,
                     total: *total,
                     caret: *caret,
-                    modes: &view.modes,
+                    modes: column_modes,
                 },
                 hits,
             );
@@ -395,8 +471,14 @@ fn render_board(
 ) -> Rendered {
     let (menu, board, footer) = board_rows(area);
     let mut rendered = Rendered::default();
-    render_modes(frame, menu, &view.modes, hits);
+    // The board's menu row and the column layout's nav row are the same
+    // cells, which is the whole of why the control does not move when
+    // the map takes the frame. A board draws one or the other on it: the
+    // halves where it has them, the descent where it does not — nothing
+    // has both, and a board that did would have to say which side each
+    // belongs on.
     render_subjects(frame, menu, &view.subjects, hits);
+    render_modes(frame, menu, &view.modes, hits);
     match &view.content {
         Content::Message { text, hint, role } => {
             render_message(frame, board, text, hint.as_deref(), color(*role));
@@ -409,6 +491,7 @@ fn render_board(
             ..
         } => {
             let gutter = gutter_width(lines);
+            rendered.content_gutter = gutter;
             for (row, (offset, line)) in lines
                 .iter()
                 .enumerate()
@@ -419,13 +502,11 @@ fn render_board(
             {
                 let rect = Rect::new(board.x, board.y + row as u16, board.width, 1);
                 render_line(frame, rect, line, gutter, false);
+                // The whole row, gutter included: where in it the pointer
+                // landed is settled once, by `caret_cell_at`, against the
+                // gutter this frame actually drew.
                 hits.push((
-                    Rect::new(
-                        rect.x + gutter,
-                        rect.y,
-                        rect.width.saturating_sub(gutter),
-                        1,
-                    ),
+                    rect,
                     ViewHit::PlaceCaret {
                         line: offset,
                         cell: 0,
@@ -893,17 +974,19 @@ fn render_navigator(
     scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> (NavigatorScroll, Option<Scrollbar>) {
+    // Padding on the divider's side only: a column indented from the
+    // frame's own edge as well leaves its rows further in than the
+    // title and the nav above them, and there is nothing on that side
+    // for them to clear.
     let inner = Rule::new(Edge::Right)
         .tone(Token::BorderDefault)
         .ground(Token::SurfaceBackground)
-        .padding(Padding::new(1, 1, 0, 0))
+        .padding(Padding::new(0, 1, 0, 0))
         .render(frame, area);
 
-    // The heading names the list; the control *changes* it. Where there
-    // is a choice to make, the control stands in the heading's place
-    // rather than beside it — two of them is a word naming what the
-    // chip next to it already says, and the chip is the one that can be
-    // pressed.
+    // A heading only where nothing above it already names the list: the
+    // nav row says which half you are in, and a word repeating it is a
+    // word that has to be read to learn nothing.
     let mut heading = match subjects.is_empty() {
         true => vec![TextSpan::styled(
             navigator.heading.clone(),
@@ -921,15 +1004,19 @@ fn render_navigator(
         navigator.badge.clone(),
         theme::color(Token::TextMuted),
     );
-    let head = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(Paragraph::new(Line::from(heading)), head);
-    render_subjects(frame, head, subjects, hits);
+    frame.render_widget(
+        Paragraph::new(Line::from(heading)),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
 
+    // A row short of the column's foot, so the last file is not read
+    // against the frame's own edge — which carries the caption, and so
+    // is a line of text the list would be touching.
     let rows = Rect::new(
         inner.x,
         inner.y.saturating_add(1),
         inner.width,
-        inner.height.saturating_sub(1),
+        inner.height.saturating_sub(2),
     );
     // The groove comes out of the list's own width, so a row is never
     // drawn under the handle that would sit on top of it.
@@ -1251,6 +1338,8 @@ fn icon_symbol(icon: RowIcon) -> Option<Symbol> {
         RowIcon::Archive => Symbol::FileArchive,
         RowIcon::Git => Symbol::FileGit,
         RowIcon::Legal => Symbol::FileLegal,
+        RowIcon::Map => Symbol::Map,
+        RowIcon::Changes => Symbol::Changes,
     })
 }
 
@@ -1277,29 +1366,45 @@ fn row_mark(mark: RowMark) -> (String, u16) {
 /// resolves to nothing, and nothing is what gets drawn, without a column
 /// held open for it.
 fn row_icon(icon: RowIcon) -> Option<TextSpan<'static>> {
+    // Muted on purpose: the icon classifies, the name identifies, and an
+    // icon drawn at the name's weight competes with the thing the reader
+    // is actually scanning for.
+    Some(icon_span(icon)?.style(theme::fg(Token::TextDim)))
+}
+
+/// The mark and the space after it, or nothing at all where the glyph
+/// set has no icon for this kind. Unstyled: a row draws its marks muted,
+/// a control draws its own in the weight the member is in.
+fn icon_span(icon: RowIcon) -> Option<TextSpan<'static>> {
     let glyph = theme::glyph(icon_symbol(icon)?);
     if glyph.trim().is_empty() {
         return None;
     }
-    // Muted on purpose: the icon classifies, the name identifies, and an
-    // icon drawn at the name's weight competes with the thing the reader
-    // is actually scanning for.
-    Some(TextSpan::styled(
-        format!("{glyph} "),
-        theme::fg(Token::TextDim),
-    ))
+    Some(TextSpan::raw(format!("{glyph} ")))
 }
 
 /// How much of the heading row the mode control takes, so the heading
 /// itself is drawn shorter rather than under it.
 fn modes_width(modes: &[Mode]) -> u16 {
-    if modes.is_empty() {
-        return 0;
+    modes.iter().map(mode_width).sum()
+}
+
+/// One member's cells: its label, its padding, and the mark before it
+/// where the glyph set has one to draw.
+fn mode_width(mode: &Mode) -> u16 {
+    let icon = icon_cells(mode.icon);
+    TextSpan::raw(&mode.label).width() as u16 + icon + 2 * MODE_PAD
+}
+
+/// How many cells a mark takes, counted from what would be drawn rather
+/// than from the meaning: a glyph set with no icon for it draws nothing,
+/// and a column reserved for nothing is a gap the reader has to account
+/// for.
+fn icon_cells(icon: RowIcon) -> u16 {
+    match icon_span(icon) {
+        Some(span) => span.width() as u16,
+        None => 0,
     }
-    modes
-        .iter()
-        .map(|mode| TextSpan::raw(&mode.label).width() as u16 + 2 * MODE_PAD)
-        .sum()
 }
 
 /// The ways the content can be shown, offered as a segmented control at
@@ -1352,10 +1457,16 @@ fn render_chips(
 ) {
     let mut x = from;
     for (index, mode) in modes.iter().enumerate() {
-        let width = TextSpan::raw(&mode.label).width() as u16 + 2 * MODE_PAD;
+        let width = mode_width(mode);
         let rect = Rect::new(x, y, width, 1);
+        // The same lift a chip rests on, and the same one the board's
+        // own selector wears — never the accent tint. That tint means
+        // "this is the one picked out of several", which is what a list
+        // says; a member of this control is *where you are*, and the two
+        // surfaces of one extension saying that two different ways is
+        // how a vocabulary stops being one.
         let (fill, ink) = match mode.active {
-            true => (Token::SurfaceSelected, Token::TextBright),
+            true => (Token::SurfaceRaised, Token::TextBright),
             false => (Token::SurfaceBackground, Token::TextMuted),
         };
         let mut style = Style::default()
@@ -1364,17 +1475,13 @@ fn render_chips(
         if mode.active {
             style = style.add_modifier(Modifier::BOLD);
         }
-        frame.render_widget(
-            Paragraph::new(TextSpan::styled(
-                format!(
-                    "{pad}{}{pad}",
-                    mode.label,
-                    pad = " ".repeat(MODE_PAD as usize)
-                ),
-                style,
-            )),
-            rect,
-        );
+        let pad = " ".repeat(MODE_PAD as usize);
+        let mut spans = vec![TextSpan::styled(pad.clone(), style)];
+        if let Some(mark) = icon_span(mode.icon) {
+            spans.push(mark.style(style));
+        }
+        spans.push(TextSpan::styled(format!("{}{pad}", mode.label), style));
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, hit_of(index)));
         x = x.saturating_add(width);
     }
@@ -1388,8 +1495,8 @@ fn render_chips(
 /// what keeps the hit table one entry per drawn row instead of one per
 /// cell — and the arithmetic stays here, with the layout that produced
 /// `row`, rather than in the event loop.
-pub(crate) fn caret_cell_at(row: Rect, cell: usize, column: u16) -> usize {
-    cell + usize::from(column.saturating_sub(row.x.saturating_add(GUTTER_WIDTH)))
+pub(crate) fn caret_cell_at(row: Rect, cell: usize, column: u16, gutter: u16) -> usize {
+    cell + usize::from(column.saturating_sub(row.x.saturating_add(gutter)))
 }
 
 /// How many cells a line's text has, once the gutter has taken its share.
@@ -1836,6 +1943,245 @@ mod tests {
             })
             .collect();
         (rows, hits)
+    }
+
+    /// A list longer than its column stops a row short of the frame,
+    /// which carries the caption: a file name read against a line of
+    /// text is one the eye has to separate from it first.
+    #[test]
+    fn a_list_is_not_read_against_the_frames_own_edge() {
+        let rows: Vec<NavigatorRow> = (0..40)
+            .map(|index| NavigatorRow::Item {
+                id: index,
+                name: format!("file-{index}.rs"),
+                depth: 0,
+                marker: Span::new("", Role::Muted),
+                selected: false,
+                icon: RowIcon::None,
+            })
+            .collect();
+        let view = View {
+            title: vec![Span::new("code", Role::Muted)],
+            caption: vec![Span::new("~/repo", Role::Dim)],
+            navigator: Some(Navigator {
+                heading: String::new(),
+                badge: "40".to_owned(),
+                focused: true,
+                rows,
+                anchor: None,
+                choosing: None,
+            }),
+            content: Content::Message {
+                text: "nothing selected".to_owned(),
+                hint: None,
+                role: Role::Muted,
+            },
+            footer: Vec::new(),
+            modes: Vec::new(),
+            subjects: vec![Mode {
+                label: "Files".to_owned(),
+                active: true,
+                icon: RowIcon::None,
+            }],
+            layout: ViewLayout::Sidebar,
+            trail: Vec::new(),
+        };
+        let height = 12;
+        let (drawn, _) = draw_sized(&view, 80, height);
+        let column: Vec<String> = drawn
+            .iter()
+            .map(|row| row.chars().take(20).collect())
+            .collect();
+        let last = height as usize - 1;
+        assert!(
+            column[last - 2].contains("file-"),
+            "the list fills the column: {:?}",
+            column[last - 2]
+        );
+        assert!(
+            !column[last - 1].contains("file-"),
+            "and stops before the edge: {:?}",
+            column[last - 1]
+        );
+    }
+
+    /// The control that says where you are wears the same neutral lift
+    /// the board's own selector does — never the accent tint, which is
+    /// what a *list* marks its selection with. One extension, two
+    /// surfaces, one vocabulary.
+    #[test]
+    fn the_control_wears_the_lift_and_the_list_wears_the_tint() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_chips(
+                    frame,
+                    0,
+                    0,
+                    &[
+                        Mode {
+                            label: "Files".to_owned(),
+                            active: true,
+                            icon: RowIcon::None,
+                        },
+                        Mode {
+                            label: "Map".to_owned(),
+                            active: false,
+                            icon: RowIcon::None,
+                        },
+                    ],
+                    &mut Vec::new(),
+                    ViewHit::SelectSubject,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        assert_eq!(
+            buffer[(1, 0)].bg,
+            theme::color(Token::SurfaceRaised),
+            "the member you are on is lifted, not tinted"
+        );
+        assert_ne!(
+            theme::color(Token::SurfaceRaised),
+            theme::color(Token::SurfaceSelected),
+            "and the two are genuinely different grounds"
+        );
+        assert_eq!(
+            buffer[(9, 0)].bg,
+            theme::color(Token::SurfaceBackground),
+            "a member you are not on has no ground at all"
+        );
+    }
+
+    /// The header is one row with a question at each end: which half you
+    /// are in, and how the half you are in is drawn.
+    ///
+    /// The row is the frame's own — it starts under the title's first
+    /// letter and spans both columns — so switching halves, which
+    /// switches the layout under it, leaves every control on it exactly
+    /// where it was.
+    #[test]
+    fn the_nav_row_is_the_frames_and_does_not_move_with_the_layout() {
+        let sidebar = View {
+            title: vec![Span::new("code", Role::Muted)],
+            caption: Vec::new(),
+            navigator: Some(Navigator {
+                heading: "FILES".to_owned(),
+                badge: "7".to_owned(),
+                focused: true,
+                rows: vec![NavigatorRow::Item {
+                    id: 0,
+                    name: "main.rs".to_owned(),
+                    depth: 0,
+                    marker: Span::new("", Role::Muted),
+                    selected: true,
+                    icon: RowIcon::None,
+                }],
+                anchor: None,
+                choosing: None,
+            }),
+            content: Content::Lines {
+                heading: "main.rs".to_owned(),
+                scroll: 0,
+                first: 0,
+                total: 1,
+                lines: vec![ContentLine {
+                    gutter: " ".to_owned(),
+                    number: "1".to_owned(),
+                    tone: LineTone::Neutral,
+                    spans: vec![Span::new("fn main() {}", Role::Default)],
+                }],
+                caret: None,
+            },
+            footer: Vec::new(),
+            modes: vec![
+                Mode {
+                    label: "Preview".to_owned(),
+                    active: true,
+                    icon: RowIcon::None,
+                },
+                Mode {
+                    label: "Source".to_owned(),
+                    active: false,
+                    icon: RowIcon::None,
+                },
+            ],
+            subjects: vec![
+                Mode {
+                    label: "Files".to_owned(),
+                    active: true,
+                    icon: RowIcon::None,
+                },
+                Mode {
+                    label: "Map".to_owned(),
+                    active: false,
+                    icon: RowIcon::None,
+                },
+                Mode {
+                    label: "Changes".to_owned(),
+                    active: false,
+                    icon: RowIcon::None,
+                },
+            ],
+            layout: ViewLayout::Sidebar,
+            trail: Vec::new(),
+        };
+        let (rows, hits) = draw_sized(&sidebar, 80, 12);
+        assert!(
+            rows[1].contains("Files") && rows[1].contains("Changes"),
+            "the halves are the row under the frame's edge: {:?}",
+            rows[1]
+        );
+        assert!(
+            rows[1].contains("Preview") && rows[1].contains("Source"),
+            "and the ways of drawing that half ride the same row: {:?}",
+            rows[1]
+        );
+        assert!(
+            rows[1].find("Files") < rows[1].find("Preview"),
+            "one question at each end: {:?}",
+            rows[1]
+        );
+        assert!(
+            rows[2].contains("main.rs") && !rows[2].contains("Preview"),
+            "the row below is the columns' own, and carries no control: {:?}",
+            rows[2]
+        );
+        let nav_at = |hits: &[(Rect, ViewHit)]| {
+            hits.iter()
+                .find(|(_, hit)| matches!(hit, ViewHit::SelectSubject(0)))
+                .map(|(rect, _)| (rect.x, rect.y))
+                .expect("the halves can be pointed at")
+        };
+        let sidebar_at = nav_at(&hits);
+        // The chip is a filled box and the title is bare text, so it is
+        // the box's own edge that goes under the title's first letter.
+        let column_of = |row: &str, text: &str| {
+            row.find(text)
+                .map(|byte| row[..byte].chars().count() as u16)
+                .expect("drawn")
+        };
+        assert_eq!(
+            sidebar_at.0,
+            column_of(&rows[0], "code"),
+            "the row starts where the title does"
+        );
+
+        // The map takes the frame, which is the switch that used to move
+        // the control a column sideways.
+        let board = View {
+            navigator: None,
+            layout: ViewLayout::Board,
+            modes: vec![Mode {
+                label: "Map".to_owned(),
+                active: true,
+                icon: RowIcon::None,
+            }],
+            ..sidebar
+        };
+        let (rows, hits) = draw_sized(&board, 80, 12);
+        assert!(rows[1].contains("Files"), "the same row: {:?}", rows[1]);
+        assert_eq!(nav_at(&hits), sidebar_at, "at the same cell");
     }
 
     fn draw_sized(view: &View, width: u16, height: u16) -> (Vec<String>, Vec<(Rect, ViewHit)>) {
@@ -2384,10 +2730,12 @@ mod tests {
             Mode {
                 label: "Preview".to_owned(),
                 active: false,
+                icon: RowIcon::None,
             },
             Mode {
                 label: "Source".to_owned(),
                 active: true,
+                icon: RowIcon::None,
             },
         ];
         let (rows, hits) = draw(&view);
@@ -2526,14 +2874,22 @@ mod tests {
         };
 
         assert_eq!(
-            caret_cell_at(*rect, *cell, rect.x + GUTTER_WIDTH + 6),
+            caret_cell_at(*rect, *cell, rect.x + GUTTER_WIDTH + 6, GUTTER_WIDTH),
             6,
             "six cells past the start of the text is six cells into the line"
         );
         assert_eq!(
-            caret_cell_at(*rect, *cell, rect.x),
+            caret_cell_at(*rect, *cell, rect.x, GUTTER_WIDTH),
             0,
             "a click on the gutter belongs to the start of the line, not past it"
+        );
+        // Content that is not numbered has no gutter, and a click on it
+        // resolved as though it had one landed seven cells to the left of
+        // the pointer — on the map, a tile or two over.
+        assert_eq!(
+            caret_cell_at(*rect, *cell, rect.x + 6, 0),
+            6,
+            "with no gutter, the text starts where the row does"
         );
     }
 
