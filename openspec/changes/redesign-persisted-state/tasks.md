@@ -219,11 +219,11 @@
 
 ## 14. Recovery, from the operator's side
 
-- [ ] 14.1 A journey in `06-recovery`: work is left in a space, the space
+- [x] 14.1 A journey in `06-recovery`: work is left in a space, the space
       is closed, and the preserved list still names it.
-- [ ] 14.2 A scene continuing it: resuming opens a space rooted at its
+- [x] 14.2 A scene continuing it: resuming opens a space rooted at its
       project and the agent runs in its own checkout.
-- [ ] 14.3 Tag `gate`, give every gesture its `expect`, and point `proves:`
+- [x] 14.3 Tag `gate`, give every gesture its `expect`, and point `proves:`
       at the pages they back.
 
 ## 15. Close the loop

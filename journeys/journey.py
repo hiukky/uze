@@ -870,7 +870,9 @@ class Checker:
         self.world = runner.world
 
     def agents(self) -> list:
-        stores = sorted((self.world.uze_home / "state" / "tasks").glob("*.json"))
+        stores = sorted(
+            (self.world.uze_home / "state" / "projects").glob("*/agents.json")
+        )
         out = []
         for store in stores:
             try:
@@ -1683,7 +1685,7 @@ def failure_context(runner: Runner) -> list[str]:
     else:
         lines.append("(no session)")
     tasks = sorted(
-        (runner.world.uze_home / "state" / "tasks").glob("*.json"),
+        (runner.world.uze_home / "state" / "projects").glob("*/agents.json"),
     )
     recorded = []
     for store in tasks:
@@ -1732,8 +1734,9 @@ def write_evidence(
     # the machine" is not available to whoever reads this afterwards.
     state = evidence / "state"
     for source in [
-        *sorted((world.uze_home / "state" / "tasks").glob("*.json")),
-        world.uze_home / "state" / "integrations.json",
+        *sorted((world.uze_home / "state" / "projects").glob("*/agents.json")),
+        *sorted((world.uze_home / "state" / "projects").glob("*/project.json")),
+        world.uze_home / "cache" / "harnesses.json",
         world.uze_home / "state" / "attachments.json",
         world.uze_home / "state" / "marketplaces.json",
         world.project / "agents.yaml",
