@@ -87,8 +87,11 @@ pub fn paint(scene: &Scene, glyphs: Glyphs, selected: Option<usize>, leads: &[Le
     };
     let mut fences = vec![0u8; size];
 
+    // A step above the board's grid and a step below a box's own border:
+    // a region is more than the ground it stands on and less than the
+    // things standing on it, and three weights is what says so.
     for (frame, cluster) in scene.placement.clusters.iter().zip(&scene.graph.clusters) {
-        canvas.frame(*frame, Corners::Square, Role::Faint);
+        canvas.frame(*frame, Corners::Square, Role::Dim);
         canvas.text(
             frame.x + 2,
             frame.y,

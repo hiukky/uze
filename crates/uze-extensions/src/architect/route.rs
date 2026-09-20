@@ -12,6 +12,14 @@
 //! whoever reads it. The exception is deliberate — edges with the same
 //! source, or the same target, may share a trunk and fork, which is how
 //! a hand-drawn diagram does it too.
+//!
+//! A region costs the same way. An edge with an end inside one may cross
+//! its wall and stand in it as freely as its own members do; one with
+//! neither end inside pays for every cell it spends there, and pays
+//! again to run alongside the wall. That is the whole of what makes a
+//! boundary legible: a line through it says the two ends have something
+//! to do with what it encloses, and until a line has to earn that, most
+//! of them say it by accident.
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
@@ -28,6 +36,12 @@ const CROSSING: i32 = 10;
 const BOUNDARY: i32 = 3;
 /// Hugging a box it has nothing to do with.
 const HALO: i32 = 3;
+/// Standing inside a region neither end of the edge belongs to. Charged
+/// per cell rather than at the wall, so going around a region is cheaper
+/// than crossing it however shallowly — which is the whole of what makes
+/// a boundary read as one: a line through it says the two ends are
+/// related to what it encloses, and most lines are not.
+const TRESPASS: i32 = 5;
 /// Leaving or arriving by a side that does not face the other end.
 const SIDE: i32 = 12;
 /// Riding a trunk a mate already drew. Small, so edges still bundle where
@@ -84,12 +98,54 @@ fn mates(a: Ends, b: Ends) -> bool {
     a.0 == b.0 || a.1 == b.1
 }
 
+/// What one edge is allowed to do, carried through the search.
+#[derive(Clone, Copy)]
+struct Passage {
+    ends: Ends,
+    /// The regions either end stands in, as bits — the only ones this
+    /// edge has business inside. Every other one it pays to be in.
+    inside: u64,
+}
+
+/// The regions `node` stands in, outermost included, as bits.
+fn regions_of(graph: &Graph, node: usize) -> u64 {
+    let mut mask = 0;
+    let mut cluster = graph.nodes[node].cluster;
+    while let Some(index) = cluster {
+        mask |= region_bit(index);
+        cluster = graph.clusters[index].parent;
+    }
+    mask
+}
+
+/// A region's bit, or none once there are more regions than bits: a
+/// diagram with sixty-five boundaries is one the extra ones are simply
+/// free to cross, which is what the layout did for all of them before.
+fn region_bit(cluster: usize) -> u64 {
+    match cluster < u64::BITS as usize {
+        true => 1 << cluster,
+        false => 0,
+    }
+}
+
+/// `frame` with `by` cells taken off every side.
+fn deflated(frame: Frame, by: i32) -> Frame {
+    Frame {
+        x: frame.x + by,
+        y: frame.y + by,
+        w: frame.w - by * 2,
+        h: frame.h - by * 2,
+    }
+}
+
 struct Grid {
     width: i32,
     height: i32,
     blocked: Vec<bool>,
     halo: Vec<bool>,
     boundary: Vec<Boundary>,
+    /// The regions each cell stands in, as bits.
+    inside: Vec<u64>,
     horizontal: Vec<Option<Ends>>,
     vertical: Vec<Option<Ends>>,
 }
@@ -103,11 +159,14 @@ impl Grid {
             blocked: vec![false; size],
             halo: vec![false; size],
             boundary: vec![Boundary::None; size],
+            inside: vec![0; size],
             horizontal: vec![None; size],
             vertical: vec![None; size],
         };
-        for (frame, cluster) in placement.clusters.iter().zip(&graph.clusters) {
+        for (index, (frame, cluster)) in placement.clusters.iter().zip(&graph.clusters).enumerate()
+        {
             grid.fence(*frame, crate::shared::canvas::text_width(&cluster.title));
+            grid.enclose(*frame, region_bit(index));
         }
         for frame in &placement.nodes {
             for y in frame.y - 1..=frame.y + frame.h {
@@ -145,6 +204,28 @@ impl Grid {
         }
     }
 
+    /// Marks what a region covers, and puts a halo on both sides of its
+    /// wall so a line does not run along it: two rules a cell apart read
+    /// as one doubled wall rather than as a boundary and an edge.
+    fn enclose(&mut self, frame: Frame, bit: u64) {
+        let wall = deflated(frame, 1);
+        let clear = deflated(frame, 2);
+        for y in frame.y - 1..=frame.y + frame.h {
+            for x in frame.x - 1..=frame.x + frame.w {
+                let Some(index) = self.index(x, y) else {
+                    continue;
+                };
+                let on_the_wall = frame.contains(x, y) && !wall.contains(x, y);
+                if frame.contains(x, y) {
+                    self.inside[index] |= bit;
+                }
+                if !on_the_wall && !clear.contains(x, y) {
+                    self.halo[index] = true;
+                }
+            }
+        }
+    }
+
     fn index(&self, x: i32, y: i32) -> Option<usize> {
         (x >= 0 && y >= 0 && x < self.width && y < self.height)
             .then(|| (y * self.width + x) as usize)
@@ -160,7 +241,7 @@ impl Grid {
 
     /// What entering this cell by `heading` costs, or `None` if it may
     /// not be entered that way at all.
-    fn entering(&self, x: i32, y: i32, heading: usize, ends: Ends) -> Option<i32> {
+    fn entering(&self, x: i32, y: i32, heading: usize, passage: Passage) -> Option<i32> {
         let index = self.index(x, y)?;
         if self.blocked[index] {
             return None;
@@ -174,7 +255,7 @@ impl Grid {
             return None;
         }
         let (same, across) = self.owners(index, heading);
-        if same.is_some_and(|owner| !mates(owner, ends)) {
+        if same.is_some_and(|owner| !mates(owner, passage.ends)) {
             return None;
         }
         let mut cost = STEP;
@@ -187,17 +268,19 @@ impl Grid {
         if self.boundary[index] != Boundary::None {
             cost += BOUNDARY;
         }
-        if across.is_some_and(|owner| !mates(owner, ends)) {
+        if across.is_some_and(|owner| !mates(owner, passage.ends)) {
             cost += CROSSING;
         }
+        let trespass = self.inside[index] & !passage.inside;
+        cost += TRESPASS * trespass.count_ones() as i32;
         Some(cost)
     }
 
     /// A bend needs a cell of its own: not on a boundary, and not where
     /// a foreign line already runs, since a corner drawn on a crossing
     /// reads as the two lines joining.
-    fn may_turn(&self, index: usize, ends: Ends) -> bool {
-        let foreign = |owner: Option<Ends>| owner.is_some_and(|owner| !mates(owner, ends));
+    fn may_turn(&self, index: usize, passage: Passage) -> bool {
+        let foreign = |owner: Option<Ends>| owner.is_some_and(|owner| !mates(owner, passage.ends));
         self.boundary[index] == Boundary::None
             && !foreign(self.horizontal[index])
             && !foreign(self.vertical[index])
@@ -233,9 +316,13 @@ pub fn route(graph: &Graph, placement: &Placement) -> Routes {
     };
     for edge in order {
         let ends = (graph.edges[edge].from, graph.edges[edge].to);
+        let passage = Passage {
+            ends,
+            inside: regions_of(graph, ends.0) | regions_of(graph, ends.1),
+        };
         let from = placement.nodes[ends.0];
         let to = placement.nodes[ends.1];
-        match shortest(&grid, graph.flow, from, to, ends) {
+        match shortest(&grid, graph.flow, from, to, passage) {
             Some(cells) => {
                 for (position, &(x, y, heading)) in cells.iter().enumerate() {
                     let index = grid.index(x, y).expect("a routed cell is on the grid");
@@ -315,7 +402,7 @@ fn shortest(
     flow: Flow,
     from: Frame,
     to: Frame,
-    ends: Ends,
+    passage: Passage,
 ) -> Option<Vec<(i32, i32, usize)>> {
     let states = grid.blocked.len() * 4;
     let state = |x: i32, y: i32, heading: usize| (y * grid.width + x) as usize * 4 + heading;
@@ -338,7 +425,7 @@ fn shortest(
         (dx + dy) * STEP
     };
     for (x, y, side, off_centre) in ports(from) {
-        let Some(cost) = grid.entering(x, y, side, ends) else {
+        let Some(cost) = grid.entering(x, y, side, passage) else {
             continue;
         };
         let cost = cost + side_cost(side, exit) + off_centre;
@@ -367,13 +454,13 @@ fn shortest(
         let index = here / 4;
         // The cell beside the source is a stub, never a corner: a line
         // that bends the moment it leaves a box reads as part of its border.
-        let may_turn = came_from[here] != usize::MAX && grid.may_turn(index, ends);
+        let may_turn = came_from[here] != usize::MAX && grid.may_turn(index, passage);
         for (next, (dx, dy)) in HEADINGS.iter().enumerate() {
             if next == opposite(heading) || (next != heading && !may_turn) {
                 continue;
             }
             let (nx, ny) = (x + dx, y + dy);
-            let Some(step) = grid.entering(nx, ny, next, ends) else {
+            let Some(step) = grid.entering(nx, ny, next, passage) else {
                 continue;
             };
             let total = cost + step + if next == heading { 0 } else { TURN };

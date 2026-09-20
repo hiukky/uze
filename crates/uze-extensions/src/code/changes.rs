@@ -549,7 +549,7 @@ mod repository_tests {
         let from_agent = Changes::read(&TestHost, &agent_root, None);
         assert!(from_agent.error.is_none(), "{:?}", from_agent.error);
         assert_eq!(
-            crate::code::current_branch(&TestHost, &agent_root),
+            crate::shared::checkout::branch_of(&TestHost, &agent_root),
             "feature"
         );
         assert_eq!(

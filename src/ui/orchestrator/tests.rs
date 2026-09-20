@@ -41,7 +41,7 @@ mod workspace_tests {
         WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
         answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
         evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_code, open_commit_detail, pane_relative, pending_tab_drop,
+        open_architect, open_code, open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -644,6 +644,69 @@ mod workspace_tests {
         assert_eq!(
             model.code.as_ref().expect("open").place(),
             walked_to,
+            "and the one left mid-walk is where it was left"
+        );
+    }
+
+    /// The same gesture on the architect surface. A drawing is walked
+    /// into — a diagram chosen, a level entered, a box selected, the
+    /// board moved to it — and a surface that forgot all of that on the
+    /// way out is one nobody leaves to go and check something.
+    #[test]
+    fn coming_back_to_a_checkouts_architect_returns_to_the_diagram_it_was_left_on() {
+        use uze_extensions::{architect, view::Command};
+
+        let (mut model, first, second) = two_agents_with_shells();
+        let answer_artifacts = |model: &mut WorkspaceModel| {
+            let view = model.architect.as_mut().expect("the surface is open");
+            view.absorb(architect::ArtifactsAnswer {
+                branch: "main".to_owned(),
+                artifacts: architect::Artifacts::Found {
+                    artifacts: vec![
+                        architect::Artifact::read("one.mmd", "flowchart TD\n a --> b"),
+                        architect::Artifact::read("two.mmd", "flowchart TD\n c --> d"),
+                    ],
+                    project: PathBuf::from("/repo"),
+                },
+            });
+        };
+        let space = uze_extensions::view::Size {
+            width: 120,
+            height: 40,
+        };
+
+        model.session.as_mut().expect("session").select_tab(first);
+        open_architect(&mut model);
+        answer_artifacts(&mut model);
+        // Moved off the diagram the surface opens on, which is the part
+        // that must survive the round trip.
+        architect::handle_command(
+            model.architect.as_mut().expect("open"),
+            Command::NextView,
+            space,
+        );
+        let moved_to = model.architect.as_ref().expect("open").place();
+
+        model.close_architect();
+        assert!(model.architect.is_none());
+
+        // Another agent's checkout is a different place, not this one.
+        model.session.as_mut().expect("session").select_tab(second);
+        open_architect(&mut model);
+        answer_artifacts(&mut model);
+        assert_ne!(
+            model.architect.as_ref().expect("open").place(),
+            moved_to,
+            "a checkout never visited opens on its own first diagram"
+        );
+        model.close_architect();
+
+        model.session.as_mut().expect("session").select_tab(first);
+        open_architect(&mut model);
+        answer_artifacts(&mut model);
+        assert_eq!(
+            model.architect.as_ref().expect("open").place(),
+            moved_to,
             "and the one left mid-walk is where it was left"
         );
     }
@@ -6540,21 +6603,24 @@ mod workspace_tests {
     fn a_list_open_over_the_architects_board_follows_the_pointer() {
         use uze_extensions::{architect, view::Choosing};
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-architect-hover"));
-        let mut view = architect::ArchitectView::opening();
-        view.absorb(architect::ArtifactsAnswer::Found {
-            artifacts: [
-                (
-                    "crate-layering.mmd",
-                    include_str!("../../../docs/architecture/crate-layering.mmd"),
-                ),
-                (
-                    "install-pipeline.mmd",
-                    include_str!("../../../docs/architecture/install-pipeline.mmd"),
-                ),
-            ]
-            .map(|(origin, source)| architect::Artifact::read(origin, source))
-            .into(),
-            project: PathBuf::from("/repo"),
+        let mut view = architect::ArchitectView::opening("~/repo".to_owned());
+        view.absorb(architect::ArtifactsAnswer {
+            branch: "main".to_owned(),
+            artifacts: architect::Artifacts::Found {
+                artifacts: [
+                    (
+                        "crate-layering.mmd",
+                        include_str!("../../../docs/architecture/crate-layering.mmd"),
+                    ),
+                    (
+                        "install-pipeline.mmd",
+                        include_str!("../../../docs/architecture/install-pipeline.mmd"),
+                    ),
+                ]
+                .map(|(origin, source)| architect::Artifact::read(origin, source))
+                .into(),
+                project: PathBuf::from("/repo"),
+            },
         });
         let mut model = model_of(session("/repo"));
         model.architect = Some(view);

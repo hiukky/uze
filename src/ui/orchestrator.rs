@@ -958,9 +958,12 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.architect_artifacts").entered();
-        let silence = architect::ArtifactsAnswer::Nothing {
-            text: "Reading the project's artifacts failed".to_owned(),
-            hint: "Close this and open it again.".to_owned(),
+        let silence = architect::ArtifactsAnswer {
+            branch: String::new(),
+            artifacts: architect::Artifacts::Nothing {
+                text: "Reading the project's artifacts failed".to_owned(),
+                hint: "Close this and open it again.".to_owned(),
+            },
         };
         let answer = answered_or(
             || {
@@ -981,7 +984,7 @@ fn spawn_artifacts_read(root: PathBuf, sender: mpsc::Sender<ArtifactsResolution>
                         project,
                     },
                 };
-                architect::read_artifacts(&WorkspaceHost, source)
+                architect::read_artifacts(&WorkspaceHost, &root, source)
             },
             silence,
         );
@@ -2188,6 +2191,12 @@ struct Remembered {
     /// being rewritten while nobody is looking; within a session it is
     /// worth returning to, and across runs it is worth nothing.
     code_places: BTreeMap<PathBuf, code::CodePlace>,
+    /// Where the viewer was on each checkout's architect surface, keyed
+    /// the same way and for the same reason: a drawing is walked into —
+    /// a level entered, a box selected, the board moved to it — and a
+    /// surface that forgets all of that on the way out is one nobody
+    /// leaves to check something.
+    architect_places: BTreeMap<PathBuf, architect::ArchitectPlace>,
     /// Preserved work across the machine, as last swept. The last good
     /// answer stays drawn while a new one is in flight, so opening the
     /// list never shows an empty one it is about to fill.
@@ -4695,6 +4704,16 @@ impl WorkspaceModel {
             .code_places
             .insert(view.root().to_path_buf(), view.place());
     }
+
+    /// Closes the architect surface, keeping where the viewer was on this
+    /// checkout — every way out goes through here, for the reason
+    /// [`Self::close_code`] does.
+    fn close_architect(&mut self) {
+        let (Some(view), Some(root)) = (self.architect.take(), self.architect_root.clone()) else {
+            return;
+        };
+        self.remembered.architect_places.insert(root, view.place());
+    }
 }
 
 fn open_architect(model: &mut WorkspaceModel) {
@@ -4703,9 +4722,15 @@ fn open_architect(model: &mut WorkspaceModel) {
     };
     let root = session.selected_tab().pane.cwd.clone();
     model.close_code();
+    let place = model.remembered.architect_places.get(&root).cloned();
+    let display_root = crate::ui::display_project_path(&root);
     model.architect_root = Some(root);
     model.architect_asked = false;
-    model.architect = Some(architect::ArchitectView::opening());
+    let view = architect::ArchitectView::opening(display_root);
+    model.architect = Some(match place {
+        Some(place) => view.resuming(place),
+        None => view,
+    });
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }
@@ -4724,7 +4749,7 @@ fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
         display_root,
         code::ContentMode::Contents,
     );
-    model.architect = None;
+    model.close_architect();
     model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.code_measure_asked = None;
@@ -4740,7 +4765,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let display_root = crate::ui::display_project_path(&cwd);
     let place = model.remembered.code_places.get(&cwd).cloned();
     let view = code::CodeView::opening(cwd, display_root, mode);
-    model.architect = None;
+    model.close_architect();
     model.code = Some(match place {
         Some(place) => view.resuming(place),
         None => view,

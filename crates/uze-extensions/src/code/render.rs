@@ -16,7 +16,7 @@ use super::{
     diff::content_line,
     editor::OpenFile,
 };
-use crate::shared::canvas::Glyphs;
+use crate::shared::{canvas::Glyphs, checkout};
 use crate::view::{
     Command, Content, ContentLine, Layout, LineTone, Mode, Navigator, NavigatorRow, Role, RowIcon,
     Size, Span, TrailStep, View,
@@ -181,30 +181,8 @@ fn mode_label(code: &CodeView, showing: Showing) -> String {
     }
 }
 
-/// What the surface is, which checkout it is on, and which branch that
-/// checkout is at — in that order, and told apart by weight.
-///
-/// The three are not equally interesting. The name is a label and is
-/// said once; the directories leading to the checkout are context; the
-/// checkout's own name and its branch are what identify it, and they are
-/// what the eye should land on. One run of text gave all three the same
-/// weight, which is how a title stops being read.
 fn title(code: &CodeView) -> Vec<Span> {
-    let (parent, name) = match code.display_root.rsplit_once('/') {
-        Some((parent, name)) => (format!("{parent}/"), name.to_owned()),
-        None => (String::new(), code.display_root.clone()),
-    };
-    let mut spans = vec![
-        Span::new("code", Role::Muted),
-        Span::new(" · ", Role::Faint),
-        Span::new(parent, Role::Dim),
-        Span::new(name, Role::Bright).bold(),
-    ];
-    if !code.branch.is_empty() {
-        spans.push(Span::new(" · ", Role::Faint));
-        spans.push(Span::new(code.branch.clone(), Role::Accent).bold());
-    }
-    spans
+    checkout::title("code", &code.display_root, &code.branch)
 }
 
 /// What this surface can be asked, in the order the footer should name

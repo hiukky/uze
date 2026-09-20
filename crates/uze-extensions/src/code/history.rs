@@ -9,7 +9,8 @@
 
 use std::{collections::BTreeSet, path::Path};
 
-use super::{changes::parse_numstat, current_branch};
+use super::changes::parse_numstat;
+use crate::shared::checkout;
 use crate::{
     Host,
     view::{Role, RowMark, Section, SectionRow, Span},
@@ -62,7 +63,7 @@ pub fn timeline(
     if commits.is_empty() {
         return None;
     }
-    let branch = current_branch(host, &root);
+    let branch = checkout::branch_of(host, &root);
     if let Some(base) = comparison_base(host, &root, &branch, target) {
         // By patch, not by ancestry: a delivery rebases the branch onto
         // the target, so what landed there carries another hash, and by

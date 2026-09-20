@@ -126,14 +126,20 @@ pub(crate) fn content_columns(
 
 /// A board's rows, top to bottom: its menu, the board itself and the
 /// footer. The board gets everything the other two do not need — no
-/// navigator column, no blank row under the title, no reading margin, and
-/// one row of menu rather than one per level of it.
+/// navigator column, no reading margin, and one row of menu rather than
+/// one per level of it.
+///
+/// It keeps the blank row under the title that [`content_columns`] keeps,
+/// though, and for a reason the other margins do not have: the row under
+/// it is a row of *controls*, and a control butting against the title
+/// reads as part of it. One row is what says the title is a title and
+/// the chips beneath it are things to press.
 pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
-        frame_area.y + 1,
+        frame_area.y + 2,
         frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(2),
+        frame_area.height.saturating_sub(3),
     );
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1659,6 +1665,10 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use uze_extensions::view::{ContentLine, LineTone, Rgb};
 
+    /// Which drawn row a board's menu lands on: the frame's own top edge
+    /// carrying the title, the blank row under it, then the menu.
+    const MENU_ROW: usize = 2;
+
     fn sample() -> View {
         View {
             title: vec![Span::new("demo", Role::Bright)],
@@ -1820,7 +1830,7 @@ mod tests {
     fn a_selector_with_one_choice_neither_opens_nor_says_it_does() {
         let chevron = theme::glyph(Symbol::ChevronExpanded);
         let (drawn, hits) = draw_sized(&board(1, 1, &[]), 80, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(!menu.contains(&chevron), "no mark on either: {menu}");
         assert!(!menu.contains(" 1 "), "nor a count of one: {menu}");
         assert!(
@@ -1832,10 +1842,10 @@ mod tests {
 
         let (drawn, hits) = draw_sized(&board(2, 3, &[]), 80, 20);
         assert_eq!(
-            drawn[1].matches(chevron.as_str()).count(),
+            drawn[MENU_ROW].matches(chevron.as_str()).count(),
             2,
             "both open where there is a choice: {}",
-            drawn[1]
+            drawn[MENU_ROW]
         );
         assert!(
             hits.iter().any(|(_, h)| *h == ViewHit::ChooseGroup)
@@ -1851,10 +1861,10 @@ mod tests {
         let chevron = theme::glyph(Symbol::ChevronExpanded);
         let (drawn, hits) = draw_sized(&board(2, 3, &[]), 100, 20);
         assert_eq!(
-            drawn[1].matches(chevron.as_str()).count(),
+            drawn[MENU_ROW].matches(chevron.as_str()).count(),
             2,
             "a set is two lists: {}",
-            drawn[1]
+            drawn[MENU_ROW]
         );
         assert!(hits.iter().any(|(_, h)| *h == ViewHit::ChooseItem));
 
@@ -1870,7 +1880,7 @@ mod tests {
             ],
         );
         let (drawn, hits) = draw_sized(&ladder, 100, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(
             menu.contains("Context") && menu.contains("Containers") && menu.contains("Components"),
             "every level is on show at once: {menu}"
@@ -1907,7 +1917,7 @@ mod tests {
             .map(|(name, current)| (name.as_str(), *current))
             .collect();
         let (drawn, _) = draw_sized(&board(2, 3, &borrowed), 70, 20);
-        let menu = drawn[1].clone();
+        let menu = drawn[MENU_ROW].clone();
         assert!(menu.contains("Level number 7"), "{menu}");
         assert!(
             menu.contains(&theme::glyph(Symbol::Ellipsis)),
@@ -1985,7 +1995,7 @@ mod tests {
         use uze_extensions::architect;
         let (width, height) = (150, 45);
         let space = board_space(Rect::new(0, 0, width, height));
-        let mut state = architect::ArchitectView::opening();
+        let mut state = architect::ArchitectView::opening("~/project".to_owned());
         let artifacts: Vec<architect::Artifact> = [
             (
                 "containers.mmd",
@@ -2010,9 +2020,12 @@ mod tests {
         ]
         .map(|(origin, source)| architect::Artifact::read(origin, source))
         .into();
-        state.absorb(architect::ArtifactsAnswer::Found {
-            artifacts,
-            project: std::path::PathBuf::from("/project"),
+        state.absorb(architect::ArtifactsAnswer {
+            branch: "main".to_owned(),
+            artifacts: architect::Artifacts::Found {
+                artifacts,
+                project: std::path::PathBuf::from("/project"),
+            },
         });
         // The catalog opens on the outermost view; the box this clicks is a
         // container, one level in.
@@ -2022,17 +2035,17 @@ mod tests {
             println!("{}", rows.join("\n"));
         }
         assert!(
-            rows[1].contains("C4")
-                && !rows[1].contains("C4 2")
-                && rows[1].contains("System context")
-                && rows[1].contains("Containers"),
+            rows[MENU_ROW].contains("C4")
+                && !rows[MENU_ROW].contains("C4 2")
+                && rows[MENU_ROW].contains("System context")
+                && rows[MENU_ROW].contains("Containers"),
             "one row: the area on show, then its levels, the one on show among them: {}",
-            rows[1]
+            rows[MENU_ROW]
         );
         assert!(
-            !rows[1].contains("Sequence") && !rows[1].contains("Install"),
+            !rows[MENU_ROW].contains("Sequence") && !rows[MENU_ROW].contains("Install"),
             "and nothing of any other area: {}",
-            rows[1]
+            rows[MENU_ROW]
         );
         let footer = rows[usize::from(height) - 3].as_str();
         assert!(

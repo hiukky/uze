@@ -8,7 +8,12 @@ const SPACE: Size = Size {
 /// uze's own architecture, as the repository keeps it. Living fixtures:
 /// what is checked here is also that the project's real artifacts draw.
 fn opened() -> ArchitectView {
-    let mut state = ArchitectView::opening();
+    filled(ArchitectView::opening("~/project".to_owned()))
+}
+
+/// The same artifacts, read into a surface that may already have been
+/// told where the viewer left off.
+fn filled(mut state: ArchitectView) -> ArchitectView {
     let artifacts = vec![
         Artifact::read(
             "containers.mmd",
@@ -43,11 +48,22 @@ fn opened() -> ArchitectView {
             include_str!("../../../../docs/architecture/attachment-lifecycle.mmd"),
         ),
     ];
-    state.absorb(ArtifactsAnswer::Found {
-        artifacts,
-        project: PathBuf::from("/project"),
+    state.absorb(ArtifactsAnswer {
+        branch: "main".to_owned(),
+        artifacts: Artifacts::Found {
+            artifacts,
+            project: PathBuf::from("/project"),
+        },
     });
     state
+}
+
+/// The box `id` names on the diagram on show.
+fn node_named_in(state: &ArchitectView, id: &str) -> Option<usize> {
+    let Drawing::Graph(scene) = &state.drawing else {
+        return None;
+    };
+    scene.graph.nodes.iter().position(|node| node.id == id)
 }
 
 fn showing(name: &str) -> ArchitectView {
@@ -207,7 +223,7 @@ fn clicking_a_box_selects_it_and_clicking_it_again_lets_go() {
 
 #[test]
 fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
-    let mut state = ArchitectView::opening();
+    let mut state = ArchitectView::opening("~/project".to_owned());
     let Content::Message { hint, .. } = view(&state, SPACE).content else {
         panic!("a read in flight is a message");
     };
@@ -237,7 +253,11 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
             String::new()
         }
     }
-    state.absorb(read_artifacts(&Bare, ArtifactSource::Undeclared));
+    state.absorb(read_artifacts(
+        &Bare,
+        Path::new("/project"),
+        ArtifactSource::Undeclared,
+    ));
     let Content::Message { text, hint, .. } = view(&state, SPACE).content else {
         panic!("an undeclared project is a message");
     };
@@ -249,7 +269,7 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
         declared: "docs/diagrams".to_owned(),
         project: PathBuf::from("/project"),
     };
-    state.absorb(read_artifacts(&Bare, empty));
+    state.absorb(read_artifacts(&Bare, Path::new("/project"), empty));
     let Content::Message { text, .. } = view(&state, SPACE).content else {
         panic!("an empty directory is a message");
     };
@@ -524,10 +544,13 @@ fn a_selector_with_nothing_to_choose_stays_shut() {
         "install-sequence.mmd",
         include_str!("../../../../docs/architecture/install-sequence.mmd"),
     );
-    let mut state = ArchitectView::opening();
-    state.absorb(ArtifactsAnswer::Found {
-        artifacts: vec![lone],
-        project: PathBuf::from("/project"),
+    let mut state = ArchitectView::opening("~/project".to_owned());
+    state.absorb(ArtifactsAnswer {
+        branch: "main".to_owned(),
+        artifacts: Artifacts::Found {
+            artifacts: vec![lone],
+            project: PathBuf::from("/project"),
+        },
     });
     handle_command(&mut state, Command::ChooseGroup, SPACE);
     assert_eq!(state.choosing, None, "one area");
@@ -567,4 +590,128 @@ fn hovering_a_row_of_an_open_list_highlights_it() {
         !handle_hover(&mut state, Some(ViewHit::SelectItem(other))),
         "and with no list open it is the board's pointer, not a menu's"
     );
+}
+
+/// A boundary can only be read as one if a line through it means
+/// something. Crossing it is what an edge with an end inside does; an
+/// edge with neither end inside goes around.
+#[test]
+fn an_edge_with_no_business_in_a_region_stays_out_of_it() {
+    let Diagram::Graph(graph) = mermaid::parse(
+        "flowchart TD\n a --> m --> z\n a --> z\n subgraph region [Region]\n m\n end",
+    )
+    .expect("it parses") else {
+        panic!("a flowchart is a graph");
+    };
+    let scene = Scene::of(graph);
+    let region = scene.placement.clusters[0];
+    let past = scene
+        .routes
+        .routes
+        .iter()
+        .find(|route| {
+            let edge = &scene.graph.edges[route.edge];
+            scene.graph.nodes[edge.from].cluster.is_none()
+                && scene.graph.nodes[edge.to].cluster.is_none()
+        })
+        .expect("the edge that skips the region is routed");
+    for &(x, y, _) in &past.cells {
+        assert!(
+            !region.contains(x, y),
+            "({x},{y}) is inside a region the edge has no end in"
+        );
+    }
+}
+
+/// The board's grid is the texture of having nothing on it, so a region
+/// stands on a ground of its own — and a region inside a region takes
+/// its parent's ground back, which is what tells two nested walls apart.
+#[test]
+fn a_region_stands_on_its_own_ground() {
+    let outer = Frame {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 20,
+    };
+    let inner = Frame {
+        x: 5,
+        y: 5,
+        w: 5,
+        h: 5,
+    };
+    assert!(grounded(&[outer, inner], (30, 30)));
+    assert!(!grounded(&[outer, inner], (2, 2)));
+    assert!(grounded(&[outer, inner], (6, 6)));
+}
+
+/// Leaving the surface and coming back is coming back: the diagram, the
+/// levels entered to reach it, the box selected and where the board was
+/// moved to are all where they were left.
+#[test]
+fn coming_back_stands_where_the_viewer_stood() {
+    let mut left = showing("Containers");
+    left.picked = node_named_in(&left, "core");
+    let outcome = left.enter();
+    assert_eq!(outcome, ArchitectOutcome::Stay, "core goes inside");
+    left.picked = node_named_in(&left, "delivery");
+    left.corner = Some((12, 34));
+
+    let back = filled(ArchitectView::opening("~/project".to_owned()).resuming(left.place()));
+    assert_eq!(back.selected, left.selected);
+    assert_eq!(back.trail, left.trail);
+    assert_eq!(back.picked, left.picked);
+    assert_eq!(back.corner, Some((12, 34)));
+}
+
+/// A diagram that was deleted while the surface was shut is not an error
+/// and not an empty board: the place is simply not restored.
+#[test]
+fn a_place_naming_a_diagram_that_is_gone_opens_at_the_top() {
+    let place = ArchitectPlace {
+        artifact: "vanished.mmd".to_owned(),
+        ..ArchitectPlace::default()
+    };
+    let back = filled(ArchitectView::opening("~/project".to_owned()).resuming(place));
+    assert_eq!(back.selected, 0);
+    assert!(back.trail.is_empty());
+}
+
+/// The title names the checkout and the branch, the way the code
+/// surface's does — the same sentence in the same place, because a
+/// reader switching between the two is asking one question.
+#[test]
+fn the_title_says_the_checkout_the_way_the_code_surface_says_it() {
+    let mut state = opened();
+    state.display_root = "~/uze/.worktrees/joipv0".to_owned();
+    state.branch = "feat/thing".to_owned();
+
+    let title = view(&state, SPACE).title;
+    let said: String = title.iter().map(|span| span.text.as_str()).collect();
+    assert_eq!(said, "architect · ~/uze/.worktrees/joipv0 · feat/thing");
+
+    let weight = |text: &str| {
+        title
+            .iter()
+            .find(|span| span.text == text)
+            .map(|span| (span.role, span.bold))
+    };
+    assert_eq!(weight("architect"), Some((Role::Muted, false)));
+    assert_eq!(weight("~/uze/.worktrees/"), Some((Role::Dim, false)));
+    assert_eq!(weight("joipv0"), Some((Role::Bright, true)));
+    assert_eq!(weight("feat/thing"), Some((Role::Accent, true)));
+}
+
+/// The two surfaces' titles are one sentence with one word changed. Held
+/// here because "they look the same today" is not the same claim as
+/// "they are built the same way", and only the second one survives an
+/// edit to either surface.
+#[test]
+fn both_surfaces_say_a_checkout_in_the_same_words() {
+    let architect = crate::shared::checkout::title("architect", "~/uze/repo", "main");
+    let code = crate::shared::checkout::title("code", "~/uze/repo", "main");
+    assert_eq!(architect.len(), code.len());
+    for (architect, code) in architect.iter().zip(&code).skip(1) {
+        assert_eq!(architect, code);
+    }
 }
