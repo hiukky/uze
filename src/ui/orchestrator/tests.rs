@@ -799,6 +799,68 @@ mod workspace_tests {
         );
     }
 
+    /// The header row is the first row inside the frame, and the control
+    /// that says which half you are in stands where the heading did.
+    ///
+    /// A blank row between the frame's own edge and a row of controls
+    /// left those controls belonging to neither, and the list's heading
+    /// named the half it was already the only thing showing.
+    #[test]
+    fn the_code_header_is_one_row_in_and_carries_the_control() {
+        use uze_extensions::{DirEntry, ExtensionHit, code, view::ViewHit};
+
+        let root = PathBuf::from("/repo");
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        let mut view = code::CodeView::opening(
+            root.clone(),
+            "/repo".to_owned(),
+            code::ContentMode::Contents,
+        );
+        view.take_request();
+        view.absorb(code::FileAnswer::Listed {
+            path: root.clone(),
+            entries: Ok(vec![DirEntry {
+                directory: false,
+                name: "main.rs".to_owned(),
+            }]),
+        });
+        // A measured checkout is what makes the map one of the halves.
+        view.absorb_measure(code::Measure {
+            root,
+            files: vec![code::FileMeasure {
+                path: "main.rs".to_owned(),
+                lines: 1,
+                commits: 1,
+                changed: false,
+            }],
+        });
+        model.code = Some(view);
+
+        let rows = frame_rows(&mut model);
+        assert!(
+            rows[1].contains("Files") && rows[1].contains("Map"),
+            "the control is on the row under the frame's edge: {:?}",
+            rows[1]
+        );
+        assert!(
+            !rows[1].contains("FILES"),
+            "and the heading it replaced is gone: {:?}",
+            rows[1]
+        );
+
+        full_frame(&mut model);
+        let control = model.hits.iter().find(|(_, hit)| {
+            matches!(
+                hit,
+                WorkspaceHit::Extension(ExtensionHit::Code(ViewHit::SelectSubject(_)))
+            )
+        });
+        let (rect, _) = control.expect("the control can be pointed at");
+        assert_eq!(rect.y, 1, "on that same row");
+    }
+
     /// A click inside the explorer has to resolve to the row the frame
     /// drew, not to something laid out under it. The overlay covers the
     /// whole frame and pushes its own hits into the shared table, so

@@ -2495,6 +2495,7 @@ impl Attach<'_> {
                 | ViewHit::SelectTrail(_)
                 | ViewHit::PlaceCaret { .. }
                 | ViewHit::SelectMode(_)
+                | ViewHit::SelectSubject(_)
                 | ViewHit::DragContentScrollbar
                 | ViewHit::Close => {}
             },

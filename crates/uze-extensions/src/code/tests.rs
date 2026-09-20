@@ -1613,6 +1613,52 @@ fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
     );
 }
 
+fn chips(modes: &[crate::view::Mode]) -> Vec<(&str, bool)> {
+    modes
+        .iter()
+        .map(|mode| (mode.label.as_str(), mode.active))
+        .collect()
+}
+
+/// The two ends of the header row answer two questions: what the surface
+/// is about, over the half that does the finding, and how what was found
+/// is shown, over the half that shows it.
+#[test]
+fn the_header_offers_the_halves_on_one_side_and_the_renderings_on_the_other() {
+    let machine = FakeMachine::default()
+        .with_file("/w/README.md", "# hi\n")
+        .with_file("/w/main.rs", "fn main() {}\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    view.absorb_measure(crate::code::Measure {
+        root: PathBuf::from("/w"),
+        files: vec![crate::code::FileMeasure {
+            path: "main.rs".to_owned(),
+            lines: 1,
+            commits: 1,
+            changed: false,
+        }],
+    });
+
+    // On a document: the two ways of reading it, and the two halves.
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    let drawn = render::view(&view, space());
+    assert_eq!(chips(&drawn.subjects), [("Files", true), ("Map", false)]);
+    assert_eq!(chips(&drawn.modes), [("Preview", true), ("Source", false)]);
+
+    // On anything else there is one way to read it, and a control with
+    // one option is a label that can be clicked. Back to the tree first:
+    // activating a file puts the keyboard in what it opened.
+    press(&mut view, Command::FocusNext);
+    press(&mut view, Command::SelectNext);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+    let drawn = render::view(&view, space());
+    assert_eq!(chips(&drawn.subjects), [("Files", true), ("Map", false)]);
+    assert!(drawn.modes.is_empty(), "nothing to choose between");
+}
+
 /// The map takes the frame, and its levels are the breadcrumb: an
 /// either/or with the tree, not a column beside it.
 #[test]
@@ -1639,22 +1685,16 @@ fn the_map_takes_the_frame_and_says_which_level_it_is_on() {
     assert_eq!(drawn.layout, crate::view::Layout::Board);
     let steps: Vec<&str> = drawn.trail.iter().map(|step| step.name.as_str()).collect();
     assert_eq!(steps, ["repo"], "the checkout, and nothing entered yet");
-    let chips: Vec<(&str, bool)> = drawn
-        .modes
-        .iter()
-        .map(|mode| (mode.label.as_str(), mode.active))
-        .collect();
     assert_eq!(
-        chips,
-        [
-            // Named for the half it would go back to — the tree — so the
-            // way out is a chip somebody can point at, not only a key
-            // they have to know.
-            ("Files", false),
-            ("Map", true),
-            ("ASCII", false),
-            ("Ranking", false),
-        ]
+        chips(&drawn.subjects),
+        [("Files", false), ("Map", true)],
+        "which half you are in, and the way back out as a chip somebody \
+         can point at rather than a key they have to know"
+    );
+    assert_eq!(
+        chips(&drawn.modes),
+        [("Map", true), ("ASCII", false), ("Ranking", false)],
+        "and beside the content, only the ways of drawing it"
     );
 
     // Down a level, and the key that closes comes back up before it

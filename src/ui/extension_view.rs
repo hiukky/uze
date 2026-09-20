@@ -108,14 +108,16 @@ pub(crate) fn content_columns(
     frame_area: Rect,
     navigator_width_override: Option<u16>,
 ) -> (Rect, Rect, Rect) {
-    // The frame takes a row and a column at each edge; one more column
-    // of breathing room inside it, and one blank row under the title it
-    // carries.
+    // The frame takes a row and a column at each edge, and one more
+    // column of breathing room inside it. No blank row under the title:
+    // the title is on the border, the row beneath it is a row of
+    // controls, and a gap between them left the controls belonging to
+    // neither. The board never had one.
     let inner = Rect::new(
         frame_area.x + 2,
-        frame_area.y + 2,
+        frame_area.y + 1,
         frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(3),
+        frame_area.height.saturating_sub(2),
     );
     let navigator_width = navigator_width_override
         .map(|width| clamp_navigator_width(width, inner.width))
@@ -326,8 +328,14 @@ pub(crate) fn render(
         ..Rendered::default()
     };
     if let Some(navigator) = view.navigator.as_ref() {
-        let (settled, bar) =
-            render_navigator(frame, navigator_area, navigator, navigator_scroll, hits);
+        let (settled, bar) = render_navigator(
+            frame,
+            navigator_area,
+            navigator,
+            &view.subjects,
+            navigator_scroll,
+            hits,
+        );
         rendered.navigator_scroll = settled;
         rendered.navigator_bar = bar;
     }
@@ -388,6 +396,7 @@ fn render_board(
     let (menu, board, footer) = board_rows(area);
     let mut rendered = Rendered::default();
     render_modes(frame, menu, &view.modes, hits);
+    render_subjects(frame, menu, &view.subjects, hits);
     match &view.content {
         Content::Message { text, hint, role } => {
             render_message(frame, board, text, hint.as_deref(), color(*role));
@@ -880,6 +889,7 @@ fn render_navigator(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     navigator: &Navigator,
+    subjects: &[Mode],
     scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> (NavigatorScroll, Option<Scrollbar>) {
@@ -889,12 +899,20 @@ fn render_navigator(
         .padding(Padding::new(1, 1, 0, 0))
         .render(frame, area);
 
-    let mut heading = vec![TextSpan::styled(
-        navigator.heading.clone(),
-        Style::default()
-            .fg(theme::color(Token::TextSecondary))
-            .add_modifier(Modifier::BOLD),
-    )];
+    // The heading names the list; the control *changes* it. Where there
+    // is a choice to make, the control stands in the heading's place
+    // rather than beside it — two of them is a word naming what the
+    // chip next to it already says, and the chip is the one that can be
+    // pressed.
+    let mut heading = match subjects.is_empty() {
+        true => vec![TextSpan::styled(
+            navigator.heading.clone(),
+            Style::default()
+                .fg(theme::color(Token::TextSecondary))
+                .add_modifier(Modifier::BOLD),
+        )],
+        false => Vec::new(),
+    };
     // The panel's own right padding is the gap a trailing caption keeps
     // off the divider, so the row is measured as if it were the pad.
     row::push_trailing(
@@ -903,10 +921,9 @@ fn render_navigator(
         navigator.badge.clone(),
         theme::color(Token::TextMuted),
     );
-    frame.render_widget(
-        Paragraph::new(Line::from(heading)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
+    let head = Rect::new(inner.x, inner.y, inner.width, 1);
+    frame.render_widget(Paragraph::new(Line::from(heading)), head);
+    render_subjects(frame, head, subjects, hits);
 
     let rows = Rect::new(
         inner.x,
@@ -1297,10 +1314,46 @@ fn render_modes(
     modes: &[Mode],
     hits: &mut Vec<(Rect, ViewHit)>,
 ) {
-    let mut x = area.right().saturating_sub(modes_width(modes));
+    let x = area.right().saturating_sub(modes_width(modes));
+    render_chips(frame, x, area.y, modes, hits, ViewHit::SelectMode);
+}
+
+/// The same control at the other end of the row: what the surface is
+/// about, over the half that does the finding.
+fn render_subjects(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    subjects: &[Mode],
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    render_chips(
+        frame,
+        area.x,
+        area.y,
+        subjects,
+        hits,
+        ViewHit::SelectSubject,
+    );
+}
+
+/// One segmented control, from `x` rightwards.
+///
+/// The members meet on their own padding and the boundary *is* where the
+/// fill changes — the same construction the tab strip's button groups
+/// use, for the same reason: a divider inside a group is a column
+/// belonging to no member.
+fn render_chips(
+    frame: &mut ratatui::Frame<'_>,
+    from: u16,
+    y: u16,
+    modes: &[Mode],
+    hits: &mut Vec<(Rect, ViewHit)>,
+    hit_of: fn(usize) -> ViewHit,
+) {
+    let mut x = from;
     for (index, mode) in modes.iter().enumerate() {
         let width = TextSpan::raw(&mode.label).width() as u16 + 2 * MODE_PAD;
-        let rect = Rect::new(x, area.y, width, 1);
+        let rect = Rect::new(x, y, width, 1);
         let (fill, ink) = match mode.active {
             true => (Token::SurfaceSelected, Token::TextBright),
             false => (Token::SurfaceBackground, Token::TextMuted),
@@ -1322,7 +1375,7 @@ fn render_modes(
             )),
             rect,
         );
-        hits.push((rect, ViewHit::SelectMode(index)));
+        hits.push((rect, hit_of(index)));
         x = x.saturating_add(width);
     }
 }
@@ -1752,6 +1805,7 @@ mod tests {
             },
             footer: vec![Command::Close],
             modes: Vec::new(),
+            subjects: Vec::new(),
             layout: ViewLayout::Sidebar,
             trail: Vec::new(),
         }
@@ -1854,6 +1908,7 @@ mod tests {
             },
             footer: vec![Command::Close],
             modes: Vec::new(),
+            subjects: Vec::new(),
             layout: ViewLayout::Board,
             trail: trail
                 .iter()
@@ -2004,6 +2059,7 @@ mod tests {
             },
             footer: vec![Command::Close],
             modes: Vec::new(),
+            subjects: Vec::new(),
             layout: ViewLayout::Board,
             trail: Vec::new(),
         };

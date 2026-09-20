@@ -709,30 +709,59 @@ impl CodeView {
         self.map_showing
     }
 
-    /// The ways this surface can show what it is showing, in the order
+    /// The ways this surface can show *what is selected*, in the order
     /// the control offers them — and the one list both the chips and the
     /// click that picks one are read from, so an index can never mean
     /// two different things.
+    ///
+    /// Never the map: that is not a way of showing the selection, it is
+    /// another thing to be looking at, and it is offered as one — see
+    /// [`Self::subjects`]. Empty where there is no choice to make, which
+    /// is most files: a control with one option is a label that can be
+    /// clicked.
     pub(super) fn showings(&self) -> Vec<Showing> {
         if self.content == ContentMode::Map {
             return vec![
-                Showing::Selection(self.before_map),
                 Showing::Measured(MapShowing::Unicode),
                 Showing::Measured(MapShowing::Ascii),
                 Showing::Measured(MapShowing::Ranking),
             ];
         }
-        let mut showings = Vec::new();
         if self.selected_is_markdown() && self.content != ContentMode::Diff {
-            showings.push(Showing::Selection(ContentMode::Preview));
-            showings.push(Showing::Selection(ContentMode::Contents));
-        } else if self.offers_the_map() {
-            showings.push(Showing::Selection(self.content));
+            return vec![
+                Showing::Selection(ContentMode::Preview),
+                Showing::Selection(ContentMode::Contents),
+            ];
         }
-        if self.offers_the_map() {
-            showings.push(Showing::Measured(MapShowing::Unicode));
+        Vec::new()
+    }
+
+    /// What this surface can be about: the checkout's files, or the map
+    /// of the whole of it.
+    ///
+    /// Offered at the head of the column that does the finding, because
+    /// that is the half it changes — the map replaces the list rather
+    /// than the way a file is drawn, and it was read as a third way of
+    /// showing a file for as long as it stood beside two.
+    ///
+    /// Empty where there is no choice: an unmeasured checkout, and the
+    /// changes list, which is a question the map does not answer.
+    pub(super) fn subjects(&self) -> Vec<Showing> {
+        if self.content == ContentMode::Map {
+            return vec![
+                Showing::Selection(self.before_map),
+                // The rendering already on show, so the chip that says
+                // where you are does not also change it.
+                Showing::Measured(self.map_showing),
+            ];
         }
-        showings
+        if !self.offers_the_map() {
+            return Vec::new();
+        }
+        vec![
+            Showing::Selection(self.content),
+            Showing::Measured(MapShowing::Unicode),
+        ]
     }
 
     /// Whether the map is on offer. It is another way of finding a file,
@@ -1344,6 +1373,11 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> C
                 view.show_this_way(showing);
             }
         }
+        Some(ViewHit::SelectSubject(index)) => {
+            if let Some(showing) = view.subjects().get(index).copied() {
+                view.show_this_way(showing);
+            }
+        }
         Some(ViewHit::Close) => return CodeOutcome::Close,
         _ => {}
     }
@@ -1358,6 +1392,11 @@ fn map_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> CodeOutc
         Some(ViewHit::Close) => return CodeOutcome::Close,
         Some(ViewHit::SelectMode(index)) => {
             if let Some(showing) = view.showings().get(index).copied() {
+                view.show_this_way(showing);
+            }
+        }
+        Some(ViewHit::SelectSubject(index)) => {
+            if let Some(showing) = view.subjects().get(index).copied() {
                 view.show_this_way(showing);
             }
         }

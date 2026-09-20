@@ -989,6 +989,10 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
                 active: showing == state.showing,
             })
             .collect(),
+        // Nothing to be about but the artifacts it draws: the trail is
+        // how this surface is walked, and the selectors above it are
+        // what stand where the code surface's own halves do.
+        subjects: Vec::new(),
         layout: Layout::Board,
         trail: state.steps(),
     }

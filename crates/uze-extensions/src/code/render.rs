@@ -45,6 +45,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             },
             footer,
             modes: Vec::new(),
+            subjects: Vec::new(),
             layout: Layout::Sidebar,
             trail: Vec::new(),
         };
@@ -62,6 +63,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
             content: map_content(code, space),
             footer,
             modes: modes(code),
+            subjects: subjects(code),
             layout: Layout::Board,
             trail: map_trail(code),
         };
@@ -82,6 +84,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
         },
         footer,
         modes: modes(code),
+        subjects: subjects(code),
         layout: Layout::Sidebar,
         trail: Vec::new(),
     }
@@ -158,7 +161,7 @@ fn modes(code: &CodeView) -> Vec<Mode> {
     code.showings()
         .into_iter()
         .map(|showing| Mode {
-            label: mode_label(code, showing),
+            label: mode_label(showing),
             active: match showing {
                 Showing::Selection(mode) => code.content == mode,
                 Showing::Measured(map) => {
@@ -169,15 +172,32 @@ fn modes(code: &CodeView) -> Vec<Mode> {
         .collect()
 }
 
-fn mode_label(code: &CodeView, showing: Showing) -> String {
+/// The two things this surface can be about, named as the halves they
+/// are: the list of files, and the map of the checkout they are in.
+///
+/// Not named after the *rendering* the map happens to be in — that is
+/// what the modes beside it are for, and a chip that said "ASCII" here
+/// would be answering a question nobody asked of this end of the row.
+fn subjects(code: &CodeView) -> Vec<Mode> {
+    code.subjects()
+        .into_iter()
+        .map(|showing| Mode {
+            label: match showing {
+                Showing::Selection(_) => "Files".to_owned(),
+                Showing::Measured(_) => "Map".to_owned(),
+            },
+            active: match showing {
+                Showing::Selection(_) => code.content != ContentMode::Map,
+                Showing::Measured(_) => code.content == ContentMode::Map,
+            },
+        })
+        .collect()
+}
+
+fn mode_label(showing: Showing) -> String {
     match showing {
         Showing::Selection(ContentMode::Preview) => "Preview".to_owned(),
-        Showing::Selection(ContentMode::Contents) => match code.content {
-            // Beside "Preview" it names the markup; beside the map it
-            // names the half the viewer would be going back to.
-            ContentMode::Map => "Files".to_owned(),
-            _ => "Source".to_owned(),
-        },
+        Showing::Selection(ContentMode::Contents) => "Source".to_owned(),
         Showing::Selection(ContentMode::Diff) => "Changes".to_owned(),
         Showing::Selection(ContentMode::Map) => "Map".to_owned(),
         Showing::Measured(MapShowing::Unicode) => "Map".to_owned(),
@@ -216,7 +236,7 @@ fn footer(code: &CodeView) -> Vec<Command> {
         commands.push(Command::Delete);
     }
     if code
-        .showings()
+        .subjects()
         .iter()
         .any(|showing| matches!(showing, Showing::Measured(_)))
     {

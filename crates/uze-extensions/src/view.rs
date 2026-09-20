@@ -142,6 +142,17 @@ pub struct View {
     /// be reachable by pointing at it, and a mode nothing on screen
     /// mentions is a mode only a reader of the keymap knows about.
     pub modes: Vec<Mode>,
+    /// What this surface can be *about*, in the order they should be
+    /// offered, with the current one marked — a checkout's files or a
+    /// map of the whole of it.
+    ///
+    /// Apart from [`View::modes`] because the two are different
+    /// questions, and one row of chips asking both is a row where
+    /// neither is read: this is what is being looked at, and that is how
+    /// what was found is shown. So they sit at the two ends of the same
+    /// row, each over the half it governs — this one where the finding
+    /// happens, in place of a heading that only ever named it.
+    pub subjects: Vec<Mode>,
     pub layout: Layout,
     /// The descent the viewer is in, outermost first, with the step they
     /// are standing on marked. Empty where what there is to see does not
@@ -472,6 +483,11 @@ pub enum ViewHit {
     /// One of the [`View::modes`] offered, chosen — by its index into
     /// that list, which is the extension's own order.
     SelectMode(usize),
+    /// The same, for one of the [`View::subjects`]. Its own hit rather
+    /// than one index space over both, because the two lists are the
+    /// extension's own orders and nothing but the extension can say
+    /// where one ends.
+    SelectSubject(usize),
     /// The edge between navigator and content, taken hold of.
     ///
     /// One target for two gestures, because the edge is one line and
