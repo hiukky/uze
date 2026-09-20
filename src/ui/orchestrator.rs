@@ -2592,6 +2592,20 @@ impl WorkspaceModel {
                 self.prune_dragging_space();
                 self.occupancy_stale = true;
             }
+            ClientEvent::WorkspaceSetAside { kept_at, reason } => {
+                // A toast, beside the one an adopted task store already
+                // raises. The runtime is a different process from this
+                // one, so without an event of its own the only record was
+                // a log nobody had turned on — and an operator watched
+                // every space disappear with nothing said anywhere.
+                self.raise_toast(
+                    ToastKind::Warned,
+                    format!("kept at {}", kept_at.display()),
+                    "the workspace could not be opened".to_owned(),
+                    None,
+                );
+                tracing::warn!(%reason, kept_at = %kept_at.display(), "the workspace was set aside");
+            }
             ClientEvent::Damage(damage) => {
                 if is_incremental_repaint(&damage) {
                     self.note_agent_output(damage.pane, identities, Instant::now());

@@ -769,10 +769,6 @@ impl uze_document::Shaped for PersistedWorkspace {
 /// file is missing/unreadable/corrupt) is not an error — [`Server::new`]
 /// falls back to its ordinary fresh-bootstrap path exactly as if this
 /// returned `None` from the start.
-fn load_persisted_workspace() -> Option<PersistedWorkspace> {
-    load_persisted_workspace_at(&persisted_state_path()).0
-}
-
 /// The workspace at `path`, and what reading it cost.
 ///
 /// A shape this build knows is carried across and the spaces survive —
@@ -826,7 +822,7 @@ fn load_persisted_workspace_at(
 /// The whole workspace is rewritten on every structural change, and a plain
 /// write truncates before it fills: a crash, a `kill -9`, a full disk or a
 /// power loss in that window leaves a half-written file, which
-/// [`load_persisted_workspace`] cannot parse and therefore reads as
+/// [`load_persisted_workspace_at`] cannot parse and therefore reads as
 /// "nothing persisted yet" — every space, tab and agent the person had,
 /// gone, with no error anywhere. The temporary is a sibling so the rename
 /// stays inside one filesystem, and the bytes reach the disk before the
@@ -1199,6 +1195,15 @@ struct Server {
     /// client changing theme changes the answer everywhere at once rather
     /// than only for panes opened afterwards.
     palette: Arc<Mutex<Palette>>,
+    /// The workspace this runtime could not carry across, held until a
+    /// client is there to be told.
+    ///
+    /// Held rather than logged, and held rather than dropped: the runtime
+    /// starts before any client attaches, and the one time this happened
+    /// the only record was a `tracing::warn!` to a file sink that is off
+    /// unless `UZE_LOG` is set. An operator watched every space disappear
+    /// with no sentence anywhere.
+    set_aside: Mutex<Option<uze_document::SetAside>>,
 }
 
 impl Server {
@@ -1213,7 +1218,8 @@ impl Server {
         // `persisted_state_path` for why a crash, a `kill -9`, or a reboot
         // still leaves this behind even though nothing else about a pane's
         // running state survives any of those.
-        let (session, launches) = load_persisted_workspace()
+        let (restored, set_aside) = load_persisted_workspace_at(&persisted_state_path());
+        let (session, launches) = restored
             .and_then(|persisted| Session::restore(persisted.spaces))
             .unwrap_or_else(|| {
                 let (columns, rows) = PLACEHOLDER_PANE_SIZE;
@@ -1233,6 +1239,7 @@ impl Server {
             persisting: Mutex::new(()),
             damage,
             palette: Arc::new(Mutex::new(Palette::default())),
+            set_aside: Mutex::new(set_aside),
         };
         for (pane, launch) in launches {
             // A persisted program is a guess (an agent binary that may
@@ -1420,6 +1427,17 @@ impl Server {
                     self.resize_pane(self.selected_pane_of(client), columns, rows);
                 }
                 self.broadcast_snapshot();
+                // Said once, to the first client that arrives. The runtime
+                // starts before anyone is watching, so this waits rather
+                // than going to a log nobody turned on — which is how an
+                // operator once watched every space disappear with no
+                // sentence anywhere.
+                if let Some(moved) = self.set_aside.lock().expect("set-aside poisoned").take() {
+                    events.reply(ClientEvent::WorkspaceSetAside {
+                        kept_at: moved.path,
+                        reason: moved.reason,
+                    });
+                }
                 Some(client)
             }
             Ok(Some(ClientRequest::Attach { .. })) => {
@@ -2806,10 +2824,10 @@ mod tests {
         ANSWERS_WITHIN, Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
         PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server,
         WORKSPACE_SCHEMA_VERSION, WorkspaceLock, arrival, bind_endpoint, held_by_a_server,
-        identify, identity_of, listener_at, load_persisted_workspace, load_persisted_workspace_at,
-        persisted_state_path, read_event, read_message, relaunch_command_for_process, retire,
-        send_request, serves_this_build, signalable, snapshot, socket_path, view_for,
-        workspace_is_claimed, workspace_lock_path, write_atomically, write_message,
+        identify, identity_of, listener_at, load_persisted_workspace_at, persisted_state_path,
+        read_event, read_message, relaunch_command_for_process, retire, send_request,
+        serves_this_build, signalable, snapshot, socket_path, view_for, workspace_is_claimed,
+        workspace_lock_path, write_atomically, write_message,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -4221,7 +4239,8 @@ mod tests {
         )
         .unwrap();
 
-        let restored = load_persisted_workspace().expect("the previous release's spaces survive");
+        let (restored, _) = load_persisted_workspace_at(&path);
+        let restored = restored.expect("the previous release's spaces survive");
         assert_eq!(
             restored.spaces.len(),
             1,
@@ -5390,6 +5409,100 @@ mod tests {
             "and every tab the space carried"
         );
 
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Nothing persisted at all is a first run, not a loss.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_first_run_reports_nothing() {
+        let scratch = uze_testkit::temp::socket_scratch("setaside-first");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
+        assert!(
+            server
+                .set_aside
+                .lock()
+                .expect("set-aside poisoned")
+                .is_none(),
+            "there was nothing to lose, so there is nothing to say"
+        );
+        server.stop_panes();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The runtime starts before anyone is watching, and it is a different
+    /// process from the screen. So what it could not carry waits for the
+    /// first client and is said there — not in a log that is off unless
+    /// `UZE_LOG` is set, which is where the one that mattered went.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_client_is_told_what_the_runtime_could_not_carry() {
+        let scratch = uze_testkit::temp::socket_scratch("setaside-told");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let path = persisted_state_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not a workspace at all").unwrap();
+
+        let socket = socket_path().unwrap();
+        let (server, _damage) = Server::new(seat_at(&project), socket).expect("server");
+        let server = std::sync::Arc::new(server);
+
+        // A socket pair stands in for the endpoint: what is being proven
+        // is what a client is told once it attaches, not how it got there.
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                columns: 80,
+                rows: 24,
+                seating: crate::Seating::WhereItLeftOff,
+            },
+        )
+        .unwrap();
+
+        let mut told = None;
+        for _ in 0..8 {
+            match read_event(&mut reader) {
+                Ok(Some(crate::ClientEvent::WorkspaceSetAside { kept_at, .. })) => {
+                    told = Some(kept_at);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        let kept_at = told.expect("the client is told, rather than a log nobody turned on");
+        assert!(kept_at.exists(), "and told where the bytes were kept");
+        assert!(
+            !path.exists(),
+            "the workspace itself is out of the way, under a name nothing reads as one"
+        );
+
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        drop(writer);
+        let _ = serving.join();
+        server.stop_panes();
         let _ = std::fs::remove_dir_all(&scratch);
     }
 

@@ -115,13 +115,20 @@
 
 ## 9. The runtime can reach the screen
 
-- [ ] 9.1 Add the protocol event by which the runtime says it could not
+- [x] 9.1 Add the protocol event by which the runtime says it could not
       carry the workspace across, and raise it as a toast beside the
       adopted task store's.
-- [ ] 9.2 Answer a mismatched `PROTOCOL_VERSION` with an error naming both
-      versions instead of falling to `_ => None`, and tell the operator
-      what to do.
-- [ ] 9.3 Test that a first run with nothing persisted reports nothing.
+- [x] 9.2 Nothing to do: a mismatched `PROTOCOL_VERSION` is already
+      answered, and has been since `fail closed on hooks, delivery, updates
+      and the terminal runtime` (ba0448f0, 2026-09-13) — before the incident
+      this change is named for. The runtime replies "incompatible terminal
+      runtime protocol", `serves_this_build` reads that as "cannot serve
+      this build", and the client retires the old runtime and starts one
+      that can. `_ => None` catches a first message that is not an `Attach`
+      at all, which is a different case. The claim that the client was hung
+      up on in silence was wrong: the protocol half of the incident worked
+      as designed, and the workspace half is what cost the spaces.
+- [x] 9.3 Test that a first run with nothing persisted reports nothing.
 
 ## 10. `uze doctor` reports what the previous version left
 
@@ -164,7 +171,7 @@
       none matches, sequencing the tab on the session update that names it.
 - [x] 12.4 Leave a space rooted above the project unmatched, with the
       reason recorded beside the code.
-- [ ] 12.5 Refuse a resume whose project directory no longer exists:
+- [x] 12.5 Refuse a resume whose project directory no longer exists:
       nothing opens, the reason is said, the entry stays.
 - [x] 12.6 Tests: an open space receives the tab and no second space is
       created for the same root; a closed-and-reopened space matches

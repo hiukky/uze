@@ -2935,6 +2935,31 @@ mod task_service_tests {
         }
     }
 
+    /// The repository being gone is exactly when the records are all
+    /// there is, so they stay listed — and a resume of one opens nothing
+    /// rather than failing halfway through a launch.
+    #[test]
+    fn work_whose_repository_is_gone_stays_listed_and_refuses_to_resume() {
+        let app = application("preserved-vanished-home");
+        let project = uze_testkit::temp::scratch("preserved-vanished");
+        std::fs::create_dir_all(&project).unwrap();
+        let id = record_an_agent(&app, &project, TaskState::Parked, None);
+        std::fs::remove_dir_all(&project).unwrap();
+
+        let preserved = app.workspace().preserved_work();
+        assert_eq!(
+            preserved.len(),
+            1,
+            "the records are what says the work existed at all"
+        );
+
+        let refusal = app.workspace().resume_task(&project, &id, &[]);
+        assert!(
+            refusal.is_err(),
+            "a resume with nowhere to go opens nothing"
+        );
+    }
+
     /// A record whose work the target already carries is not preserved
     /// work — it is delivered — and neither is one that never had any.
     #[test]
