@@ -20,7 +20,7 @@ use super::{
 use crate::{
     DirEntry,
     code::highlight::FALLBACK_SYNTAX_THEME,
-    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size},
+    view::{Command, Content, LineTone, NavigatorRow, Role, RowMark, Size, Span},
 };
 
 fn space() -> Size {
@@ -983,43 +983,53 @@ fn the_doors_switch_modes_once_the_surface_is_open() {
     assert_eq!(view.navigator(), NavigatorMode::Changes);
 }
 
-/// A title is three things at once, and one run of text gives them all
-/// the same weight — which is how a title stops being read.
+/// The frame's two edges: what the surface is on top, where it is open
+/// at the foot — and each part of the second told apart by weight, since
+/// one run of text gives them all the same and that is how a line stops
+/// being read.
 #[test]
-fn the_title_tells_its_three_parts_apart() {
+fn the_frame_says_what_this_is_on_top_and_where_it_is_at_the_foot() {
     let mut view = fixture();
     view.branch = "feat/thing".to_owned();
     view.display_root = "~/uze/.worktrees/joipv0".to_owned();
 
-    let title = super::view(&view, space()).title;
-    let said: String = title.iter().map(|span| span.text.as_str()).collect();
-    assert!(said.contains("~/uze/.worktrees/"));
-    assert!(said.contains("joipv0"));
-    assert!(said.contains("feat/thing"));
+    let drawn = super::view(&view, space());
+    let said = |spans: &[Span]| {
+        spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>()
+    };
+    assert_eq!(
+        said(&drawn.title),
+        CATALOG.name,
+        "the name it is registered under"
+    );
+    assert_eq!(said(&drawn.caption), "~/uze/.worktrees/joipv0 · feat/thing");
 
-    let weight = |text: &str| {
-        title
+    let weight = |spans: &[Span], text: &str| {
+        spans
             .iter()
             .find(|span| span.text == text)
             .map(|span| (span.role, span.bold))
     };
     assert_eq!(
-        weight("code"),
+        weight(&drawn.title, CATALOG.name),
         Some((Role::Muted, false)),
         "the surface's name is a label, said once and quietly"
     );
     assert_eq!(
-        weight("~/uze/.worktrees/"),
+        weight(&drawn.caption, "~/uze/.worktrees/"),
         Some((Role::Dim, false)),
         "the directories leading to it are context"
     );
     assert_eq!(
-        weight("joipv0"),
+        weight(&drawn.caption, "joipv0"),
         Some((Role::Bright, true)),
         "the checkout's own name identifies it"
     );
     assert_eq!(
-        weight("feat/thing"),
+        weight(&drawn.caption, "feat/thing"),
         Some((Role::Accent, true)),
         "and so does the branch, which is what changes"
     );

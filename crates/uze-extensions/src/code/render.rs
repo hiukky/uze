@@ -25,7 +25,8 @@ use crate::view::{
 /// `space` is advisory: it bounds how much content is worth producing,
 /// never where any of it goes.
 pub fn view(code: &CodeView, space: Size) -> View {
-    let title = title(code);
+    let title = checkout::name(super::CATALOG.name);
+    let caption = checkout::caption(&code.display_root, &code.branch);
     let footer = footer(code);
 
     // A surface-level failure — the tab's directory is gone, say — leaves
@@ -35,6 +36,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
     if let Some(message) = &code.error {
         return View {
             title,
+            caption,
             navigator: None,
             content: Content::Message {
                 text: message.clone(),
@@ -55,6 +57,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
     if code.content == ContentMode::Map {
         return View {
             title,
+            caption,
             navigator: None,
             content: map_content(code, space),
             footer,
@@ -66,6 +69,7 @@ pub fn view(code: &CodeView, space: Size) -> View {
 
     View {
         title,
+        caption,
         navigator: Some(match code.navigator() {
             NavigatorMode::Changes => changes_navigator(code),
             NavigatorMode::Files => files_navigator(code),
@@ -179,10 +183,6 @@ fn mode_label(code: &CodeView, showing: Showing) -> String {
         Showing::Measured(MapShowing::Ascii) => "ASCII".to_owned(),
         Showing::Measured(MapShowing::Ranking) => "Ranking".to_owned(),
     }
-}
-
-fn title(code: &CodeView) -> Vec<Span> {
-    checkout::title("code", &code.display_root, &code.branch)
 }
 
 /// What this surface can be asked, in the order the footer should name

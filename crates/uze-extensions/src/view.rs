@@ -109,15 +109,21 @@ impl Span {
 /// its content and a hint row underneath.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct View {
-    /// What this surface is about, in parts.
+    /// What this surface is: the label along the top of its frame.
     ///
-    /// Spans rather than a string because a title is several things at
-    /// once — what the surface is, which checkout, which branch — and
-    /// one run of text gives them all the same weight, which is how a
-    /// title stops being read. The extension says which part is which;
-    /// the host decides what each looks like, exactly as it does for
-    /// every other [`Role`].
+    /// Spans rather than a string because the extension says which part
+    /// is which and the host decides what each looks like, exactly as it
+    /// does for every other [`Role`].
     pub title: Vec<Span>,
+    /// Where this surface is open: the line along the bottom edge of its
+    /// frame — which checkout, and which branch it is at.
+    ///
+    /// Apart from the title because the two are read at different
+    /// moments. The title is read once, on arriving; this is what a
+    /// reader comes back to on losing track of which checkout they are
+    /// in, and a frame has two edges to put one question on each. Empty
+    /// for a surface that is not open on anything.
+    pub caption: Vec<Span>,
     /// `None` when there is nothing to navigate — an error leaves the
     /// column empty rather than showing an empty list with a zero beside
     /// it, which reads as "no changes" when the truth is "we could not

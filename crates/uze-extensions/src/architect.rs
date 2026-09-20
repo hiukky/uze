@@ -970,7 +970,8 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
         });
     }
     View {
-        title: title(state),
+        title: checkout::name(CATALOG.name),
+        caption: checkout::caption(&state.display_root, &state.branch),
         navigator: Some(Navigator {
             heading: "ARTIFACTS".to_owned(),
             badge: state.catalog.artifacts().len().to_string(),
@@ -1003,10 +1004,6 @@ fn footer(state: &ArchitectView) -> Vec<Command> {
     }
     commands.extend([Command::ChooseItem, Command::NextView, Command::NextMode]);
     commands
-}
-
-fn title(state: &ArchitectView) -> Vec<Span> {
-    checkout::title("architect", &state.display_root, &state.branch)
 }
 
 fn content(state: &ArchitectView, space: Size) -> Content {

@@ -75,12 +75,19 @@ fn styled(span: &Span) -> TextSpan<'static> {
         .color
         .map(|rgb| theme::content(rgb.0, rgb.1, rgb.2))
         .unwrap_or_else(|| color(span.role)));
-    if span.bold {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if span.italic {
-        style = style.add_modifier(Modifier::ITALIC);
-    }
+    // Emphasis is stated both ways round, never left to whatever the
+    // span is drawn inside. A ratatui title carries a style its spans
+    // are patched over, so a span that only *omits* bold comes out bold
+    // on a frame's edge and plain everywhere else — the same span
+    // meaning two things depending on where it landed.
+    style = match span.bold {
+        true => style.add_modifier(Modifier::BOLD),
+        false => style.remove_modifier(Modifier::BOLD),
+    };
+    style = match span.italic {
+        true => style.add_modifier(Modifier::ITALIC),
+        false => style.remove_modifier(Modifier::ITALIC),
+    };
     TextSpan::styled(span.text.clone(), style)
 }
 
@@ -126,20 +133,19 @@ pub(crate) fn content_columns(
 
 /// A board's rows, top to bottom: its menu, the board itself and the
 /// footer. The board gets everything the other two do not need — no
-/// navigator column, no reading margin, and one row of menu rather than
-/// one per level of it.
+/// navigator column, no blank row under the title, no reading margin, and
+/// one row of menu rather than one per level of it.
 ///
-/// It keeps the blank row under the title that [`content_columns`] keeps,
-/// though, and for a reason the other margins do not have: the row under
-/// it is a row of *controls*, and a control butting against the title
-/// reads as part of it. One row is what says the title is a title and
-/// the chips beneath it are things to press.
+/// The menu sits straight under the title because there is nothing up
+/// there to crowd: the frame's top edge carries the surface's name and
+/// nothing else, and where it is open is written along the foot. A row
+/// of chips under one word is a row of chips, not a continuation.
 pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
-        frame_area.y + 2,
+        frame_area.y + 1,
         frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(3),
+        frame_area.height.saturating_sub(2),
     );
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -283,15 +289,29 @@ pub(crate) fn render(
     let mut title: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
     title.extend(view.title.iter().map(styled));
     title.push(TextSpan::raw(" "));
-    Surface::card().title(Line::from(title)).render(frame, area);
-    // This closes the whole overlay, so make it an explicit, comfortably
-    // clickable control rather than the compact tab-close glyph.
-    let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
+    let mut surface = Surface::card().title(Line::from(title));
+    // What the surface is at the top, where it is open at the foot. The
+    // second is the one a reader comes back to, and it sits on the edge
+    // nothing else is written along.
+    if !view.caption.is_empty() {
+        let mut caption: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
+        caption.extend(view.caption.iter().map(styled));
+        caption.push(TextSpan::raw(" "));
+        surface = surface.caption(Line::from(caption));
+    }
+    surface.render(frame, area);
+    // The mark alone. It carried the word "close" beside it while the top
+    // edge was a whole sentence and the mark would have been lost in it;
+    // opposite one word it is the only other thing up there, and a
+    // control that says what every ✕ in every window says is a control
+    // spelling out its own glyph. The gap it punches in the hairline is
+    // as wide as the drawn mark and no wider: a hit larger than what is
+    // drawn closes the surface from a cell that looks like the frame.
+    let close = format!(" {} ", theme::glyph(Symbol::MarkClose));
+    let width = TextSpan::raw(close.as_str()).width() as u16;
+    let close_rect = Rect::new(area.right().saturating_sub(width + 1), area.y, width, 1);
     frame.render_widget(
-        Paragraph::new(TextSpan::styled(
-            format!(" {} close ", theme::glyph(Symbol::MarkClose)),
-            theme::fg(Token::StateDanger),
-        )),
+        Paragraph::new(TextSpan::styled(close, theme::fg(Token::StateDanger))),
         close_rect,
     );
     hits.push((close_rect, ViewHit::Close));
@@ -1666,12 +1686,13 @@ mod tests {
     use uze_extensions::view::{ContentLine, LineTone, Rgb};
 
     /// Which drawn row a board's menu lands on: the frame's own top edge
-    /// carrying the title, the blank row under it, then the menu.
-    const MENU_ROW: usize = 2;
+    /// carrying the title, then the menu straight under it.
+    const MENU_ROW: usize = 1;
 
     fn sample() -> View {
         View {
             title: vec![Span::new("demo", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: "CHANGES".to_owned(),
                 badge: "2".to_owned(),
@@ -1799,6 +1820,7 @@ mod tests {
         }
         View {
             title: vec![Span::new("Board", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: String::new(),
                 badge: String::new(),
@@ -1947,6 +1969,7 @@ mod tests {
         }));
         let view = View {
             title: vec![Span::new("Board", Role::Bright)],
+            caption: Vec::new(),
             navigator: Some(Navigator {
                 heading: String::new(),
                 badge: String::new(),

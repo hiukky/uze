@@ -677,41 +677,47 @@ fn a_place_naming_a_diagram_that_is_gone_opens_at_the_top() {
     assert!(back.trail.is_empty());
 }
 
-/// The title names the checkout and the branch, the way the code
-/// surface's does — the same sentence in the same place, because a
-/// reader switching between the two is asking one question.
+/// The frame's two edges: what the surface is at the top, where it is
+/// open at the foot — the same two the code surface draws, because a
+/// reader switching between them is asking one question.
 #[test]
-fn the_title_says_the_checkout_the_way_the_code_surface_says_it() {
+fn the_frame_says_what_this_is_on_top_and_where_it_is_at_the_foot() {
     let mut state = opened();
     state.display_root = "~/uze/.worktrees/joipv0".to_owned();
     state.branch = "feat/thing".to_owned();
+    let drawn = view(&state, SPACE);
 
-    let title = view(&state, SPACE).title;
-    let said: String = title.iter().map(|span| span.text.as_str()).collect();
-    assert_eq!(said, "architect · ~/uze/.worktrees/joipv0 · feat/thing");
+    let said = |spans: &[Span]| {
+        spans
+            .iter()
+            .map(|span| span.text.clone())
+            .collect::<String>()
+    };
+    assert_eq!(
+        said(&drawn.title),
+        CATALOG.name,
+        "the name it is registered under"
+    );
+    assert_eq!(said(&drawn.caption), "~/uze/.worktrees/joipv0 · feat/thing");
 
-    let weight = |text: &str| {
-        title
+    let weight = |spans: &[Span], text: &str| {
+        spans
             .iter()
             .find(|span| span.text == text)
             .map(|span| (span.role, span.bold))
     };
-    assert_eq!(weight("architect"), Some((Role::Muted, false)));
-    assert_eq!(weight("~/uze/.worktrees/"), Some((Role::Dim, false)));
-    assert_eq!(weight("joipv0"), Some((Role::Bright, true)));
-    assert_eq!(weight("feat/thing"), Some((Role::Accent, true)));
-}
-
-/// The two surfaces' titles are one sentence with one word changed. Held
-/// here because "they look the same today" is not the same claim as
-/// "they are built the same way", and only the second one survives an
-/// edit to either surface.
-#[test]
-fn both_surfaces_say_a_checkout_in_the_same_words() {
-    let architect = crate::shared::checkout::title("architect", "~/uze/repo", "main");
-    let code = crate::shared::checkout::title("code", "~/uze/repo", "main");
-    assert_eq!(architect.len(), code.len());
-    for (architect, code) in architect.iter().zip(&code).skip(1) {
-        assert_eq!(architect, code);
-    }
+    assert_eq!(
+        weight(&drawn.title, CATALOG.name),
+        Some((Role::Muted, false)),
+        "the surface's name is a label, said once and quietly"
+    );
+    assert_eq!(
+        weight(&drawn.caption, "~/uze/.worktrees/"),
+        Some((Role::Dim, false))
+    );
+    assert_eq!(weight(&drawn.caption, "joipv0"), Some((Role::Bright, true)));
+    assert_eq!(
+        weight(&drawn.caption, "feat/thing"),
+        Some((Role::Accent, true))
+    );
 }
