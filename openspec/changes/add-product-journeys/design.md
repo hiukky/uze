@@ -241,9 +241,9 @@ suite, and this is the answer to it.
 ## Model update
 
 This change adds a test-tooling system alongside `conformanceLab`, so
-`docs/architecture/likec4/model.c4` gains a `journeyRunner` system with its
+`docs/architecture/containers.mmd` gains a `journeyRunner` node with its
 relation to `uze` (`drives the CLI and the workspace client, and reads the
-machine they wrote`), validated with the project's arch-validate script.
+machine they wrote`), validated with `cargo test -p uze-extensions`.
 
 ## Candidate ADRs
 

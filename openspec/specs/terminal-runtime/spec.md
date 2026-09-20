@@ -343,3 +343,325 @@ process.
   was before it opened
 - **AND THEN** every pane's process SHALL be unaffected by the surface
   having been open
+
+### Requirement: A space is a root, and the runtime knows nothing else about it
+The terminal runtime SHALL identify a space by its root alone. It SHALL
+NOT carry, persist or report a kind for a space, and nothing it does with
+panes, tabs or processes SHALL depend on one. When asked to open a space
+for a root, the runtime SHALL reuse the existing space for that root, and
+create one only when there is none.
+
+A persisted workspace written by a version that recorded a kind per space
+SHALL be read by the rule the `upgrade-resilience` capability states for a
+document of an older version.
+
+#### Scenario: A root names one space
+- **WHEN** a client opens a space for a root that already has one
+- **THEN** the existing space is selected and none is created
+
+#### Scenario: The space round-trips through a restart
+- **WHEN** a space is created and the server is restarted
+- **THEN** the restored space is the same space, at the same root
+
+#### Scenario: A workspace persisted by an older version
+- **WHEN** the runtime restores a persisted workspace whose spaces carry a kind
+- **THEN** it reads it as the older document it is, and the operator is told what was done about it
+
+### Requirement: The workspace claim names the process holding it
+
+The server serving a workspace SHALL record its own process id in the
+claim it holds, so that a client which cannot reach the endpoint can still
+say — and end — what holds the workspace. A reader SHALL treat the
+recorded id as a lead and corroborate it against the process table before
+acting on it; the lock, not the record, remains the proof that a server is
+alive.
+
+#### Scenario: A client cannot reach the endpoint
+
+- **WHEN** a client finds the workspace claimed and nothing answering at
+  the endpoint this build computes
+- **THEN** it SHALL allow the server the time its endpoint watch needs to
+  restore a socket that was taken from it
+- **AND THEN** failing that, it SHALL end the recorded holder and start a
+  server that answers where this build looks
+- **AND THEN** the spaces and panes the previous server was serving SHALL
+  be restored by the one that replaces it
+
+#### Scenario: The claim names nobody this process can act on
+
+- **WHEN** the claim is held but records no id, or records one the process
+  table no longer vouches for
+- **THEN** the client SHALL report that the workspace is served by
+  something it cannot reach, naming the endpoint it looked at and the
+  command that ends a server
+- **AND THEN** it SHALL NOT report only the operating system's error about
+  the endpoint path
+
+### Requirement: Stopping the runtime stops what holds the workspace
+
+`uze terminal stop` SHALL end the server holding the workspace, whether or
+not that server answers at the endpoint this build computes. "Nothing
+answers here" SHALL NOT be reported as "nothing is running" while the
+workspace is claimed.
+
+#### Scenario: The server recorded itself and is on another endpoint
+
+- **WHEN** `uze terminal stop` runs while a server that recorded its own
+  id holds the workspace at an endpoint this build does not name
+- **THEN** that server SHALL be ended
+- **AND THEN** the workspace SHALL be free for the next server
+
+#### Scenario: The server predates the record
+
+- **WHEN** the workspace is claimed, nothing answers at this build's
+  endpoint, and the claim records nobody — a server from a release older
+  than the record itself
+- **THEN** `uze terminal stop` SHALL report that, naming the endpoint it
+  looked at and how to find the process
+- **AND THEN** it SHALL NOT report success, and SHALL signal nothing
+
+#### Scenario: Nothing is running at all
+
+- **WHEN** `uze terminal stop` runs with no server holding the workspace
+  and no endpoint present
+- **THEN** it SHALL succeed, having nothing to do
+
+### Requirement: The endpoint lives beside the workspace it serves
+
+The endpoint SHALL be named from the workspace's own location, so that
+every terminal of one machine computes the same endpoint for one
+`UZE_HOME` whatever their session environment says, and no directory a
+system cleaner owns can take it while the workspace itself survives. Where
+that path cannot hold a socket, UZE SHALL fall back to the session's
+runtime directory and the system temporary directories in turn.
+
+#### Scenario: Two terminals with different session environments
+
+- **WHEN** two terminals of one machine have different values for the
+  session's runtime directory, or one has none
+- **THEN** both SHALL compute the same endpoint for the same `UZE_HOME`
+- **AND THEN** the second SHALL attach to the server the first started
+
+#### Scenario: A home too long for a socket path
+
+- **WHEN** the workspace's own directory would exceed the length a socket
+  path allows
+- **THEN** UZE SHALL use the first fallback directory that can hold one
+- **AND THEN** the endpoint SHALL still be one per `UZE_HOME`
+
+### Requirement: A server is never started from a binary that is gone
+
+Starting a server SHALL use an executable that exists. Where the running
+image has been replaced on disk — an install over a live session — UZE
+SHALL start the server from `uze` as the path resolves it, and where
+neither exists it SHALL say so rather than reporting a missing file.
+
+#### Scenario: The binary was replaced while the client ran
+
+- **WHEN** a client needs to start a server after its own binary has been
+  replaced on disk
+- **THEN** the server SHALL be started from the installed `uze`
+- **AND THEN** no error naming a deleted path SHALL reach the operator
+
+### Requirement: A workspace written by an earlier build opens on this one
+
+The persisted workspace SHALL be carried across to the shape this build
+reads, keeping every space, its root, its tabs and each tab's directory
+and launch. A field an earlier shape carried that this one dropped SHALL
+be the only thing lost. Spaces SHALL NOT be lost because the workspace was
+written by an earlier build whose shape this one knows.
+
+#### Scenario: Upgrading with spaces open
+
+- **WHEN** UZE is upgraded and the persisted workspace was written by an
+  earlier shape this build knows
+- **THEN** the same spaces SHALL open, with the same roots, tabs and
+  directories
+- **AND THEN** nothing SHALL be reported
+
+#### Scenario: The shape that carried a kind per space
+
+- **WHEN** the workspace was written when a space carried a kind of its
+  own
+- **THEN** every space SHALL open without it
+- **AND THEN** nothing else about the workspace SHALL change
+
+### Requirement: The runtime says what it could not carry across
+
+When the terminal runtime cannot carry the persisted workspace across and
+starts from nothing, it SHALL tell the client, and the client SHALL show
+the operator what happened and where the previous workspace was kept.
+
+Reporting it only where a log would have to be turned on SHALL NOT satisfy
+this: the runtime and the screen are different processes, and the operator
+is at the screen.
+
+#### Scenario: A workspace that could not be read
+
+- **WHEN** the runtime starts from nothing because the persisted workspace
+  could not be read or carried across
+- **THEN** the operator SHALL be told on screen
+- **AND THEN** they SHALL be told where the previous workspace is kept
+
+#### Scenario: A first run
+
+- **WHEN** the runtime starts with no workspace persisted at all
+- **THEN** nothing SHALL be reported: there was nothing to lose
+
+### Requirement: Persistent terminal session
+The system SHALL provide a local terminal session whose server owns every pane
+PTY and child process independently from an attached UI client.
+
+#### Scenario: Client detaches while an agent is running
+- **WHEN** a user detaches from an active terminal session containing a running agent
+- **THEN** the session server SHALL keep the agent process and its PTY alive
+- **AND THEN** a later client attachment SHALL reconnect to the same session
+
+### Requirement: Native terminal pane behavior
+The system SHALL render a pane from terminal-emulation state derived from its
+PTY output and SHALL send focused-pane input and resize events back to that
+PTY.
+
+#### Scenario: Interactive agent uses terminal controls
+- **WHEN** an agent emits cursor movement, styled output, or an alternate-screen transition
+- **THEN** the attached client SHALL render the corresponding pane state
+- **AND THEN** switching away from and back to the pane SHALL not restart the agent process
+
+### Requirement: Workspace organization
+The system SHALL organize a local terminal session as workspaces containing
+tabs, with each tab containing at least one pane.
+
+#### Scenario: User creates and selects tabs
+- **WHEN** a user creates a terminal tab and selects another tab
+- **THEN** each tab SHALL retain its own panes and running processes
+- **AND THEN** the sidebar and tab header SHALL identify the selected tab
+
+### Requirement: Management context switching
+The system SHALL allow a user to switch between the terminal workspace client
+and the existing UZE management TUI without terminating the terminal session.
+
+#### Scenario: User returns from management to a running pane
+- **WHEN** a user switches from an active terminal workspace to the management TUI and then returns
+- **THEN** the client SHALL reattach to the existing terminal session
+- **AND THEN** each running pane SHALL retain its process and terminal state
+
+### Requirement: Explicit session termination
+The system SHALL expose an explicit terminal-session stop action that ends the
+server and its remaining pane processes.
+
+#### Scenario: User stops a terminal session
+- **WHEN** a user requests that a terminal session stop
+- **THEN** the server SHALL detach connected clients and terminate its managed panes
+- **AND THEN** a subsequent attachment SHALL create a new session rather than reuse the stopped one
+
+### Requirement: Runtime isolation
+The terminal runtime SHALL be opt-in and SHALL NOT participate in package
+installation, harness projection, or environment-maintenance reconciliation.
+
+#### Scenario: Ordinary management command runs without a terminal session
+- **WHEN** a user runs an existing management command without opening a terminal workspace
+- **THEN** the command SHALL NOT start a terminal server or create PTYs
+
+### Requirement: Portable runtime boundary
+The terminal runtime SHALL define transport and PTY boundaries independently of
+the host operating system. The initial release SHALL support Linux and macOS;
+adding a Windows backend SHALL NOT require a change to workspace, tab, pane,
+or client/server lifecycle semantics.
+
+#### Scenario: Initial supported platform starts a session
+- **WHEN** a user on Linux or macOS attaches to a terminal workspace
+- **THEN** the system SHALL use the platform's local transport and PTY backend
+- **AND THEN** the workspace behavior SHALL conform to this specification
+
+### Requirement: One server per user
+The system SHALL run one terminal server per user — per `UZE_HOME` — and
+every `uze` client SHALL attach to it, whatever directory the client was
+started in. The server's spaces, tabs and panes SHALL persist between runs
+in one document under the user's UZE state.
+
+#### Scenario: Two launches from two directories share one server
+- **WHEN** a user starts `uze` in one directory and then in another
+- **THEN** both clients are attached to the same server and see the same spaces
+
+#### Scenario: A launch after the binary was replaced keeps the running panes
+- **WHEN** the `uze` binary is replaced while a server is running agents, and a user starts `uze` again
+- **THEN** the new client attaches to the running server whenever it answers this build's handshake, and every pane keeps its process
+- **AND THEN** a server that cannot answer it is ended instead, and the spaces, tabs and panes it held are restored by the server that replaces it
+
+### Requirement: A space has a root
+The system SHALL give every space a root directory, chosen when the space
+is created, and SHALL derive the space's behaviour from that root: an agent
+or a shell created in the space starts from it, and a root that is a Git
+repository with a commit gives agents isolated checkouts. Starting `uze`
+SHALL ensure a space rooted at the launch directory's workspace root exists
+and SHALL select it for that client, creating it only when no space has
+that root. Creating a space explicitly SHALL ask for its root, prefilled
+with the selected space's.
+
+#### Scenario: The launch directory becomes a space
+- **WHEN** a user starts `uze` in a directory no space is rooted at
+- **THEN** a space rooted there is created, labelled from the directory, and selected for that client
+
+#### Scenario: A known root is selected, not duplicated
+- **WHEN** a user starts `uze` in a directory a space is already rooted at
+- **THEN** that space is selected for the client and no space is created
+
+#### Scenario: A new space starts from a chosen root
+- **WHEN** a user creates a space and confirms a root
+- **THEN** the space's first shell opens in that root and agents created in it start from it
+
+### Requirement: A new space's root is chosen, not typed
+Creating a space SHALL offer the directories that exist rather than accept a
+path typed blind: the prompt SHALL name a directory to list and a segment to
+match inside it, SHALL narrow the offered directories as that segment is
+typed, and SHALL create the space at the directory the person lands on.
+
+#### Scenario: The listing narrows as the root is typed
+- **WHEN** a user opens the new-space prompt and types part of a directory's name
+- **THEN** only the directories of the listed directory whose names match are offered
+
+#### Scenario: The chosen directory becomes the root
+- **WHEN** a user confirms one of the offered directories
+- **THEN** a space rooted at that directory is created
+
+### Requirement: A tab belongs with the agent it was born from
+A shell opened while an agent is in front of the person SHALL belong with
+that agent and SHALL start in that agent's own directory. The tab strip
+SHALL show one context at a time — that agent followed by the shells that
+belong with it, and no other agent's. A shell belonging to no agent SHALL
+belong to the space, reachable from the space's own row. Closing an agent
+SHALL hand the shells opened alongside it to the space rather than closing
+them, and SHALL remain a confirmed action, never a click on the strip.
+
+#### Scenario: Switching agents switches the strip
+- **WHEN** a user selects a different agent
+- **THEN** the strip shows that agent and the shells that belong with it, and none of the previous agent's
+
+#### Scenario: A shell opens on the agent's work
+- **WHEN** a user opens a shell while an agent is selected
+- **THEN** the shell starts in that agent's directory and appears with it
+
+#### Scenario: An agent's shells outlive it
+- **WHEN** an agent is closed
+- **THEN** the shells opened alongside it remain, as shells of the space
+
+### Requirement: Focus is per client
+The system SHALL keep which space and which tab each attached client is
+looking at per client. Selecting a space or a tab in one client SHALL NOT
+move another client's selection, and the session a client receives SHALL
+carry that client's own selection.
+
+#### Scenario: Two terminals look at two agents
+- **WHEN** two clients are attached and one selects a different space
+- **THEN** the other client's selected space is unchanged
+
+### Requirement: A launch inside a pane opens a space
+The system SHALL mark every pane it spawns so a `uze` started inside one
+can tell, and such a `uze` SHALL NOT open a client inside the client: it
+SHALL ask the running server for a space rooted at its directory's
+workspace root, created when none is, and exit reporting the space.
+
+#### Scenario: Nested launch opens a space and leaves
+- **WHEN** `uze` is started inside one of the server's own panes, in a directory no space is rooted at
+- **THEN** a space rooted there appears in the running client and the nested `uze` exits without attaching a client
+

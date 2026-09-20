@@ -128,5 +128,5 @@ trail, and whichever is non-empty is what the menu shows.
 
 ## Architecture model
 
-No update to `docs/architecture/likec4/` is required: no container,
+No update to `docs/architecture/*.mmd` is required: no container,
 dependency or relationship is added.

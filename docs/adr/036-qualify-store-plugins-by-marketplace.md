@@ -138,4 +138,4 @@ needed for that either.
   than assumed.
 - [ ] The full Rust test suite and formatting gate pass.
 
-Source change: marketplace-qualified-store-identity
+Recorded ad hoc: no OpenSpec change directory exists for this decision.

@@ -37,10 +37,35 @@ naming them, and the absorbed records are listed under
   slice contradicts, and then two ADRs where one belonged. Use the `adr`
   skill to record one ad hoc — a decision made outside an OpenSpec change,
   or backfilling one that predates this convention.
-- **Only for decisions that clear the bar**: a new external dependency, a
-  technology or pattern choice with long-term consequences, a boundary
-  that would be expensive to move later. Routine implementation choices
-  don't need one.
+- **The default is no ADR.** Most changes — including most good ones —
+  produce none. The archive under `openspec/changes/archive/` is already
+  the log of what was done and why; an ADR is the rarer thing: a record
+  that exists so a future reader does not *undo the decision by
+  accident*. Writing one for an ordinary choice does not document the
+  system, it dilutes the set that matters and adds a second place for the
+  truth to drift.
+- **Four questions, all yes, or no record.** Answer them in the archive
+  discussion, not in your head:
+  1. **Is reversing it expensive?** If undoing it is a refactor one
+     change could carry, it is not an ADR.
+  2. **Was a real alternative rejected?** An ADR whose Decision had no
+     contender is a description. Descriptions belong in
+     `docs/architecture/`, in the code, or in a doc comment.
+  3. **Does it bind code that does not exist yet?** A choice that
+     constrains only what is already written is history, and history is
+     what the archive is for.
+  4. **Is it unrecorded elsewhere?** A rule a test enforces, a boundary
+     `AGENTS.md` states, or a relationship a diagram draws already has a
+     home and an owner. Do not give it a second one.
+- **These do not clear the bar**, however much discussion they took: a
+  naming or vocabulary choice, a file or module layout, a refactor, a
+  bug fix however subtle, a performance tuning, a dependency *version*
+  bump, a test strategy, a UI arrangement, or a decision that only
+  restates a principle an existing ADR already holds. Fold the reasoning
+  into the change's own `design.md`; it is archived with the change and
+  stays findable.
+- **If the Decision needs more than a short paragraph to state, it is
+  probably two decisions or none.** Split it or drop it.
 - **Stable once accepted, but not frozen.** Don't quietly rewrite a
   Decision to match what the code does now — that erases the reason the
   boundary exists. When a later change *reverses* a decision, write a new
@@ -94,6 +119,9 @@ naming them, and the absorbed records are listed under
 - [048 — An extension may write only what it was shown](048-an-extension-may-write-only-what-it-was-shown.md)
 - [049 — Diagrams are drawn in cells, by an engine uze owns](049-diagrams-are-drawn-in-cells-by-an-engine-uze-owns.md)
 - [050 — A project's artifacts are described by the files themselves](050-a-projects-artifacts-are-described-by-the-files-themselves.md)
+- [051 — Conformance is a disposable lab outside the product, and evidence is layered](051-conformance-is-a-disposable-lab-outside-the-product.md)
+- [052 — What UZE persists is tiered by what deleting it costs, and only records climb](052-what-uze-persists-is-tiered-by-what-deleting-it-costs.md)
+- [053 — Isolation belongs to the agent, not to the space](053-isolation-belongs-to-the-agent-not-to-the-space.md)
 
 ## Consolidated records
 

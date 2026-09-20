@@ -108,7 +108,7 @@ command.
 
 The Application gains an orchestration component but dependency direction is
 unchanged: it consumes Core Store/receipts and IntegrationPort inspection/
-repair contracts. No container or external dependency is added, so the LikeC4
+repair contracts. No container or external dependency is added, so the Mermaid
 model remains accurate without modification. This is architecturally
 significant; create the ADR artifact for the reconciliation policy.
 

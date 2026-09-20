@@ -131,7 +131,7 @@ differently-configured name was confirmed by research, so UZE never calls
       fixture.
 - [x] Rust, OpenSpec, and LikeC4 validation pass.
 
-Source change: openspec/changes/enable-mcp-as-second-capability/
+Source change: openspec/changes/archive/2026-08-26-enable-mcp-as-second-capability/
 
 ## More Information
 

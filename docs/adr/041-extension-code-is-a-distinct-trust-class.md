@@ -62,4 +62,4 @@ A capability-scoped application surface stops being only an internal
 tidiness argument: it is the thing that would let an extension be handed
 read access to packages without being handed the Store (see ADR-042).
 
-Source change: openspec/changes/enforce-architecture-seams/
+Source change: openspec/changes/archive/2026-09-03-enforce-architecture-seams/

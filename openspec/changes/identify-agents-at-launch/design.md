@@ -142,7 +142,7 @@ than a model. `src/shim.rs` is sanctioned by name in the architecture
 suite for reaching core; the sanction grows to name the terminal, with the
 reason: the shim is the launch boundary, not presentation.
 
-**No LikeC4 update.** No container or component is added or removed and
+**No diagram update.** No container or component is added or removed and
 no relationship changes: the client already creates tabs on the terminal
 and the shim already reads core.
 

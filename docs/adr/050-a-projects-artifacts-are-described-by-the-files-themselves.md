@@ -55,4 +55,4 @@ with one alias resolve to the first, and the join is restricted to C4
 artifacts because an unrestricted one made a flowchart's subgraph the
 inside of a container by accident of naming.
 
-Source change: openspec/changes/add-the-architect-surface/
+Source change: openspec/changes/archive/2026-09-19-add-the-architect-surface/

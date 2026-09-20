@@ -93,5 +93,5 @@ net +7 today, paying from the fifth harness on. What remains is each
 vendor's own table, which is irreducible; moving it to a manifest would
 trade type safety for a parser.
 
-Source change: openspec/changes/enforce-architecture-seams/
+Source change: openspec/changes/archive/2026-09-03-enforce-architecture-seams/
 Source change: openspec/changes/close-the-application-boundary/

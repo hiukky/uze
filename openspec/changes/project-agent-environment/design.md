@@ -288,9 +288,9 @@ to leave to read is a report they do not read.
 - **[Drift `attachments.json` vs lock]** → Mitigation: ADR-009 `Matched/Missing/Drifted/Blocked`; only `Matched` detach
 - **[Store `PackageConflict` on `install`]** → Mitigation: `store.ingest` rejects `PackageConflict` `store.rs:130`; report, not overwrite
 
-## LikeC4
+## Architecture diagrams
 
-This change adds a new component (`agents.lock` as project-scoped artifact) and a new relationship (project → global Store via `install`). The LikeC4 model under `docs/architecture/likec4/` should be updated to reflect the project-agent-environment layer. However, since the current LikeC4 model focuses on the global machine state and harness integrations, and `agents.lock` is a project-scoped file (not a runtime component), the LikeC4 update is deferred to a follow-up when the project-scoped layer is more fully modeled.
+This change adds a new component (`agents.lock` as project-scoped artifact) and a new relationship (project → global Store via `install`). The Mermaid diagrams under `docs/architecture/` should be updated to reflect the project-agent-environment layer. However, since they focus on the global machine state and harness integrations, and `agents.lock` is a project-scoped file (not a runtime component), the diagram update is deferred to a follow-up when the project-scoped layer is more fully modeled.
 
 ## ADRs
 

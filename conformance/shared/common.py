@@ -132,12 +132,31 @@ def suite_path(name: str) -> str:
 
 
 def settle_and_quiet(screen, quiet=None, budget=None):
-    """Requires a window with no new TUI bytes before absence checks may
-    evaluate (ADR-035): 'never appeared' is only provable once the turn
-    settled and the surface went quiet. Returns True when the quiet window
-    elapsed within the budget. Window lengths are env-overridable
-    (`UZE_CONFORMANCE_QUIET_MS` / `UZE_CONFORMANCE_QUIET_BUDGET_S`) for
-    debugging short-run failures."""
+    """Requires a window in which the TUI stops *changing* before absence
+    checks may evaluate (ADR-035): 'never appeared' is only provable once
+    the turn settled and the surface went quiet. Returns True when the
+    quiet window elapsed within the budget. Window lengths are
+    env-overridable (`UZE_CONFORMANCE_QUIET_MS` /
+    `UZE_CONFORMANCE_QUIET_BUDGET_S`) for debugging short-run failures.
+
+    Quiet is measured on the rendered screen, not on bytes arriving. A
+    finished Claude Code turn keeps writing bare cursor motion
+    (`ESC[2C ESC[3A`) to hold the caret under the prompt, so a byte-counting
+    window never closes and every absence check on that turn fails as
+    "never settled" while the screen has been still for seconds. The same
+    phenomenon already broke the first-run drive, which is why
+    `render_screen` exists: place the bytes on a grid and ask whether what
+    the person sees changed. An erase that blanks a line is a change and
+    still counts; a caret moving over unchanged text is not.
+
+    Every duration here is `time.monotonic`, never the wall clock. This
+    runs on developer machines whose clock is re-synced under them — a WSL
+    guest re-syncing with its Windows host stepped `time.time()` back 23
+    seconds mid-window, which made the budget expire on its first
+    comparison and failed two absence checks on a turn that had settled
+    correctly. A clock that can step is not a stopwatch, and a check that
+    can never pass by accident must not be able to fail by one either.
+    """
     quiet = (
         quiet
         if quiet is not None
@@ -148,13 +167,30 @@ def settle_and_quiet(screen, quiet=None, budget=None):
         if budget is not None
         else float(os.environ.get("UZE_CONFORMANCE_QUIET_BUDGET_S", "12.0"))
     )
-    deadline = time.time() + budget
-    last_bytes = time.time()
-    while time.time() < deadline:
+    trace = os.environ.get("UZE_CONFORMANCE_SETTLE_TRACE")
+    start = time.monotonic()
+    deadline = start + budget
+    last_change = start
+    stream = ""
+    shown = render_screen(stream)
+    while time.monotonic() < deadline:
         t, _p = screen(0.5)
+        changed = False
         if t:
-            last_bytes = time.time()
-        if time.time() - last_bytes >= quiet:
+            stream += t
+            now = render_screen(stream)
+            if now != shown:
+                shown = now
+                last_change = time.monotonic()
+                changed = True
+        if trace:
+            print(
+                f"      [settle] t+{time.monotonic() - start:5.2f}s "
+                f"read={len(t):6d} changed={int(changed)} "
+                f"quiet_for={time.monotonic() - last_change:5.2f}s",
+                flush=True,
+            )
+        if time.monotonic() - last_change >= quiet:
             return True
     return False
 

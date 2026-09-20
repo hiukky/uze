@@ -92,7 +92,7 @@ configuration translator.
 - Supersedes the capability-graph boundary in `docs/adr/002-*.md` with a
   new permanent ADR that records standards-first composition, progressive
   enhancement, and ACP's limited-but-preferred role.
-- Revises the LikeC4 model from a universal projector to a project
+- Revises the architecture diagrams from a universal projector to a project
   composition layer that sits beside—not in—the Client ↔ Agent ACP path.
 - Defines the first real PoC around one Agent Skill resolved once and assessed
   through peer Claude Code and Codex integrations; Cursor and other harnesses

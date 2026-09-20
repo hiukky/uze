@@ -46,4 +46,4 @@ the power already there. A loading mechanism for extensions authored
 elsewhere (ADR-041) inherits these as the first capabilities its model has
 to express.
 
-Source change: openspec/changes/add-the-code-surface/
+Source change: openspec/changes/archive/2026-09-11-add-the-code-surface/

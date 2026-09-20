@@ -289,7 +289,8 @@ actual composed environment; it is not a harness launcher. Existing bundle
 import remains available as explicit foreign-format import; its Claude-specific
 discovery moves to `ClaudePluginImporter`.
 
-The LikeC4 model is updated in the same increment to show the harness-agnostic
+The Mermaid diagrams under `docs/architecture/` are updated in the same
+increment to show the harness-agnostic
 core and peer Claude/Codex integration containers.
 
 ## Open Questions

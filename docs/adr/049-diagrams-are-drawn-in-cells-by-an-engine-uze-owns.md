@@ -62,4 +62,4 @@ a smaller view of the system, which is what C4 levels are for.
 Every later "visual" surface inherits this: what it shows is made of
 cells, coloured by role.
 
-Source change: openspec/changes/add-the-architect-surface/
+Source change: openspec/changes/archive/2026-09-19-add-the-architect-surface/

@@ -122,12 +122,28 @@ explicit `VERSION DRIFT` event.
 **Absence assertions** (a marker that must never appear) evaluate only after
 the turn settled and the TUI went quiet (`settle_and_quiet` + `check_absence`
 in `shared/common.py`); an unsettled turn fails the check instead of passing
-by accident.
+by accident. Both windows are timed on `time.monotonic`: a wall clock that a
+WSL guest re-syncs under the run stepped the budget past its deadline on the
+first comparison and failed two claude `hooks > order` checks on a turn that
+had settled correctly. `conformance/tests/test_settle.py` holds that, and
+`UZE_CONFORMANCE_SETTLE_TRACE=1` prints the window's decision per read.
 
 Per-harness **evidence summaries** are written beside the run evidence and
 uploaded as **Actions artifacts** (retention-days 90; local runs write into
 `conformance/evidence/` for the version-drift baseline) — the audit trail
 without CI-to-main push races or commit churn (ADR-035 revised).
+
+That baseline has **no automatic writer, and the gate does not police it**.
+CI never commits it; it moves only when a maintainer runs
+`make lab-evidence HARNESS=<h>` and commits the result. Two failure modes
+follow, both observed: a summary can go stale, so the `VERSION DRIFT` it
+reports is measured against an arbitrary point in the past rather than the
+last known-good run; and a summary can sit **red** in the repository
+indefinitely — `opencode.json` recorded 3/24 with twenty-one failures for
+twenty-two days, having been carried in by an unrelated commit, while the
+vertical itself was green. Re-record all four whenever a vendor channel
+moves, and read a summary's `recorded_at` before trusting it. Making the
+gate refuse a stale or failing baseline is a change of its own.
 
 **CI gate**: PR runs each vertical once (with `--retry-once`, which reruns
 only a run-level crash, never an assertion failure); the nightly

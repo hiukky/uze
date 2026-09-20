@@ -95,7 +95,8 @@ client concern and cannot kill or directly mutate a pane.
 
 ### Architecture documentation
 
-The LikeC4 model will add the terminal runtime server and workspace client as
+The Mermaid diagrams under `docs/architecture/` add the terminal runtime
+server and workspace client as
 containers, show the root CLI/TUI as their composition point, and preserve the
 existing Core/Application/Integration relationships.
 

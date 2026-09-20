@@ -1,12 +1,12 @@
 {
  "harness": "claude",
- "harness_version": "2.1.260 (Claude Code)",
- "uze_version": "uze 0.0.0-alpha.0",
- "fixture_revision": "19b2992484f59dfc",
- "recorded_at": "2026-09-04T00:23:38-0300",
+ "harness_version": "2.1.278 (Claude Code)",
+ "uze_version": "uze 0.0.0-alpha.6",
+ "fixture_revision": "e4c38e6e6680cc0e",
+ "recorded_at": "2026-09-20T13:18:08-0300",
  "gate": {
-  "passed": 31,
-  "total": 31,
+  "passed": 38,
+  "total": 38,
   "known_adapted": 0,
   "retry": 0,
   "failures": []

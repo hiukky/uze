@@ -84,4 +84,4 @@ Status note: this ADR partially supersedes ADR-016 (`docs/adr/016-project-agent-
 — only its `project-agent-environment/design.md` Decision #8 "`remove` disambiguated by context" clause.
 Every other decision in ADR-016 stands, reaffirmed by this ADR rather than replaced.
 
-Source change: openspec/changes/redesign-cli-project-machine-grammar/
+Source change: openspec/changes/archive/2026-08-26-redesign-cli-project-machine-grammar/

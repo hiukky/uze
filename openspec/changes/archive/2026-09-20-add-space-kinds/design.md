@@ -261,7 +261,7 @@ it became, with the reason it was once a non-goal.
 that page says every agent gets an isolated checkout. The page changes
 first, or `journey validate` passes proving false prose.
 
-**No LikeC4 update.** No container or component is added or removed. The
+**No diagram update.** No container or component is added or removed. The
 kind is data on an existing container; the tenant is a record in an
 existing store.
 

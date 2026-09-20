@@ -68,4 +68,4 @@ A vertical that cannot express part of the contract reads as
 `Unsupported` in the report rather than as green, so the gate's numbers go
 down before they go up.
 
-Source change: openspec/changes/assert-one-capability-contract/
+Source change: openspec/changes/archive/2026-09-03-assert-one-capability-contract/

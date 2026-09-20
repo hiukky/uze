@@ -64,5 +64,6 @@ network operations. This keeps scripted plugin installation predictable.
 
 An ADR is required: vendor executable provisioning is an enduring new product
 responsibility, but it must remain integration-owned and separate from both
-package provenance and managed attachment ownership. The LikeC4 model must
-show the Application coordinating the optional official vendor provision path.
+package provenance and managed attachment ownership. The Mermaid diagrams
+under `docs/architecture/` must show the Application coordinating the
+optional official vendor provision path.
