@@ -155,8 +155,6 @@ pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 

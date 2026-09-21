@@ -158,11 +158,17 @@ pub fn distance(directory: &Path, pinned: &str, head: &str) -> Option<usize> {
         return Some(0);
     }
     let range = format!("{pinned}..{head}");
-    run(&["rev-list", "--count", &range], Some(directory))
+    let counted: usize = run(&["rev-list", "--count", &range], Some(directory))
         .ok()?
         .trim()
         .parse()
-        .ok()
+        .ok()?;
+    // Nothing reachable from `head` that `pinned` lacks, yet they are not
+    // the same commit: `head` is *behind* `pinned`. Counting the other
+    // direction would be a distance, but not this one's — the ref moved
+    // backwards, and `Some(0)` here would read as "identical" at every
+    // caller.
+    (counted > 0).then_some(counted)
 }
 
 /// Writes `subdirectory` at `commit` into `destination`, which must not
@@ -297,6 +303,12 @@ mod tests {
             distance(&mirror, "0000000000000000000000000000000000000000", &second),
             None,
             "a commit this mirror does not have yields no number at all"
+        );
+        assert_eq!(
+            distance(&mirror, &second, &first),
+            None,
+            "a ref that moved backwards is not a distance of zero: `Some(0)` \
+             is what an identical pair answers, and these are not identical"
         );
         fs::remove_dir_all(&root).unwrap();
     }

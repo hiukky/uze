@@ -834,7 +834,7 @@ mod tests {
         let reloaded = load(&home, &root).unwrap();
         let task = reloaded.get(&original.id).unwrap();
         assert_eq!(task.label, "second-name");
-        assert_eq!(isolation(&task).branch, isolation(&original).branch);
+        assert_eq!(isolation(task).branch, isolation(&original).branch);
         assert_eq!(reloaded.agents.len(), 1);
     }
 

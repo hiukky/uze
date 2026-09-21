@@ -469,7 +469,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// Shape 1 keyed its receipts by a string built from three of their own
     /// fields, and that string could not be split back: a resource identity
     /// carries colons of its own. Shape 2 drops the key and keeps the
@@ -504,6 +503,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn receipt_ledger_persists_multiple_receipts_and_idempotent_keys() {
         let home = temp_home("receipt-ledger");
         record_receipt(&home, receipt("plugin-a", "codex", "uze-a")).unwrap();
