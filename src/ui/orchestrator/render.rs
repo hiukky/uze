@@ -601,21 +601,16 @@ pub(super) fn render_sidebar(
         return;
     };
 
-    // The blank row above each space is where a space being dragged is
-    // shown landing (see `draw_space_drop`), and between two spaces that
-    // is the whole of what it is for: a card is already told from the one
-    // under it by its own fill, so a row of nothing between every pair
-    // spent a line of the column saying again what the surfaces say —
-    // four spaces cost four rows to separate what was not running
-    // together. Those slots open when there is something to drop into
-    // them and close when there is not.
+    // A blank row above each space, the first one included: each card
+    // gets an edge on both sides, and it is also where a space being
+    // dragged is shown landing (see `draw_space_drop`).
     //
-    // The first one stays. It is not between anything: it is the column's
-    // own top margin, holding the first card off the rule above it, and a
-    // card butted against that rule reads as part of the bar rather than
-    // as the first of a list.
-    let rearranging = model.dragging_space.is_some_and(|dragging| dragging.armed);
-    let slot = |rows: &mut Rows| rearranging.then(|| rows.slot(1).visible()).flatten();
+    // The fill alone was tried and is not enough. Every card but the one
+    // in front is faded, so where two faded cards meet there is no edge
+    // to find — the column reads as one surface with headers in it, and
+    // the card in front reads as the top or the bottom of whichever
+    // neighbour it touches rather than as its own thing. The row over the
+    // first card is the same argument against the rule above it.
     let mut gap_above = rows.slot(1).visible();
     // While the root picker is open it owns the column: the listing it
     // draws is a tree of directories, and side by side with the tree of
@@ -692,8 +687,7 @@ pub(super) fn render_sidebar(
     // unreachable rather than merely out of view. The bound is measured
     // here, where the tree's own window is known, and handed back for the
     // wheel to stay inside (see `scroll_tree`).
-    let overflow =
-        tree_rows(model, session, identities, rearranging).saturating_sub(rows.remaining());
+    let overflow = tree_rows(model, session, identities).saturating_sub(rows.remaining());
     metrics.tree_overflow = overflow;
     rows.scroll_past(model.remembered.tree_scroll.min(overflow));
 
@@ -721,7 +715,7 @@ pub(super) fn render_sidebar(
             render_space_caption(frame, &mut rows, hits, model, session, space, identities);
         }
         if folded {
-            gap_above = slot(&mut rows);
+            gap_above = rows.slot(1).visible();
             continue;
         }
 
@@ -750,7 +744,7 @@ pub(super) fn render_sidebar(
                 .collect();
             draw_tree(frame, &mut rows, hits, is_active_space, &agents, &captions);
         }
-        gap_above = slot(&mut rows);
+        gap_above = rows.slot(1).visible();
     }
     if dropping == Some(PendingDrop::End) {
         draw_space_drop(frame, gap_above);
@@ -803,18 +797,12 @@ pub(super) fn render_sidebar(
 /// The rows the space tree comes to, whether or not the column can show
 /// them all: a header per space, the cwd caption a space with no agent
 /// shows in place of its tree, two rows per agent with the separator row
-/// between the two groups, the column's own top margin, and — only while a
-/// space is being `rearranging`d into a new place — the blank row each
-/// one would land in. A minimized space,
+/// between the two groups, the blank row over each space, and the
+/// column's own top margin. A minimized space,
 /// or an open one with no agent, has its header and the caption under it. Measured up front rather
 /// than counted while drawing, because how far the tree may be scrolled
 /// has to be known before its first row is laid out.
-fn tree_rows(
-    model: &WorkspaceModel,
-    session: &Session,
-    identities: &[AgentIdentity],
-    rearranging: bool,
-) -> u16 {
+fn tree_rows(model: &WorkspaceModel, session: &Session, identities: &[AgentIdentity]) -> u16 {
     session
         .workspace
         .spaces
@@ -826,16 +814,17 @@ fn tree_rows(
             } else {
                 agent_rows(agents)
             };
-            1 + body + u16::from(rearranging)
+            1 + body + 1
         })
         .sum::<u16>()
+        // The column's own top margin, which is a row above the first
+        // space rather than one of the rows between a pair of them.
         + 1
 }
 
-/// Where a dragged space would land: an accent hairline across the slot
-/// that opened between two spaces — a line where it goes, rather than a
-/// mark on a header, whose leading column already says which space is
-/// selected.
+/// Where a dragged space would land: an accent hairline across the blank
+/// row between two spaces — a line where it goes, rather than a mark on a
+/// header, whose leading column already says which space is selected.
 fn draw_space_drop(frame: &mut ratatui::Frame<'_>, gap: Option<Rect>) {
     let Some(gap) = gap else {
         return;
@@ -1127,18 +1116,30 @@ fn render_space_caption(
     let ground = if is_current {
         theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle)
     } else {
-        block_ground(selected)
+        block_ground(selected || !model.space_folded(space))
     };
     row::pad_to(&mut spans, rect.width, ground);
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
 
-/// The ground under a space's rows: the panel itself where the operator
-/// is working, and the same panel faded where they are not. Every space
-/// is a block either way — what the fill says is which block is in front.
-fn block_ground(active: bool) -> Color {
-    if active {
+/// The ground under a space's rows: the panel itself where a space is
+/// `lifted`, and the same panel faded where it is not. Every space is a
+/// block either way — what the fill says is which blocks have something
+/// standing on them.
+///
+/// A space is lifted when it is the one in front *or* when it is open,
+/// which is not the same rule as "selected" and used not to be one at
+/// all. The fade is a third of a surface that is itself seven percent
+/// over the background, so what reaches the screen is about two — enough
+/// to find the edge of a minimized card, which is two rows reading as one
+/// item, and not enough to be a ground. An open space has agent rows
+/// standing on it, and on that fill they stood on the panel instead: the
+/// block had a header and then nothing under it, so its rows read as
+/// loose in the column rather than as its contents. Which one is in front
+/// is the gutter's answer now (see [`space_gutter`]), not the fill's.
+fn block_ground(lifted: bool) -> Color {
+    if lifted {
         theme::color(Token::SurfaceRaisedSubtle)
     } else {
         theme::faded(Token::SurfaceRaisedSubtle)
@@ -1153,10 +1154,26 @@ fn block_ground(active: bool) -> Color {
 /// during a drag is an accent bar down the item's leading column, on
 /// both of its rows so it reads as the whole item.
 ///
-/// Both groups sit in the same column, one step inside the space's
-/// header: the agent receiving keystrokes is the one stretch of the
-/// gutter in the accent, and which group an agent is in is said by the
-/// separator row between the two collections.
+/// An agent in the space's own root stands where its space stands — it
+/// works there, so there is no level to draw. The isolated ones hang off
+/// a trunk of their own, one column in, because their work does: the
+/// group that is somewhere else gets the one indent in the column, and
+/// the line down it says those rows are one collection.
+///
+/// That trunk is the group's, not the space's, which is why it reads
+/// where the old `├─` did not: the space's gutter is a bar flush against
+/// its cell and a box-drawing corner cannot meet one, so the connector
+/// pointed at a line it could not touch. Given a column of its own there
+/// is nothing to meet — it is its own line, and it starts and ends with
+/// the group.
+///
+/// The agent receiving keystrokes is the one stretch of the *space's*
+/// gutter in the accent; the trunk stays quiet either way, because it
+/// answers which group, not which row.
+///
+/// Only an open space with agents in it reaches here, so every row this
+/// draws stands on a lifted ground whether or not its space is the one
+/// in front (see [`block_ground`]).
 fn draw_tree(
     frame: &mut ratatui::Frame<'_>,
     rows: &mut Rows,
@@ -1170,15 +1187,26 @@ fn draw_tree(
     // somebody in them — a separator between collections, never between
     // siblings. Isolating an agent moves its row from the first group to
     // the second, which is how the operator sees the action happened.
+    // Which of the isolated ones opens the group's trunk and which
+    // closes it — the two rows whose glyph is not the one in between.
+    let first_isolated = agents.iter().position(|agent| agent.isolated);
+    let last_isolated = agents.iter().rposition(|agent| agent.isolated);
+    /// Every space `draw_tree` is called for is open.
+    const OPEN: bool = true;
     let mut previous: Option<bool> = None;
-    for (agent, caption) in agents.iter().zip(captions) {
+    for (index, (agent, caption)) in agents.iter().zip(captions).enumerate() {
         let tab = agent.tab;
         let isolated = agent.isolated;
+        let branch = Branch::of(
+            isolated,
+            Some(index) == first_isolated,
+            Some(index) == last_isolated,
+        );
         if previous.is_some_and(|was| was != isolated)
             && let Some(gap) = rows.slot(1).visible()
         {
             let mut spans = vec![space_gutter(is_active_space, false)];
-            row::pad_to(&mut spans, gap.width, block_ground(is_active_space));
+            row::pad_to(&mut spans, gap.width, block_ground(OPEN));
             frame.render_widget(Paragraph::new(Line::from(spans)), gap);
         }
         previous = Some(isolated);
@@ -1196,20 +1224,12 @@ fn draw_tree(
         let surface = if agent.is_current {
             Some(theme::tinted(Token::Accent, Token::SurfaceRaisedSubtle))
         } else {
-            Some(block_ground(is_active_space))
+            Some(block_ground(OPEN))
         };
-        // Two blank columns between the gutter and the status glyph, in
-        // either group, so the mark that answers for the agent lands one
-        // step inside the header's own fold and name.
-        //
-        // The isolated ones used to branch off the trunk with a `├─` of
-        // their own. A box-drawing corner cannot join a bar — one is
-        // centred in its cell and the other sits flush against its edge —
-        // and once the rail is drawn beside the selected space alone there
-        // is nothing above it to hang off in any other. Which group an
-        // agent is in is said by where it stands, under the separator the
-        // two collections are already split by.
-        let lead = || [space_gutter(is_active_space, lit), Span::raw("  ")];
+        // The status glyph in the header's own fold column for an agent
+        // in the root, and one further in for one working in a checkout
+        // of its own — that column carrying the group's own trunk.
+        let lead = || [space_gutter(is_active_space, lit), branch.corner()];
         let label_slot = rows.slot(1);
         if label_slot.is_full() {
             break;
@@ -1251,7 +1271,11 @@ fn draw_tree(
         if let Some(detail_rect) = rows.slot(1).visible() {
             // Under the agent's name, past the indent and the status
             // column, in either kind.
-            let mut spans = vec![space_gutter(is_active_space, lit), Span::raw("    ")];
+            let mut spans = vec![
+                space_gutter(is_active_space, lit),
+                branch.stem(),
+                Span::raw("  "),
+            ];
             // Right-aligned under the task mark, with the same trailing pad
             // off the divider: a count pinned to the row's edge keeps its
             // column as branches vary in length. The way back in, on the
@@ -1689,7 +1713,7 @@ pub(super) fn render_space_header(
     row::pad_to(
         &mut spans,
         rect.width,
-        if selected {
+        if selected || !collapsed {
             ground
         } else {
             theme::fade(ground)
@@ -1717,6 +1741,83 @@ pub(super) fn render_space_header(
 /// already told apart by where they stand in the column, under the
 /// separator the two collections are split by, and a second axis saying
 /// the same thing costs a colour that then means nothing else.
+/// The one column between the space's gutter and an agent's row: empty
+/// for an agent in the space's own root, and the isolated group's trunk
+/// for one working in a checkout of its own.
+///
+/// One column, not two. Every step here is paid twice — once by the
+/// group and once by the level inside it — so a two-column step put an
+/// isolated agent's name four columns past its space's, and the column
+/// spent more of itself on saying where a name sits than on the name.
+/// Hence the indent *is* the trunk rather than sitting beside one: a
+/// single column carrying both the level and the line that says these
+/// rows are one collection.
+///
+/// The trunk is drawn by its ends, not by one glyph repeated: a `├`
+/// carries a stem *upward* as well, so at the top of a group it pointed
+/// at the blank row above and read as a line broken off rather than a
+/// line starting. Each end closes — which is also why a group of one
+/// gets a plain arm and no trunk at all: there is nothing for a line to
+/// join.
+#[derive(Clone, Copy)]
+enum Branch {
+    /// In the space's own root: no level, no line.
+    None,
+    /// The first of the isolated ones, opening the trunk.
+    Opens,
+    /// Isolated, with siblings above and below it.
+    Carries,
+    /// The last of them: the trunk closes on its name and nothing runs
+    /// under its caption.
+    Closes,
+    /// The only one: an arm to its row, and no trunk to open or close.
+    Alone,
+}
+
+impl Branch {
+    fn of(isolated: bool, first: bool, last: bool) -> Self {
+        match (isolated, first, last) {
+            (false, ..) => Self::None,
+            (true, true, true) => Self::Alone,
+            (true, true, false) => Self::Opens,
+            (true, false, false) => Self::Carries,
+            (true, false, true) => Self::Closes,
+        }
+    }
+
+    /// What stands beside the agent's own name.
+    fn corner(self) -> Span<'static> {
+        match self {
+            Self::None => Span::raw(""),
+            Self::Opens => Self::drawn(Symbol::TreeFirst),
+            Self::Carries => Self::drawn(Symbol::TreeBranch),
+            Self::Closes => Self::drawn(Symbol::TreeLast),
+            Self::Alone => Self::drawn(Symbol::TreeDivider),
+        }
+    }
+
+    /// What stands beside the caption under it, which is the same item:
+    /// the trunk runs through it, unless the group ended on the name
+    /// above.
+    fn stem(self) -> Span<'static> {
+        match self {
+            Self::Opens | Self::Carries => Self::drawn(Symbol::TreeVertical),
+            Self::None => Span::raw(""),
+            Self::Closes | Self::Alone => Span::raw(" "),
+        }
+    }
+
+    /// One column of a tree glyph. `tree.branch` and `tree.last` are two
+    /// cells — a corner and the `─` that reached across to the status
+    /// column — and that arm is what made the old connector cost a second
+    /// column it did not need.
+    fn drawn(symbol: Symbol) -> Span<'static> {
+        let glyph = theme::glyph(symbol);
+        let corner = glyph.chars().next().map(String::from).unwrap_or_default();
+        Span::styled(corner, theme::fg(Token::TextFaint))
+    }
+}
+
 fn space_gutter(selected: bool, lit: bool) -> Span<'static> {
     if !selected {
         return Span::raw(" ".repeat(theme::width(Symbol::BarThin) as usize));

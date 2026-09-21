@@ -35,14 +35,13 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
         AgentTabStatus, AgentView, Attach, CommitDetailPopup, CommitDetailResolution,
-        CompletionBehavior, DeliveryResolution, DraggingSpace, DraggingTab, ExtensionHit, Flow,
-        GitAnswer, GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay,
-        RootPicker, ScrollDirection, TabDragGroup, UpstreamSync, Viewport, WorkResolution,
-        WorkStateView, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
-        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
-        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
-        next_shell_label, open_architect, open_code, open_commit_detail, pane_relative,
-        pending_tab_drop,
+        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer,
+        GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
+        ScrollDirection, TabDragGroup, UpstreamSync, Viewport, WorkResolution, WorkStateView,
+        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
+        answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
+        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
+        open_architect, open_code, open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -2469,7 +2468,8 @@ mod workspace_tests {
         let model = agents_in_the_root_session();
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
-        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        use crate::ui::theme::Symbol;
+        let idle = theme::glyph(Symbol::StatusIdle);
         let selected = theme::glyph(crate::ui::theme::Symbol::StatusSelected);
         assert!(rows[agents[0] as usize].contains(&idle), "{rows:?}");
         assert!(rows[agents[2] as usize].contains(&selected), "{rows:?}");
@@ -2615,6 +2615,107 @@ mod workspace_tests {
             )],
         );
         model
+    }
+
+    /// A space whose agents all work in checkouts of their own, so the
+    /// group's trunk has to carry through one row and close on the next.
+    fn a_space_of_isolated_agents() -> WorkspaceModel {
+        let mut model = agents_in_the_root_session();
+        let mut tasks = Vec::new();
+        for id in ["a1", "a2"] {
+            let checkout = format!("/repo/.worktrees/{id}");
+            let stamped = model.session.as_mut().unwrap().workspace.spaces[0]
+                .tabs
+                .iter_mut()
+                .find(|tab| {
+                    tab.env.iter().any(|(key, value)| {
+                        key == uze_terminal::launch::AGENT_IDENTITY_VARIABLE && value == id
+                    })
+                })
+                .expect("the agent its launch stamped");
+            stamped.pane.cwd = PathBuf::from(&checkout);
+            let mut task = task_in(&checkout, id, WorkStateView::Running, 0);
+            task.id = id.into();
+            task.branch = format!("agent/{id}");
+            tasks.push(task);
+        }
+        model.remembered.tasks.insert(PathBuf::from("/repo"), tasks);
+        model
+    }
+
+    /// The isolated group hangs off a trunk of its own, one column in
+    /// from the space's gutter: a corner beside each agent's name and the
+    /// line running on through the caption under it. Both ends close — a
+    /// `├` carries a stem upward as well, so at the top of the group it
+    /// pointed at the blank row above and read as a line broken off
+    /// rather than one starting.
+    #[test]
+    fn the_isolated_group_hangs_off_a_trunk_of_its_own() {
+        let model = a_space_of_isolated_agents();
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
+        let at = agent_rows(&hits);
+        assert_eq!(at.len(), 4, "two rows per agent: {rows:?}");
+        let column = gutter_column(&hits) + 1;
+        let glyph = |row: u16| {
+            rows[row as usize]
+                .chars()
+                .nth(column as usize)
+                .expect("the trunk column is drawn")
+                .to_string()
+        };
+        let stem = |symbol| {
+            theme::glyph(symbol)
+                .chars()
+                .next()
+                .expect("the glyph")
+                .to_string()
+        };
+        use crate::ui::theme::Symbol;
+        assert_eq!(glyph(at[0]), stem(Symbol::TreeFirst), "opens: {rows:?}");
+        assert_eq!(glyph(at[1]), stem(Symbol::TreeVertical), "{rows:?}");
+        assert_eq!(glyph(at[2]), stem(Symbol::TreeLast), "closes: {rows:?}");
+        assert_eq!(glyph(at[3]), " ", "the group closed above: {rows:?}");
+        assert_ne!(
+            stem(Symbol::TreeFirst),
+            stem(Symbol::TreeBranch),
+            "the opening corner is not the carrying one: {rows:?}"
+        );
+
+        // A group of one has nothing for a line to join, so it gets the
+        // arm to its row and no trunk at all.
+        let lone = sidebar(&a_space_with_both_groups(), &identities_in_the_root());
+        let at = agent_rows(&lone.hits);
+        let column = (gutter_column(&lone.hits) + 1) as usize;
+        let cell = |row: u16| {
+            lone.rows[row as usize]
+                .chars()
+                .nth(column)
+                .expect("the trunk column is drawn")
+                .to_string()
+        };
+        assert_eq!(cell(at[2]), stem(Symbol::TreeDivider), "{:?}", lone.rows);
+        assert_eq!(cell(at[3]), " ", "{:?}", lone.rows);
+
+        // An agent in the space's own root spends no column on a trunk:
+        // that column is where its own status glyph stands.
+        let root = sidebar(&agents_in_the_root_session(), &identities_in_the_root());
+        let at = agent_rows(&root.hits);
+        let column = (gutter_column(&root.hits) + 1) as usize;
+        let marks = [
+            theme::glyph(Symbol::StatusIdle),
+            theme::glyph(Symbol::StatusSelected),
+        ];
+        assert!(
+            marks.contains(
+                &root.rows[at[0] as usize]
+                    .chars()
+                    .nth(column)
+                    .expect("the column is drawn")
+                    .to_string()
+            ),
+            "the root's own agent stands there itself: {:?}",
+            root.rows
+        );
     }
 
     #[test]
@@ -7051,46 +7152,59 @@ mod workspace_tests {
         model_of(session)
     }
 
-    /// Every space is a block, the ones nobody is working in included:
-    /// their ground is the same panel at part of its strength, so the
-    /// column reads as blocks rather than as rows floating on the
-    /// backdrop — and the space in front keeps the only ground at full
-    /// strength.
+    /// An open space is a block at full strength whether or not anybody
+    /// is working in it: its agent rows stand on it, and on the faded
+    /// ground they stood on the panel instead — the block had a header
+    /// and then nothing under it, so its rows read as loose in the column
+    /// rather than as its contents.
+    ///
+    /// Minimized, nobody in it, the fade stays: two rows reading as one
+    /// item need an edge, not a ground. Which space is in front is the
+    /// gutter's answer either way.
     #[test]
-    fn a_space_nobody_is_working_in_is_a_fainter_block_of_its_own() {
+    fn an_open_space_is_a_block_whether_or_not_anybody_is_in_it() {
         let mut model = three_spaces();
         model.first_steps_collapsed = true;
+        // One minimized, one open, neither of them the one in front.
+        toggle_space_collapsed(&mut model, SpaceId(1));
         let Sidebar {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
-        let active = space_header(&hits, SpaceId(3));
-        let resting = space_header(&hits, SpaceId(1));
-        let ground = |header: Rect, offset: u16| buffer[(header.x + 2, header.y + offset)].bg;
+        let ground = |space: SpaceId, offset: u16| {
+            let header = space_header(&hits, space);
+            buffer[(header.x + 2, header.y + offset)].bg
+        };
 
         assert_eq!(
-            ground(active, 0),
+            ground(SpaceId(2), 0),
             theme::color(Token::SurfaceRaised),
-            "the space being worked in wears its header at full strength: {rows:?}"
+            "an open space wears its header at full strength: {rows:?}"
         );
         assert_eq!(
-            ground(resting, 0),
-            crate::ui::theme::faded(Token::SurfaceRaised),
-            "and the others wear the same one, faded: {rows:?}"
-        );
-        assert_eq!(
-            ground(resting, 1),
-            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
-            "their rows are the panel, faded with them: {rows:?}"
-        );
-        assert_ne!(
-            ground(resting, 1),
-            theme::color(Token::SurfaceBackground),
-            "a block nobody is in is still a block"
-        );
-        assert_ne!(
-            ground(resting, 1),
+            ground(SpaceId(2), 1),
             theme::color(Token::SurfaceRaisedSubtle),
-            "and never reads as the one in front"
+            "and its agents stand on the panel, not on the backdrop: {rows:?}"
+        );
+        assert_eq!(
+            ground(SpaceId(2), 0),
+            ground(SpaceId(3), 0),
+            "the same ground the space in front stands on: {rows:?}"
+        );
+
+        assert_eq!(
+            ground(SpaceId(1), 0),
+            crate::ui::theme::faded(Token::SurfaceRaised),
+            "a minimized space nobody is in is faded: {rows:?}"
+        );
+        assert_eq!(
+            ground(SpaceId(1), 1),
+            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
+            "its caption faded with it: {rows:?}"
+        );
+        assert_ne!(
+            ground(SpaceId(1), 1),
+            theme::color(Token::SurfaceBackground),
+            "and it is still a block"
         );
     }
 
@@ -7182,52 +7296,40 @@ mod workspace_tests {
             .count()
     }
 
-    /// Nothing stands between one space and the next until there is
-    /// something to put there. A card is told from the one under it by
-    /// its own fill, so a permanent row of nothing spent a line of the
-    /// column saying again what the surfaces say; the slots open when a
-    /// space is being carried to a new place, which is the one thing they
-    /// were ever for. The row above the *first* space is not one of them
-    /// — it is the column's top margin and does not move.
+    /// One blank row over every space, the first one included, whatever
+    /// the shape of the space under it.
+    ///
+    /// The fill alone was tried: every card but the one in front is
+    /// faded, so where two faded cards meet there is no edge to find, and
+    /// with a column of them it reads as one surface with headers in it
+    /// rather than as a list of blocks. The row over the first card is
+    /// the same argument against the rule above it.
     ///
     /// Measured over a column that mixes the two shapes a space has, open
     /// and minimized, because they are drawn by different arms of the
-    /// same loop and each used to close its own block with a blank row.
+    /// same loop and each closes its own block.
     #[test]
-    fn the_slots_between_spaces_open_only_while_one_is_being_carried() {
+    fn a_blank_row_stands_over_every_space() {
         let mut model = three_spaces();
         model.first_steps_collapsed = true;
         toggle_space_collapsed(&mut model, SpaceId(2));
-        // Each space's header down to the next one's: its whole block.
-        let blocks = |model: &WorkspaceModel| {
-            let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
-            let mut at: Vec<u16> = (1..=3)
-                .map(|id| space_header(&hits, SpaceId(id)).y)
-                .collect();
-            at.sort_unstable();
-            (rows, at[0], vec![at[1] - at[0], at[2] - at[1]])
-        };
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let mut at: Vec<u16> = (1..=3)
+            .map(|id| space_header(&hits, SpaceId(id)).y)
+            .collect();
+        at.sort_unstable();
 
         // One agent each: an open space is a header over its two rows, a
-        // minimized one a header over the caption saying where it is.
-        let (rows, first, resting) = blocks(&model);
-        assert_eq!(
-            resting,
-            vec![3, 2],
-            "no row of nothing between them: {rows:?}"
-        );
-
-        // Armed, every block grows by the slot its neighbour would land
-        // in.
-        model.dragging_space = Some(DraggingSpace {
-            space: SpaceId(1),
-            origin: first,
-            armed: true,
-            pending: None,
-        });
-        let (rows, carried, open) = blocks(&model);
-        assert_eq!(carried, first, "the top margin does not move: {rows:?}");
-        assert_eq!(open, vec![4, 3], "a slot under each: {rows:?}");
+        // minimized one a header over the caption saying where it is, and
+        // each of them closes on the blank row over the next.
+        assert_eq!(at[1] - at[0], 4, "an open space and its row: {rows:?}");
+        assert_eq!(at[2] - at[1], 3, "a minimized one and its row: {rows:?}");
+        for header in &at {
+            assert!(
+                without_chrome(&rows[*header as usize - 1]).is_empty(),
+                "the row over the header at {header} says nothing: {rows:?}"
+            );
+        }
     }
 
     /// The leading column carries a rail beside the selected space and
@@ -7279,18 +7381,35 @@ mod workspace_tests {
                 "row {row}: the rail sits outside the block's fill: {rows:?}"
             );
         }
+        // What the fill says is a separate question, and
+        // `an_open_space_is_a_block_whether_or_not_anybody_is_in_it`
+        // owns it: here the claim is that the rail alone answers which
+        // space is in front, so two open headers are told apart by their
+        // leading column and by nothing else.
         let outside = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(outside.x + 2, outside.y)].bg,
+            buffer[(header.x + 2, header.y)].bg,
+            "both headers stand on the same ground: {rows:?}"
+        );
         assert_ne!(
-            buffer[(outside.x, outside.y)].bg,
-            buffer[(header.x, header.y)].bg,
-            "a space nobody is in is not filled at all: {rows:?}"
+            buffer[(outside.x, outside.y)].symbol(),
+            buffer[(header.x, header.y)].symbol(),
+            "and only their leading column differs: {rows:?}"
         );
     }
 
-    /// The column reads space > agent: the header's fold against the
-    /// gutter and its name just after; each agent's status glyph a blank
-    /// column past the connector, its name after that, its caption under
+    /// The column spends no width on saying an agent is in its space: the
+    /// header's fold sits against the gutter with its name just after,
+    /// and an agent in that space's own root puts its status glyph in the
+    /// fold's column and its name in the header's, with its caption under
     /// that name — the same in either kind of space.
+    ///
+    /// One column further for an agent isolated in a checkout of its own,
+    /// and that is the only indent in the column: the agent that is
+    /// somewhere else is the only one with somewhere else to be, which is
+    /// the whole of what tells the two groups apart now that nothing
+    /// branches off the gutter.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -7299,27 +7418,38 @@ mod workspace_tests {
                 .unwrap_or_else(|| panic!("{text:?} in {row:?}"));
             row[..byte].chars().count()
         };
-        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        use crate::ui::theme::Symbol;
+        let idle = theme::glyph(Symbol::StatusIdle);
         let tree = three_spaces();
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let fold = column_of(&rows[header], &theme::glyph(Symbol::ChevronExpanded));
+        assert_eq!(column_of(&rows[header + 1], &idle), fold, "{rows:?}");
         let agent = column_of(&rows[header + 1], "shell");
-        assert_eq!(agent, name + 2, "{rows:?}");
+        assert_eq!(agent, name, "{rows:?}");
         assert_eq!(column_of(&rows[header + 2], "agent"), agent, "{rows:?}");
 
         let flat = agents_in_the_root_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &identities_in_the_root());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let fold = column_of(&rows[header], &theme::glyph(Symbol::ChevronExpanded));
+        assert_eq!(column_of(&rows[header + 1], &idle), fold, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], "agent 1"), name, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "claude"), name, "{rows:?}");
+
+        let both = a_space_with_both_groups();
+        let Sidebar { rows, hits, .. } = sidebar(&both, &identities_in_the_root());
+        let agents = agent_rows(&hits);
+        let root = column_of(&rows[agents[0] as usize], "agent 1");
+        let isolated = column_of(&rows[agents[2] as usize], "agent 2");
+        assert_eq!(isolated, root + 1, "a step further in: {rows:?}");
         assert_eq!(
-            column_of(&rows[header + 1], "agent 1"),
-            name + 2,
-            "{rows:?}"
+            column_of(&rows[agents[3] as usize], "codex"),
+            column_of(&rows[agents[1] as usize], "claude") + 1,
+            "and its caption keeps under its name: {rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 2], "claude"), name + 2, "{rows:?}");
     }
 
     /// A space is where its own shell is: a `cd` there moves what the space
@@ -7423,8 +7553,8 @@ mod workspace_tests {
         let two = space_header(&hits, SpaceId(2));
         assert_eq!(
             two.y,
-            space_header(&hits, one).y + 2,
-            "the next space follows the header and its caption, with nothing between"
+            space_header(&hits, one).y + 3,
+            "the next space follows the header, its caption and the blank row"
         );
         assert!(
             driven.sent().is_empty(),
