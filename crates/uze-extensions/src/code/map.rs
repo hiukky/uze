@@ -146,7 +146,7 @@ pub enum Heat {
 }
 
 impl Heat {
-    fn role(self) -> Role {
+    pub(super) fn role(self) -> Role {
         match self {
             Self::Untouched => Role::Faint,
             Self::Touched => Role::Muted,
@@ -421,11 +421,18 @@ impl Map {
         let tiles = self.tiles(space);
         let picked = |tile: &Tile| self.picked.as_deref() == Some(tile.path.as_str());
         let mut grid = Grid::new(space);
+        // The selected tile keeps its own colour. Every tile on this map
+        // is coloured by how hot it is, and a selection that repainted one
+        // green answered "which is selected" by erasing the only thing the
+        // map is drawn to show. It is marked by its ground instead — its
+        // own hue, laid under it — so both questions stay answered at
+        // once. The outline still claims the cells it shares, which is
+        // what keeps it unbroken against its neighbours.
         for tile in &tiles {
-            let role = match picked(tile) {
-                true => Role::Accent,
-                false => tile.heat.role(),
-            };
+            let role = tile.heat.role();
+            if picked(tile) {
+                canvas.ground(bordered(tile.frame, space), role);
+            }
             grid.outline(bordered(tile.frame, space), role, picked(tile));
         }
         grid.draw(&mut canvas);
@@ -852,7 +859,12 @@ fn label(canvas: &mut Canvas, tile: &Tile, frame: Frame, picked: bool) {
         _ => tile.name.clone(),
     };
     let (role, bold) = match (picked, tile.kind, tile.heat) {
-        (true, ..) => (Role::Accent, true),
+        // Bold, not a different colour: the ground under it already says
+        // it is selected, and the name goes on saying how hot the file is.
+        (true, TileKind::Folded { .. }, _) => (Role::Dim, true),
+        (true, _, Heat::Untouched) => (Role::Muted, true),
+        (true, _, Heat::Touched) => (Role::Bright, true),
+        (true, _, heat) => (heat.role(), true),
         (_, TileKind::Folded { .. }, _) => (Role::Dim, false),
         (_, _, Heat::Untouched) => (Role::Muted, false),
         (_, _, Heat::Touched) => (Role::Bright, false),

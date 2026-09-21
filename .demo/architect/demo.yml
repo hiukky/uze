@@ -1,0 +1,329 @@
+# The architect surface, as a spec. This file is the source of truth: it says what the
+# video shows, in order, and everything needed to make it again.
+#
+#   tui-record beats  .demo/architect   # the script, as prose
+#   tui-record seed   .demo/architect   # build the sandbox (first run, or after a /tmp wipe)
+#   tui-record probe  .demo/architect   # the app in its sandbox, to try a selector out
+#   tui-record run    .demo/architect   # record → cut → leak-check → render → poster
+#
+# `tui-record` ships with the `tui` plugin: uze plugin install tui@ai
+#
+# It records in the **same sandbox as .demo/demo.yml** — one {root}, one
+# {fixtures}, one remembered HEAD — so the `demo-app` fixture below is that
+# file's, byte for byte. Change a commit in one and change it in all three, or
+# seeding one rewinds the others to a base they were not recorded against.
+#
+# No harness is started here, so this spec grants no credential and installs
+# no harness binary: the surface it films reads Git and the checkout, and
+# nothing else. Seed .demo/demo.yml first if you also want the agents.
+
+video:
+  title: uze — architect
+  out: .demo/architect/uze-architect.gif
+  poster: .demo/architect/uze-architect-poster.png
+  publish:
+    - from: out
+      to: web/public/uze-architect.gif
+    - from: poster
+      to: web/public/uze-architect-poster.png
+  cast: '{root}/uze-architect.cast'
+  # The same grade as the hero: a terminal with room in it. Cutting columns
+  # to make the text bigger was solving the wrong axis — it reads as the app
+  # running on a tiny screen, everything zoomed and pressed against the
+  # edges. Resolution is `font_size`'s job, and it is set below.
+  cols: 152
+  rows: 36
+  speed: 1.3
+  background: 0a0c0d
+  # Twice the column it is embedded in, so the page downscales rather
+  # than stretches. The grid above is untouched by this — it only
+  # multiplies the pixels each cell is drawn with.
+  font_size: 20
+  # The app draws with the nerd glyph set (see `provision`), so the renderer
+  # needs the patched font too — without it every icon is a blank cell. The
+  # fallback is named so a machine without the patched build still renders
+  # readable text instead of nothing.
+  font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  wait_collapse: 1.0
+  # The frame the board opens on, before anything is selected: selecting a
+  # box pans the board to bring it into view, which pushes the top row of
+  # the drawing under the header — right for a surface you steer, wrong for
+  # a still. The box count is what says the diagram finished drawing; the
+  # ladder in the header is on screen from the first cell and proves
+  # nothing, and the file name alone is gone the moment there is a
+  # selection to describe instead.
+  poster_when: '3 boxes · 2 edges · system-context\.mmd'
+  sidebar: 31
+sandbox:
+  root: ~/.uzedemo          # never on screen
+  fixtures: /tmp/demos      # on screen: a path under $HOME carries a username
+  cwd: '{fixtures}/demo-app'
+  command:
+    - '{project}/target/release/uze'
+  shell: '{home}/demoshell'
+  path:
+    - '{home}/.uze/shims'
+    - '{home}/.local/bin'
+    - '{home}/bin'
+    - /usr/local/bin
+    - /usr/bin
+    - /bin
+  env:
+    # UTC, so nothing the harness prints carries the operator's region. A
+    # provider's own status line names the timezone it resets in, and the
+    # leak scan looks for a username and a hostname — a place is neither.
+    TZ: UTC
+    PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
+  # The nerd set, declared here rather than left to whatever the sandbox
+  # home happens to hold: it is the set the docs recommend, and the one
+  # the product is drawn for. It needs a patched font in the *renderer*
+  # too — see `font_family` in `video`.
+  provision:
+    - '{project}/target/release/uze theme glyphs nerd'
+  author: Ada Lovelace
+  author_email: ada@demo.dev
+  reset:
+    - |
+      for pid in $(pgrep -x uze 2>/dev/null); do
+        cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null) || continue
+        case "$cmd" in *"terminal serve --root /tmp/demos/"*) kill -TERM "$pid" 2>/dev/null ;; esac
+      done
+    # `git reset --hard` — the fixture rewind before every attempt — reverts
+    # tracked files and leaves untracked ones, so a file another spec's beats
+    # wrote is still there, counted in this take's changes badge. `.worktrees`
+    # is excluded: the rewind removes those itself, and pulling the directory
+    # out from under Git first leaves metadata to prune.
+    - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
+  clear:
+    # The rewind removes the checkouts but leaves the directory that held
+    # them, and the `clean` above deliberately spares it — so an empty
+    # `.worktrees/` survives into the next take and shows up in the file
+    # tree. `clear` runs after the removal and the prune, so it is the one
+    # place this can be deleted without dangling Git's metadata.
+    - '{fixtures}/demo-app/.worktrees'
+    - '{home}/.uze/state/terminal'
+    - '{runtime}/uze-runtime'
+  write:
+    - path: '{home}/demoshell'
+      executable: true
+      text: |
+        #!/bin/sh
+        exec /bin/bash --norc --noprofile
+    - path: '{home}/.gitconfig'
+      text: "[user]\n\tname = Ada Lovelace\n\temail = ada@demo.dev\n[init]\n\tdefaultBranch = main\n"
+fixtures:
+  - name: demo-app
+    commits:
+      - message: 'chore: initial commit'
+        days_ago: 9
+        files:
+          README.md: '# demo-app'
+      - message: 'feat(api): add the health endpoint'
+        days_ago: 7
+        files:
+          src/main.rs: |-
+            mod router;
+
+            fn main() {
+                let port = config::port();
+                println!("demo-app listening on {}", port);
+                serve(port, router::route);
+            }
+          src/health.rs: |-
+            pub fn health() -> Response {
+                Response::json(200, r#"{"status":"ok"}"#)
+            }
+      - message: 'docs: describe the request lifecycle'
+        days_ago: 5
+        files:
+          docs/lifecycle.md: |
+            # Request lifecycle
+
+            A request arrives, the router looks its path up in the route
+            table, and the handler it finds answers. A path the table does
+            not carry falls through to the 404 handler.
+
+            ## Routes
+
+            | Path | Handler |
+            | --- | --- |
+            | `/health` | `health::health` |
+      - message: 'feat(config): read settings from config.toml'
+        days_ago: 4
+        files:
+          config.toml: |-
+            [app]
+            port = 8080
+            log = "info"
+          src/config.rs: |-
+            pub fn port() -> u16 {
+                settings().app.port
+            }
+      - message: 'docs: add AGENTS.md with the project''s conventions'
+        days_ago: 3
+        files:
+          AGENTS.md: |
+            # AGENTS.md
+
+            Guidance for agentic tools working in this repository.
+
+            ## What this is
+
+            `demo-app` is a small HTTP service. `src/router.rs` maps a path to a
+            response; `config.toml` carries the runtime settings.
+
+            ## Conventions
+
+            - Keep handlers total: every route returns a `Response`, never panics.
+            - Document a new route in `docs/lifecycle.md` in the same change.
+            - Conventional Commits for commit subjects.
+      # The policy belongs in the manifest, not the lock: `agents.lock` is
+      # derived, and an agent reading a worktree policy from it would be
+      # reading something UZE regenerates. `default: isolated` is what puts
+      # every agent this demo starts in a checkout of its own.
+      - message: 'chore: declare the project''s environment in agents.yaml'
+        days_ago: 2
+        files:
+          agents.yaml: |-
+            worktrees:
+              default: isolated
+              target: main
+              completion: handoff
+              branch: conventional
+              slots: 3
+
+            artifacts:
+              path: docs/architecture
+      - message: 'docs(architecture): draw the context, the containers and the lifecycle'
+        days_ago: 2
+        files:
+          docs/architecture/system-context.mmd: |
+            ---
+            title: System context
+            ---
+            C4Context
+              Person(dev, "Developer", "Runs the service and reads its logs")
+              System(app, "demo-app", "The HTTP service")
+              System_Ext(site, "demo-web", "The marketing site")
+              Rel(dev, app, "Runs, reviews")
+              Rel(site, app, "Calls /health")
+          docs/architecture/containers.mmd: |
+            ---
+            title: Containers
+            ---
+            C4Container
+              System_Boundary(app, "demo-app") {
+                Container(router, "Router", "Rust", "Maps a path to a response")
+                Container(health, "Health", "Rust", "Answers /health")
+                Container(config, "Config", "TOML", "Runtime settings")
+              }
+              Rel(router, health, "Dispatches /health")
+              Rel(router, config, "Reads the port")
+          docs/architecture/router-components.mmd: |
+            ---
+            title: Router components
+            ---
+            C4Component
+              Container_Boundary(router, "Router") {
+                Component(table, "Route table", "Rust", "Path to handler")
+                Component(dispatch, "Dispatch", "Rust", "Calls the handler it found")
+                Component(fallback, "Fallback", "Rust", "Answers 404")
+              }
+              Rel(table, dispatch, "Hands the match to")
+              Rel(table, fallback, "No match")
+          docs/architecture/request-lifecycle.mmd: |
+            ---
+            title: Request lifecycle
+            ---
+            flowchart LR
+              req([Request]) --> router[Router]
+              router --> known{Known route?}
+              known -- yes --> handler[Handler]
+              known -- no --> missing[404]
+              handler --> res([Response])
+              missing --> res
+              click router href "src/router.rs"
+              click handler href "src/health.rs"
+      - message: 'fix(api): return 404 for an unknown route'
+        days_ago: 1
+        files:
+          src/router.rs: |-
+            use crate::{config, health};
+
+            /// Every route this service answers, in the order they are tried.
+            pub fn route(path: &str) -> Response {
+                match path {
+                    "/health" => health::health(),
+                    _ => not_found(path),
+                }
+            }
+
+            fn not_found(path: &str) -> Response {
+                Response::text(404, format!("no route for {path}"))
+            }
+# What the video shows, in order. Edit this list first.
+#
+# Alt chords arrive through tmux as Esc-then-letter, which the workspace reads
+# as two events — so this drives the `architect` button in the strip rather
+# than Alt+A. Shift+arrow does arrive intact, and is what moves the selection
+# from box to box; a click on a box's label does not select it.
+#
+# Every `expect` is the status bar, which names the file being drawn and, when
+# a box is selected, what Enter would do with it. The ladder in the header
+# lists every level whether or not you are on one, so it proves nothing.
+beats:
+  - say: uze is open on a project that wrote its architecture down
+    pause: 1.4
+  - say: the diagrams the project declares, drawn in cells
+    click: architect
+    in: strip
+    expect: system-context\.mmd
+    expect_timeout: 10
+    pause: 3.2
+  - say: a box is not a picture — this one has an inside
+    key: S-Down
+    expect: enter goes inside
+    expect_timeout: 6
+    pause: 1.8
+  - say: 'and you walk into it: the containers within the system'
+    key: Enter
+    expect: containers\.mmd
+    expect_timeout: 8
+    pause: 3.4
+  # The status bar says what is *selected* when something is, and only names
+  # the file when nothing is — and coming back up restores the selection you
+  # left. So the proof that the level was left is the hint that is gone.
+  - say: back out, the way you came
+    key: BSpace
+    expect: enter goes inside
+    expect_timeout: 8
+    refuse: backspace level up
+    pause: 1.8
+  - say: the diagrams are grouped by what they are
+    click: C4
+    in: sidebar
+    expect: Flowchart
+    expect_timeout: 6
+    pause: 1.4
+  - say: a lifecycle, not a structure
+    click: Flowchart
+    in: sidebar
+    expect: request-lifecycle\.mmd
+    expect_timeout: 8
+    pause: 3.0
+  - key: S-Down
+    expect: Known route
+    expect_timeout: 6
+    pause: 1.0
+  - say: and a box can name the code it stands for
+    key: S-Right
+    expect: enter opens src/health\.rs
+    expect_timeout: 6
+    pause: 2.4
+  - say: which opens it — the two surfaces are one errand
+    key: Enter
+    expect: 'Response::json'
+    expect_timeout: 8
+    pause: 3.2
+  - say: and out — the cut stops here, before the screen blanks
+    end: C-q

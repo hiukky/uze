@@ -1,6 +1,6 @@
 journey: a branch that no longer replays onto the target is handed back, and lands once it is settled
 tags: [gate, tui, delivery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   The target does not hold still while an agent works. An operator commits
   on main, or a sibling agent delivers, and the branch that was deliverable

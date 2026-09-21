@@ -36,6 +36,19 @@ impl Files {
     }
 }
 
+/// Whether the tree shows this entry at all.
+///
+/// One name, not a hidden-file rule: `.env`, `.github` and `.gitignore`
+/// are things somebody wrote, and a surface that hid them would be
+/// hiding the project from itself. `.git` is the repository's own
+/// database — nothing in it is read or edited here, and opening it walks
+/// the viewer into thousands of objects the tree would then keep listed.
+/// It is matched whether it is a directory or a file, because in a linked
+/// worktree it is a file naming the gitdir.
+pub(super) fn is_shown(entry: &DirEntry) -> bool {
+    entry.name != ".git"
+}
+
 /// One row of the flattened tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TreeRow {

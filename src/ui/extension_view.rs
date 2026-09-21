@@ -50,23 +50,34 @@ const PROSE_INSET: u16 = 2;
 /// Columns of padding on each side of a mode segment's label. The padding
 /// is part of the button — it is filled, and clicked, like the label is.
 const MODE_PAD: u16 = 1;
+/// The gap between the hints on a footer's left and the caption on its
+/// right, so the two never meet at the width where both are widest.
+const FOOTER_GAP: u16 = 2;
 
 /// The extension's palette, resolved. An extension names meaning; the host
 /// names colour, exactly once, here.
 fn color(role: Role) -> Color {
+    theme::color(token(role))
+}
+
+/// The token a role means. Kept apart from [`color`] because a role is
+/// asked for two different things — the ink it draws in, and the hue it
+/// lends a ground — and both have to answer from one mapping or a
+/// selection stops matching what it is marking.
+fn token(role: Role) -> Token {
     match role {
-        Role::Default => theme::color(Token::TextBright),
-        Role::Muted => theme::color(Token::TextMuted),
-        Role::Secondary => theme::color(Token::TextSecondary),
-        Role::Bright => theme::color(Token::TextBright),
-        Role::Inactive => theme::color(Token::TextInactive),
-        Role::Accent => theme::color(Token::Accent),
-        Role::Dim => theme::color(Token::TextDim),
-        Role::Faint => theme::color(Token::TextFaint),
-        Role::Info => theme::color(Token::StateInfo),
-        Role::Success => theme::color(Token::StateSuccess),
-        Role::Warning => theme::color(Token::StateWarning),
-        Role::Danger => theme::color(Token::StateDanger),
+        Role::Default => Token::TextBright,
+        Role::Muted => Token::TextMuted,
+        Role::Secondary => Token::TextSecondary,
+        Role::Bright => Token::TextBright,
+        Role::Inactive => Token::TextInactive,
+        Role::Accent => Token::Accent,
+        Role::Dim => Token::TextDim,
+        Role::Faint => Token::TextFaint,
+        Role::Info => Token::StateInfo,
+        Role::Success => Token::StateSuccess,
+        Role::Warning => Token::StateWarning,
+        Role::Danger => Token::StateDanger,
     }
 }
 
@@ -75,6 +86,12 @@ fn styled(span: &Span) -> TextSpan<'static> {
         .color
         .map(|rgb| theme::content(rgb.0, rgb.1, rgb.2))
         .unwrap_or_else(|| color(span.role)));
+    // A ground the span named: its own hue, let into the surface far
+    // enough to mark the area and not far enough to compete with what is
+    // written on it — the same strength a selected row wears.
+    if let Some(ground) = span.ground {
+        style = style.bg(theme::tinted(token(ground), Token::SurfaceBackground));
+    }
     // Emphasis is stated both ways round, never left to whatever the
     // span is drawn inside. A ratatui title carries a style its spans
     // are patched over, so a span that only *omits* bold comes out bold
@@ -547,9 +564,25 @@ fn render_board(
             );
         }
     }
-    render_footer(frame, footer, &view.footer, scope);
-    if let Content::Lines { heading, .. } = &view.content {
-        let width = (TextSpan::raw(heading.as_str()).width() as u16).min(footer.width / 2);
+    // The caption is right-aligned on the footer's own row, so the hints
+    // are given what is left of it rather than the whole width: drawn over
+    // each other, a narrow board reads `g ren3 boxes · 2 edges`, which is
+    // two truths written into one run of cells and no truth at all.
+    let caption = match &view.content {
+        Content::Lines { heading, .. } if !heading.is_empty() => {
+            Some((TextSpan::raw(heading.as_str()).width() as u16).min(footer.width / 2))
+        }
+        _ => None,
+    };
+    let hints = match caption {
+        Some(width) => Rect {
+            width: footer.width.saturating_sub(width + FOOTER_GAP),
+            ..footer
+        },
+        None => footer,
+    };
+    render_footer(frame, hints, &view.footer, scope);
+    if let (Some(width), Content::Lines { heading, .. }) = (caption, &view.content) {
         frame.render_widget(
             Paragraph::new(TextSpan::styled(
                 heading.clone(),
@@ -1674,7 +1707,10 @@ fn render_footer(
     // resolve against — the same stack `Attach::scopes` builds.
     let scopes = [uze_keys::Scope::Global, uze_keys::Scope::Workspace, scope];
     let actions: Vec<uze_keys::Action> = commands.iter().copied().filter_map(action_of).collect();
-    frame.render_widget(Paragraph::new(hint::line(&scopes, &actions)), area);
+    frame.render_widget(
+        Paragraph::new(hint::within(area.width, &scopes, &actions)),
+        area,
+    );
 }
 
 /// What each extension command means in the product's own vocabulary, read
@@ -1925,6 +1961,7 @@ mod tests {
                         text: "let x = 1;".to_owned(),
                         role: Role::Default,
                         color: Some(Rgb(1, 2, 3)),
+                        ground: None,
                         bold: false,
                         italic: false,
                     }],
@@ -2203,6 +2240,66 @@ mod tests {
         assert!(rows[1].contains("Files"), "the same row: {:?}", rows[1]);
         assert_eq!(nav_at(&hits), sidebar_at, "at the same cell");
     }
+
+    /// A board's footer carries two things — the keys on its left and
+    /// what is drawn on its right — and they are written into one row.
+    /// Narrow enough and they used to meet in the middle, which reads as
+    /// neither: `g ren3 boxes · 2 edges`.
+    #[test]
+    fn a_boards_hints_stop_before_its_caption() {
+        let view = View {
+            title: vec![Span::new("architect", Role::Muted)],
+            caption: Vec::new(),
+            navigator: None,
+            content: Content::Lines {
+                first: 0,
+                caret: None,
+                total: 1,
+                heading: "3 boxes · 2 edges · containers.mmd".to_owned(),
+                scroll: 0,
+                lines: Vec::new(),
+            },
+            footer: vec![
+                Command::Close,
+                Command::ChooseItem,
+                Command::NextView,
+                Command::NextMode,
+            ],
+            modes: Vec::new(),
+            subjects: Vec::new(),
+            layout: ViewLayout::Board,
+            trail: Vec::new(),
+        };
+
+        for width in [70, 90, 118] {
+            let (rows, _) = draw_sized(&view, width, 12);
+            let footer = rows
+                .iter()
+                .find(|row| row.contains("3 boxes"))
+                .cloned()
+                .unwrap_or_else(|| panic!("the caption is drawn at {width} columns: {rows:?}"));
+            // Whatever room is left, the two never touch: the hints end,
+            // then blank cells, then the caption.
+            let caption = footer
+                .find("3 boxes")
+                .expect("the caption starts where it starts");
+            assert!(
+                footer[..caption].ends_with("  "),
+                "hints ran into the caption at {width} columns: {footer:?}"
+            );
+            // And what is kept is whole: a list cut at the edge ends in
+            // half a word, which reads as a key nobody can press.
+            let hints = footer[..caption].trim_end();
+            assert!(
+                hints.is_empty() || KEPT_WHOLE.iter().any(|label| hints.ends_with(label)),
+                "a hint was cut mid-word at {width} columns: {footer:?}"
+            );
+        }
+    }
+
+    /// Every label this view's own footer can end on. Ending on anything
+    /// else is a word the edge took half of.
+    const KEPT_WHOLE: [&str; 4] = ["close", "artifacts", "artifact", "rendering"];
 
     fn draw_sized(view: &View, width: u16, height: u16) -> (Vec<String>, Vec<(Rect, ViewHit)>) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -2758,6 +2855,7 @@ mod tests {
                 text: text.to_owned(),
                 role: Role::Default,
                 color: None,
+                ground: None,
                 bold: false,
                 italic: false,
             }],

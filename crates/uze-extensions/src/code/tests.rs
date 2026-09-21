@@ -651,6 +651,33 @@ fn a_directory_is_read_only_when_it_is_opened() {
     assert_eq!(item_names_of_tree(&view), ["src", "main.rs", "README.md"]);
 }
 
+/// `.git` is the repository's own database, not the project — and in a
+/// linked worktree it is a file rather than a directory, so both spellings
+/// have to go. Every other dotfile is content and stays.
+#[test]
+fn the_tree_shows_every_dotfile_but_the_repository_itself() {
+    let machine = FakeMachine::default()
+        .with_directory("/w/.git")
+        .with_file("/w/.git/HEAD", "ref: refs/heads/main\n")
+        .with_directory("/w/.github")
+        .with_file("/w/.gitignore", "target\n")
+        .with_file("/w/README.md", "# hi\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+
+    assert_eq!(
+        item_names_of_tree(&view),
+        [".github", ".gitignore", "README.md"]
+    );
+
+    let worktree = FakeMachine::default()
+        .with_file("/w/.git", "gitdir: /repo/.git/worktrees/one\n")
+        .with_file("/w/main.rs", "fn main() {}\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &worktree);
+    assert_eq!(item_names_of_tree(&view), ["main.rs"]);
+}
+
 fn item_names_of_tree(view: &CodeView) -> Vec<String> {
     view.files
         .rows(&view.root)
@@ -1610,6 +1637,104 @@ fn coming_back_to_a_directory_row_reads_nothing_and_says_nothing_is_open() {
 /// The map is a fourth way of looking at the same checkout, and the
 /// selection is what survives the switch: a tile followed is the file
 /// selected, read by whichever half was on show before the map.
+/// Selecting a tile marks it without recolouring it.
+///
+/// Every tile on the map is coloured by how hot its file is, so a
+/// selection that repainted one answered "which is selected" by erasing
+/// the only thing the map is drawn to show. The mark is the ground under
+/// it — the tile's own hue — and the border and the name go on saying
+/// what they said.
+#[test]
+fn a_selected_tile_keeps_the_colour_that_says_how_hot_it_is() {
+    let mut view = surface(Path::new("/repo"), Vec::new(), 0);
+    view.absorb_measure(measured());
+    press(&mut view, Command::ToggleMap);
+    assert_eq!(view.showing(), ContentMode::Map);
+
+    let space = (80, 20);
+    let roles = |view: &CodeView| -> Vec<Role> {
+        view.map_view()
+            .expect("measured")
+            .paint(space, crate::shared::canvas::Glyphs::Unicode)
+            .lines()
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .map(|span| span.role)
+            .collect()
+    };
+    let before = roles(&view);
+
+    let frame = view
+        .map_view()
+        .expect("measured")
+        .tiles(space)
+        .into_iter()
+        .find(|tile| tile.path == "src")
+        .expect("a tile for src")
+        .frame;
+    let (x, y) = frame.center();
+    handle_mouse(
+        &mut view,
+        Some(ViewHit::PlaceCaret {
+            line: y as usize,
+            cell: x as usize,
+        }),
+        Size {
+            width: space.0 as u16,
+            height: space.1 as u16,
+        },
+    );
+
+    let painted = view
+        .map_view()
+        .expect("measured")
+        .paint(space, crate::shared::canvas::Glyphs::Unicode);
+    let spans: Vec<_> = painted
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .collect();
+
+    // The ground is the tile's *own* hue, so what marks a cold file and
+    // what marks a hot one are different colours — the map goes on being
+    // readable while one of its tiles is picked.
+    let picked_heat = view
+        .map_view()
+        .expect("measured")
+        .tiles(space)
+        .into_iter()
+        .find(|tile| tile.path == "src")
+        .expect("a tile for src")
+        .heat;
+    let grounds: Vec<Role> = spans.iter().filter_map(|span| span.ground).collect();
+    assert!(!grounds.is_empty(), "the selection is a ground");
+    assert!(
+        grounds.iter().all(|role| *role == picked_heat.role()),
+        "and it is the tile's own hue, not one of its own: {grounds:?}"
+    );
+    assert!(
+        spans.iter().all(|span| span.role != Role::Accent),
+        "and never a colour of its own: {:?}",
+        spans
+            .iter()
+            .filter(|span| span.role == Role::Accent)
+            .map(|span| &span.text)
+            .collect::<Vec<_>>()
+    );
+    let named = |roles: &[Role]| {
+        let mut seen: Vec<String> = roles.iter().map(|role| format!("{role:?}")).collect();
+        seen.sort();
+        seen.dedup();
+        seen
+    };
+    let after: Vec<Role> = spans.iter().map(|span| span.role).collect();
+    assert_eq!(
+        named(&before),
+        named(&after),
+        "selecting changes no tile's colour"
+    );
+}
+
 #[test]
 fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
     let mut view = surface(Path::new("/repo"), Vec::new(), 0);

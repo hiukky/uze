@@ -1,6 +1,6 @@
 journey: a shell opened beside an agent goes when the agent goes
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   Open a second tab while an agent is in front of you and it lands in that
   agent's worktree, with its own shell and its own history. It belongs to

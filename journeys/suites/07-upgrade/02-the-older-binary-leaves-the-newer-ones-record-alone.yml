@@ -1,6 +1,6 @@
 journey: a release older than this build never takes this build's records
 tags: [upgrade, cli, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   Recovery moves in one direction. A record older than this build is this
   build's to carry across or, failing that, to set aside. A record *newer*

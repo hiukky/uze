@@ -1,6 +1,6 @@
 journey: an agent names the work it is doing, and renames it when the work turns out to be something else
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   A branch a reviewer meets on a pull request has to say what the change
   is. Nothing UZE knows at launch can say that — the work has not been

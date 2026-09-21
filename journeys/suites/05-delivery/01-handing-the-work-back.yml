@@ -1,6 +1,6 @@
 journey: an agent's work reaches the target branch, and says what it will do before doing it
 tags: [gate, tui, delivery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   The end of the loop. An agent commits in its own checkout; the project's
   branch does not move because of it. When the work is deliverable the

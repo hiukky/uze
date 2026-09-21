@@ -34,15 +34,24 @@ experimental](/docs/getting-started).
 - **The terminal workspace** — persistent panes, parallel agents in isolated
   checkouts, readiness read from Git, explicit delivery, and a conversation that
   survives a reboot.
-- **Theming** — one file restyles the CLI, the TUI, and what a pane is told the
-  terminal looks like.
+- **Extensions** — [Code](/docs/workspace/extensions#code), for a checkout's
+  changes, files, history and map, and
+  [Architect](/docs/workspace/extensions#architect), for the project's own
+  Mermaid diagrams drawn in the terminal.
+- **Freshness** — `uze plugin list` reports each package against its
+  marketplace's mirror, and `uze update` moves the pins when you decide to.
+- **Records that survive an upgrade** — a record written in a shape a build
+  knows is carried across silently; only a shape with no rung is set aside.
+- **Theming and keys** — one file restyles the CLI, the TUI and what a pane is
+  told the terminal looks like; another rebinds every action, holding only what
+  differs from the default.
 
 ## In progress
 
 - **Requirements & dependencies** — what a plugin needs from its host, declared
   and checked before install.
-- **Update detection** — the lock records what a marketplace resolved to; telling
-  you something newer exists needs a fetch policy that nothing has decided yet.
+- **Plugin versioning** — a plugin is pinned to a commit today. A version a
+  project can ask for by range is not decided yet.
 - **Security & trust** — beyond today's executable-capability boundary.
 - **Runtime context projection** — the PATH shim that reaches a harness without
   writing into the project is still experimental.
@@ -68,4 +77,5 @@ itself, so it can never silently rot.
 The plugin ecosystem grows through the official marketplace (`marketplace.json`
 at the repository root, embedded in the binary as `uze-official`) plus any
 community marketplace registered with `uze market add`. The one official plugin
-today is `plugins/uze`, carrying the `uze:init` and `uze:worktree` Skills.
+today is `plugins/uze`, carrying the `uze:init`, `uze:worktree` and
+`uze:architect` Skills.

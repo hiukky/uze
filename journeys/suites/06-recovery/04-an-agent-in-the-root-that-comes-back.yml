@@ -1,6 +1,6 @@
 journey: an agent in the root that comes back after a restart comes back to its own conversation
 tags: [gate, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   An agent nobody isolated has no checkout of its own: it works in the
   project directory, beside the operator, and the directory it stands in

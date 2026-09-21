@@ -1,6 +1,6 @@
 journey: a workspace the previous release wrote opens on this build with its spaces
 tags: [gate, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   The terminal runtime persists the shape of the workspace — the spaces,
   their roots, their tabs — under UZE's own state directory, and that

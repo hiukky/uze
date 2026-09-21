@@ -1,6 +1,6 @@
 journey: a repository under a folder that is not one is reachable from the new-space prompt
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   Checkouts are rarely siblings of the one you are in. They sit in a
   folder of projects, often grouped a level further down, and the folder

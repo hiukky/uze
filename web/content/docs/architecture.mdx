@@ -19,14 +19,20 @@ graph TD
     TERM["uze-terminal<br/>local terminal runtime"]
     GIT["uze-git<br/>the one transport to the Git binary"]
     THEME["uze-theme<br/>the design vocabulary: tokens, symbols, resolver"]
+    KEYS["uze-keys<br/>actions · scopes · chords"]
+    DOC["uze-document<br/>the shape a record declares, and its ladder"]
 
     CLI --> EXT
     CLI --> APP
     CLI --> TERM
     CLI --> THEME
+    CLI --> KEYS
+    EXT --> GIT
     APP --> CORE
     INTEG --> CORE
     CORE --> GIT
+    CORE --> DOC
+    TERM --> DOC
 ```
 
 - **`uze-core` never names a harness.** No Claude, Codex, OpenCode, or Antigravity
@@ -66,8 +72,18 @@ graph TD
   file, resolving `$HOME`) arrives through a `Host` it is handed. The crate
   depends on no uze crate at all and names no process, filesystem or environment
   API — an extension is code uze runs in its own process, a different trust class
-  from plugin bytes a harness reads (ADR-041). The [Git extension](/docs/workspace#the-git-extension)
-  is the one built-in today.
+  from plugin bytes a harness reads (ADR-041). Two ship today:
+  [Code and Architect](/docs/workspace/extensions).
+- **`uze-document`** — the one rule for reading a record another build wrote: the
+  shape a record declares, the ladder that carries it across a version, and the
+  floor beneath that. A record written in a shape this build knows is carried
+  across silently; only a shape with no rung is set aside, and a record from a
+  *newer* build is never taken. A leaf crate naming no domain, no path and no
+  harness — a durability rule written in two places is the failure it exists to
+  end.
+- **`uze-keys`** — actions, scopes and chords: the vocabulary
+  [Shortcuts](/docs/keys) is written in, and the resolver that answers which
+  action a chord reaches in the surface that is open.
 
 ## Repository layout
 
@@ -83,6 +99,8 @@ part; everything else is where to look.
 | `crates/uze-terminal` | The local terminal runtime |
 | `crates/uze-git` | The one transport to the Git binary |
 | `crates/uze-theme` | Colour tokens, symbols, and the theme resolver |
+| `crates/uze-document` | The shape a record declares, and the ladder that carries it across a version |
+| `crates/uze-keys` | Actions, scopes, chords, and the keymap that resolves them |
 | `crates/uze-testkit` | Shared test infrastructure |
 | `src/` | The CLI, the TUI, and the runtime PATH shim |
 | `tests/` | Integration suites, L0–L4 (see `tests/README.md`) |

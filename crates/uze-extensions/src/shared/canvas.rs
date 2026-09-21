@@ -48,6 +48,10 @@ pub enum Corners {
 pub struct Cell {
     pub glyph: char,
     pub role: Role,
+    /// The role tinting this cell's ground — see [`Span::ground`]. Set
+    /// over a region rather than per glyph, because what it marks is an
+    /// area, and the glyphs inside it keep saying whatever they said.
+    pub ground: Option<Role>,
     pub bold: bool,
     /// Written to, even if with a space: the inside of a box and the gap
     /// between two words are the drawing's, not the board showing through.
@@ -59,6 +63,7 @@ impl Default for Cell {
         Self {
             glyph: ' ',
             role: Role::Default,
+            ground: None,
             bold: false,
             solid: false,
         }
@@ -91,9 +96,13 @@ impl Canvas {
 
     pub fn put(&mut self, x: i32, y: i32, glyph: char, role: Role, bold: bool) {
         if let Some(index) = self.index(x, y) {
+            // The ground survives what is written over it: a region is
+            // marked once and then drawn into, not the other way round.
+            let ground = self.cells[index].ground;
             self.cells[index] = Cell {
                 glyph,
                 role,
+                ground,
                 bold,
                 solid: true,
             };
@@ -154,6 +163,24 @@ impl Canvas {
         }
     }
 
+    /// Tints every cell of `frame` with `role`'s hue, leaving what is
+    /// drawn there alone.
+    ///
+    /// The way an area is marked when recolouring it would cost the
+    /// reader something: on the map every tile's colour already says how
+    /// hot it is, so a selection that repainted it would answer "which is
+    /// selected" by erasing "how hot is it".
+    pub fn ground(&mut self, frame: Frame, role: Role) {
+        for y in frame.y..frame.y + frame.h {
+            for x in frame.x..frame.x + frame.w {
+                if let Some(index) = self.index(x, y) {
+                    self.cells[index].ground = Some(role);
+                    self.cells[index].solid = true;
+                }
+            }
+        }
+    }
+
     pub fn cell(&self, x: i32, y: i32) -> Option<Cell> {
         self.index(x, y).map(|index| self.cells[index])
     }
@@ -187,12 +214,17 @@ impl Canvas {
                 continue;
             }
             match spans.last_mut() {
-                Some(last) if last.role == cell.role && last.bold == cell.bold => {
+                Some(last)
+                    if last.role == cell.role
+                        && last.bold == cell.bold
+                        && last.ground == cell.ground =>
+                {
                     last.text.push(cell.glyph);
                 }
                 _ => {
                     let mut span = Span::new(cell.glyph.to_string(), cell.role);
                     span.bold = cell.bold;
+                    span.ground = cell.ground;
                     spans.push(span);
                 }
             }

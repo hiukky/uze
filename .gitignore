@@ -20,9 +20,9 @@ uze-sbom.json
 # Demo video: the spec is tracked, the render is not — the published copy in
 # web/public is the one the site and the README point at, and committing both
 # would put the same ~700KB blob in history twice per recording.
-/.demo/*.gif
-/.demo/*.png
-/.demo/*.cast
+/.demo/**/*.gif
+/.demo/**/*.png
+/.demo/**/*.cast
 
 # journey runner: disposable worlds live in /tmp; evidence is per-run
 journeys/.evidence/

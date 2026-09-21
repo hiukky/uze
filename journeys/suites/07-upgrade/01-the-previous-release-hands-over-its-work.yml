@@ -1,6 +1,6 @@
 journey: the release a user has installed hands its work to this build
 tags: [upgrade, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   Every other tier proves this build against a document a test wrote. That
   proves a ladder step and not the claim, which is about two binaries

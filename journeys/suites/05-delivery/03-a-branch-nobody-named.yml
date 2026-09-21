@@ -1,6 +1,6 @@
 journey: work nobody named still reaches the remote under a readable name
 tags: [gate, tui, delivery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   Instructing an agent is not the same as it happening. So naming has an
   automatic half: work that reaches its first commit still carrying the

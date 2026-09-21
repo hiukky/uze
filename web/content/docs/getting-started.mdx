@@ -56,7 +56,7 @@ check with `gh attestation verify <file> --repo hiukky/uze`.
 
 ## Provision your harnesses
 
-`uze setup` detects the four supported harnesses and provisions any that are
+`uze setup` detects every harness uze supports and provisions any that are
 missing through each vendor's own official installer — never a mirror, never a
 repackaged binary (ADR-010).
 
@@ -152,6 +152,10 @@ $ uze status     # how this project's environment and context reach each harness
 artifacts it can prove are safe to rebuild, and escalates only what genuinely
 needs your decision.
 
+When something needs explaining rather than repairing, the workspace and the
+terminal server keep a journal without being asked — `~/.uze/cache/logs/`,
+rolled daily and pruned to a week. Nothing to turn on after the fact.
+
 ## Run agents side by side
 
 Running `uze` with no arguments opens the **workspace** — a persistent terminal
@@ -161,12 +165,16 @@ that hosts your agent sessions:
 $ uze
 ```
 
-Each agent starts in an isolated checkout of the repository, so two of them never
-touch each other's files, or yours. `Ctrl+O` switches to management — Overview,
-Plugins, Extensions, Integrations, Profiles — and back.
+Agents start where the project says — beside you in the space's own root, or
+each in an isolated checkout of its own, so two of them never touch each other's
+files or yours. `Ctrl+G` shows what one changed, `Alt+A` the project's own
+diagrams, and `Ctrl+O` switches to management — Overview, Plugins, Extensions,
+Integrations, Profiles — and back.
 
 <Cards>
   <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="Running agents" href="/docs/workspace/agents" />
+  <Card title="Extensions" href="/docs/workspace/extensions" />
 </Cards>
 
 ## A fresh clone

@@ -13,7 +13,7 @@ delivers them to each harness — [Claude Code](https://code.claude.com),
 that harness has. A real plugin where one exists, a native capability where it
 doesn't, an adapter only as a last resort.
 
-**And it is where you run those agents.** A terminal that gives each agent a
+**And it is where you run those agents.** A terminal that can give each agent a
 checkout of its own (`.worktrees/<id>`, on branch `agent/<id>`), watches what
 each one did, and brings the work home to the target branch.
 
@@ -67,10 +67,10 @@ directory you are in.
 | --- | --- |
 | **Terminal runtime** | A local server owns the pseudoterminals, so a pane survives the client leaving. Close the TUI; the agent keeps working. |
 | **Workspace** | Spaces, tabs and panes, with a prompt history you can jump back through. |
-| **Isolated checkouts** | Every agent starts in a reusable slot on a branch of its own, before its harness starts. |
+| **Isolated checkouts** | An agent can be placed in a reusable slot on a branch of its own, before its harness starts — every agent, where the project declares it. |
 | **Task lifecycle** | Running, uncommitted, ready, conflicted, integrated, parked — read from Git, never announced by an agent. |
 | **Delivery** | Rebase onto the target inside the agent's own checkout, run the project's gate, then hand off, merge, or open a pull request. |
-| **Extensions** | Built-in TUI extensions, today a Git one: status badge, commit timeline, and a changes overlay with per-file diffs. |
+| **Extensions** | Two surfaces built into the TUI: **Code** — a checkout's changes, files, history and a map of where its lines are — and **Architect**, the project's own Mermaid diagrams drawn in cells. |
 | **Themes** | Every colour and mark uze draws is named by meaning, so one theme file restyles the CLI, the TUI and what a pane is told the terminal looks like. |
 
 ### The guarantees around it
@@ -85,7 +85,7 @@ directory you are in.
 ## The loop
 
 ```bash
-$ uze setup                # detect + provision the four harnesses through official routes
+$ uze setup                # detect + provision every harness through official routes
 $ uze flow@my-marketplace  # add a plugin from a marketplace to this project
 $ uze status               # context, environment and what is still owed
 $ uze doctor               # diagnostics: store, harnesses, attachment health
@@ -102,5 +102,6 @@ Or run `uze` with no arguments for the workspace — your agents, side by side.
   <Card title="Getting started" href="/docs/getting-started" />
   <Card title="Concepts" href="/docs/concepts" />
   <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="Extensions" href="/docs/workspace/extensions" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
 </Cards>

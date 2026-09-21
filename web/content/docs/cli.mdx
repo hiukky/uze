@@ -19,10 +19,15 @@ uze --version                # version
 
 ```bash
 uze <plugin>@<market>        # shorthand — add a plugin to this project
-uze install [path]           # resolve agents.yaml into agents.lock, then install it
+uze install [path]           # resolve agents.yaml into agents.lock, then install it (alias: uze i)
+uze update [plugin] [path]   # move the pins to where agents.yaml's refs point now
 uze remove <plugin>          # remove a plugin from this project (never the machine Store)
 uze status [path]            # this project's environment readiness
 ```
+
+`uze install` **reproduces** the pin the lock records; `uze update` **moves** it,
+by re-resolving the ref `agents.yaml` declares and rewriting `agents.lock`. One
+is what a fresh clone runs, the other is a decision you make.
 
 `uze <plugin>@<market>` is the only form that adds a plugin to a project. A bare
 path or Git URL is never accepted — a plugin is always resolved through a
@@ -37,7 +42,7 @@ creates that file.
 
 | Flag | Where | Meaning |
 | --- | --- | --- |
-| `--trust` | `install`, `<plugin>@<market>` | Authorize executable capabilities (hook and MCP commands) |
+| `--trust` | `install`, `update`, `<plugin>@<market>` | Authorize executable capabilities (hook and MCP commands) |
 | `--format json` | every command above | Machine-readable output, keyed on stable ids |
 
 `uze status` is where a person asks whether the project is ready: which file
@@ -56,13 +61,17 @@ person; it simply answers at a detail only a writer of `AGENTS.md` acts on.
 
 ```bash
 uze agent task name <type>/<subject>  # name the work, judged against agents.yaml's vocabulary
+uze agent artifacts check [path]      # draw every declared diagram and say what that found
 uze agent context inspect [path]      # what each harness currently sees of AGENTS.md — read-only
 uze agent context plan [path]         # exactly what reconcile would change — read-only
 uze agent context reconcile [path]    # compose AGENTS.md and reconcile the harness bridges
 ```
 
-`--format json` on all four. `uze agent task name` works only inside an agent
+`--format json` on all five. `uze agent task name` works only inside an agent
 UZE launched — a person's own shell has no task to name.
+`uze agent artifacts check` exits non-zero on a diagram that does not draw, or
+whose edges found no path, so it belongs in a project's gate — see
+[Architect](/docs/workspace/extensions#proving-a-diagram-still-draws).
 
 ## Machine scope
 
@@ -76,6 +85,8 @@ uze market add <source>            # register a marketplace (a Git URL, or a loc
 uze market list                    # registered marketplaces
 uze market inspect <name>          # one marketplace's source and plugin count
 uze market remove <name>           # blocked while plugins from it are installed
+uze market link <name> <checkout>  # read a marketplace from a checkout you develop
+uze market unlink <name>           # stop reading it from that checkout
 
 uze plugin install <plugin>@<market>  # install into the machine Store
 uze plugin list                       # installed packages
@@ -85,6 +96,18 @@ uze plugin remove <plugin>            # remove from the Store (inspects before d
 
 uze doctor                         # diagnostics: store, harnesses, attachments, ledger
 ```
+
+`uze plugin list` says how fresh each installed package is against its
+marketplace's mirror — a bare `--filter=blob:none` clone uze keeps per
+marketplace, fetched rather than re-cloned:
+
+| Says | Means |
+| --- | --- |
+| `up to date` | The installed commit is the marketplace's newest for that plugin |
+| `N behind` | That many commits have touched it since |
+| `linked` | It is read from a checkout on this machine (`market link`), so there is no pin to compare |
+| `unpinned` | Nothing recorded what it was installed from |
+| `not checked` | The mirror has not been read yet — never a claim that it is current |
 
 A marketplace is a Git repository either way: a local path is where *this
 machine* reads that repository, and installing always clones it at a commit. See
@@ -131,7 +154,7 @@ uze theme set <id>      # draw in it from now on, in both the CLI and the TUI
 uze theme show [id]     # a theme's resolved colours and glyphs, and its warnings
 
 uze theme glyphs        # the glyph sets, each drawn in its own glyphs
-uze theme glyphs <set>  # draw every mark from that set, whatever theme is on
+uze theme glyphs <set>  # draw with that set from now on — `default`, `ascii` or `nerd`
 ```
 
 The palette and the glyph set are separate choices, and neither changes the
@@ -150,8 +173,8 @@ uze terminal stop     # stop this workspace's session and every process in it
 ```
 
 <Callout type="info">
-  `terminal` and `theme` are not listed in `uze --help` yet — the terminal
-  runtime is experimental, and a theme is normally chosen from the TUI.
+  The terminal runtime is experimental; running `uze` with no arguments already
+  attaches it, and a theme is normally chosen from the TUI.
 </Callout>
 
 ## Performance contract
@@ -165,5 +188,6 @@ cache and re-inspects only the anomalies live.
 <Cards>
   <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
   <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="Extensions" href="/docs/workspace/extensions" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
 </Cards>

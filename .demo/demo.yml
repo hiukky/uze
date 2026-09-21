@@ -27,12 +27,46 @@ video:
   forbid:
     - Upstream request limit
     - Retry attempt
+    # The account's own state, which the harness prints unasked and which no
+    # sandbox can pre-answer: the quota line, and — the reason this is not
+    # merely untidy — the timezone it names, which is the operator's region
+    # on a published video. The leak scan looks for a username and a
+    # hostname; a place is neither. `TZ` above should keep the second one
+    # from ever firing; it stays as the proof that it did.
+    #
+    # The quota line is the one thing here a re-take cannot clear: it is
+    # true until the week resets. When it fires, blank that sentence in the
+    # `.raw.cast` — spaces, the same count of characters, so nothing on the
+    # row reflows — and `recut`. Not `redact`, which substitutes `x` and
+    # would put a bar of them on camera where the line was.
+    - weekly limit
+    - America/
+    # `usage credits` was here too, for the referral promo that rides with
+    # the quota line. It is gone because the same sentence is the static
+    # description of Claude's own `/passes` command, which the command
+    # palette beat is *meant* to show — the phrase does not say whose
+    # account it is, and the line above does.
+  # What is meant to be on camera and happens to look like a leak. The scan
+  # searches for the operator's login name, and here that is also the GitHub
+  # organisation this project is published under, so the Plugins screen
+  # showing the project's own URL trips both `username` and `hostname`. The
+  # span is allowed, not the name: a home path, a token or this login
+  # anywhere else still stops the run, and the count excused is printed
+  # every time so this cannot quietly widen.
+  allow:
+    - https://github\.com/hiukky/uze
   cast: '{root}/uze-hero.cast'
   cols: 152                 # wide enough for the Integrations cards, narrow
   rows: 36                  # enough that GitHub's ~900px column stays readable
   speed: 1.45               # reads as a person; past ~1.5 it reads as fast-forward
   background: 0a0c0d        # crate::ui::BASE — a mismatch shows as a border
-  font_size: 14
+  # Twice the width the README embeds it at, so the page downscales it.
+  font_size: 20
+  # The app draws with the nerd glyph set (see `provision`), so the
+  # renderer needs the patched font too — without it every icon is a
+  # blank cell. The fallback is named so a machine without the patched
+  # build still renders readable text instead of nothing.
+  font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
   wait_collapse: 1.5        # what an agent's thinking time collapses to
   # The still the site shows first: named by what must be on screen, so a
   # re-cut cannot silently move it to a half-drawn frame.
@@ -53,16 +87,26 @@ sandbox:
     - /usr/bin
     - /bin
   env:
+    # UTC, so nothing the harness prints carries the operator's region. A
+    # provider's own status line names the timezone it resets in, and the
+    # leak scan looks for a username and a hostname — a place is neither.
+    TZ: UTC
     PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
+  # Named binaries are symlinked into the sandbox from the real PATH.
+  # `opencode` is not among them on purpose: its v2 launcher is a `sh`
+  # script that execs `$(dirname "$0")/opencode`, so a symlink of *that*
+  # under another name execs itself and spins forever. The real binary is
+  # granted below, by path.
   binaries:
     - claude
-    - opencode
     - agy
   author: Ada Lovelace
   author_email: ada@demo.dev
   # A deliberate, revocable grant: symlinks, never copies. Delete the link
   # and the grant is over; without them the harnesses record a login screen.
   link:
+    - from: ~/.opencode/bin/opencode
+      to: '{home}/bin/opencode'
     - from: ~/.claude/.credentials.json
       to: '{home}/.claude/.credentials.json'
       optional: true
@@ -73,9 +117,11 @@ sandbox:
     - from: ~/.config/opencode/opencode.json
       to: '{home}/.config/opencode/opencode.json'
   # Setup first, or every Integrations card reads "Not configured" on camera.
+
   provision:
     - test -x {home}/.local/bin/codex || curl -fsSL https://chatgpt.com/codex/install.sh | sh
     - '{project}/target/release/uze setup'
+    - '{project}/target/release/uze theme glyphs nerd'
   # The sandbox's own terminal server, by pid, verified through /proc — never
   # a pattern kill, which would match the shell running it.
   reset:
@@ -84,7 +130,19 @@ sandbox:
         cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null) || continue
         case "$cmd" in *"terminal serve --root /tmp/demos/"*) kill -TERM "$pid" 2>/dev/null ;; esac
       done
+    # `git reset --hard` — the fixture rewind before every attempt — reverts
+    # tracked files and leaves untracked ones, so a file another spec's beats
+    # wrote is still there, counted in this take's changes badge. `.worktrees`
+    # is excluded: the rewind removes those itself, and pulling the directory
+    # out from under Git first leaves metadata to prune.
+    - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
   clear:
+    # The rewind removes the checkouts but leaves the directory that held
+    # them, and the `clean` above deliberately spares it — so an empty
+    # `.worktrees/` survives into the next take and shows up in the file
+    # tree. `clear` runs after the removal and the prune, so it is the one
+    # place this can be deleted without dangling Git's metadata.
+    - '{fixtures}/demo-app/.worktrees'
     - '{home}/.uze/state/terminal'
     - '{runtime}/uze-runtime'
   write:
@@ -117,33 +175,62 @@ sandbox:
       merge: '{"permissions": {"defaultMode": "acceptEdits", "allow": ["Bash"]}}'
 # Two projects with a believable past: an empty repo reads as a test
 # fixture, a handful of dated commits reads as a project.
+#
+# `demo-app` is shared, byte for byte, with .demo/code and .demo/architect:
+# the three specs record in one sandbox ({root}) against one fixtures
+# directory, so its remembered HEAD is shared with them too. Change a commit
+# here and change it there, or `tui-record seed` on one spec rewinds the
+# other two to a base they were not recorded against.
 fixtures:
   - name: demo-app
     commits:
       - message: 'chore: initial commit'
-        days_ago: 7
+        days_ago: 9
         files:
           README.md: '# demo-app'
       - message: 'feat(api): add the health endpoint'
+        days_ago: 7
+        files:
+          src/main.rs: |-
+            mod router;
+
+            fn main() {
+                let port = config::port();
+                println!("demo-app listening on {}", port);
+                serve(port, router::route);
+            }
+          src/health.rs: |-
+            pub fn health() -> Response {
+                Response::json(200, r#"{"status":"ok"}"#)
+            }
+      - message: 'docs: describe the request lifecycle'
         days_ago: 5
         files:
-          src/main.rs: fn main() {}
-      - message: 'docs: describe the request lifecycle'
-        days_ago: 3
-        files:
-          docs/lifecycle.md: '# Request lifecycle'
+          docs/lifecycle.md: |
+            # Request lifecycle
+
+            A request arrives, the router looks its path up in the route
+            table, and the handler it finds answers. A path the table does
+            not carry falls through to the 404 handler.
+
+            ## Routes
+
+            | Path | Handler |
+            | --- | --- |
+            | `/health` | `health::health` |
       - message: 'feat(config): read settings from config.toml'
-        days_ago: 2
+        days_ago: 4
         files:
           config.toml: |-
             [app]
             port = 8080
-      - message: 'fix(api): return 404 for an unknown route'
-        days_ago: 1
-        files:
-          src/router.rs: pub fn route() {}
+            log = "info"
+          src/config.rs: |-
+            pub fn port() -> u16 {
+                settings().app.port
+            }
       - message: 'docs: add AGENTS.md with the project''s conventions'
-        days_ago: 1
+        days_ago: 3
         files:
           AGENTS.md: |
             # AGENTS.md
@@ -160,15 +247,90 @@ fixtures:
             - Keep handlers total: every route returns a `Response`, never panics.
             - Document a new route in `docs/lifecycle.md` in the same change.
             - Conventional Commits for commit subjects.
-      - message: 'chore: declare the worktree policy in agents.lock'
+      # The policy belongs in the manifest, not the lock: `agents.lock` is
+      # derived, and an agent reading a worktree policy from it would be
+      # reading something UZE regenerates. `default: isolated` is what puts
+      # every agent this demo starts in a checkout of its own.
+      - message: 'chore: declare the project''s environment in agents.yaml'
+        days_ago: 2
+        files:
+          agents.yaml: |-
+            worktrees:
+              default: isolated
+              target: main
+              completion: handoff
+              branch: conventional
+              slots: 3
+
+            artifacts:
+              path: docs/architecture
+      - message: 'docs(architecture): draw the context, the containers and the lifecycle'
+        days_ago: 2
+        files:
+          docs/architecture/system-context.mmd: |
+            ---
+            title: System context
+            ---
+            C4Context
+              Person(dev, "Developer", "Runs the service and reads its logs")
+              System(app, "demo-app", "The HTTP service")
+              System_Ext(site, "demo-web", "The marketing site")
+              Rel(dev, app, "Runs, reviews")
+              Rel(site, app, "Calls /health")
+          docs/architecture/containers.mmd: |
+            ---
+            title: Containers
+            ---
+            C4Container
+              System_Boundary(app, "demo-app") {
+                Container(router, "Router", "Rust", "Maps a path to a response")
+                Container(health, "Health", "Rust", "Answers /health")
+                Container(config, "Config", "TOML", "Runtime settings")
+              }
+              Rel(router, health, "Dispatches /health")
+              Rel(router, config, "Reads the port")
+          docs/architecture/router-components.mmd: |
+            ---
+            title: Router components
+            ---
+            C4Component
+              Container_Boundary(router, "Router") {
+                Component(table, "Route table", "Rust", "Path to handler")
+                Component(dispatch, "Dispatch", "Rust", "Calls the handler it found")
+                Component(fallback, "Fallback", "Rust", "Answers 404")
+              }
+              Rel(table, dispatch, "Hands the match to")
+              Rel(table, fallback, "No match")
+          docs/architecture/request-lifecycle.mmd: |
+            ---
+            title: Request lifecycle
+            ---
+            flowchart LR
+              req([Request]) --> router[Router]
+              router --> known{Known route?}
+              known -- yes --> handler[Handler]
+              known -- no --> missing[404]
+              handler --> res([Response])
+              missing --> res
+              click router href "src/router.rs"
+              click handler href "src/health.rs"
+      - message: 'fix(api): return 404 for an unknown route'
         days_ago: 1
         files:
-          agents.lock: |-
-            version: 1
-            worktrees:
-              target: main
-              completion: merge
-              slots: 3
+          src/router.rs: |-
+            use crate::{config, health};
+
+            /// Every route this service answers, in the order they are tried.
+            pub fn route(path: &str) -> Response {
+                match path {
+                    "/health" => health::health(),
+                    _ => not_found(path),
+                }
+            }
+
+            fn not_found(path: &str) -> Response {
+                Response::text(404, format!("no route for {path}"))
+            }
   - name: demo-web
     commits:
       - message: 'chore: initial commit'
@@ -186,14 +348,14 @@ fixtures:
             # AGENTS.md
 
             The marketing site for demo-app. Plain HTML and CSS, no build step.
-      - message: 'chore: declare the worktree policy in agents.lock'
+      - message: 'chore: declare the worktree policy in agents.yaml'
         days_ago: 2
         files:
-          agents.lock: |-
-            version: 1
+          agents.yaml: |-
             worktrees:
+              default: isolated
               target: main
-              completion: merge
+              completion: handoff
               slots: 3
 # What the video shows, in order. Edit this list first.
 beats:
@@ -211,8 +373,13 @@ beats:
   - type: api
     clear: 8
     pause: 0.9
+  # The mark is aimed at by glyph, not by character, and both spellings are
+  # named: `mark.sparkle` is `✦` in the default set and a private-use
+  # codepoint in the nerd one, so a spec that hard-codes either stops aiming
+  # the day the other is chosen — which is exactly what three takes died on.
   - say: an agent is placed, in a checkout of its own
-    click: ✦
+    click: ''
+    glyph: '✦'
     in: strip
     expect: new agent
     expect_timeout: 6
@@ -224,7 +391,8 @@ beats:
     expect_timeout: 25
     pause: 1.6
   - say: and named after the work it is doing
-    dclick: ✦
+    dclick: ''
+    glyph: '✦'
     in: strip
     offset: 2
     expect: ▏
@@ -237,11 +405,15 @@ beats:
     pause: 0.7
   - say: asked for something real, and for the commit
     type: add a /ping route to src/router.rs that answers pong, then commit
+    # The hint is the right proof — it is in every cast this ever recorded.
+    # What was wrong was the patience: a cold session takes longer than 20s
+    # to reach it, and the take died on the app being slow, not wrong.
     expect: esc to interrupt
-    expect_timeout: 20
+    expect_timeout: 60
     pause: 1.8
   - say: a second agent, on a different harness
-    click: ✦
+    click: ''
+    glyph: '✦'
     in: strip
     occurrence: 2
     expect: new agent
@@ -253,7 +425,8 @@ beats:
     expect: ctrl\+p commands
     expect_timeout: 25
     pause: 1.8
-  - dclick: ✦
+  - dclick: ''
+    glyph: '✦'
     in: strip
     offset: 2
     expect: ▏
@@ -264,11 +437,16 @@ beats:
     expect: docs
     expect_in: strip
     pause: 0.7
+  # Its own checkout and nothing else. Asking it for the route the *other*
+  # agent is adding is asking about a file it cannot see — isolation is the
+  # point of this demo — and a careful agent then explores, finds nothing,
+  # and the wait below times out with the take.
   - say: asked for something else — this one without a commit
-    type: add a Routes line to README.md listing the health and ping routes
+    type: add a Routes section to README.md listing every route in src/router.rs
     pause: 1.6
   - say: 'what uze delivered to *this* harness: AGENTS.md native, not shimmed'
-    click: ✦
+    click: ''
+    glyph: '✦'
     in: strip
     occurrence: last
     expect: CAPABILITIES
@@ -279,45 +457,97 @@ beats:
   - say: wait for that agent's first edit — the only stretch the cut squeezes
     wait: shell
     until: grep -qs Routes /tmp/demos/demo-app/.worktrees/*/README.md
-    timeout: 150
+    timeout: 300
     settle: 2.0
     pause: 0.2
+  # Every proof below is the narrowest thing on screen that only the state
+  # being proved draws. The code surface's nav row reads `Files  Map
+  # Changes` in every one of its states, and the architect's header lists
+  # every level whether or not you are on one, so neither proves anything —
+  # it is the status bar, and the diff's own header, that do.
   - say: its uncommitted change, in its own checkout
-    expect: CHANGES
-    expect_timeout: 8
-    refuse: no changes
-    pause: 2.6
     key: C-g
-  - key: Escape
-    pause: 0.8
-  - say: what every glyph means, opened from the mark itself
-    click: ''
-    glyph: ±⇧…!✕↑≡
-    in: sidebar
-    expect: uncommitted
-    expect_timeout: 6
-    pause: 3.4
-  - key: Escape
-    pause: 0.8
-  - say: a commit from the timeline, in detail
-    click: ◉
-    in: sidebar
-    offset: 2
-    expect: commit
-    expect_timeout: 6
-    pause: 2.6
-  - key: Escape
-    pause: 0.8
-  - say: the management side, unhurried
-    click: Manage
-    in: sidebar
-    offset: 2
-    expect: Overview
+    expect: 'DIFF ·'
+    expect_timeout: 10
+    refuse: no changes
+    pause: 3.0
+  - say: the same checkout as the tree it sits in, and then as a map of it
+    key: C-e
+    expect: config\.toml
+    expect_timeout: 8
     pause: 2.2
+  - key: m
+    expect: Ranking
+    expect_timeout: 8
+    pause: 2.8
+  # Closed by its own mark, not by Escape. Escape steps *back* — a level, a
+  # selection, a mode — so how many it takes to leave depends on how deep the
+  # scene went, and the beat after it then clicks at a screen that is still
+  # there. The mark is one gesture at any depth, and the strip coming back is
+  # the proof it worked: while a surface is open, the strip is under it.
+  # Both spellings again, for the same reason as the mark above: `mark.close`
+  # is `✕` in the default set and a private-use codepoint in the nerd one.
+  # Every literal glyph in this file is a pair now — aiming at one spelling
+  # is aiming at one glyph set, and the set is a thing the sandbox chooses.
+  - click: ''
+    glyph: '✕'
+    in: strip
+    expect: architect
+    expect_in: strip
+    expect_timeout: 6
+    pause: 0.8
+  # The surface remembers where it was left — but a take opens it exactly
+  # once, so on camera that memory is always empty and the first level is
+  # what it draws. (Driving it by hand first is what makes this assertion
+  # look flaky: `probe` keeps the same client across experiments, a take
+  # never does.) The proof is the file the status bar names, because the
+  # ladder in the header lists every level whether or not you are on one.
+  - say: what the project wrote down about itself, drawn in cells
+    click: architect
+    in: strip
+    expect: system-context\.mmd
+    expect_timeout: 10
+    pause: 3.0
+  # Shift+arrow, not a click: a click on a box's label does not select it,
+  # and a gesture that silently does nothing is what ends a take wrong.
+  - say: a box is a level — and you walk into it
+    key: S-Down
+    expect: enter goes inside
+    expect_timeout: 6
+    pause: 1.4
+  - key: Enter
+    expect: containers\.mmd
+    expect_timeout: 8
+    pause: 3.0
+  - click: ''
+    glyph: '✕'
+    in: strip
+    expect: architect
+    expect_in: strip
+    expect_timeout: 6
+    pause: 0.8
+  # By its chord, not by a label: management is reached through a mark in
+  # the sidebar now, and a glyph is a worse target than the key the product
+  # documents for it. Every proof below is something only that screen draws
+  # — the menu carries each name permanently, so a name proves nothing.
+  - say: the management side, unhurried
+    key: C-o
+    # The modal's own footer, which every screen inside it carries: what it
+    # opens *on* is the screen it was left on, so naming one is naming a
+    # memory. The screen this beat wants is asked for next, explicitly.
+    expect: ctrl\+o manage
+    expect_timeout: 8
+    pause: 1.2
+  - click: Overview
+    in: sidebar
+    offset: 2
+    expect: Harnesses detected
+    expect_timeout: 8
+    pause: 2.0
   - click: Plugins
     in: sidebar
     offset: 2
-    expect: PLUGIN
+    expect: Filter plugins
     expect_timeout: 8
     pause: 2.1
   - click: Extensions
@@ -332,22 +562,12 @@ beats:
     expect: HARNESS
     expect_timeout: 8
     pause: 2.1
-  - click: Profiles
-    in: sidebar
-    offset: 2
-    expect: Harnesses
-    expect_timeout: 8
-    pause: 2.1
-  - click: Overview
-    in: sidebar
-    offset: 2
-    expect: status & health
-    expect_timeout: 8
-    pause: 2.1
-  - click: Work
-    in: sidebar
-    offset: 1
-    expect: agents
-    pause: 1.6
+  # Back where it opened, with both agents still there: the same chord, and
+  # a last frame that is the product rather than a settings screen.
+  - key: C-o
+    expect: architect
+    expect_in: strip
+    expect_timeout: 6
+    pause: 1.8
   - say: and out — the cut stops here, before the screen blanks
     end: C-q
