@@ -12,8 +12,8 @@ about: |
   then accumulated shells — and, because a slot is only free when nobody is
   standing in it, left a live pane inside a checkout that could never be
   given to the next agent. The space also took the dead agent's directory as
-  its own, which is where its caption, its `⇄` and the next placement all
-  read from.
+  its own, which is where its caption and the next placement both read
+  from.
 
   So: the agent's shells go with it, the space's own are untouched, the task
   ends, and the slot is free — *because* nothing is left in it. That last

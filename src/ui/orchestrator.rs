@@ -1343,9 +1343,6 @@ pub(super) enum WorkspaceHit {
     /// A space's header row in the sidebar — click selects it (switching
     /// which space's tabs the tab strip and pane show).
     SelectSpace(SpaceId),
-    /// The `⇄` behind a space's name — flips that header between its label
-    /// and its root (see `WorkspaceModel::roots_shown`).
-    ToggleSpaceRoot(SpaceId),
     /// The fold in front of a space's name — minimizes the space to its
     /// header, or opens it again (see `Remembered::collapsed_spaces`).
     ToggleSpaceCollapsed(SpaceId),
@@ -2267,13 +2264,6 @@ struct Remembered {
     lost_checkouts: BTreeSet<PaneId>,
     /// Whether the sweep for tasks nobody's session restored has run.
     slots_swept: bool,
-    /// The spaces whose header row shows its root instead of its label —
-    /// flipped by the `⇄` behind the name (see
-    /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
-    /// one line wide and a path is the one thing on it that can be any
-    /// length. Remembered across attaches like any other sidebar
-    /// resolution, so an attach does not flip it back.
-    roots_shown: BTreeSet<SpaceId>,
     /// Which tab each agent was last left on: the agent's own tab, or one
     /// of the shells opened beside it in its strip.
     ///
@@ -4090,7 +4080,7 @@ fn space_own_tab(space: &Space, identities: &[AgentIdentity]) -> Option<TabId> {
 /// Where a space currently is: the directory its own shell stands in, and
 /// the root it was opened at while it has none. A shell is a person's way
 /// of moving around, so a `cd` in it moves the space — what its agents are
-/// placed from, what its caption names, and what its `⇄` shows — rather
+/// placed from and what its caption names — rather
 /// than leaving the space pinned to the directory it was created in.
 pub(super) fn space_cwd(space: &Space, identities: &[AgentIdentity]) -> PathBuf {
     space_own_tab(space, identities)
@@ -4660,18 +4650,9 @@ fn toggle_space_collapsed(model: &mut WorkspaceModel, space: SpaceId) {
     model.dirty = true;
 }
 
-/// Flips one space's header between its label and its root. Purely local
-/// state, no server round trip to eventually mark the model dirty — same
-/// as `OpenStatusCatalog`.
-fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
-    if !model.remembered.roots_shown.remove(&space) {
-        model.remembered.roots_shown.insert(space);
-    }
-    model.dirty = true;
-}
-
 /// Folds the sidebar's timeline section to its header, or opens it back
-/// up. Local state, same as `toggle_space_root`.
+/// up. Purely local state, no server round trip to eventually mark the
+/// model dirty — same as `OpenStatusCatalog`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
     // One section open at a time. They stack at the foot of the same
