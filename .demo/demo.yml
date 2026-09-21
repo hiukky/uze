@@ -75,6 +75,10 @@ sandbox:
     - /usr/bin
     - /bin
   env:
+    # UTC, so nothing the harness prints carries the operator's region. A
+    # provider's own status line names the timezone it resets in, and the
+    # leak scan looks for a username and a hostname — a place is neither.
+    TZ: UTC
     PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
   # Named binaries are symlinked into the sandbox from the real PATH.
   # `opencode` is not among them on purpose: its v2 launcher is a `sh`

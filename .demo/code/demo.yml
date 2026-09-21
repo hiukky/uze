@@ -68,6 +68,10 @@ sandbox:
     - /usr/bin
     - /bin
   env:
+    # UTC, so nothing the harness prints carries the operator's region. A
+    # provider's own status line names the timezone it resets in, and the
+    # leak scan looks for a username and a hostname — a place is neither.
+    TZ: UTC
     PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
   # The nerd set, declared here rather than left to whatever the sandbox
   # home happens to hold: it is the set the docs recommend, and the one
