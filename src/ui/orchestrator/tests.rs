@@ -5476,13 +5476,13 @@ mod workspace_tests {
         );
     }
 
-    /// The operator's own tree is where a pull or a push is due, so an
-    /// agent there carries what each would move at the right edge of its
-    /// caption — an arrow for the direction and the count in subscript,
+    /// The operator's own tree is where a pull or a push is due, so the
+    /// space standing in it carries what each would move at the right
+    /// edge of its header — an arrow for the direction and the count,
     /// red for what is to pull and green for what is to push — and only
     /// the halves that have a count.
     #[test]
-    fn an_agent_outside_any_slot_is_captioned_with_what_a_pull_and_a_push_would_move() {
+    fn a_space_outside_any_slot_says_what_a_pull_and_a_push_would_move() {
         let mut model = agent_session_in("/repo");
         model
             .remembered
@@ -5492,60 +5492,90 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows
-            .iter()
-            .position(|row| row.contains("Agent"))
-            .expect("the agent's row");
-        let caption = &rows[agent + 1];
+        let header = |model: &WorkspaceModel| {
+            let Sidebar {
+                rows, hits, buffer, ..
+            } = sidebar(model, &identities_fixture());
+            let at = space_header(&hits, SpaceId(1)).y as usize;
+            let hue = |text: &str| {
+                rows[at].find(text).map(|offset| {
+                    let column = rows[at][..offset].chars().count() as u16;
+                    buffer[(column, at as u16)].fg
+                })
+            };
+            (
+                at,
+                rows.clone(),
+                rows[at].clone(),
+                hue("\u{21e3}"),
+                hue("\u{21e1}"),
+            )
+        };
+
+        let (at, rows, row, pull, push) = header(&model);
         assert!(
-            caption.contains("agent"),
-            "the harness captions the agent: {caption:?}"
+            row.ends_with("\u{21e3}1 \u{21e1}12 \u{2502}"),
+            "the arrows sit at the right edge, one pad off the divider: {row:?}"
         );
+        assert_eq!(pull, Some(theme::color(Token::StateDanger)));
+        assert_eq!(push, Some(theme::color(Token::StateSuccess)));
+        // And no other row says it.
         assert!(
-            caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
-            "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "agent"),
-            theme::color(Token::StateWarning)
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "\u{21e3}"),
-            theme::color(Token::StateDanger)
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "\u{21e1}"),
-            theme::color(Token::StateSuccess)
+            rows.iter()
+                .enumerate()
+                .filter(|(index, _)| *index != at)
+                .all(|(_, row)| !row.contains('\u{21e3}') && !row.contains('\u{21e1}')),
+            "the header is the only row that carries it: {rows:?}"
         );
 
         model
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
-        let caption = &rows[agent + 1];
+        let (_, _, row, ..) = header(&model);
         assert!(
-            !caption.contains('\u{21e3}') && caption.ends_with("\u{21e1}\u{2083} \u{2502}"),
-            "nothing to pull, three to push: {caption:?}"
+            !row.contains('\u{21e3}') && row.ends_with("\u{21e1}3 \u{2502}"),
+            "nothing to pull, three to push: {row:?}"
         );
 
         model
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync::default());
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
-        let caption = &rows[agent + 1];
+        let (_, _, row, ..) = header(&model);
         assert!(
-            !caption.contains('\u{21e1}') && !caption.contains('\u{21e3}'),
-            "in sync says nothing: {caption:?}"
+            !row.contains('\u{21e1}') && !row.contains('\u{21e3}'),
+            "in sync says nothing: {row:?}"
+        );
+    }
+
+    /// It is read from the checkout, not from the agent, so a space's
+    /// agents all stand in the same one and used to print the same two
+    /// numbers each — four in a root is an ordinary day. Said once, on the
+    /// header of the space whose checkout it is about.
+    #[test]
+    fn what_a_pull_and_a_push_would_move_is_said_once_per_checkout() {
+        let mut model = agents_in_the_root_session();
+        model
+            .remembered
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
+        assert_eq!(
+            agent_rows(&hits).len(),
+            4,
+            "two agents, two rows each: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.contains('\u{21e1}')).count(),
+            1,
+            "one row carries it, whatever the agents number: {rows:?}"
         );
     }
 
     /// Inside a slot the remote is the target's business, not the task's:
-    /// whatever the primary's sync reads, a slot's caption never shows it.
+    /// an agent standing in one carries no arrow of its own, whatever the
+    /// space it hangs under reads.
     #[test]
     fn a_slot_never_shows_the_primary_sync() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
@@ -5553,13 +5583,14 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 2, push: 2 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            !rows
-                .iter()
-                .any(|row| row.contains('\u{21e1}') || row.contains('\u{21e3}')),
-            "no arrow in a slot: {rows:?}"
-        );
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        for row in agent_rows(&hits) {
+            let row = &rows[row as usize];
+            assert!(
+                !row.contains('\u{21e1}') && !row.contains('\u{21e3}'),
+                "no arrow on a slot's own rows: {row:?}"
+            );
+        }
     }
 
     /// A shell opened beside an agent is part of that agent's context:
@@ -7191,20 +7222,23 @@ mod workspace_tests {
             "the same ground the space in front stands on: {rows:?}"
         );
 
+        // Minimized and nobody in it, the card is its header alone (see
+        // `only_the_minimized_space_in_front_says_where_it_is`), and the
+        // fade is what gives that one row an edge.
         assert_eq!(
             ground(SpaceId(1), 0),
             crate::ui::theme::faded(Token::SurfaceRaised),
             "a minimized space nobody is in is faded: {rows:?}"
         );
-        assert_eq!(
-            ground(SpaceId(1), 1),
-            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
-            "its caption faded with it: {rows:?}"
-        );
         assert_ne!(
-            ground(SpaceId(1), 1),
+            ground(SpaceId(1), 0),
             theme::color(Token::SurfaceBackground),
             "and it is still a block"
+        );
+        assert_ne!(
+            ground(SpaceId(1), 0),
+            ground(SpaceId(2), 0),
+            "never the ground an open one stands on: {rows:?}"
         );
     }
 
@@ -7296,40 +7330,59 @@ mod workspace_tests {
             .count()
     }
 
-    /// One blank row over every space, the first one included, whatever
-    /// the shape of the space under it.
+    /// A blank row over every space that has something under its header,
+    /// the first one included — and none between two that come to a
+    /// single line, which is what a minimized space nobody is in is.
     ///
     /// The fill alone was tried: every card but the one in front is
     /// faded, so where two faded cards meet there is no edge to find, and
     /// with a column of them it reads as one surface with headers in it
-    /// rather than as a list of blocks. The row over the first card is
-    /// the same argument against the rule above it.
+    /// rather than as a list of blocks. Between two single rows there is
+    /// nothing to mistake for anything — one line is one space — and a
+    /// row of nothing between them spends half the column on the spaces
+    /// nobody is in.
     ///
-    /// Measured over a column that mixes the two shapes a space has, open
-    /// and minimized, because they are drawn by different arms of the
-    /// same loop and each closes its own block.
+    /// Measured over a column that mixes both shapes, because they are
+    /// drawn by different arms of the same loop.
     #[test]
-    fn a_blank_row_stands_over_every_space() {
+    fn the_row_between_two_spaces_closes_when_both_come_to_one_line() {
         let mut model = three_spaces();
         model.first_steps_collapsed = true;
+        // `three_spaces` leaves the third in front, so minimizing the
+        // other two leaves each of them a single row.
+        toggle_space_collapsed(&mut model, SpaceId(1));
         toggle_space_collapsed(&mut model, SpaceId(2));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
-        let mut at: Vec<u16> = (1..=3)
+        let at: Vec<u16> = (1..=3)
             .map(|id| space_header(&hits, SpaceId(id)).y)
             .collect();
-        at.sort_unstable();
 
-        // One agent each: an open space is a header over its two rows, a
-        // minimized one a header over the caption saying where it is, and
-        // each of them closes on the blank row over the next.
-        assert_eq!(at[1] - at[0], 4, "an open space and its row: {rows:?}");
-        assert_eq!(at[2] - at[1], 3, "a minimized one and its row: {rows:?}");
-        for header in &at {
-            assert!(
-                without_chrome(&rows[*header as usize - 1]).is_empty(),
-                "the row over the header at {header} says nothing: {rows:?}"
-            );
-        }
+        assert!(
+            without_chrome(&rows[at[0] as usize - 1]).is_empty(),
+            "the column's own top margin: {rows:?}"
+        );
+        assert_eq!(
+            at[1] - at[0],
+            1,
+            "two single rows stand one under the other: {rows:?}"
+        );
+        assert_eq!(
+            at[2] - at[1],
+            2,
+            "and the row opens again over the one that grew: {rows:?}"
+        );
+        assert!(
+            without_chrome(&rows[at[2] as usize - 1]).is_empty(),
+            "which says nothing: {rows:?}"
+        );
+
+        // Opened, it is no longer a single line and takes its row back.
+        toggle_space_collapsed(&mut model, SpaceId(2));
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let at: Vec<u16> = (1..=2)
+            .map(|id| space_header(&hits, SpaceId(id)).y)
+            .collect();
+        assert_eq!(at[1] - at[0], 2, "a row over it again: {rows:?}");
     }
 
     /// The leading column carries a rail beside the selected space and
@@ -7553,8 +7606,8 @@ mod workspace_tests {
         let two = space_header(&hits, SpaceId(2));
         assert_eq!(
             two.y,
-            space_header(&hits, one).y + 3,
-            "the next space follows the header, its caption and the blank row"
+            space_header(&hits, one).y + 2,
+            "nobody is in it, so the next space follows its header and the blank row"
         );
         assert!(
             driven.sent().is_empty(),
@@ -7601,30 +7654,33 @@ mod workspace_tests {
         assert!(lit, "{folded:?}");
     }
 
-    /// A minimized space keeps a caption under its header saying where its
-    /// work is — the directory, never an agent and never the branch its
-    /// root is on, which its agents say for themselves once it is open.
-    /// Open over its agents, it has no caption at all.
+    /// A minimized space keeps a caption under its header saying where
+    /// its work is — the directory, never an agent and never the branch
+    /// its root is on, which its agents say for themselves once it is
+    /// open — and only while it is the space in front. Open over its
+    /// agents it has no caption at all.
     #[test]
-    fn a_folded_space_caption_names_where_it_is_and_an_open_one_has_none() {
+    fn only_the_minimized_space_in_front_says_where_it_is() {
         let rows_at = |model: &WorkspaceModel, space: SpaceId| {
             let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, space).y as usize;
             (rows[header].clone(), rows[header + 1].clone())
         };
         let mut model = three_spaces();
-        let one = SpaceId(1);
-        let (_, open) = rows_at(&model, one);
+        // `three_spaces` leaves the third in front.
+        let (front, behind) = (SpaceId(3), SpaceId(1));
+
+        let (_, open) = rows_at(&model, front);
         assert!(
             open.contains("shell"),
             "open, the agents follow the header: {open:?}"
         );
 
-        toggle_space_collapsed(&mut model, one);
-        let (_, row) = rows_at(&model, one);
+        toggle_space_collapsed(&mut model, front);
+        let (_, row) = rows_at(&model, front);
         assert!(
-            row.contains("/one") && !row.contains("shell"),
-            "the directory it is in: {row:?}"
+            row.contains("/three") && !row.contains("shell"),
+            "minimized and in front, the directory it is in: {row:?}"
         );
 
         // Known, the branch stays out of it: the row answers where, and a
@@ -7632,12 +7688,19 @@ mod workspace_tests {
         model
             .remembered
             .branches
-            .insert(PathBuf::from("/one"), "main".into());
-        let (_, row) = rows_at(&model, one);
+            .insert(PathBuf::from("/three"), "main".into());
+        let (_, row) = rows_at(&model, front);
         assert!(
-            row.contains("/one") && !row.contains("main"),
+            row.contains("/three") && !row.contains("main"),
             "still the directory: {row:?}"
         );
+
+        // Behind, the name is the whole of it: a path under every space
+        // in a long column is a second column to read past.
+        toggle_space_collapsed(&mut model, behind);
+        let (header, under) = rows_at(&model, behind);
+        assert!(header.contains("one"), "its name: {header:?}");
+        assert!(!under.contains("/one"), "and nothing under it: {under:?}");
     }
 
     /// The scroll bound is measured with the folds, so a column of folded
@@ -7658,8 +7721,8 @@ mod workspace_tests {
         assert!(open > 2, "the column overflows: {open}");
         assert_eq!(
             open - folded,
-            1,
-            "the agent's two rows give way to one caption"
+            2,
+            "nobody is in it, so the agent's two rows give way to nothing"
         );
     }
 

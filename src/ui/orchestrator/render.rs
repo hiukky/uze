@@ -611,6 +611,14 @@ pub(super) fn render_sidebar(
     // the card in front reads as the top or the bottom of whichever
     // neighbour it touches rather than as its own thing. The row over the
     // first card is the same argument against the rule above it.
+    //
+    // Except between two spaces that are each a single row — minimized,
+    // with nobody in them (see `render_space_caption`). A row of nothing
+    // between two rows of something is half the column spent on the
+    // spaces nobody is in, and there is nothing to mistake for anything:
+    // one line is one space. They pack, and the rows open again around
+    // whichever one grows, which is the one in front.
+    let rearranging = model.dragging_space.is_some_and(|dragging| dragging.armed);
     let mut gap_above = rows.slot(1).visible();
     // While the root picker is open it owns the column: the listing it
     // draws is a tree of directories, and side by side with the tree of
@@ -687,7 +695,8 @@ pub(super) fn render_sidebar(
     // unreachable rather than merely out of view. The bound is measured
     // here, where the tree's own window is known, and handed back for the
     // wheel to stay inside (see `scroll_tree`).
-    let overflow = tree_rows(model, session, identities).saturating_sub(rows.remaining());
+    let overflow =
+        tree_rows(model, session, identities, rearranging).saturating_sub(rows.remaining());
     metrics.tree_overflow = overflow;
     rows.scroll_past(model.remembered.tree_scroll.min(overflow));
 
@@ -695,8 +704,17 @@ pub(super) fn render_sidebar(
         .dragging_space
         .filter(|dragging| dragging.armed)
         .and_then(|dragging| dragging.pending);
-    for space in &session.workspace.spaces {
+    for (index, space) in session.workspace.spaces.iter().enumerate() {
         let is_active_space = space.id == session.workspace.selected_space;
+        // The row under this space is also the row over the next one. It
+        // is wanted unless both of them are a single line — and always
+        // while a space is being carried, because it is the one place a
+        // drop can be drawn.
+        let margin = rearranging
+            || !is_one_line(model, session, space)
+            || session.workspace.spaces[index + 1..]
+                .first()
+                .is_none_or(|next| !is_one_line(model, session, next));
         if dropping == Some(PendingDrop::Before(space.id)) {
             draw_space_drop(frame, gap_above);
         }
@@ -707,15 +725,22 @@ pub(super) fn render_sidebar(
         if let Some(header_rect) = header.visible() {
             render_space_header(frame, header_rect, session, space, model, identities, hits);
         }
-        // Minimized — or open with nothing in it — a space keeps the two-row
-        // shape of every item: its header over where its work is. Open over
-        // agents, they are that context, so the header stands alone.
+        // Where a space's work is, under its name. Minimized, only while
+        // it is the one in front: the name is what a person reads down a
+        // column of spaces, and a path under every one of them is a
+        // second column of text to read past to reach the first. Asked
+        // for by selecting it, which is when the answer is worth a row.
+        //
+        // Open with nothing in it, always — there it is not detail under
+        // a name, it is the whole of what the block has to show, and
+        // without it the space is a header over nothing.
         let folded = model.space_folded(space);
-        if folded || agent_tabs_of(space, identities).is_empty() {
+        let empty = agent_tabs_of(space, identities).is_empty();
+        if (folded && is_active_space) || (!folded && empty) {
             render_space_caption(frame, &mut rows, hits, model, session, space, identities);
         }
         if folded {
-            gap_above = rows.slot(1).visible();
+            gap_above = margin.then(|| rows.slot(1).visible()).flatten();
             continue;
         }
 
@@ -744,7 +769,7 @@ pub(super) fn render_sidebar(
                 .collect();
             draw_tree(frame, &mut rows, hits, is_active_space, &agents, &captions);
         }
-        gap_above = rows.slot(1).visible();
+        gap_above = margin.then(|| rows.slot(1).visible()).flatten();
     }
     if dropping == Some(PendingDrop::End) {
         draw_space_drop(frame, gap_above);
@@ -796,30 +821,54 @@ pub(super) fn render_sidebar(
 
 /// The rows the space tree comes to, whether or not the column can show
 /// them all: a header per space, the cwd caption a space with no agent
-/// shows in place of its tree, two rows per agent with the separator row
-/// between the two groups, the blank row over each space, and the
-/// column's own top margin. A minimized space,
+/// shows in place of its tree — and a minimized one shows only while it
+/// is the one in front — two rows per agent with the separator row
+/// between the two groups, the blank row over each space except between
+/// two that come to a single line, and the column's own top margin. A minimized space,
 /// or an open one with no agent, has its header and the caption under it. Measured up front rather
 /// than counted while drawing, because how far the tree may be scrolled
 /// has to be known before its first row is laid out.
-fn tree_rows(model: &WorkspaceModel, session: &Session, identities: &[AgentIdentity]) -> u16 {
-    session
-        .workspace
-        .spaces
+fn tree_rows(
+    model: &WorkspaceModel,
+    session: &Session,
+    identities: &[AgentIdentity],
+    rearranging: bool,
+) -> u16 {
+    let spaces = &session.workspace.spaces;
+    spaces
         .iter()
-        .map(|space| {
+        .enumerate()
+        .map(|(index, space)| {
             let agents = agent_tabs_of(space, identities).len() as u16;
-            let body = if model.space_folded(space) || agents == 0 {
+            // The same conditions `render_sidebar` draws by: a minimized
+            // space nobody is in is its header and nothing else, and two
+            // of those in a row have no blank row between them.
+            let body = if model.space_folded(space) {
+                u16::from(space.id == session.workspace.selected_space)
+            } else if agents == 0 {
                 1
             } else {
                 agent_rows(agents)
             };
-            1 + body + 1
+            let margin = rearranging
+                || !is_one_line(model, session, space)
+                || spaces[index + 1..]
+                    .first()
+                    .is_none_or(|next| !is_one_line(model, session, next));
+            1 + body + u16::from(margin)
         })
         .sum::<u16>()
         // The column's own top margin, which is a row above the first
         // space rather than one of the rows between a pair of them.
         + 1
+}
+
+/// Whether a space comes to a single row: minimized, and not the one in
+/// front, so it has no caption under its header (see
+/// [`render_space_caption`]). What decides whether the row between it and
+/// its neighbour is worth reserving.
+fn is_one_line(model: &WorkspaceModel, session: &Session, space: &Space) -> bool {
+    model.space_folded(space) && space.id != session.workspace.selected_space
 }
 
 /// Where a dragged space would land: an accent hairline across the blank
@@ -947,13 +996,11 @@ struct TreeCaption {
     /// is gone.
     detail: String,
     detail_color: Color,
-    sync: Vec<(String, Color)>,
 }
 
 impl TreeCaption {
     fn resolve(model: &WorkspaceModel, agent: &SidebarAgent<'_>) -> Self {
         let tab = agent.tab;
-        let cwd = &tab.pane.cwd;
         let task = model.tab_task(tab.id);
         let task_mark = task.and_then(|task| task_mark(&model.drawn_state(task)));
         // A checkout removed from under the agent is said in words, not as
@@ -996,7 +1043,6 @@ impl TreeCaption {
             resumable,
             detail,
             detail_color,
-            sync: unisolated_sync_caption(model, cwd),
         }
     }
 }
@@ -1076,10 +1122,16 @@ impl<'a> SidebarAgent<'a> {
     }
 }
 
-/// The row under a minimized or empty space's header, keeping the two-row
-/// shape every item in the column has: the directory the space's work is
-/// in. Lit along with its header, and selecting the space like any
-/// caption.
+/// The row under a minimized or empty space's header: the directory the
+/// space's work is in. Lit along with its header, and selecting the space
+/// like any caption.
+///
+/// Minimized, it is drawn only for the space in front. A name is what a
+/// person reads down a column of spaces, and the path under every one of
+/// them was a second column of text to read past to reach the first —
+/// tiring exactly when the column is long, which is when the names
+/// matter most. Selecting a space is how it is asked for, and the row it
+/// costs is a row the space in front can afford.
 ///
 /// The directory rather than the branch its root is on. A space is a
 /// place, and the fold is what asks about it: opened, its agents answer
@@ -1276,35 +1328,35 @@ fn draw_tree(
                 branch.stem(),
                 Span::raw("  "),
             ];
-            // Right-aligned under the task mark, with the same trailing pad
-            // off the divider: a count pinned to the row's edge keeps its
-            // column as branches vary in length. The way back in, on the
-            // row itself: "resume" puts the task this pane was running into
-            // a slot of its own, via the same picker a new agent goes
-            // through. Offered only while the task is waiting for one (see
+            // Right-aligned under the task mark, with the same trailing
+            // pad off the divider. The way back in, on the row itself:
+            // "resume" puts the task this pane was running into a slot of
+            // its own, via the same picker a new agent goes through.
+            // Offered only while the task is waiting for one (see
             // `lost_task`).
+            //
+            // The only thing this edge carries. What a pull and a push
+            // would move used to stand here too, and it is not the
+            // agent's: it is read from the checkout, so every agent
+            // sharing one — four in a space's own root is an ordinary
+            // day — printed the same two numbers under its own name. It
+            // is said once now, on the header of the space whose checkout
+            // it is about (see `push_trailing_sync`), which is where the
+            // branch went for the same reason.
             const RESUME: &str = "resume";
-            let sync: Vec<Span<'_>> = if caption.resumable {
+            let trailing: Vec<Span<'_>> = if caption.resumable {
                 vec![Span::styled(RESUME, theme::fg(Token::Accent))]
             } else {
-                caption
-                    .sync
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (text, hue))| {
-                        let gap = if index == 0 { "" } else { " " };
-                        Span::styled(format!("{gap}{text}"), Style::default().fg(*hue))
-                    })
-                    .collect()
+                Vec::new()
             };
             // The branch is elided, never cut: a name longer than the column
-            // used to run under the sync caption and off the right edge, so
-            // the one thing the row was pinning there — "3 ahead", "resume"
-            // — was what disappeared.
+            // used to run under the caption and off the right edge, so
+            // the one thing the row was pinning there — "resume" — was
+            // what disappeared.
             {
                 let taken: u16 = spans
                     .iter()
-                    .chain(&sync)
+                    .chain(&trailing)
                     .map(|span| span.width() as u16)
                     .sum::<u16>()
                     + TRAILING_PAD;
@@ -1314,25 +1366,23 @@ fn draw_tree(
                     Style::default().fg(caption.detail_color),
                 ));
             }
-            if !sync.is_empty() {
-                if caption.resumable {
-                    let x = detail_rect
-                        .right()
-                        .saturating_sub(TRAILING_PAD + RESUME.len() as u16);
-                    hits.push((
-                        Rect::new(x, detail_rect.y, RESUME.len() as u16, 1),
-                        WorkspaceHit::ResumeLostCheckout(tab.id),
-                    ));
-                }
+            if !trailing.is_empty() {
+                let x = detail_rect
+                    .right()
+                    .saturating_sub(TRAILING_PAD + RESUME.len() as u16);
+                hits.push((
+                    Rect::new(x, detail_rect.y, RESUME.len() as u16, 1),
+                    WorkspaceHit::ResumeLostCheckout(tab.id),
+                ));
                 let used: u16 = spans
                     .iter()
-                    .chain(&sync)
+                    .chain(&trailing)
                     .map(|span| span.width() as u16)
                     .sum::<u16>()
                     + TRAILING_PAD;
                 let gap = detail_rect.width.saturating_sub(used).max(1);
                 spans.push(Span::raw(" ".repeat(gap as usize)));
-                spans.extend(sync);
+                spans.extend(trailing);
                 spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             }
             if let Some(surface) = surface {
@@ -1695,6 +1745,7 @@ pub(super) fn render_space_header(
                     Style::default().fg(status.color()),
                 ));
             }
+            push_trailing_sync(&mut spans, rect, model, space, identities);
         }
     }
     // The space's own row is a target like any other, so when it is the
@@ -2081,14 +2132,67 @@ pub(super) fn render_status_catalog(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// What a pull and a push would move for an agent outside any slot, when
-/// its branch is the delivery target and something is due either way:
-/// `⇣₁` in the danger hue for what is to pull, `⇡₂` in the success hue
-/// for what is to push, each only while its count is non-zero — the
-/// shape a shell prompt gives the same fact, the count in subscript so
-/// the arrow leads. No word: the two colours say which is which. Empty
-/// inside a slot, on any other branch, without an upstream, or in sync —
-/// a caption that says "nothing to do" says it best by saying nothing.
+/// Pins what a pull and a push would move to the space header's right
+/// edge — the column every row in the sidebar keeps free, the one the
+/// agent rows pin their task mark to.
+///
+/// On the header because that is whose fact it is. It is read from the
+/// checkout, so it is the same two numbers for every agent standing in
+/// one, and the agent rows printed it once each: four agents in a space's
+/// own root is an ordinary day, and the column said `⇣₁₁ ⇡₁₉` four times
+/// under four different names. The branch left those rows for the header
+/// on exactly this argument.
+///
+/// Nothing when there is nothing to move, and nothing for a space whose
+/// own directory is a slot — that checkout belongs to a task, and what
+/// its branch owes upstream is the task's business, not the space's.
+fn push_trailing_sync(
+    spans: &mut Vec<Span<'_>>,
+    rect: Rect,
+    model: &WorkspaceModel,
+    space: &Space,
+    identities: &[AgentIdentity],
+) {
+    let counts = unisolated_sync_caption(model, &space_cwd(space, identities));
+    if counts.is_empty() {
+        return;
+    }
+    let drawn: Vec<Span<'_>> = counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (text, hue))| {
+            let gap = if index == 0 { "" } else { " " };
+            Span::styled(format!("{gap}{text}"), Style::default().fg(hue))
+        })
+        .collect();
+    let used: u16 = spans
+        .iter()
+        .chain(&drawn)
+        .map(|span| span.width() as u16)
+        .sum::<u16>()
+        + TRAILING_PAD;
+    let Some(gap) = rect.width.checked_sub(used) else {
+        return;
+    };
+    spans.push(Span::raw(" ".repeat(gap as usize)));
+    spans.extend(drawn);
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+}
+
+/// What a pull and a push would move for a checkout outside any slot,
+/// when its branch is the delivery target and something is due either
+/// way: `⇣1` in the danger hue for what is to pull, `⇡2` in the success
+/// hue for what is to push, each only while its count is non-zero — the
+/// shape a shell prompt gives the same fact. No word: the two colours say
+/// which is which. Empty inside a slot, on any other branch, without an
+/// upstream, or in sync — a caption that says "nothing to do" says it
+/// best by saying nothing.
+///
+/// Ordinary digits, not the small forms. Those exist so a count can ride
+/// *inside* a line of text without breaking it, and this one does not
+/// ride inside anything — it stands alone at the edge of a row. At that
+/// size two small digits beside an arrow read as a smudge on the arrow
+/// rather than as a number, which is the one thing a count has to be.
 fn unisolated_sync_caption(model: &WorkspaceModel, cwd: &Path) -> Vec<(String, Color)> {
     if !is_unisolated(cwd) {
         return Vec::new();
@@ -2116,12 +2220,7 @@ fn sync_caption(model: &WorkspaceModel, key: &Path) -> Vec<(String, Color)> {
     ]
     .into_iter()
     .filter(|(_, count, _)| *count > 0)
-    .map(|(arrow, count, hue)| {
-        (
-            format!("{}{}", theme::glyph(arrow), text::small_digits(count)),
-            hue,
-        )
-    })
+    .map(|(arrow, count, hue)| (format!("{}{count}", theme::glyph(arrow)), hue))
     .collect()
 }
 
