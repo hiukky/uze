@@ -613,11 +613,10 @@ mod mirror_tests {
     }
 
     #[test]
-    /// The listing says *whether* something newer exists and pays no
-    /// subprocess for it; the detail view says how far, because it is
-    /// already asking Git to describe the revision. Both are the same
-    /// fact, and neither may be a guess.
-    fn a_listing_says_that_it_is_behind_and_the_detail_says_how_far() {
+    /// A marketplace that moved makes the plugin installed from it read as
+    /// behind — answered from the entry the mirror wrote, with no
+    /// subprocess, because every listing pays this read.
+    fn a_plugin_reads_as_behind_once_its_marketplace_has_moved() {
         let home_root = uze_testkit::temp::scratch("freshness-distance");
         let (repository, _first) = marketplace("freshness-distance-src");
         let home = UzeHome::at(home_root.join("uze"));
@@ -670,12 +669,10 @@ mod mirror_tests {
             crate::application::FreshnessState::Behind { commits: None },
             "a listing reports that there is something newer, and counts nothing"
         );
-
-        let inspected = application.plugins().inspect("flow").unwrap();
-        assert_eq!(
-            inspected.plugin.freshness.state,
-            crate::application::FreshnessState::Behind { commits: Some(2) },
-            "the detail view answers how far behind it is"
+        assert!(
+            flow.freshness.established_at_unix.is_some(),
+            "carrying when the comparison was made, which is what makes it \
+             readable as an answer rather than as a guess"
         );
 
         fs::remove_dir_all(&home_root).unwrap();

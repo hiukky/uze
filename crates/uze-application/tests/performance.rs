@@ -9,6 +9,10 @@
 //! another, so a target holding nothing but these measures what it claims
 //! to.
 //!
+//! What each test asserts is exact and the same everywhere: a warm path
+//! takes no live harness probe and no reach for the Git binary. The clock
+//! is a backstop beside those — see `BUDGET`.
+//!
 //! Each test times a command's warm path — a fresh `UzeApplication`, the
 //! way a new invocation is — against a world where anything expensive is
 //! visible: the one harness sleeps half a second per detection probe, and
@@ -37,12 +41,26 @@ use uze_core::{
     trust::AlwaysTrust,
 };
 
-/// Half of what `specs/cli-performance/spec.md` promises a person (50 ms,
-/// release build, their machine): these run unoptimized, in-process, and
-/// still measure single-digit milliseconds on a 4-vCPU WSL VM, so the
-/// ceiling is set where a regression shows rather than where the promise
-/// breaks.
-const BUDGET: Duration = Duration::from_millis(25);
+/// A backstop, not the claim.
+///
+/// What these tests exist to catch is a warm path going *cold* — a live
+/// harness probe, a clone, a `rev-parse` per installed package. Every one
+/// of those is a discrete event, and both are counted exactly below: zero
+/// probes and zero reaches for the Git binary. That is the claim, and it
+/// is the same on every machine.
+///
+/// The clock cannot be. These run unoptimized, and the same warm read
+/// measures 8 ms and 40 ms on one idle 4-vCPU VM and several times that on
+/// a CI macOS runner — so a tight ceiling here fails on the machine rather
+/// than on the code, which is the one thing a gate must never do. It is
+/// set instead where *something expensive happened*: below one probe
+/// (`PROBE_DELAY`), so a path that goes cold in a way the counters somehow
+/// miss still fails, and far enough above the work that a slow runner
+/// does not.
+///
+/// `specs/cli-performance/spec.md` promises a person 50 ms on a release
+/// build. That promise is not what is measured here and never was.
+const BUDGET: Duration = Duration::from_millis(250);
 /// Any live probe on a warm path costs this, so one is enough to fail the
 /// budget on its own, not only the probe counter.
 const PROBE_DELAY: Duration = Duration::from_millis(500);
@@ -63,6 +81,35 @@ fn meter() -> MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+/// Counts the spans `uze-git` opens, one per invocation of the Git binary.
+#[derive(Clone, Default)]
+struct GitCalls(Arc<AtomicUsize>);
+
+impl<S> tracing_subscriber::Layer<S> for GitCalls
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _id: &tracing::span::Id,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if attrs.metadata().name() == "git" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// How many times `body` reached for the Git binary.
+fn git_calls<T>(body: impl FnOnce() -> T) -> (T, usize) {
+    use tracing_subscriber::layer::SubscriberExt;
+    let calls = GitCalls::default();
+    let subscriber = tracing_subscriber::registry().with(calls.clone());
+    let out = tracing::subscriber::with_default(subscriber, body);
+    (out, calls.0.load(Ordering::SeqCst))
+}
+
 const MARKETPLACE: &str = "budget-market";
 const PLUGIN: &str = "flow";
 
@@ -178,11 +225,21 @@ impl World {
             })
             .min()
             .expect("at least one attempt");
-        eprintln!("{label}: best of {ATTEMPTS} warm runs {best:?}");
+        let (_, calls) = git_calls(|| operation(&self.app()));
+        eprintln!("{label}: best of {ATTEMPTS} warm runs {best:?}, {calls} git call(s)");
         assert_eq!(
             self.probes.load(Ordering::SeqCst),
             probes_before,
             "{label}: a warm run probed the harness"
+        );
+        // The exact half of the budget. A warm read answers from what is
+        // on this disk; reaching for Git is how one of these paths has
+        // gone cold before — "one `rev-parse` per installed package put
+        // the machine snapshot over its budget" — and a count says so on
+        // every machine, which a clock does not.
+        assert_eq!(
+            calls, 0,
+            "{label}: a warm read reached for the Git binary {calls} time(s)"
         );
         drop(measuring);
         assert_within_budget(label, best, ATTEMPTS);

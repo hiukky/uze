@@ -58,18 +58,9 @@ impl Plugins<'_> {
             })
             .collect();
         let reconciliation = self.0.reconcile_cached_report(package.id.as_str());
-        let mut plugin = self.0.plugin_summary(&package)?;
-        // The listing says *whether* something newer exists, because that is
-        // all it can afford. Here the distance is worth one more Git read —
-        // this view is already spawning one to describe the revision.
-        if plugin.freshness.state == (FreshnessState::Behind { commits: None }) {
-            plugin.freshness.state = FreshnessState::Behind {
-                commits: self.0.commits_behind(&package),
-            };
-        }
         Ok(PluginInspection {
             revision: self.0.installed_revision(&package),
-            plugin,
+            plugin: self.0.plugin_summary(&package)?,
             capabilities: resources
                 .iter()
                 .map(|resource| PluginCapability {
