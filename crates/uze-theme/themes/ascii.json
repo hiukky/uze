@@ -45,6 +45,7 @@
     "sync.behind": "v",
     "sync.ahead": "^",
 
+    "tree.first": ".-",
     "tree.branch": "|-",
     "tree.last": "`-",
     "tree.vertical": "|",

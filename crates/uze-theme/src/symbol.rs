@@ -207,7 +207,13 @@ vocabulary! {
         Commit = "commit",
 
         // ── structure ──────────────────────────────────────────────────
-        /// A tree row with siblings below it.
+        /// The first tree row in its group, opening the line the rest
+        /// hang from. Distinct from [`Symbol::TreeBranch`], whose stem
+        /// runs *up* as well: at the top of a group that stem points at
+        /// nothing, which reads as a broken line rather than the start of
+        /// one.
+        TreeFirst = "tree.first",
+        /// A tree row with siblings above and below it.
         TreeBranch = "tree.branch",
         /// The last tree row in its group.
         TreeLast = "tree.last",

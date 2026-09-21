@@ -95,6 +95,7 @@
     "commit.head": "◉",
     "commit": "●",
 
+    "tree.first": "┌─",
     "tree.branch": "├─",
     "tree.last": "└─",
     "tree.vertical": "│",
