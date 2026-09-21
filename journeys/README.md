@@ -191,7 +191,8 @@ this, and the linter refuses it rather than the reviewer. Synchronization is
 | `tasks` | the task store UZE writes: `count`, `states`, `checkouts`, `newest_state`, `any_state`, `newest_checkout_in: <capture>`, `one_task_per_checkout` |
 | `process` | `matching:` + `alive:`, scoped to this world's processes; `count:` where one thing is one process, `same_as:`/`more_than: <capture>` where it is not — a login shell forks a child on some hosts |
 | `cmd` | runs a command: `exit:`, `stdout_contains:` — the *subject*, asserted beside the filesystem checks |
-| `capture` | remembers `dirs:`, `tree:`, `processes:` or `task_checkouts:` under a `name:` for a later scene |
+| `tree` | every path under the given roots, by content: `same_as: <capture>` for a "nothing moved" claim, `except:` to drop paths by glob (a lock every command takes and drops is about the command having run, not about what it left behind) |
+| `capture` | remembers `dirs:`, `tree:` (with the same `except:`), `processes:` or `task_checkouts:` under a `name:` for a later scene |
 
 `about:` on a check is what the report prints — write the outcome, not the
 mechanism.

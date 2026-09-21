@@ -1,0 +1,131 @@
+journey: an install that cannot finish leaves nothing of itself behind
+tags: [gate, cli, packages]
+proves: web/content/docs/getting-started.mdx
+about: |
+  Every other journey in this chapter watches an install succeed. The ones
+  that matter for trusting the machine are the ones that do not: a plugin
+  name nobody offers, a marketplace that is no longer reachable. What UZE
+  must never do is get part of the way — bytes in the Store with no receipt,
+  a receipt with no bytes, a name registered against nothing — because the
+  next command reads that state as if somebody meant it.
+
+  So this journey asks for two things it cannot have, and both times reads
+  the whole machine against a snapshot taken when it was last known good:
+  the Store, the records, and the shared skill root every harness reads.
+  Not "the new plugin is absent" — *nothing moved at all*.
+
+  It also asks the marketplace to become unreachable after the fact, which
+  is the case a mirror exists for: what was already delivered must keep
+  working when the repository it came from is gone.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "description": "A marketplace this journey stages.",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "version": "1.0.0",
+        "description": "Canonical: one package, no vendor manifests."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: a marketplace that is a repository, with its one plugin delivered
+    when:
+      - shell: "{uze} setup"
+        check: false
+        say: provision every registered harness
+      - shell: "{uze} market add file://{world}/market"
+        say: |
+          spelled as a URL, so the install goes through the mirror — which
+          is the path a marketplace anyone else publishes actually takes
+      - shell: "{uze} plugin install flow@demo"
+        say: install the one plugin it offers
+    then:
+      - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
+        exists: true
+        about: the Store holds the plugin's bytes
+      - link: "{home}/.agents/skills/flow:commit"
+        resolves_to: flow
+        about: and a harness can reach its skill through the shared root
+      - capture:
+          name: settled
+          tree:
+            - "{uze_home}/store"
+            - "{uze_home}/state"
+            - "{home}/.agents"
+          # Every command takes and drops this, so its mtime is about the
+          # command having run, never about what the command left behind.
+          except: ["state/mutation.lock"]
+        about: |
+          remember the machine exactly as a good install leaves it — this
+          is what both refusals below are read against
+
+  - scene: a plugin the marketplace does not offer is refused, and writes nothing
+    when:
+      - shell: "{uze} plugin install ghost@demo"
+        check: false
+        say: ask for a name that is not in the manifest
+    then:
+      - cmd:
+          run: "{uze} plugin install ghost@demo"
+          exit: 1
+        about: |
+          UZE says no with a status a script can read — `uze plugin install
+          x && …` is not told the install happened
+      - dir: "{uze_home}/store/plugins/demo/ghost"
+        exists: false
+        about: with no directory opened for a package that never existed
+      - tree:
+            - "{uze_home}/store"
+            - "{uze_home}/state"
+            - "{home}/.agents"
+        except: ["state/mutation.lock"]
+        same_as: settled
+        about: |
+          and nothing else moved either — not a receipt, not a registry
+          entry, not a byte of the plugin that *is* installed
+
+  - scene: a marketplace whose repository is gone refuses, and costs nothing already delivered
+    when:
+      - shell: "rm -rf {world}/market"
+        say: the repository the marketplace was registered from disappears
+    then:
+      - cmd:
+          run: "{uze} plugin install flow@demo"
+          exit: 1
+        about: |
+          a plugin that is not on this disk cannot be acquired from a
+          repository that is gone, and UZE says so rather than half-trying
+      - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
+        exists: true
+        about: |
+          while what was already delivered is untouched — the Store is the
+          copy every harness reads, and it stands without its source
+      - link: "{home}/.agents/skills/flow:commit"
+        resolves_to: flow
+        about: and still reachable, which is the whole point of keeping it here
+      - tree:
+            - "{uze_home}/store"
+            - "{uze_home}/state"
+            - "{home}/.agents"
+        except: ["state/mutation.lock"]
+        same_as: settled
+        about: |
+          with the machine still exactly as the good install left it: a
+          failed acquisition is a no-op, not a partial one

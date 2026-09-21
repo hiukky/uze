@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import glob as globlib
 import hashlib
 import json
@@ -890,11 +891,18 @@ class Runner:
 # ── checking the machine ─────────────────────────────────────────────────
 
 
-def snapshot_tree(roots: list[str]) -> dict:
+def snapshot_tree(roots: list[str], ignore: list[str] | None = None) -> dict:
     """Every path under `roots`, with a digest of what it holds — file bytes,
     or a symlink's target. What "nothing was left behind" is measured
     against, and the reason it is a digest rather than a listing: an artifact
-    that survived a removal with different content is still an orphan."""
+    that survived a removal with different content is still an orphan.
+
+    `ignore` drops paths by glob, for the ones a snapshot must not be about:
+    a lock every command takes and drops says nothing about what a command
+    left behind, and a claim that fails on it is failing on the wrong thing.
+    Name them, so that what is excused from a "nothing moved" claim is
+    written in the journey rather than decided here."""
+    ignore = ignore or []
     found = {}
     for root in roots:
         base = Path(root)
@@ -902,6 +910,8 @@ def snapshot_tree(roots: list[str]) -> dict:
             continue
         for path in sorted(base.rglob("*")):
             key = f"{base.name}/{path.relative_to(base)}"
+            if any(fnmatch.fnmatch(key, pattern) for pattern in ignore):
+                continue
             if path.is_symlink():
                 found[key] = f"-> {os.readlink(path)}"
             elif path.is_dir():
@@ -1235,7 +1245,7 @@ class Checker:
 
     def _tree(self, spec: dict) -> tuple[bool, str]:
         roots = spec["tree"] if isinstance(spec["tree"], list) else [spec["tree"]]
-        now = snapshot_tree(roots)
+        now = snapshot_tree(roots, spec.get("except"))
         if remembered := spec.get("same_as"):
             before = self.runner.captures.get(remembered)
             if before is None:
@@ -1400,7 +1410,10 @@ class Checker:
     def _capture(self, spec: dict) -> tuple[bool, str]:
         name = spec["capture"]["name"]
         if roots := spec["capture"].get("tree"):
-            value = snapshot_tree(roots if isinstance(roots, list) else [roots])
+            value = snapshot_tree(
+                roots if isinstance(roots, list) else [roots],
+                spec["capture"].get("except"),
+            )
         elif pattern := spec["capture"].get("dirs"):
             value = sorted(
                 Path(path).name for path in globlib.glob(pattern) if Path(path).is_dir()

@@ -1,0 +1,144 @@
+journey: a branch that no longer replays onto the target is handed back, and lands once it is settled
+tags: [gate, tui, delivery]
+proves: web/content/docs/workspace.mdx
+about: |
+  The target does not hold still while an agent works. An operator commits
+  on main, or a sibling agent delivers, and the branch that was deliverable
+  a minute ago no longer replays onto it.
+
+  UZE does not wait to be asked about this. It keeps a task's branch on the
+  target as the work goes, so the moment the two stop agreeing is the moment
+  the owning agent is told — not the moment somebody presses deliver and
+  finds out. What it must not do is decide: it cannot know which of the two
+  versions was meant, so it leaves the rebase paused exactly where Git left
+  it and hands the agent the only things that let it act — which files, how
+  far the target moved, and what to run.
+
+  A refusal with no way forward is a dead end with better manners, so this
+  journey goes on to do what the message asks. The same button, once the
+  conflict is settled, lands the work it was holding back — carrying the
+  resolution the agent wrote rather than either side's original.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      default: isolated
+      target: main
+      completion: merge
+      slots: 3
+
+scenes:
+  - scene: the target moves under an agent, and UZE says so without being asked
+    when:
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "+  ✦"
+        in: strip
+        offset: 3
+        expect: new agent
+      - click: " new agent "
+        say: place an agent
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'fn main() { serve(8080) }\n' > "$slot/src/main.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): serve on the configured port'
+        say: the agent commits its version of the file
+      - shell: |
+          set -e
+          printf 'fn main() { listen() }\n' > {project}/src/main.rs
+          git -C {project} add -A
+          git -C {project} commit -qm 'refactor(api): listen instead of serving'
+        say: |
+          and the operator commits a different version of the same file on
+          the target, which is what makes the two irreconcilable
+      - wait: screen
+        # Nobody has pressed anything. This arrives because the branch is
+        # kept on the target as the work goes, which is the claim.
+        until: "Your branch no longer rebases onto main"
+        in: pane
+        timeout: 60
+        settle: 1.0
+        say: the agent is told, in its own pane, before anyone asks to deliver
+    then:
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "refactor(api): listen instead of serving"
+        about: the target carries the operator's commit and nothing else
+      - cmd:
+          run: 'git -C "$(ls -d .worktrees/*/ | head -1)" log --oneline --all'
+          stdout_contains: "feat(api): serve on the configured port"
+        about: and the agent's commit is still there, on its own branch
+      - cmd:
+          run: >-
+            cd "$(ls -d .worktrees/*/ | head -1)" &&
+            { test -e "$(git rev-parse --git-path rebase-merge)" ||
+              test -e "$(git rev-parse --git-path rebase-apply)"; } && echo paused
+          stdout_contains: paused
+        about: |
+          the rebase is paused where Git left it, in the agent's own
+          checkout — nothing was aborted to make the report tidy
+      - cmd:
+          run: 'git -C "$(ls -d .worktrees/*/ | head -1)" diff --name-only --diff-filter=U'
+          stdout_contains: "src/main.rs"
+        about: waiting on the one file both sides wrote
+      - tasks: { any_state: conflicted }
+        about: |
+          and the task says a conflict is what happened, rather than saying
+          nothing or reading as merely unfinished
+      - git: { in: "{project}", dirty: false }
+        about: with the project's own checkout never used as the workbench
+
+  - scene: the agent does what it was told, and the same button lands the work
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'fn main() { listen_and_serve(8080) }\n' > "$slot/src/main.rs"
+          git -C "$slot" add src/main.rs
+          GIT_EDITOR=true git -C "$slot" rebase --continue
+        say: |
+          resolve the conflict preserving the intent of both sides and
+          continue the rebase — the procedure the message named
+      - wait: shell
+        until: 'grep -q ''"state": "ready"'' {uze_home}/state/projects/*/agents.json'
+        timeout: 60
+        say: |
+          the next evaluation reads the settled branch as deliverable again,
+          with nobody having told UZE that the conflict was resolved
+      - click: "→ main"
+        say: deliver, now that there is nothing in the way
+        in: strip
+        expect: "→ main ↑"
+        expect_timeout: 90
+        pause: 2.0
+    then:
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "feat(api): serve on the configured port"
+        about: the target now carries the agent's commit
+      - cmd:
+          run: "git -C {project} log --oneline -2"
+          stdout_contains: "refactor(api): listen instead of serving"
+        about: on top of the operator's, rather than instead of it
+      - cmd:
+          run: "git -C {project} show HEAD:src/main.rs"
+          stdout_contains: "listen_and_serve"
+        about: |
+          carrying the resolution the agent actually wrote — what reached
+          the target is neither side's original, which is the only way to
+          tell a settled conflict from a discarded one
+      - tasks: { count: 1, newest_state: integrated }
+        about: and the task is recorded as integrated, not merely closed
+      - git: { in: "{project}", dirty: false }
+        about: with the project's checkout still clean
