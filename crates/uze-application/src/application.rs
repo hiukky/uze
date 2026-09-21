@@ -600,7 +600,9 @@ impl UzeApplication {
             return Some(Revision::Checkout { path: checkout });
         }
         let mirrored = marketplace_catalogue::mirrored_head(&self.home, marketplace)?;
-        let catalogue = self.catalogue(marketplace, &record.source).ok()?;
+        let catalogue = self
+            .catalogue_as_it_stands(marketplace, &record.source)
+            .ok()?;
         let within =
             uze_core::acquisition::marketplace::plugin_subdirectory(&catalogue.manifest, plugin)
                 .ok()?;
@@ -751,6 +753,16 @@ impl UzeApplication {
         source: &PackageSource,
     ) -> Result<marketplace_catalogue::Catalogue> {
         self.marketplace_catalogues.read(name, source)
+    }
+
+    /// `catalogue`, for a reader that must answer without reaching a
+    /// remote — every path a keystroke or a click is waiting on.
+    pub(crate) fn catalogue_as_it_stands(
+        &self,
+        name: &str,
+        source: &PackageSource,
+    ) -> Result<marketplace_catalogue::Catalogue> {
+        self.marketplace_catalogues.read_as_it_stands(name, source)
     }
 
     pub(crate) fn installed_packages(&self) -> Vec<StoredPackage> {

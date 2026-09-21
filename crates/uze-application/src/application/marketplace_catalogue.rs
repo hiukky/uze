@@ -103,9 +103,23 @@ impl Catalogue {
                 materialized,
             } => {
                 let out = materialized.join(directory_name(plugin));
-                if !out.exists() {
-                    let within =
-                        acquisition::marketplace::plugin_subdirectory(&self.manifest, plugin)?;
+                let within = acquisition::marketplace::plugin_subdirectory(&self.manifest, plugin)?;
+                // Asked of the plugin's own root, not of the directory that
+                // holds it. Materialization creates that directory before
+                // it writes anything, so one interrupted part-way leaves it
+                // there empty — and a guard on the directory then answers
+                // "already done" forever, leaving that plugin permanently
+                // unresolvable.
+                let root = if within == "." {
+                    out.clone()
+                } else {
+                    out.join(&within)
+                };
+                if !root.exists() {
+                    // Cleared first: what is there is the residue of a
+                    // materialization that did not finish, and writing over
+                    // it would mix two revisions' files.
+                    let _ = fs::remove_dir_all(&out);
                     acquisition::mirror::materialize_subdirectory(
                         repository,
                         commit,
@@ -164,6 +178,33 @@ impl MarketplaceCatalogues {
                     Err(error) => self.on_disk(name, source, true).ok_or(error)?,
                 },
             },
+        };
+        self.memo
+            .borrow_mut()
+            .insert(name.to_owned(), catalogue.clone());
+        Ok(catalogue)
+    }
+
+    /// The catalogue as it stands on this disk, however old — never
+    /// refilled.
+    ///
+    /// For a reader that must answer *now*: selecting a plugin used to
+    /// reach `read`, which refills an entry past its window, which is a
+    /// `git fetch` to a remote. A click then paid an SSH round trip, and a
+    /// second click during it cancelled the first part-way.
+    ///
+    /// Refreshing belongs to the background pass that already runs when
+    /// the client opens. An answer here is as old as the last one of those,
+    /// which is what the established-at date beside it is for.
+    pub fn read_as_it_stands(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
+        if let Some(catalogue) = self.memo.borrow().get(name) {
+            return Ok(catalogue.clone());
+        }
+        let catalogue = match source {
+            PackageSource::Local { path } => read_in_place(path)?,
+            _ => self
+                .on_disk(name, source, true)
+                .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))?,
         };
         self.memo
             .borrow_mut()
@@ -589,6 +630,67 @@ mod tests {
         assert!(
             cache.read("remote", &source).is_err(),
             "the memo went with it"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A materialization interrupted part-way leaves the directory it
+    /// created and nothing inside it. Asking whether *that* exists answers
+    /// "already done" forever, so the plugin never resolves again — which
+    /// is what a second click during a slow first one produced.
+    #[test]
+    fn a_materialization_that_was_interrupted_is_done_again() {
+        let root = uze_testkit::temp::scratch("catalogue-interrupted");
+        let (_repository, source) = marketplace_repository("cat-interrupted", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        let (_, catalogue) = MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
+
+        // What an interrupted run leaves behind.
+        let abandoned = home
+            .marketplace_cache_dir()
+            .join("remote")
+            .join(MATERIALIZED_DIR)
+            .join("flow");
+        fs::create_dir_all(&abandoned).unwrap();
+
+        let resolved = catalogue.plugin_root("flow").unwrap();
+
+        assert!(
+            resolved.join("plugin.json").is_file(),
+            "the plugin is materialized again rather than left unresolvable"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Selecting a plugin must answer from what is on this disk. Reaching
+    /// a remote there put an SSH round trip inside a click, and a second
+    /// click during it cancelled the first part-way.
+    #[test]
+    fn reading_as_it_stands_answers_an_expired_entry_without_the_source() {
+        let root = uze_testkit::temp::scratch("catalogue-as-it-stands");
+        let (repository, source) = marketplace_repository("cat-stands", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
+
+        // Past its window, and the source gone.
+        let entry = home.marketplace_cache_dir().join("remote");
+        let mut meta: Meta =
+            serde_json::from_slice(&fs::read(entry.join(META_FILE)).unwrap()).unwrap();
+        meta.cached_at_unix_nanos = 0;
+        fs::write(
+            entry.join(META_FILE),
+            serde_json::to_vec_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        fs::remove_dir_all(repository.root()).unwrap();
+
+        let fresh = MarketplaceCatalogues::new(&home);
+        let catalogue = fresh.read_as_it_stands("remote", &source).unwrap();
+
+        assert_eq!(catalogue.manifest.plugins.len(), 1);
+        assert!(
+            fresh.read_as_it_stands("remote", &source).is_ok(),
+            "and it never tries to refill, however old the entry is"
         );
         fs::remove_dir_all(&root).unwrap();
     }

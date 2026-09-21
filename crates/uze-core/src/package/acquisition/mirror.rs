@@ -191,7 +191,13 @@ pub fn materialize_subdirectory(
     let mut arguments = vec![work_tree.as_str(), "checkout", commit, "--"];
     let spec = subdirectory.unwrap_or(".");
     arguments.push(spec);
-    run(&arguments, Some(directory))?;
+    // The destination goes with a failure. Left behind, it is a directory
+    // holding nothing that a caller cannot tell from one holding the
+    // answer.
+    if let Err(error) = run(&arguments, Some(directory)) {
+        let _ = std::fs::remove_dir_all(destination);
+        return Err(error);
+    }
     // The index the checkout wrote belongs to the mirror, not to the
     // answer: left behind, the next materialization would read a state
     // from the last one.

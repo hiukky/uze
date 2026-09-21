@@ -453,7 +453,10 @@ impl Marketplace<'_> {
         }));
 
         for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
-            let Ok(catalogue) = self.0.catalogue(&name, &record.source) else {
+            // As it stands: this list is drawn on every refresh of the
+            // plugins screen, and a refill here is a remote inside a
+            // render.
+            let Ok(catalogue) = self.0.catalogue_as_it_stands(&name, &record.source) else {
                 continue;
             };
             out.extend(catalogue.manifest.plugins.into_iter().map(|entry| {
@@ -491,7 +494,7 @@ impl Marketplace<'_> {
             // clones at a commit.
             let record = uze_core::state::marketplace_get(&self.0.home, marketplace)?
                 .ok_or_else(|| UzeError::UnknownMarketplace(marketplace.to_owned()))?;
-            let catalogue = self.0.catalogue(marketplace, &record.source)?;
+            let catalogue = self.0.catalogue_as_it_stands(marketplace, &record.source)?;
             let plugin_root = catalogue.plugin_root(name)?;
             uze_core::MaterializedPackage::borrowed(
                 plugin_root.clone(),
