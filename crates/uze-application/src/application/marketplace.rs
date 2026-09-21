@@ -613,6 +613,75 @@ mod mirror_tests {
     }
 
     #[test]
+    /// The listing says *whether* something newer exists and pays no
+    /// subprocess for it; the detail view says how far, because it is
+    /// already asking Git to describe the revision. Both are the same
+    /// fact, and neither may be a guess.
+    fn a_listing_says_that_it_is_behind_and_the_detail_says_how_far() {
+        let home_root = uze_testkit::temp::scratch("freshness-distance");
+        let (repository, _first) = marketplace("freshness-distance-src");
+        let home = UzeHome::at(home_root.join("uze"));
+        let application = UzeApplication::new(home.clone(), Vec::new());
+
+        application
+            .marketplace()
+            .add(&format!("file://{}", repository.root().display()))
+            .unwrap();
+        application
+            .marketplace()
+            .install_plugin("flow@mkt", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+
+        // The marketplace moves twice after the install.
+        for subject in ["second", "third"] {
+            fs::write(
+                repository.root().join("plugins/flow/skills/one/SKILL.md"),
+                format!("---\nname: one\ndescription: d\n---\n\nflow {subject}.\n"),
+            )
+            .unwrap();
+            repository.git(&["add", "-A"]);
+            repository.git(&["commit", "-m", subject]);
+        }
+
+        // Age the cached entry so the next catalogue read refills it, which
+        // is what brings the mirror — and the head freshness compares
+        // against — up to date.
+        let entry = home.marketplace_cache_dir().join("mkt");
+        let meta_path = entry.join("catalogue.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        meta["cached_at_unix_nanos"] = serde_json::json!(0);
+        fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+        // A fresh application, the way a new invocation is: the catalogue
+        // is refilled from disk rather than answered from this one's memo.
+        let application = UzeApplication::new(home.clone(), Vec::new());
+        // `list` is the read that refills an expired entry; the plugin
+        // reads deliberately answer from the entry as it stands, so that no
+        // listing pays the network.
+        application.marketplace().list().unwrap();
+
+        let listed = application.plugins().list().unwrap();
+        let flow = listed
+            .iter()
+            .find(|plugin| plugin.active_name == "flow")
+            .expect("flow is installed");
+        assert_eq!(
+            flow.freshness.state,
+            crate::application::FreshnessState::Behind { commits: None },
+            "a listing reports that there is something newer, and counts nothing"
+        );
+
+        let inspected = application.plugins().inspect("flow").unwrap();
+        assert_eq!(
+            inspected.plugin.freshness.state,
+            crate::application::FreshnessState::Behind { commits: Some(2) },
+            "the detail view answers how far behind it is"
+        );
+
+        fs::remove_dir_all(&home_root).unwrap();
+    }
+
+    #[test]
     fn two_plugins_from_one_marketplace_share_one_mirror() {
         let home_root = uze_testkit::temp::scratch("mirror-second");
         let (repository, _first) = marketplace("mirror-second-src");

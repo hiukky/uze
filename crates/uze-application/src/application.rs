@@ -691,6 +691,31 @@ impl UzeApplication {
         }
     }
 
+    /// How many commits the installed revision is behind the one its
+    /// marketplace offers.
+    ///
+    /// The counterpart to `freshness_of`, split off it deliberately: the
+    /// listing needs "there is something newer" and pays no subprocess for
+    /// it, while a detail view is already spawning Git to describe the
+    /// revision and can afford one more question.
+    ///
+    /// `None` whenever the number would be a guess — nothing is behind,
+    /// the marketplace is linked or unpinned, or the mirror cannot place
+    /// the two commits in one history. "Behind" stays true either way; it
+    /// is only the distance that goes missing.
+    pub(crate) fn commits_behind(&self, package: &StoredPackage) -> Option<usize> {
+        let marketplace = package.id.marketplace();
+        let uze_core::ResolvedSource::Git { commit, .. } = &package.provenance.resolved else {
+            return None;
+        };
+        let mirrored = marketplace_catalogue::mirrored_head(&self.home, marketplace)?;
+        uze_core::acquisition::mirror::distance(
+            &marketplace_catalogue::mirror_dir(&self.home, marketplace),
+            commit,
+            &mirrored.commit,
+        )
+    }
+
     /// Refreshes every integration's derived view of the installed package
     /// set. Collects failures instead of propagating them: publication is not
     /// part of package ownership, so one harness failing to rebuild its view
