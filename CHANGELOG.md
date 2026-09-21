@@ -4,6 +4,47 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.7](https://github.com/hiukky/uze/compare/v0.0.0-alpha.6...v0.0.0-alpha.7) - 2026-09-21
+
+### Features
+
+- **extensions:** Add the architect extension and the code surface's map ([#77](https://github.com/hiukky/uze/pull/77)) ([d8dc084](https://github.com/hiukky/uze/commit/d8dc084cf00d30804247f0d43a5f6213a2fe1dd1))
+- **workspace:** Isolate one agent instead of choosing a kind of space ([#79](https://github.com/hiukky/uze/pull/79)) [**breaking**] ([07aad6d](https://github.com/hiukky/uze/commit/07aad6dcf6359604e226ef031a9b7215acabab78))
+- Carry every record across a version, and give every agent its work's state ([#80](https://github.com/hiukky/uze/pull/80)) [**breaking**] ([08e6468](https://github.com/hiukky/uze/commit/08e6468bf1723c0185b3f99fd109cc1f8adff685))
+- **observability:** Keep a journal nobody has to turn on ([#82](https://github.com/hiukky/uze/pull/82)) ([61d4c56](https://github.com/hiukky/uze/commit/61d4c56cae9d57ac8c789a7c4ea9cfd30e065897))
+- **ui:** Read the strip's right end as three zones, not a row of chips ([#83](https://github.com/hiukky/uze/pull/83)) ([f0e4902](https://github.com/hiukky/uze/commit/f0e49025a38c315e2504756e6bddac509b5d967d))
+- **architect:** Make a region legible, and remember where you left off ([#85](https://github.com/hiukky/uze/pull/85)) ([e4c38e6](https://github.com/hiukky/uze/commit/e4c38e6e6680cc0e10d9e85a827196d80c944e83))
+- **code:** Viewport-bounded rendering, cached reads, and a single-row nav ([#84](https://github.com/hiukky/uze/pull/84)) ([efb09b5](https://github.com/hiukky/uze/commit/efb09b57dffcd035ac087e68eaad3d820ded6359))
+- **architect:** Add uze agent artifacts check ([#89](https://github.com/hiukky/uze/pull/89)) ([ce8fd8f](https://github.com/hiukky/uze/commit/ce8fd8f9af26c81f266bf6dabef5b57f3eccc135))
+- **workspace:** Name a request the way its own forge does ([#91](https://github.com/hiukky/uze/pull/91)) ([d3ab490](https://github.com/hiukky/uze/commit/d3ab490949131733c15db90b216e6cf7d10711aa))
+- **plugins:** Report installed freshness against the marketplace mirror ([#88](https://github.com/hiukky/uze/pull/88)) ([818737c](https://github.com/hiukky/uze/commit/818737c9cb60980b35c6765336c8983ebf14234a))
+
+### Fixes
+
+- **workspace:** Recover from a task document this build cannot read ([#74](https://github.com/hiukky/uze/pull/74)) ([aeab1d7](https://github.com/hiukky/uze/commit/aeab1d720d773af5c3c1351724e7418afa760263))
+- **terminal:** Never end a live server that can still serve the client ([#75](https://github.com/hiukky/uze/pull/75)) ([3e1d25f](https://github.com/hiukky/uze/commit/3e1d25f10f05f2d7dfe96496aa331fbe5f230b68))
+- **ui:** Say configured or nothing on a harness card ([#76](https://github.com/hiukky/uze/pull/76)) ([65ba209](https://github.com/hiukky/uze/commit/65ba209220d84c375af0d2838cc0bc2c04915ea7))
+- **workspace:** Close an agent's shell tabs with the agent tab ([#87](https://github.com/hiukky/uze/pull/87)) ([bcd0ff4](https://github.com/hiukky/uze/commit/bcd0ff46b048fd0261674b670e5208ebe1382b22))
+
+### Refactor
+
+- **ui:** Assemble chrome from one widget vocabulary ([#78](https://github.com/hiukky/uze/pull/78)) ([cd8ab4b](https://github.com/hiukky/uze/commit/cd8ab4b93629bbe08d31b67534263b21be8e3cda))
+- **cli:** Move the context verbs under `uze agent` ([#90](https://github.com/hiukky/uze/pull/90)) ([9cfd05d](https://github.com/hiukky/uze/commit/9cfd05d3fc4abb312cce09180368ee563256a497))
+
+### Documentation
+
+- Give every document one home, and one source for the architecture ([#81](https://github.com/hiukky/uze/pull/81)) ([5318a81](https://github.com/hiukky/uze/commit/5318a8149cc3202362af1e9b1d8290a99bb8ecea))
+- **openspec:** Archive seven delivered changes, fix the Lab's settle clock ([#86](https://github.com/hiukky/uze/pull/86)) ([6074674](https://github.com/hiukky/uze/commit/60746742d2722ca6096e969beaa9b84f1292ecda))
+- **web:** Split the workspace pages, add Extensions, and re-record every demo ([#93](https://github.com/hiukky/uze/pull/93)) ([e105d23](https://github.com/hiukky/uze/commit/e105d23a13e1ef6a635eed61bf493865cb6c9eed))
+
+### CI
+
+- **deps:** Pin dtolnay/rust-toolchain to v1 ([#69](https://github.com/hiukky/uze/pull/69)) ([690beac](https://github.com/hiukky/uze/commit/690beac442c99e10e1018909c5c8803272f26004))
+
+### Dependencies
+
+- **deps:** Bump the cargo-dependencies group across 1 directory with 4 updates ([#73](https://github.com/hiukky/uze/pull/73)) ([50ad05a](https://github.com/hiukky/uze/commit/50ad05a79044e672f15ff0b2ba384ad8270267d4))
+
 ## [0.0.0-alpha.6](https://github.com/hiukky/uze/compare/v0.0.0-alpha.5...v0.0.0-alpha.6) - 2026-09-18
 
 ### Features
