@@ -1797,7 +1797,7 @@ precedes every command is held to the same ceiling and to a second claim
 a clock cannot make: run warm, it leaves every file under `UZE_HOME` as it
 found it.
 
-> `crates/uze-application/src/application/performance_tests.rs`
+> `crates/uze-application/tests/performance.rs`
 > `tests/cli/budget.rs::a_warm_read_only_command_writes_nothing_under_uze_home`
 
 ### A marketplace listing never clones
@@ -1809,7 +1809,7 @@ listing, the plugin picker and a plugin's inspection still answer. A
 local marketplace is read where it is, every time.
 
 > `tests/cli/budget.rs::a_marketplace_registered_by_url_is_listed_without_its_repository`
-> `crates/uze-application/src/application/performance_tests.rs::market_list_and_inspect_meet_the_budget_without_the_repository`
+> `crates/uze-application/tests/performance.rs::market_list_and_inspect_meet_the_budget_without_the_repository`
 > `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_local_marketplace_is_read_where_it_is`
 
 ### Every action is one trace, and every entry point is a span

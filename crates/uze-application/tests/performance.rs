@@ -1,6 +1,14 @@
 //! Budget tests for every command `src/command_performance.rs` classifies
 //! `Budgeted`, and for the one read the management screens are made of.
 //!
+//! Its own test target, and that is the whole point: a budget is a claim
+//! about a path, and a wall clock inside the crate's lib-test binary
+//! measures the path *plus* the 186 sibling tests sharing its thread pool,
+//! several of which spawn Git. That reads as a regression on a loaded
+//! machine and passes on an idle one. Cargo runs test targets one after
+//! another, so a target holding nothing but these measures what it claims
+//! to.
+//!
 //! Each test times a command's warm path — a fresh `UzeApplication`, the
 //! way a new invocation is — against a world where anything expensive is
 //! visible: the one harness sleeps half a second per detection probe, and
@@ -13,17 +21,18 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use super::*;
+use uze_application::application::UzeApplication;
 use uze_core::{
+    UzeHome,
     capability::Resource,
     exposure::{ExposureMechanism, ExposurePlan},
-    integration::HarnessDetection,
+    integration::{HarnessDetection, IntegrationPort},
     router::{CompatibilityRoute, HarnessCapabilities},
     trust::AlwaysTrust,
 };
@@ -38,6 +47,22 @@ const BUDGET: Duration = Duration::from_millis(25);
 /// budget on its own, not only the probe counter.
 const PROBE_DELAY: Duration = Duration::from_millis(500);
 const ATTEMPTS: usize = 3;
+
+/// Held for the length of every timed run, so that within this target one
+/// budget is measured at a time.
+///
+/// A dedicated target keeps the rest of the workspace off the clock; this
+/// keeps these ten off each other's. A thread waiting here is blocked, not
+/// spinning, so what it costs the measurement is nothing.
+static METER: Mutex<()> = Mutex::new(());
+
+/// The lock, taken whether or not a previous holder panicked: a poisoned
+/// meter means an earlier budget failed, which the run already reports.
+fn meter() -> MutexGuard<'static, ()> {
+    METER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 const MARKETPLACE: &str = "budget-market";
 const PLUGIN: &str = "flow";
 
@@ -142,6 +167,7 @@ impl World {
     /// probes.
     fn within_budget<T>(&self, label: &str, operation: impl Fn(&UzeApplication) -> T) {
         let _ = operation(&self.app());
+        let measuring = meter();
         let probes_before = self.probes.load(Ordering::SeqCst);
         let best = (0..ATTEMPTS)
             .map(|_| {
@@ -158,6 +184,7 @@ impl World {
             probes_before,
             "{label}: a warm run probed the harness"
         );
+        drop(measuring);
         assert_within_budget(label, best, ATTEMPTS);
     }
 
@@ -165,6 +192,7 @@ impl World {
     /// on a fresh application, zero probes. The caller takes the best over
     /// several worlds.
     fn timed_once<T>(&self, label: &str, operation: impl FnOnce(&UzeApplication) -> T) -> Duration {
+        let _measuring = meter();
         let probes_before = self.probes.load(Ordering::SeqCst);
         let started = Instant::now();
         let app = self.app();
@@ -337,6 +365,7 @@ fn market_link_and_unlink_meet_the_budget() {
 
     let links: Vec<Duration> = (0..ATTEMPTS)
         .map(|_| {
+            let _measuring = meter();
             let app = application();
             let started = Instant::now();
             app.marketplace().link(MARKETPLACE, &market).unwrap();
@@ -349,6 +378,7 @@ fn market_link_and_unlink_meet_the_budget() {
         .map(|_| {
             let app = application();
             app.marketplace().link(MARKETPLACE, &market).unwrap();
+            let _measuring = meter();
             let fresh = application();
             let started = Instant::now();
             fresh.marketplace().unlink(MARKETPLACE).unwrap();

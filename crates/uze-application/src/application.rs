@@ -939,8 +939,6 @@ fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod performance_tests;
-#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tracing_tests;

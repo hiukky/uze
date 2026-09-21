@@ -23,7 +23,7 @@ pub enum PerformanceClass {
     /// Must complete in low milliseconds once its cache is warm, with no
     /// manual action required — see `specs/cli-performance/spec.md`. Each
     /// command in this class has a test in
-    /// `uze_application::application::performance_tests` that times the
+    /// `crates/uze-application/tests/performance.rs` that times the
     /// application call it dispatches to, on a fresh application, in a
     /// world where a live probe or a clone would be visible; the mapping
     /// is `BUDGETED_COMMAND_TESTS`.
@@ -166,31 +166,31 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
 pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "remove",
-        "uze_application::application::performance_tests::removals_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::removals_meet_the_budget",
     ),
     (
         "agent task name",
-        "uze_application::application::performance_tests::the_agent_surface_meets_the_budget",
+        "crates/uze-application/tests/performance.rs::the_agent_surface_meets_the_budget",
     ),
     (
         "status",
-        "uze_application::application::performance_tests::status_meets_the_budget",
+        "crates/uze-application/tests/performance.rs::status_meets_the_budget",
     ),
     (
         "doctor",
-        "uze_application::application::performance_tests::doctor_meets_the_budget",
+        "crates/uze-application/tests/performance.rs::doctor_meets_the_budget",
     ),
     (
         "agent context inspect",
-        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "agent context plan",
-        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "agent context reconcile",
-        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "theme list",
@@ -210,35 +210,35 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "market list",
-        "uze_application::application::performance_tests::market_list_and_inspect_meet_the_budget_without_the_repository",
+        "crates/uze-application/tests/performance.rs::market_list_and_inspect_meet_the_budget_without_the_repository",
     ),
     (
         "market remove",
-        "uze_application::application::performance_tests::removals_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::removals_meet_the_budget",
     ),
     (
         "market link",
-        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::market_link_and_unlink_meet_the_budget",
     ),
     (
         "market unlink",
-        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::market_link_and_unlink_meet_the_budget",
     ),
     (
         "market inspect",
-        "uze_application::application::performance_tests::market_list_and_inspect_meet_the_budget_without_the_repository",
+        "crates/uze-application/tests/performance.rs::market_list_and_inspect_meet_the_budget_without_the_repository",
     ),
     (
         "plugin list",
-        "uze_application::application::performance_tests::plugin_list_and_inspect_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::plugin_list_and_inspect_meet_the_budget",
     ),
     (
         "plugin inspect",
-        "uze_application::application::performance_tests::plugin_list_and_inspect_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::plugin_list_and_inspect_meet_the_budget",
     ),
     (
         "plugin remove",
-        "uze_application::application::performance_tests::removals_meet_the_budget",
+        "crates/uze-application/tests/performance.rs::removals_meet_the_budget",
     ),
 ];
 
@@ -342,27 +342,48 @@ mod tests {
     }
 
     /// A name in `BUDGETED_COMMAND_TESTS` is a claim that a test exists;
-    /// this reads the module the name points into and finds the function,
-    /// so a renamed or deleted test fails here by name instead of leaving
-    /// the classification pointing at nothing.
+    /// this reads the file the name points into and finds the function, so
+    /// a renamed, moved or deleted test fails here by name instead of
+    /// leaving the classification pointing at nothing.
+    ///
+    /// Two spellings, because a budget test sits in one of two places: a
+    /// module inside `uze-application` (`uze_application::application::…`)
+    /// or a test target of its own, named by its path from the workspace
+    /// root. The second is where the ones timing a whole command live —
+    /// see the header of `crates/uze-application/tests/performance.rs` for
+    /// why they cannot share a binary with the crate's other tests.
     #[test]
     fn every_named_performance_test_exists() {
-        let application_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("crates/uze-application/src/application");
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         for (command, test) in BUDGETED_COMMAND_TESTS {
-            let path = test
-                .strip_prefix("uze_application::application::")
-                .unwrap_or_else(|| {
-                    panic!("{command}: {test} is not under uze_application::application")
-                });
-            let mut segments = path.split("::");
-            let module = segments.next().expect("a module segment");
-            let function = segments.last().expect("a function segment");
-            let source = std::fs::read_to_string(application_src.join(format!("{module}.rs")))
-                .unwrap_or_else(|error| panic!("{command}: cannot read module {module}: {error}"));
+            let (location, function) = test
+                .rsplit_once("::")
+                .unwrap_or_else(|| panic!("{command}: {test} names no function"));
+            let file = if location.ends_with(".rs") {
+                workspace.join(location)
+            } else {
+                let module = location
+                    .strip_prefix("uze_application::application::")
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{command}: {test} is neither a path ending in `.rs` nor under \
+                             uze_application::application"
+                        )
+                    })
+                    .split("::")
+                    .next()
+                    .expect("a module segment");
+                workspace
+                    .join("crates/uze-application/src/application")
+                    .join(format!("{module}.rs"))
+            };
+            let source = std::fs::read_to_string(&file).unwrap_or_else(|error| {
+                panic!("{command}: cannot read {}: {error}", file.display())
+            });
             assert!(
                 source.contains(&format!("fn {function}(")),
-                "{command}: BUDGETED_COMMAND_TESTS names {test}, but {module}.rs has no fn {function}"
+                "{command}: BUDGETED_COMMAND_TESTS names {test}, but {} has no fn {function}",
+                file.display()
             );
         }
     }

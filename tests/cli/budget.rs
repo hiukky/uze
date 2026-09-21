@@ -2,7 +2,7 @@
 //! real `uze` binary, an isolated home, and claims about the machine it
 //! leaves behind rather than about how long it took. The ceilings
 //! themselves are held in-process, by
-//! `uze_application::application::performance_tests`, where a run is
+//! `crates/uze-application/tests/performance.rs`, where a run is
 //! not dominated by process start-up and scheduler noise.
 
 use std::{
