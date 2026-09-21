@@ -448,7 +448,7 @@ enum HelpTopic {
 
 /// The commands the root help lists under "Project:" — the project-scoped
 /// half of ADR-019's grammar. Every other visible command is the machine's.
-const PROJECT_COMMANDS: &[&str] = &["install", "remove", "status"];
+const PROJECT_COMMANDS: &[&str] = &["install", "update", "remove", "status"];
 
 /// Whether clap reads `arguments` as a command to run — which makes a
 /// `help` among them one of its values rather than a request for a page.

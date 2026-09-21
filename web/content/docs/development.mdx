@@ -15,8 +15,9 @@ cargo fmt --check
 ```
 
 `make help` lists every wrapper (`make build`, `make test`, `make check`,
-`make coverage`…). `ci.yml` is the source of truth for what gates a merge; treat
-`make check` as a close local proxy, not a guarantee of parity.
+`make coverage`, `make artifacts`…). `ci.yml` is the source of truth for what
+gates a merge; treat `make check` as a close local proxy, not a guarantee of
+parity.
 
 Coverage is enforced too:
 
@@ -61,6 +62,31 @@ python3 journeys/journey.py run  journeys/suites/04-workspace
 Every run writes its evidence under `journeys/.evidence/`: per check, the
 question as written against the value found on the machine. `journeys/README.md`
 has the vocabulary and the rules that decide what a journey is.
+
+## Seeing what uze did
+
+Every action opens a span, and the two processes that outlive the gesture that
+started them — the TUI and the terminal server — keep a journal without being
+asked. It is on by default, because the run worth reading is the one nobody
+expected to have to read:
+
+```bash
+~/.uze/cache/logs/uze.<date>.log         # the TUI
+~/.uze/cache/logs/terminal.<date>.log    # the terminal server
+```
+
+Rolled daily, pruned to seven days and a 64 MB floor, under `cache/` — deleting
+it costs nothing. `UZE_LOG` is both the switch and the filter for a *command's*
+own text:
+
+```bash
+UZE_LOG=info uze doctor              # spans and events on stderr
+UZE_LOG=uze_git=debug uze status     # tracing_subscriber filter syntax
+make observe                         # Jaeger 2 in Docker: UI :16686, OTLP :4318
+```
+
+The OTLP exporter is behind the `telemetry` cargo feature and is not in the
+release binaries. `docs/observability.md` is the full guide.
 
 ## OpenSpec
 
@@ -109,5 +135,5 @@ SBOM and signed provenance on the merge. Versions come from one place —
 ## Marketplace
 
 This repository is itself the official uze marketplace: `marketplace.json` +
-`plugins/**` at the root, with `plugins/uze` — the `uze:init` and `uze:worktree`
-Skills — as the one official plugin.
+`plugins/**` at the root, with `plugins/uze` — the `uze:init`, `uze:worktree`
+and `uze:architect` Skills — as the one official plugin.

@@ -2,20 +2,22 @@
 
 # uze
 
-**Install once. Native everywhere.**
+**Agents come and go. Your work stays.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/hiukky/uze/ci.yml?branch=main&style=flat-square&labelColor=1e1f20&label=CI)](https://github.com/hiukky/uze/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-7d97c9?style=flat-square&labelColor=1e1f20)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-Apache_2.0-A22136?style=flat-square&labelColor=1e1f20)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-e0b567?style=flat-square&labelColor=1e1f20)](https://uze.hiukky.com/docs/roadmap)
 
-A compatibility layer for agent tooling: install a plugin once, share one
-project context, and every harness — Claude, Codex, OpenCode,
-Antigravity — gets it through its own most native surface. Then run them
-side by side, each agent in an isolated checkout of its own.
+A compatibility layer for agent tooling: install a plugin once, write one
+`AGENTS.md`, and every agent you run gets both through its own most native
+surface — Claude Code, Codex, OpenCode and Antigravity today, and whatever
+you switch to next. Then run several at once, each in a checkout of its
+own or beside you in yours, and close the terminal without losing any of
+it.
 
 <p align="center">
-  <img src="web/public/uze-demo.gif" alt="The uze terminal running a Claude Code agent and an OpenCode agent at once, each on its own branch in its own checkout" width="860" />
+  <img src="web/public/uze-demo.gif" alt="The uze terminal: two agents at once, each on its own branch in its own checkout, with the checkout's diff, its map and the project's own architecture diagrams a keystroke away" width="860" />
 </p>
 
 ```sh
@@ -32,7 +34,8 @@ curl -fsSL https://uze.hiukky.com/i | sh
 - [x] Agent & hook portability · Native package delivery
 - [x] Profiles · Environment maintenance · Terminal workspace with isolated agents
 - [x] Reproducible project environments · Theming · Linux & macOS releases
-- [ ] Requirements & dependencies · Update detection · Security & trust
+- [x] Code & Architect extensions · Plugin freshness · Records that survive an upgrade
+- [ ] Requirements & dependencies · Plugin versioning · Security & trust
 - [ ] Windows releases · Runtime context projection · Migration tooling · Ecosystem expansion
 
 ---

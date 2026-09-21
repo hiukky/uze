@@ -1,0 +1,210 @@
+---
+title: Running agents
+description: Where an agent works, how it names its work, how readiness is read from Git, and how finished work comes home
+---
+
+# Running agents
+
+An agent is a tab. `Alt+N` starts one and asks which harness runs it; the row in
+the sidebar says the name of the work and, under it, the harness running it.
+
+## Where an agent works
+
+Every agent starts **where the project says** — in the space's own root unless
+`agents.yaml` declares otherwise — and any single agent can be given a checkout
+of its own afterwards.
+
+| Where it works | What uze does with its work |
+| --- | --- |
+| **In the space's root**, on your branch | Nothing: the commits are already on your branch |
+| **Isolated**, in `.worktrees/<id>` on branch `agent/<id>` | Naming, readiness and delivery, below |
+
+```yaml
+worktrees:
+  default: isolated    # in-place (default) | isolated
+```
+
+An agent in the root shares one tree with everyone else there, the way two
+people in a shell would; uze keeps their conversations apart and nothing else.
+The sidebar draws the two groups apart: the root's agents first, then the
+isolated ones, each in its own hue.
+
+### Isolate
+
+`Isolate` is on an agent's right-click menu, offered only where it can be
+honoured: a Git working tree with a commit to branch from, and an agent that has
+no checkout yet. The agent keeps its identity, its tab and everything uze
+records about it; the harness is relaunched in the new checkout.
+
+- **Isolate** takes your uncommitted work with it — edits to tracked files and
+  new files Git isn't ignoring alike, as a *copy*. Your own tree is byte for
+  byte what you left it. That is the default because what the tree holds when
+  you move an agent is usually what that agent was doing.
+- **Isolate clean** cuts the checkout from the last commit instead, leaving the
+  changes where they are. It stands beside the first only when your tree is
+  dirty, for the case uze cannot see: a tree dirty from something else.
+
+Whether the *harness's own* conversation follows is up to the harness. One that
+keeps a conversation under the directory it ran in — Claude Code does — cannot
+resume it somewhere else, so the agent picks up with a fresh one. Isolate early
+if the thread matters.
+
+## The checkout is a slot
+
+In any Git repository with at least one commit, uze places an isolated agent in
+a checkout of its own **before its harness starts** — nothing required of the
+harness. The primary checkout stays yours.
+
+- A new agent takes a **free slot**: a new branch from the base, tracked and
+  untracked files reset, ignored artifacts (`target/`, `node_modules/`) left in
+  place. A new directory is created only when no slot is free, so the number of
+  checkouts is bounded by peak concurrency, not by how many tasks you run. The
+  second agent in a Rust project doesn't pay for a cold build.
+- Where a slot cannot be acquired — no commit yet, the cap reached, Git refusing
+  — nothing moves and the reason is said. An agent you asked to isolate never
+  lands in your own tree.
+
+<Callout type="warn">
+  A `.worktrees/` slot is uze's. Don't hand-manage the branches inside it — the
+  workspace resets a slot when it hands it to the next agent.
+</Callout>
+
+### What the project declares
+
+One block in `agents.yaml`, at the project root, owned by the primary checkout
+— a worktree's own manifest is ignored:
+
+```yaml
+worktrees:
+  default: in-place        # in-place | isolated — where an agent launched here starts
+  target: main             # branch finished work targets (default: the primary's branch)
+  completion: handoff      # handoff | merge | pr
+  branch: conventional     # the vocabulary an agent's name for its work is judged against
+  link: [.env, .env.local] # ignored files a fresh slot links from the primary
+  setup: pnpm install      # prepares a slot after linking; a failure warns, never blocks
+  gate: cargo test         # run on the rebased commits; non-zero refuses delivery
+  slots: 3                 # cap on concurrent checkouts (default: peak concurrency)
+```
+
+`setup` and `gate` each take one command or a list run in order — the list is
+what makes a failure say which step failed. Full reference:
+[`agents.yaml`](/docs/project-files#worktrees).
+
+## The agent names its work
+
+`agent/<id>` tells a reviewer nothing, and nothing uze knows at launch can do
+better. The party that knows what the work is, is the agent doing it — so the
+agent says so, as its **first action**, before it reads a file:
+
+```bash
+uze agent task name fix/branch-naming
+```
+
+The branch becomes `fix/branch-naming` and the label beside it in the sidebar
+reads `branch naming`: one name for the two people who read it, the reviewer
+meeting the pull request and you reading three agents in a strip. There is no
+identifier argument, so an agent can only ever name its own work.
+
+The moment is half the rule: a name states an *intention*, which the agent holds
+from the request you gave it, and nothing it reads afterwards makes the name
+easier to choose. So it is the first thing the "Concurrent work isolation"
+section projected into your `AGENTS.md` asks for.
+
+Two mechanisms catch what that misses, and neither asks a harness for anything:
+
+- **Work that reaches a commit still unnamed** is named from that commit's
+  subject, judged against the same vocabulary. It reads
+  `feat/answer-ping-with-pong` where an agent would have chosen two words.
+- **A published branch never carries the identifier.** A task nobody named is
+  pushed under a name derived from its first commit.
+
+**A name nobody generated is never overwritten.** Rename a branch by hand with
+`git branch -m` and uze adopts it at the next evaluation; nothing automatic
+renames it again. **Asking renames, however often you ask** — the last name
+given is the one that stands.
+
+### The vocabulary is yours to close
+
+A proposed name has to be validated, and only a closed set can be. `branch:`
+takes a preset — `conventional`, `gitflow`, `flat` — or your own list of types,
+which is the answer when a preset almost fits: a team that wants `ui` declares
+`ui` rather than mislabelling the work as `style`.
+
+```yaml
+worktrees:
+  branch: [feat, fix, docs, ui]
+```
+
+Undeclared, it is `agent`: work is not named, the branch stays the generated
+identifier, and everything above is off.
+
+## Readiness is read, not announced
+
+Where an agent's work stands comes from Git in the checkout it sits in — never
+from something the agent claims.
+
+| State | What it means |
+| --- | --- |
+| `Running` | Live, nothing observed yet |
+| `Uncommitted` | Changes in the checkout that aren't committed |
+| `Ready` | Commits ahead of the base, clean tree |
+| `Integrating` | Delivery in progress |
+| `Conflicted` | A rebase stopped; it stays paused in the agent's own checkout |
+| `GateFailed` | The declared gate failed on the rebased commits |
+| `Integrated` | The work is in the target |
+| `Parked` | The agent is gone and the checkout still holds work |
+| `Closed` | The agent is gone and had nothing to deliver |
+
+Every agent has a state. What only an **isolated** agent has is a branch uze
+cut, and therefore a delivery uze may run — so only `Ready` and `GateFailed`
+there draw the deliver button. The branch an agent in your own checkout is on is
+yours, and rebasing it onto the target is yours to ask for.
+
+## Delivery
+
+Delivery is an explicit action (`Alt+I`), one task at a time, under the
+repository write lock. uze rebases the branch onto the target's tip **inside the
+task's own checkout**, runs the declared gate on the rebased commits, and then
+does what `completion:` says:
+
+- **`handoff`** (default) — the branch is left for a person to integrate.
+  Nothing reaches the target without someone deciding it should.
+- **`merge`** — the target is fast-forwarded, once the gate passes.
+- **`pr`** — the branch is pushed and a pull request opened through `gh`, or a
+  merge request through `glab`, whichever is on `PATH`. The strip names it the
+  way the remote's own forge does until it has a number.
+
+A failed gate or a conflict leaves the target untouched. A conflict returns the
+task to the agent that owns it — that agent holds the intent behind the change —
+rather than asking you to resolve someone else's rebase.
+
+## Work that outlives its agent
+
+An agent can end with commits still on its branch: you closed the tab, the
+harness exited, the machine rebooted. That task becomes **parked**, and its
+checkout is not handed to anyone else. `Alt+P` opens the preserved list:
+
+| Key | Action |
+| --- | --- |
+| `r` | Resume — start a new agent in that same checkout, on the same branch |
+| `i` | Deliver it now |
+| `f` | Finish — close the task and free the slot, leaving the branch |
+| `d` then `y` | Discard. The one action that destroys work, so it asks twice |
+
+## Subagents inside a session
+
+A harness that spawns its own writing subagents can still collide with itself.
+uze projects a small managed region into the project's `AGENTS.md` describing
+the checkout the agent is already in, so a subagent knows not to isolate a
+second time on top of it, and knows to commit on its own branch instead of
+integrating its work itself.
+
+That projection is the only thing this feature writes into your project, and it
+lives in its own delimited region — see
+[Project context](/docs/concepts/context).
+
+<Cards>
+  <Card title="Extensions" href="/docs/workspace/extensions" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
+  <Card title="CLI reference" href="/docs/cli" />
+</Cards>

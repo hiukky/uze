@@ -551,7 +551,8 @@ impl CodeView {
     pub fn absorb(&mut self, answer: FileAnswer) {
         match answer {
             FileAnswer::Listed { path, entries } => match entries {
-                Ok(entries) => {
+                Ok(mut entries) => {
+                    entries.retain(files::is_shown);
                     self.files.listings.insert(path.clone(), entries);
                     if self.selected.is_none() {
                         self.selected = self

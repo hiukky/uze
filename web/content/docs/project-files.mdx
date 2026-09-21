@@ -47,12 +47,13 @@ entry survives `uze <plugin>@<market>`.
 ### `worktrees`
 
 What this project does with the work of an agent uze placed in an isolated
-checkout — see [The agent workspace](/docs/workspace). The layout of those
+checkout — see [Running agents](/docs/workspace/agents). The layout of those
 checkouts (`.worktrees/<id>`, branch `agent/<id>`) is fixed infrastructure and
 is deliberately *not* declared here.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `default` | `in-place` | Where an agent launched here starts: `in-place` in the space's own root, or `isolated` in a checkout of its own |
 | `target` | the branch the primary checkout is on when the task is created | The branch finished work targets |
 | `completion` | `handoff` | `handoff` (leave the branch), `merge` (fast-forward the target), `pr` (push and open a request) |
 | `branch` | `agent` | The vocabulary an agent's own name for its work is judged against: a preset (`conventional`, `gitflow`, `flat`, `agent`) or your own list of types. `agent` names no work |
@@ -66,6 +67,7 @@ when a failure should say *which* step failed:
 
 ```yaml
 worktrees:
+  default: isolated
   target: main
   completion: pr
   branch: conventional

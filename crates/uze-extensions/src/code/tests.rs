@@ -651,6 +651,33 @@ fn a_directory_is_read_only_when_it_is_opened() {
     assert_eq!(item_names_of_tree(&view), ["src", "main.rs", "README.md"]);
 }
 
+/// `.git` is the repository's own database, not the project — and in a
+/// linked worktree it is a file rather than a directory, so both spellings
+/// have to go. Every other dotfile is content and stays.
+#[test]
+fn the_tree_shows_every_dotfile_but_the_repository_itself() {
+    let machine = FakeMachine::default()
+        .with_directory("/w/.git")
+        .with_file("/w/.git/HEAD", "ref: refs/heads/main\n")
+        .with_directory("/w/.github")
+        .with_file("/w/.gitignore", "target\n")
+        .with_file("/w/README.md", "# hi\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+
+    assert_eq!(
+        item_names_of_tree(&view),
+        [".github", ".gitignore", "README.md"]
+    );
+
+    let worktree = FakeMachine::default()
+        .with_file("/w/.git", "gitdir: /repo/.git/worktrees/one\n")
+        .with_file("/w/main.rs", "fn main() {}\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &worktree);
+    assert_eq!(item_names_of_tree(&view), ["main.rs"]);
+}
+
 fn item_names_of_tree(view: &CodeView) -> Vec<String> {
     view.files
         .rows(&view.root)

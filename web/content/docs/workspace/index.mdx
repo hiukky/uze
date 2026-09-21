@@ -1,0 +1,119 @@
+---
+title: The agent workspace
+description: A persistent terminal that hosts your agent sessions — spaces, tabs and panes that outlive the client
+---
+
+# The agent workspace
+
+Running `uze` with no arguments opens the **workspace**: a persistent terminal
+that hosts your agent sessions, side by side.
+
+```bash
+$ uze                    # attach the workspace (starts its server when needed)
+$ uze terminal attach    # the same thing, explicitly
+$ uze terminal stop      # stop this workspace's session and its processes
+```
+
+<Callout type="info">
+  The workspace is **experimental** (ADR-038). The runtime, its protocol, and the
+  shortcuts below may still change.
+</Callout>
+
+## Spaces, tabs, panes
+
+Three levels, and no more:
+
+| Level | What it is |
+| --- | --- |
+| **Space** | One directory you work in. The sidebar lists them; `Alt+S` adds one |
+| **Tab** | One session inside a space — a plain shell, or an agent |
+| **Pane** | The live terminal a tab draws, owned by the runtime server |
+
+A shell opened while an agent is in front of you belongs to that agent: it
+starts in the agent's own checkout, is shown with it, and **closes with it**.
+A space keeps its own shells — the one it opened with, and any opened with no
+agent selected — and closing an agent never touches those.
+
+Running `uze` *inside* one of the workspace's own panes doesn't nest a second
+client: it opens a space for that directory in the uze already running, and
+exits.
+
+## Nothing you leave is lost
+
+The panes belong to a local server, not to the window you are looking at.
+Closing the client — switching to management, detaching, quitting the terminal
+emulator — leaves every process running, and the next attach finds them exactly
+where they were.
+
+The server outlives its client, but not the machine. After a reboot, the next
+`uze` brings the spaces, tabs and agents back, each relaunched in the checkout
+it was working in and each **resuming the session it was in** rather than
+starting a stranger in a directory full of half-done work.
+
+That resume is done by the shim `uze setup <harness>` installs: its presence is
+what turns this on, and removing it turns it off. A conversation is remembered
+per task and per harness in uze's own state, never inside a checkout — so
+resetting a checkout cannot take it, and a recycled slot starts fresh.
+
+What ties a process to its task is the launch, not the directory. A harness you
+start by hand carries no identity and starts exactly as it would without uze; so
+does one an agent starts from inside its own session. Where the resume cannot be
+done, the agent still starts and the tab says why — the
+[harness matrix](/docs/harnesses) has the per-harness column.
+
+## Shortcuts
+
+| Keys | Action |
+| --- | --- |
+| `Alt+N` | New agent — pick which harness starts |
+| `Ctrl+T` | New shell tab |
+| `Alt+S` | New space |
+| `Ctrl+W` | Close the selected tab |
+| `F2` | Rename what is selected |
+| `Alt+↑` / `Alt+↓` | Previous / next agent |
+| `Ctrl+↑` / `Ctrl+↓` | Previous / next space |
+| `Ctrl+G` | The checkout's changes — [Code](/docs/workspace/extensions#code) |
+| `Ctrl+E` | The checkout's files — [Code](/docs/workspace/extensions#code) |
+| `Alt+A` | The project's diagrams — [Architect](/docs/workspace/extensions#architect) |
+| `Alt+I` | [Deliver](/docs/workspace/agents#delivery) the selected task |
+| `Alt+Shift+I` | Deliver every ready task in the space |
+| `Alt+P` | [Preserved work](/docs/workspace/agents#work-that-outlives-its-agent) |
+| `Ctrl+O` | Switch to management (and back) |
+| `F1` | What is reachable right now |
+| `Ctrl+Q` | Quit |
+
+Everything else typed goes to the pane. Every one of these is rebindable — see
+[Shortcuts](/docs/keys). Tabs and spaces can be renamed inline and reordered by
+dragging; right-click gives the same actions as a menu.
+
+## The strip's right end
+
+Three zones, divided by hairlines, each answering a different question about the
+agent the strip belongs to:
+
+| Zone | Answers |
+| --- | --- |
+| **Delivery** | What the work is *doing* — its state, and the request it became (`PR`/`MR` before it has a number, `#41` after) |
+| **Changes** | What it has *changed* — the count, and the way into the diff |
+| **Actions** | What can be *done* to it — the extension chips |
+
+The header carries one line, only ever about work in flight, and it goes when
+the work ends. Outcomes are toasts, stacked top-right over the pane: they carry
+the seconds they have left, and the one that needs an answer stays until it gets
+one.
+
+## Prompt history
+
+What you send to an agent tab is recorded per workspace, and the management view
+lists it — click an entry to jump back to the tab it was typed in.
+
+It is a convenience log, not a transcript: uze forwards keystrokes to a
+pseudoterminal whose contents it never interprets, so entries can be missing and
+nothing treats the history as complete. The file is owner-only, and a
+workspace's history can be cleared outright.
+
+<Cards>
+  <Card title="Running agents" href="/docs/workspace/agents" />
+  <Card title="Extensions" href="/docs/workspace/extensions" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
+</Cards>

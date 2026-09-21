@@ -154,8 +154,12 @@ html > body[data-scroll-locked] {
    carry one dark fill and the page flips them here — not a media query inside
    the SVG, which would follow the OS and ignore the site's own theme toggle.
    Only the two monochrome marks: Claude Code carries its brand orange and
-   Antigravity's favicon is full-color, and inverting either would be wrong. */
-.dark .harness-table-icon[src$='codex.svg'],
-.dark .harness-table-icon[src$='opencode.svg'] {
+   Antigravity's favicon is full-color, and inverting either would be wrong.
+
+   Matched by what the file *is*, not by the class a table happens to give it:
+   the docs matrix and the landing page's own draw the same mark through two
+   different classes, and keying on one of them left the other invisible. */
+.dark img[src$='/harnesses/codex.svg'],
+.dark img[src$='/harnesses/opencode.svg'] {
   filter: invert(1);
 }

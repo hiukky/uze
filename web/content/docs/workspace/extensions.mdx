@@ -1,0 +1,141 @@
+---
+title: Extensions
+description: The two surfaces built into the workspace — Code, for a checkout, and Architect, for what the project wrote down about itself
+---
+
+# Extensions
+
+An extension is a surface built into the workspace, opened over the pane the
+active tab is standing in. Two ship today:
+
+| Extension | Opens with | Answers |
+| --- | --- | --- |
+| **Code** | `Ctrl+G`, `Ctrl+E`, or the `code` button | What this checkout changed, what is in it, what it is made of, and what happened to it |
+| **Architect** | `Alt+A`, or the `architect` button | What somebody wrote down about this project's architecture |
+
+Both buttons sit together at the right end of the tab strip — one group, because
+each opens the same kind of errand. They are compiled into the binary, not
+installed; `Ctrl+O → Extensions` lists what is there.
+
+An extension never draws and reaches nothing it was not handed: it describes a
+view, and the workspace renders it. Running Git, reading a file, resolving
+`$HOME` all arrive through a host it is given, which is why an extension is a
+different trust class from plugin bytes a harness reads (ADR-041).
+
+Every Git read they make runs on a thread and answers through a channel, so
+nothing waits on a repository — a large history never blocks a keystroke.
+
+## Code
+
+<Demo
+  src="/uze-code.gif"
+  poster="/uze-code-poster.png"
+  alt="The code surface: an agent's changed files on the left and a syntax-highlighted diff on the right, then the file tree, then the checkout drawn as a treemap."
+  caption="Ctrl+G opens the changes, Ctrl+E the files, m the map — one selection across all three."
+/>
+
+Three halves of one checkout, and **one selection that survives the switch
+between them**. That is the whole reason it is one extension and not three: the
+flow is agent first → diff → and only last, touch the real file, so "I see it in
+the diff, let me fix that line" is the most-crossed seam there is.
+
+| Half | Shows |
+| --- | --- |
+| **Changes** | What `git status` reports, with a syntax-highlighted diff of the selected file |
+| **Files** | The tree, growing as directories are opened. A file opens as **Preview** (rendered, for a document) or **Source** |
+| **Map** | The checkout as a treemap: where its lines are, and which of them are hot |
+
+The fourth thing it draws is not a half but a **section of the workspace's own
+sidebar**: the commit timeline, saying what has landed in the target and what is
+still ahead, with any commit openable in detail.
+
+Scope is the checkout the tab is *in*, and nothing else. An agent uze isolated
+works in `.worktrees/<name>`, and listing linked worktrees here would put every
+other agent's diff inside a tab that owns exactly one of them.
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+G` | Open the changes; again to close |
+| `Ctrl+E` | Switch to the files |
+| `m` | The map |
+| `p` | Preview ⇄ Source |
+| `↑` `↓` `←` `→` | Move, collapse, expand |
+| `e` | Edit the open file |
+| `Ctrl+S` | Save (while editing), `Esc` to leave |
+| `d` then `y` | Delete the selected file |
+
+Reading is what it is for; `e` and `d` are the two things it writes, and they
+are the only callers of the host's two writing capabilities.
+
+## Architect
+
+<Demo
+  src="/uze-architect.gif"
+  poster="/uze-architect-poster.png"
+  alt="The architect surface: a C4 diagram drawn in terminal cells on a board, a box selected and lighting what it connects to, then a level walked into."
+  caption="Alt+A opens it over the workspace; drag the board to move it, click a box to light what it connects to."
+/>
+
+A project's architecture, drawn in cells. Mermaid source — flowcharts, C4 views,
+sequences — becomes a diagram a terminal can show **without a graphics
+protocol**, and owning the layout buys what an image cannot:
+
+- every box is **addressable**, so a click selects it and lights what it
+  connects to;
+- a box carrying a link **opens the code surface** on that path;
+- a box whose alias another C4 view draws the inside of is a **level to walk
+  into**.
+
+It is a **board, not a document**: the drawing is larger than the screen in both
+directions, so it is moved rather than scrolled, with a minimap saying where the
+view is.
+
+### What the project declares
+
+One directory, in `agents.yaml`:
+
+```yaml
+artifacts:
+  path: docs/architecture
+```
+
+Everything else is read off the files themselves — the area from the diagram's
+first word, the name from a `title:` front matter, the levels from which C4
+boundary carries which alias. There is no index beside the files to keep in step
+with them. See [`artifacts`](/docs/project-files#artifacts) for the full rules.
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| `Alt+A` | Open it; again to close |
+| `←` `↑` `→` `↓` | Move the board |
+| `Shift` + arrows | Move the selection on it |
+| `Enter` | Go into the selected box — the level below it, or the code it names |
+| `Backspace` | Back out one level |
+| `Tab` / `Shift+Tab` | Next / previous diagram |
+| `o` | The list of artifacts |
+| `g` | Unicode ⇄ ASCII ⇄ the Mermaid source |
+
+### Proving a diagram still draws
+
+A diagram that stopped routing is a real regression and nobody sees it by
+looking. The check draws every file the project declares the way the surface
+would:
+
+```bash
+$ uze agent artifacts check          # --format text | json
+```
+
+Three verdicts: `drawn`, `unrouted` (the boxes are there but an edge found no
+path — the relation is simply absent), and `undrawable`. Both failures exit
+non-zero, so it belongs in a project's gate. Writing one of these is the subject
+of the `uze:architect` Skill in the official plugin.
+
+<Cards>
+  <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="Shortcuts" href="/docs/keys" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files#artifacts" />
+</Cards>
