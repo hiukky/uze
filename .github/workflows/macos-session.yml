@@ -1,0 +1,105 @@
+# A macOS session you drive by hand.
+#
+# This is not a gate and never runs on a push: it borrows a `macos-15`
+# runner — a VM on genuine Apple Silicon, under Apple's own Virtualization
+# framework — and leaves it open long enough for a person to install uze
+# the way a user does, and to look at the TUI in a real terminal emulator.
+#
+# It exists because three claims in `web/content/docs/getting-started.mdx`
+# are marked "not verified", and the only way to strike them is for
+# somebody to be at the machine. The automated half of that belongs in
+# `ci.yml`; this file is the half a screen has to answer.
+#
+# Nothing here is reachable from the internet. The runner joins a private
+# tailnet and the desktop answers only on that network, because the
+# alternative — a public tunnel whose hostname lands in the run log of a
+# public repository — is obscurity standing in for a credential.
+#
+# Two repository secrets: `TS_AUTHKEY` (an ephemeral Tailscale auth key)
+# and `VNC_PASSWORD`. Both are secrets rather than inputs, since an input
+# is echoed in the run log. `permissions: {}` drops the job's token, so
+# the session is worth nothing to anyone who reaches it anyway.
+name: macOS session
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long to hold the session open (the job's own cap is 360)
+        default: '180'
+
+permissions: {}
+
+jobs:
+  session:
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      # The point is the installer, not cargo: this is the path a reader of
+      # the README takes, and the one no suite covers today.
+      - name: Install uze the way a user does
+        run: |
+          curl -fsSL https://uze.hiukky.com/i | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: What the machine says about it
+        run: |
+          uze --version
+          uze setup || true
+          uze doctor || true
+
+      # Terminal.app ships with macOS; these two are the ones whose own
+      # quirks are worth seeing, and brew is already on the image.
+      - name: Terminals to judge the TUI in
+        run: brew install --cask iterm2 ghostty
+
+      # The runner's own user owns the console session, so the desktop is
+      # opened as a second admin — macOS refuses to reset a SecureToken
+      # user's password, which is why this is a new account rather than
+      # `runner` with a password set on it.
+      - name: Open a desktop
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          sudo dscl . -create /Users/tester
+          sudo dscl . -create /Users/tester UserShell /bin/zsh
+          sudo dscl . -create /Users/tester RealName "tester"
+          sudo dscl . -create /Users/tester UniqueID 1001
+          sudo dscl . -create /Users/tester PrimaryGroupID 20
+          sudo dscl . -create /Users/tester NFSHomeDirectory /Users/tester
+          sudo dscl . -passwd /Users/tester "$VNC_PASSWORD"
+          sudo dseditgroup -o edit -a tester -t user admin
+          sudo createhomedir -c -u tester > /dev/null
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on -users tester -privs -all -restart -agent
+
+      # An ephemeral key so the node removes itself from the tailnet when
+      # the runner goes away, rather than accumulating dead machines.
+      #
+      # Pinned to a commit rather than `@v3`: a tag can be repointed, and
+      # this action is handed the auth key. The job carries no token, so
+      # that key is the whole blast radius — which is the argument for
+      # pinning, not against it.
+      - name: Join the tailnet
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --hostname=uze-macos-session --accept-routes=false
+
+      - name: Where to find it
+        run: |
+          address=$(tailscale ip -4)
+          echo "::notice title=Desktop::VNC to ${address}:5900 as user 'tester'"
+
+      # Through the environment rather than interpolated into the script,
+      # and checked before it is used: bash re-evaluates the contents of a
+      # variable inside `$(( ))`, so arithmetic is a second way in for the
+      # text an expression interpolation was avoided for.
+      - name: Hold it open
+        env:
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          case "$MINUTES" in
+            ''|*[!0-9]*) echo "minutes must be a whole number" >&2; exit 1 ;;
+          esac
+          sleep $(( MINUTES * 60 ))
