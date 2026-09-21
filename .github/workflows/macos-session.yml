@@ -75,8 +75,13 @@ jobs:
 
       # An ephemeral key so the node removes itself from the tailnet when
       # the runner goes away, rather than accumulating dead machines.
+      #
+      # Pinned to a commit rather than `@v3`: a tag can be repointed, and
+      # this action is handed the auth key. The job carries no token, so
+      # that key is the whole blast radius — which is the argument for
+      # pinning, not against it.
       - name: Join the tailnet
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           args: --hostname=uze-macos-session --accept-routes=false
@@ -86,10 +91,15 @@ jobs:
           address=$(tailscale ip -4)
           echo "::notice title=Desktop::VNC to ${address}:5900 as user 'tester'"
 
-      # Through the environment rather than interpolated into the script:
-      # an input reaching a shell as text is how a workflow grows an
-      # injection, even one only a writer can trigger.
+      # Through the environment rather than interpolated into the script,
+      # and checked before it is used: bash re-evaluates the contents of a
+      # variable inside `$(( ))`, so arithmetic is a second way in for the
+      # text an expression interpolation was avoided for.
       - name: Hold it open
         env:
           MINUTES: ${{ inputs.minutes }}
-        run: sleep $(( MINUTES * 60 ))
+        run: |
+          case "$MINUTES" in
+            ''|*[!0-9]*) echo "minutes must be a whole number" >&2; exit 1 ;;
+          esac
+          sleep $(( MINUTES * 60 ))
