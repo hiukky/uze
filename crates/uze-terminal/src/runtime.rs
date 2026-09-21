@@ -1096,8 +1096,28 @@ const OUTBOX_CAPACITY: usize = 256;
 /// and the resync supersedes all of them.
 struct Outbox {
     sender: mpsc::SyncSender<ClientEvent>,
+    backlog: Arc<Backlog>,
+}
+
+/// How far behind one client is — the only part of its [`Outbox`] the
+/// writer thread is given.
+///
+/// It is split out because the sender must not be: a writer holding an
+/// `Outbox` holds a sender to the very channel it is blocked on, so
+/// `recv` could never report the client gone and the thread outlived
+/// the connection by the life of the server. Every probe of the endpoint
+/// then cost a thread and a descriptor permanently, and a machine that
+/// had run for a day could no longer `fork`.
+struct Backlog {
     pending: std::sync::atomic::AtomicUsize,
     stale: std::sync::atomic::AtomicBool,
+}
+
+impl Backlog {
+    fn delivered(&self) {
+        self.pending
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Outbox {
@@ -1105,10 +1125,17 @@ impl Outbox {
         let (sender, receiver) = mpsc::sync_channel(OUTBOX_CAPACITY);
         let outbox = Self {
             sender,
-            pending: std::sync::atomic::AtomicUsize::new(0),
-            stale: std::sync::atomic::AtomicBool::new(false),
+            backlog: Arc::new(Backlog {
+                pending: std::sync::atomic::AtomicUsize::new(0),
+                stale: std::sync::atomic::AtomicBool::new(false),
+            }),
         };
         (outbox, receiver)
+    }
+
+    /// A handle for the writer thread serving this client.
+    fn backlog(&self) -> Arc<Backlog> {
+        Arc::clone(&self.backlog)
     }
 
     /// Queues a broadcast without ever waiting, and answers whether the
@@ -1116,16 +1143,16 @@ impl Outbox {
     /// resynchronized.
     fn offer(&self, event: ClientEvent) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
-        if self.stale.load(Relaxed) {
+        if self.backlog.stale.load(Relaxed) {
             return true;
         }
         match self.sender.try_send(event) {
             Ok(()) => {
-                self.pending.fetch_add(1, Relaxed);
+                self.backlog.pending.fetch_add(1, Relaxed);
                 true
             }
             Err(mpsc::TrySendError::Full(_)) => {
-                self.stale.store(true, Relaxed);
+                self.backlog.stale.store(true, Relaxed);
                 true
             }
             Err(mpsc::TrySendError::Disconnected(_)) => false,
@@ -1137,21 +1164,17 @@ impl Outbox {
     /// something a resync could stand in for.
     fn reply(&self, event: ClientEvent) {
         if self.sender.send(event).is_ok() {
-            self.pending
+            self.backlog
+                .pending
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-    }
-
-    fn delivered(&self) {
-        self.pending
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether this client missed broadcasts and has since caught up with
     /// everything it was sent, so a resync would reach it.
     fn awaits_resync(&self) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
-        self.stale.load(Relaxed) && self.pending.load(Relaxed) == 0
+        self.backlog.stale.load(Relaxed) && self.backlog.pending.load(Relaxed) == 0
     }
 
     /// Sends the whole workspace to a stale client, and answers whether the
@@ -1159,14 +1182,14 @@ impl Outbox {
     /// client stale; the next one starts from a fresh `Snapshot`.
     fn resync(&self, session: Session, repaints: &[PaneDamage]) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
-        self.stale.store(false, Relaxed);
+        self.backlog.stale.store(false, Relaxed);
         let events = std::iter::once(ClientEvent::Snapshot { session })
             .chain(repaints.iter().cloned().map(ClientEvent::Damage));
         for event in events {
             if !self.offer(event) {
                 return false;
             }
-            if self.stale.load(Relaxed) {
+            if self.backlog.stale.load(Relaxed) {
                 break;
             }
         }
@@ -1342,8 +1365,8 @@ impl Server {
         };
         let (outbox, receiver) = Outbox::new();
         let events = Arc::new(outbox);
-        let writer = Arc::clone(&events);
-        thread::spawn(move || forward_events(stream, &receiver, &writer));
+        let backlog = events.backlog();
+        thread::spawn(move || forward_events(stream, &receiver, &backlog));
 
         // A deadline on the handshake only — see [`HANDSHAKE_DEADLINE`] —
         // and a frame limit sized for what a handshake actually says rather
@@ -2558,9 +2581,14 @@ fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, 
 /// will never read pile up in a channel nobody drains. Shutting both
 /// halves is what makes the failure arrive where a client can act on it —
 /// as the disconnect it actually is.
-fn forward_events(mut socket: UnixStream, events: &mpsc::Receiver<ClientEvent>, outbox: &Outbox) {
+///
+/// "No more" is the channel hanging up, which happens once the last
+/// [`Outbox`] is dropped — by the handler that served this client, and by
+/// [`Server::clients`]. That is why this is handed a [`Backlog`] and not
+/// the outbox itself: see the note on `Backlog`.
+fn forward_events(mut socket: UnixStream, events: &mpsc::Receiver<ClientEvent>, backlog: &Backlog) {
     while let Ok(event) = events.recv() {
-        outbox.delivered();
+        backlog.delivered();
         if let Err(error) = write_message(&mut socket, &event) {
             tracing::warn!(%error, "dropping a terminal client an event could not reach");
             let _ = socket.shutdown(std::net::Shutdown::Both);
@@ -2839,12 +2867,12 @@ fn identity_of(root: &Path) -> String {
 mod tests {
     use super::{
         ANSWERS_WITHIN, Arrival, Launch, Listener, MAX_FRAME, MAX_PANE_DIMENSION, MAX_SOCKET_PATH,
-        PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server,
-        WORKSPACE_SCHEMA_VERSION, WorkspaceLock, arrival, bind_endpoint, held_by_a_server,
-        identify, identity_of, listener_at, load_persisted_workspace_at, persisted_state_path,
-        read_event, read_message, relaunch_command_for_process, retire, send_request,
-        serves_this_build, signalable, snapshot, socket_path, view_for, workspace_is_claimed,
-        workspace_lock_path, write_atomically, write_message,
+        Outbox, PaneRuntime, PersistedWorkspace, ReplySink, RuntimeError, Selection, Server,
+        WORKSPACE_SCHEMA_VERSION, WorkspaceLock, arrival, bind_endpoint, forward_events,
+        held_by_a_server, identify, identity_of, listener_at, load_persisted_workspace_at,
+        persisted_state_path, read_event, read_message, relaunch_command_for_process, retire,
+        send_request, serves_this_build, signalable, snapshot, socket_path, view_for,
+        workspace_is_claimed, workspace_lock_path, write_atomically, write_message,
     };
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
@@ -3798,12 +3826,20 @@ mod tests {
         for _ in 0..super::OUTBOX_CAPACITY * 64 {
             server.broadcast_pane_damage(pane);
         }
-        let waiting = outbox().pending.load(std::sync::atomic::Ordering::Relaxed);
+        let waiting = outbox()
+            .backlog
+            .pending
+            .load(std::sync::atomic::Ordering::Relaxed);
         assert!(
             waiting <= super::OUTBOX_CAPACITY,
             "{waiting} events queued for a client that reads nothing"
         );
-        assert!(outbox().stale.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            outbox()
+                .backlog
+                .stale
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
 
         let caught_up = std::iter::from_fn(|| read_event(&mut reader).unwrap())
             .any(|_| outbox().awaits_resync());
@@ -3815,7 +3851,12 @@ mod tests {
             resynchronized,
             "the stale client was never sent the workspace again"
         );
-        assert!(!outbox().stale.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            !outbox()
+                .backlog
+                .stale
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
 
         let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
         drop(writer);
@@ -5729,8 +5770,8 @@ mod tests {
         let (outbox, receiver) = super::Outbox::new();
         let events = Arc::new(outbox);
         let writing = {
-            let events = Arc::clone(&events);
-            std::thread::spawn(move || super::forward_events(socket, &receiver, &events))
+            let backlog = events.backlog();
+            std::thread::spawn(move || super::forward_events(socket, &receiver, &backlog))
         };
 
         events.reply(crate::ClientEvent::Error {
@@ -5861,6 +5902,87 @@ mod tests {
                 "claimed: {claimed}, listener: {listener:?}"
             );
         }
+    }
+
+    /// The writer thread serving a client must end when the client does.
+    ///
+    /// It once could not: it was handed the client's whole `Outbox`, so it
+    /// held a sender to the channel it was blocked on and `recv` never
+    /// reported the hang-up. Every connection the endpoint ever accepted —
+    /// each `uze` attaching, and each probe asking who listens here — then
+    /// cost one thread and one descriptor for the life of the server, which
+    /// is how two servers reached fourteen thousand threads apiece and left
+    /// a machine unable to `fork`. The socket is deliberately still open on
+    /// the peer's side, so what ends the thread can only be the channel.
+    #[test]
+    fn a_clients_writer_thread_ends_with_the_client() {
+        let (_peer, socket) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (outbox, receiver) = Outbox::new();
+        let outbox = Arc::new(outbox);
+        let backlog = outbox.backlog();
+        let writer = thread::spawn(move || forward_events(socket, &receiver, &backlog));
+
+        drop(outbox);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !writer.is_finished() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            writer.is_finished(),
+            "the last outbox is gone, so nothing can reach this client again"
+        );
+        writer.join().unwrap();
+    }
+
+    /// And the same seen from the wire: a peer the server turns away is
+    /// hung up on, not held. Reading to end-of-file is the proof that no
+    /// thread inside the server still owns a copy of this connection.
+    #[test]
+    fn a_peer_the_server_refuses_is_hung_up_on() {
+        let scratch = uze_testkit::temp::socket_scratch("refused-peer-hangs-up");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        for directory in [&uze_home, &project] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+        let socket = scratch.join("test.sock");
+        let (server, _damage) = Server::new(seat_at(&project), socket.clone()).unwrap();
+        let server = Arc::new(server);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let serving = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            server.handle_client(stream);
+        });
+
+        let mut peer = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+        peer.set_read_timeout(Some(ANSWERS_WITHIN)).unwrap();
+        send_request(
+            &mut peer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION + 1,
+                columns: 80,
+                rows: 24,
+                seating: crate::Seating::WhereItLeftOff,
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                read_event(&mut peer.try_clone().unwrap()),
+                Ok(Some(crate::ClientEvent::Error { .. }))
+            ),
+            "a peer speaking another protocol is told so"
+        );
+
+        let mut rest = Vec::new();
+        std::io::Read::read_to_end(&mut peer, &mut rest).expect("the server hangs up");
+        assert!(rest.is_empty(), "nothing follows the refusal");
+
+        let _ = serving.join();
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A `make install` over a running server leaves every later `uze`
