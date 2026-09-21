@@ -779,21 +779,23 @@ fn rebase_in_slot(
 /// The files a paused rebase stopped on, or `None` when no rebase is
 /// paused in `slot`.
 pub fn paused_rebase(slot: &Path) -> Option<Vec<PathBuf>> {
-    let in_progress = ["rebase-merge", "rebase-apply"].iter().any(|kind| {
-        uze_git::read(slot, &["rev-parse", "--git-path", kind])
-            .ok()
-            .and_then(|output| output.successful().ok())
-            .is_some_and(|path| {
-                let path = path.trim();
-                let path = Path::new(path);
-                let absolute = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    slot.join(path)
-                };
-                absolute.exists()
-            })
-    });
+    // One question, not one per name. Both states live directly under the
+    // checkout's own Git directory — the linked worktree's, for a slot —
+    // and asking Git where that is answers for both. This is read three
+    // times per agent on every evaluation pass, which is the cadence that
+    // makes the difference between one spawn and two worth having.
+    let git_dir = uze_git::read(slot, &["rev-parse", "--git-dir"])
+        .ok()
+        .and_then(|output| output.successful().ok())?;
+    let git_dir = Path::new(git_dir.trim());
+    let git_dir = if git_dir.is_absolute() {
+        git_dir.to_path_buf()
+    } else {
+        slot.join(git_dir)
+    };
+    let in_progress = ["rebase-merge", "rebase-apply"]
+        .iter()
+        .any(|kind| git_dir.join(kind).exists());
     if !in_progress {
         return None;
     }
