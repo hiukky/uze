@@ -146,6 +146,14 @@ impl Intent {
 
 pub(crate) enum WorkerResult {
     Refreshed(std::result::Result<RefreshData, String>),
+    /// A background pass that brought packages up to date, arriving after
+    /// the screen already drew. Its own message because it reaches the
+    /// network: chained ahead of the refresh, it would gate every screen on
+    /// the slowest remote.
+    AutoUpdated {
+        applied: Vec<String>,
+        data: std::result::Result<RefreshData, String>,
+    },
     PluginInspected(std::result::Result<uze_application::application::PluginInspection, String>),
     MarketplaceInspected(
         std::result::Result<uze_application::application::MarketplacePluginDetail, String>,
@@ -566,31 +574,40 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::info_span!("tui.startup").entered();
-        let mut applied = Vec::new();
         if let Ok(app) = tui_application(home.clone()) {
             let _ = app.ensure_default_plugins();
-            // Opening uze is the explicit, interactive act the CLI's
-            // read-only dispatch path deliberately isn't, so this is where
-            // a pending official-snapshot update gets applied instead of
-            // only reported. Anything it can't settle alone (new
-            // executable capability, managed state it refuses to disturb)
-            // stays reported — `update_available` survives, and the `u`
-            // action with its trust dialog is still the way through.
-            applied = app
-                .plugins()
-                .auto_update()
-                .into_iter()
-                .filter(|outcome| outcome.applied)
-                .map(|outcome| outcome.plugin)
-                .collect();
         }
-        let refreshed = load_refresh_data(home, &context_root)
-            .map(|data| RefreshData {
-                auto_updated: applied,
-                ..data
-            })
-            .map_err(|error| error.to_string());
+        // The screen's own data goes first and on its own. Bringing
+        // packages up to date reaches a remote, and chaining it ahead of
+        // this made every screen wait on the slowest one — which is the
+        // opposite of what a background pass is for.
+        let refreshed =
+            load_refresh_data(home.clone(), &context_root).map_err(|error| error.to_string());
         let _ = sender.send(WorkerResult::Refreshed(refreshed));
+
+        // Opening uze is the explicit, interactive act the CLI's read-only
+        // dispatch path deliberately isn't, so this is where a pending
+        // update gets applied instead of only reported. Anything it cannot
+        // settle alone — a revision asking to execute something new,
+        // managed state it refuses to disturb — stays reported, and the
+        // `u` action with its trust dialog is still the way through.
+        let Ok(app) = tui_application(home.clone()) else {
+            return;
+        };
+        let applied: Vec<String> = app
+            .plugins()
+            .auto_update()
+            .into_iter()
+            .filter(|outcome| outcome.applied)
+            .map(|outcome| outcome.plugin)
+            .collect();
+        if applied.is_empty() {
+            return;
+        }
+        // Only when something actually moved: a second refresh nothing
+        // asked for is a screen that flickers for no reason.
+        let data = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
+        let _ = sender.send(WorkerResult::AutoUpdated { applied, data });
     });
 }
 
@@ -723,6 +740,31 @@ pub(crate) fn drain_worker_results(
 ) {
     while let Ok(result) = receiver.try_recv() {
         match result {
+            // A pass that moved something, arriving after the screen drew.
+            // Carried into the same `refreshed` path so the rows and the
+            // badge come from one answer rather than two.
+            WorkerResult::AutoUpdated { applied, data } => match data {
+                Ok(data) => {
+                    let updated = applied.len();
+                    model.refreshed(RefreshData {
+                        auto_updated: applied,
+                        ..data
+                    });
+                    model.status = Status::Success(format!(
+                        "Updated {updated} plugin{}",
+                        if updated == 1 { "" } else { "s" }
+                    ));
+                    model.status_expires_at = Some(Instant::now() + Duration::from_secs(5));
+                }
+                // The update happened; only re-reading the machine failed.
+                // Saying so is better than a silent screen that is now one
+                // refresh behind what is on disk.
+                Err(error) => {
+                    model.status =
+                        Status::Error(format!("Updated, but could not refresh: {error}"));
+                    model.status_expires_at = Some(Instant::now() + Duration::from_secs(5));
+                }
+            },
             WorkerResult::Refreshed(Ok(data)) => {
                 let repaired = data
                     .doctor

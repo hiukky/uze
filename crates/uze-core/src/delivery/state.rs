@@ -252,6 +252,17 @@ pub fn record_provisioning(
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MarketplaceRecord {
     pub source: crate::acquisition::PackageSource,
+    /// A checkout on this machine the operator develops this marketplace
+    /// in, and which resolution reads instead of `source`.
+    ///
+    /// A fact about one machine, so it lives here and never in a project's
+    /// versioned files — which is the conflation that put an operator's
+    /// home directory into a tracked `agents.yaml`. Absent for every
+    /// marketplace nobody has linked, which is almost all of them, so it is
+    /// optional rather than a shape change: a registry written before this
+    /// existed reads back with no link, which is the truth about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -283,11 +294,88 @@ pub fn marketplace_add(
             requested: format!("{source:?}"),
         });
     }
-    registry
-        .marketplaces
-        .insert(name.to_owned(), MarketplaceRecord { source });
+    registry.marketplaces.insert(
+        name.to_owned(),
+        MarketplaceRecord {
+            source,
+            // Registering again never silently drops a link: only
+            // `marketplace_unlink` removes one.
+            link: registry.marketplaces.get(name).and_then(|r| r.link.clone()),
+        },
+    );
     write_json(&path, &registry)?;
     Ok(true)
+}
+
+/// Whether two identities name the same repository.
+///
+/// Equal strings are the common answer. The other one that must be yes:
+/// the same directory spelled two honest ways — `file:///srv/market` when
+/// it was registered as a URL, and `/srv/market` when a checkout with no
+/// remote answers for itself. Refusing that pair would refuse linking a
+/// marketplace to the very directory it was registered from.
+///
+/// Deliberately not a general URL comparison. Two *remote* identities that
+/// differ are treated as different, because deciding that
+/// `git@host:a/b.git` and `https://host/a/b` are one repository is a claim
+/// about a host, and this layer names none.
+fn same_repository(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let as_local = |identity: &str| {
+        let path = identity.strip_prefix("file://").unwrap_or(identity);
+        std::path::Path::new(path).canonicalize().ok()
+    };
+    match (as_local(left), as_local(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Records that this machine reads `name` from `checkout`.
+///
+/// Refuses a checkout that is a different repository from the one the
+/// marketplace is registered as: a link says "read this marketplace here",
+/// and a directory holding some other project is not that marketplace
+/// wherever it sits.
+pub fn marketplace_link(home: &UzeHome, name: &str, checkout: &std::path::Path) -> Result<()> {
+    let path = home.marketplaces_path();
+    let mut registry: MarketplaceRegistry = read_json_or_default(&path)?;
+    let record = registry
+        .marketplaces
+        .get_mut(name)
+        .ok_or_else(|| crate::UzeError::UnknownMarketplace(name.to_owned()))?;
+
+    let registered = crate::acquisition::marketplace::repository_of(&record.source)?;
+    let local = crate::acquisition::marketplace::repository_of(&crate::PackageSource::Local {
+        path: checkout.to_path_buf(),
+    })?;
+    if !same_repository(&local.identity, &registered.identity) {
+        return Err(crate::UzeError::MarketplaceConflict {
+            name: name.to_owned(),
+            existing: registered.identity,
+            requested: local.identity,
+        });
+    }
+
+    record.link = Some(local.fetch.into());
+    write_json(&path, &registry)
+}
+
+/// Stops reading `name` from a checkout. The Store keeps whatever it
+/// already holds: unlinking says where to read from next, not that what
+/// was read is wrong.
+pub fn marketplace_unlink(home: &UzeHome, name: &str) -> Result<bool> {
+    let path = home.marketplaces_path();
+    let mut registry: MarketplaceRegistry = read_json_or_default(&path)?;
+    let record = registry
+        .marketplaces
+        .get_mut(name)
+        .ok_or_else(|| crate::UzeError::UnknownMarketplace(name.to_owned()))?;
+    let had = record.link.take().is_some();
+    write_json(&path, &registry)?;
+    Ok(had)
 }
 
 pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {

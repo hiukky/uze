@@ -390,3 +390,324 @@ mod policy_scope {
         );
     }
 }
+
+/// A marketplace repository beside `under`, driven through *its* Git
+/// guard.
+///
+/// Deliberately not a second `uze_testkit::git::Repository`: that takes a
+/// process-wide env lock which is not reentrant, so two of them on one
+/// thread deadlock. `git_in` runs Git somewhere else under the guard the
+/// caller already holds, which is what this needs.
+fn marketplace_beside(
+    under: &uze_testkit::git::Repository,
+    at: &std::path::Path,
+    body: &str,
+) -> String {
+    fs::create_dir_all(at.join("plugins/flow/skills/one")).unwrap();
+    fs::write(
+        at.join("plugins/flow/plugin.json"),
+        r#"{"name":"flow","description":"d"}"#,
+    )
+    .unwrap();
+    write_skill(at, body);
+    fs::write(
+        at.join("marketplace.json"),
+        r#"{"name":"mkt","plugins":[{"name":"flow","source":"./plugins/flow"}]}"#,
+    )
+    .unwrap();
+    under.git_in(at, &["init", "--quiet", "-b", "main", "."]);
+    under.git_in(at, &["config", "user.name", "Test"]);
+    under.git_in(at, &["config", "user.email", "t@example.invalid"]);
+    under.git_in(at, &["add", "-A"]);
+    under.git_in(at, &["commit", "-m", "first"]);
+    under.git_in(at, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+fn write_skill(at: &std::path::Path, body: &str) {
+    fs::write(
+        at.join("plugins/flow/skills/one/SKILL.md"),
+        format!("---\nname: one\ndescription: d\n---\n\n{body}\n"),
+    )
+    .unwrap();
+}
+
+fn move_marketplace(
+    under: &uze_testkit::git::Repository,
+    at: &std::path::Path,
+    body: &str,
+) -> String {
+    write_skill(at, body);
+    under.git_in(at, &["add", "-A"]);
+    under.git_in(at, &["commit", "-m", "second"]);
+    under.git_in(at, &["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+/// `install` reproduces what the lock records. That guarantee is what lets
+/// a clone of a project reach the bytes the project was locked at, whatever
+/// has been pushed since — so a ref that moved must not move it, and
+/// `update` is what does.
+#[test]
+fn install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it() {
+    let (application, repository) = project("update-project");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    let locked_first = fs::read_to_string(root.join("agents.lock")).unwrap();
+    let head_after_move = move_marketplace(&repository, &market, "second body");
+    assert!(!locked_first.contains(&head_after_move));
+
+    // Install: the pin stands.
+    application.project().install(&root, &AlwaysTrust).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        locked_first,
+        "install must not move a pin the declared ref has moved past"
+    );
+
+    // Update: the pin moves, to exactly where Git says the ref points now.
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+    assert!(report.moved(), "{report:?}");
+    let locked_second = fs::read_to_string(root.join("agents.lock")).unwrap();
+    assert!(
+        locked_second.contains(&head_after_move),
+        "the lock records the revision the ref resolves to now: {locked_second}"
+    );
+}
+
+/// A refused update writes nothing: naming a plugin this project does not
+/// declare is a mistake to report, not a lock to rewrite.
+#[test]
+fn updating_a_plugin_this_project_does_not_declare_writes_nothing() {
+    let (application, repository) = project("update-unknown");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "a first");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+    let before = fs::read_to_string(root.join("agents.lock")).unwrap();
+
+    let refused = application
+        .project()
+        .update(&root, Some("not-declared"), &AlwaysTrust);
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        before,
+        "a refused update writes nothing"
+    );
+}
+
+/// The author's loop: a marketplace linked to a checkout follows the
+/// working tree, and the project's pin never comes from it.
+#[test]
+fn a_linked_marketplace_follows_the_checkout_and_pins_nothing() {
+    let (application, repository) = project("linked-project");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+    let pinned = fs::read_to_string(root.join("agents.lock")).unwrap();
+
+    application.marketplace().link("mkt", &market).unwrap();
+
+    // An edit with no commit behind it.
+    write_skill(&market, "edited, never committed");
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+
+    // The Store — what every harness reads — carries the edit.
+    let stored = application
+        .plugins()
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|plugin| plugin.id == "flow@mkt")
+        .expect("the plugin is installed")
+        .store_path
+        .join("skills/one/SKILL.md");
+    assert!(
+        fs::read_to_string(&stored)
+            .unwrap()
+            .contains("edited, never committed"),
+        "a linked marketplace follows the working tree"
+    );
+
+    // And the lock is untouched, byte for byte.
+    assert_eq!(
+        fs::read_to_string(root.join("agents.lock")).unwrap(),
+        pinned,
+        "a pin must never come from unpublished work"
+    );
+    assert!(
+        !report.moved(),
+        "nothing was pinned, so nothing moved: {report:?}"
+    );
+
+    // UZE performed no Git on the operator's checkout: their edit is still
+    // uncommitted, and their branch is untouched.
+    let status = repository.git_in(&market, &["status", "--porcelain"]);
+    assert!(
+        status.contains("SKILL.md"),
+        "the edit is still the operator's to commit: {status:?}"
+    );
+}
+
+/// Linking refuses a checkout holding some other repository: a link says
+/// "read this marketplace here", and a directory holding a different
+/// project is not that marketplace wherever it sits.
+#[test]
+fn linking_to_a_foreign_checkout_is_refused() {
+    let (application, repository) = project("linked-foreign");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "a");
+    let stranger = root.parent().unwrap().join("stranger");
+    marketplace_beside(&repository, &stranger, "b");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+
+    let refused = application.marketplace().link("mkt", &stranger);
+
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+/// A contributor cloning a project whose author declared a marketplace only
+/// they have gets the rest of the environment, and is told what is missing
+/// — rather than nothing at all.
+#[test]
+fn an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs() {
+    let (application, repository) = project("unreachable-market");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "reachable");
+
+    application
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    // A second marketplace the author has and nobody else does.
+    let manifest = root.join("agents.yaml");
+    let declared = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "{declared}  theirs:\n    path: /nonexistent/theirs\n    plugins:\n      - other\n"
+        ),
+    )
+    .unwrap();
+
+    let report = application.project().install(&root, &AlwaysTrust).unwrap();
+
+    match report {
+        uze_application::application::InstallReport::Installed { skipped, .. } => {
+            assert_eq!(skipped.len(), 1, "{skipped:?}");
+            assert_eq!(skipped[0].plugin, "other");
+            assert!(
+                skipped[0].reason.contains("/nonexistent/theirs"),
+                "the skip names what this machine does not have: {}",
+                skipped[0].reason
+            );
+        }
+        other => panic!("the reachable half must still install: {other:?}"),
+    }
+
+    // The reachable plugin is installed and delivered.
+    assert!(
+        application
+            .plugins()
+            .list()
+            .unwrap()
+            .iter()
+            .any(|plugin| plugin.id == "flow@mkt"),
+        "the reachable marketplace's plugin is installed"
+    );
+}
+
+/// A package reproduced from `agents.lock` carries the locked commit *as*
+/// its own request, so re-resolving the request can only ever return what
+/// is already installed. `uze update` must resolve what the *manifest*
+/// declares instead — which is the only thing that can name a newer
+/// revision.
+///
+/// The shape this missed: a marketplace declared by path resolves to a
+/// commit from the local checkout, while the lock records the remote
+/// identity so the project stays reproducible. A commit never pushed then
+/// exists on no remote, and re-resolving the request fails outright rather
+/// than merely standing still.
+#[test]
+fn update_resolves_what_the_manifest_declares_not_what_the_package_requested() {
+    let (application, repository) = project("update-declared-ref");
+    let root = repository.root().to_path_buf();
+    let market = root.parent().unwrap().join("market");
+    marketplace_beside(&repository, &market, "first body");
+
+    application
+        .marketplace()
+        .add(&market.to_string_lossy())
+        .unwrap();
+    application
+        .project()
+        .add("flow", "mkt", &root, &AlwaysTrust)
+        .unwrap();
+
+    // Reproduce it the way a fresh machine does: the package's own request
+    // becomes the locked commit.
+    application.plugins().remove("flow@mkt").ok();
+    application.project().install(&root, &AlwaysTrust).unwrap();
+
+    let moved_to = move_marketplace(&repository, &market, "second body");
+
+    let report = application
+        .project()
+        .update(&root, None, &AlwaysTrust)
+        .unwrap();
+
+    assert!(
+        report.moved(),
+        "update must follow the declared ref, not the pinned request: {report:?}"
+    );
+    let locked = fs::read_to_string(root.join("agents.lock")).unwrap();
+    assert!(
+        locked.contains(&moved_to),
+        "the lock records where the declared ref points now: {locked}"
+    );
+}

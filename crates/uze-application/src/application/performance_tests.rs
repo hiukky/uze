@@ -305,6 +305,61 @@ fn market_list_and_inspect_meet_the_budget_without_the_repository() {
     );
 }
 
+/// Linking and unlinking are a registry write and a dropped cache entry.
+/// `link` also asks Git what repository the checkout is, which is one local
+/// call — so neither has any excuse to leave the budget.
+///
+/// Built on its own world because `World::build` deletes the marketplace's
+/// repository, and a link must point at one that exists.
+#[test]
+fn market_link_and_unlink_meet_the_budget() {
+    let root = uze_testkit::temp::scratch("budget-market-link");
+    let home = UzeHome::at(root.join("uze"));
+    let market = root.join("market");
+    let plugin_dir = market.join("plugins").join(PLUGIN);
+    uze_testkit::fixtures::copy_tree(&uze_testkit::fixtures::canonical(PLUGIN), &plugin_dir);
+    fs::write(
+        market.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME),
+        serde_json::json!({
+            "name": MARKETPLACE,
+            "plugins": [{ "name": PLUGIN, "source": format!("./plugins/{PLUGIN}") }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    uze_testkit::git::commit_everything_in(&market);
+
+    let application = || UzeApplication::new(home.clone(), Vec::new());
+    application()
+        .marketplace()
+        .add(&format!("file://{}", market.display()))
+        .unwrap();
+
+    let links: Vec<Duration> = (0..ATTEMPTS)
+        .map(|_| {
+            let app = application();
+            let started = Instant::now();
+            app.marketplace().link(MARKETPLACE, &market).unwrap();
+            started.elapsed()
+        })
+        .collect();
+    assert_best_within_budget("market link", &links);
+
+    let unlinks: Vec<Duration> = (0..ATTEMPTS)
+        .map(|_| {
+            let app = application();
+            app.marketplace().link(MARKETPLACE, &market).unwrap();
+            let fresh = application();
+            let started = Instant::now();
+            fresh.marketplace().unlink(MARKETPLACE).unwrap();
+            started.elapsed()
+        })
+        .collect();
+    assert_best_within_budget("market unlink", &unlinks);
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn context_reads_and_reconcile_meet_the_budget() {
     let world = World::build("budget-context");

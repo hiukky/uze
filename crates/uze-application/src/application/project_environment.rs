@@ -59,6 +59,16 @@ impl Project<'_> {
             .map(|(name, _)| name.to_owned())
             .collect();
 
+        // A marketplace declared as a path is a directory on one machine.
+        // It resolves here and nowhere else — including for the person who
+        // wrote it, on their next machine.
+        let unreproducible_marketplaces: Vec<String> = manifest
+            .marketplaces
+            .iter()
+            .filter(|(_, declared)| declared.git.is_none() && declared.path.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+
         let has_changes = !missing.is_empty()
             || !unresolved.is_empty()
             || !surplus.is_empty()
@@ -69,6 +79,7 @@ impl Project<'_> {
             unresolved,
             surplus,
             stale_projection,
+            unreproducible_marketplaces,
             has_changes,
         })
     }
@@ -128,7 +139,13 @@ impl Project<'_> {
             reference: Some(locked.revision.clone()),
             subdirectory: locked.subdirectory.clone(),
         }
-        .materialize_plugin(plugin)
+        .materialize_plugin(
+            plugin,
+            super::marketplace::MirrorAt {
+                home: &self.0.home,
+                marketplace,
+            },
+        )
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
@@ -236,6 +253,175 @@ impl Project<'_> {
         })
     }
 
+    /// Moves this project's pins to where the refs it declares point now.
+    ///
+    /// The half `install` deliberately does not do. `install` reproduces
+    /// what `agents.lock` records — that is what lets a clone of a project
+    /// reach the bytes the project was locked at, whatever has been pushed
+    /// since — so moving a pin has to be asked for. Every comparable tool
+    /// splits these the same way: `cargo build`/`cargo update`,
+    /// `pnpm install`/`pnpm update`, `uv sync`/`uv lock --upgrade`.
+    ///
+    /// With no `plugin`, every plugin the manifest declares; with one, only
+    /// that one, and every other lock entry is left byte-identical.
+    ///
+    /// Resolution goes through the same `resolve_and_install` that `add`
+    /// and `install` use, so the three cannot drift in how they resolve.
+    /// The trust question is asked per plugin by the install itself, and a
+    /// revision that introduces executable capability the installed one did
+    /// not have is held rather than applied — with the rest proceeding.
+    #[tracing::instrument(name = "project.update", skip_all, fields(root = %root.display()), err)]
+    pub fn update(
+        &self,
+        root: &Path,
+        plugin: Option<&str>,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdateReport> {
+        let canonical = project_root::resolve_project_root(root)?;
+        let manifest = manifest::load(&canonical)?.unwrap_or_default();
+        let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
+
+        let declared: Vec<(String, String)> = manifest
+            .declared_plugins()
+            .filter(|(name, _)| plugin.is_none_or(|wanted| wanted == *name))
+            .map(|(name, marketplace)| (name.to_owned(), marketplace.to_owned()))
+            .collect();
+        if let Some(wanted) = plugin
+            && declared.is_empty()
+        {
+            return Err(UzeError::PluginNotUsedByProject {
+                plugin: wanted.to_owned(),
+            });
+        }
+
+        // No mutation lock here: `Plugins::update` takes one per plugin and
+        // it is not reentrant. The lock file this writes is a project file,
+        // which that lock does not govern.
+        let mut outcomes = Vec::new();
+        for (name, marketplace) in declared {
+            let declared_marketplace =
+                manifest.marketplaces.get(&marketplace).ok_or_else(|| {
+                    UzeError::MarketplaceMismatch {
+                        plugin: name.clone(),
+                        expected: marketplace.clone(),
+                        found: "not declared in agents.yaml".to_owned(),
+                    }
+                })?;
+            let fetch_source =
+                Self::declared_fetch_source(&canonical, &marketplace, declared_marketplace)?;
+            let request = MarketplaceRequest::of(&fetch_source)?;
+            {
+                let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+                self.register_marketplace(
+                    &marketplace,
+                    fetch_source,
+                    &request.repository.identity,
+                )?;
+            }
+
+            let qualified = format!("{name}@{marketplace}");
+            let before = lock
+                .marketplaces
+                .get(&marketplace)
+                .map(|entry| entry.revision.clone());
+
+            // Resolved from what *this project declares*, never from the
+            // package's own request. A package reproduced from `agents.lock`
+            // carries the locked commit *as* its request, so re-resolving
+            // that can only ever return the revision already installed —
+            // and when that commit lives on no remote, not even that.
+            //
+            // Replacing, not installing over: the Store is idempotent by
+            // origin, so installing again hands back what is already held.
+            // `replace_with` is the path that replaces, and it puts the
+            // installed revision back if the new one cannot be delivered.
+            let installed_id = if self.0.package_by_name(&qualified).is_ok() {
+                let materialized = request.materialize_plugin(
+                    &name,
+                    super::marketplace::MirrorAt {
+                        home: &self.0.home,
+                        marketplace: &marketplace,
+                    },
+                )?;
+                match self
+                    .0
+                    .plugins()
+                    .replace_with(&qualified, materialized, authority)
+                {
+                    Ok(UpdatePluginReport::Updated { plugin, .. }) => plugin.id,
+                    Ok(UpdatePluginReport::Blocked { .. }) => {
+                        outcomes.push(UpdateOutcome::Held {
+                            plugin: name,
+                            reason: "managed state has drifted; nothing was changed".to_owned(),
+                        });
+                        continue;
+                    }
+                    Err(UzeError::TrustRequired { detail, .. }) => {
+                        outcomes.push(UpdateOutcome::Held {
+                            plugin: name,
+                            reason: format!(
+                                "the newer revision asks to execute something new ({detail}); \
+                                 confirm it explicitly"
+                            ),
+                        });
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+                self.resolve_and_install(&name, &marketplace, &request, authority)?
+                    .plugin
+                    .id
+            };
+
+            let pinned =
+                self.record_in_lock(&mut lock, &name, &marketplace, &request, &installed_id)?;
+            if !pinned {
+                outcomes.push(UpdateOutcome::Held {
+                    plugin: name,
+                    reason: "linked to a checkout on this machine, which pins nothing".to_owned(),
+                });
+                continue;
+            }
+            let after = lock
+                .marketplaces
+                .get(&marketplace)
+                .map(|entry| entry.revision.clone())
+                .unwrap_or_default();
+            outcomes.push(if before.as_deref() == Some(after.as_str()) {
+                UpdateOutcome::AlreadyCurrent { plugin: name }
+            } else {
+                UpdateOutcome::Moved {
+                    plugin: name,
+                    revision: after,
+                }
+            });
+            // Saved per entry: the bytes are already in the Store, and a
+            // later failure must not leave the lock denying what this
+            // machine now holds.
+            project_lock::save_lock(&canonical, &lock)?;
+        }
+
+        // Moving a pin changes what this project's packages contribute to
+        // `AGENTS.md`, so declaring and projecting stay one command, as
+        // they are for `install`.
+        let report = UpdateReport {
+            reconciled: false,
+            outcomes,
+        };
+        let reconciled = if report.moved() {
+            self.0.context().reconcile(&canonical)?;
+            true
+        } else {
+            false
+        };
+        Ok(UpdateReport {
+            reconciled,
+            ..report
+        })
+    }
+
     /// Brings the project's declared environment about, in two passes over
     /// the same lifecycle an ordinary add uses
     /// (`authorize → prepare → ingest → republish → attach`):
@@ -277,6 +463,7 @@ impl Project<'_> {
 
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let mut installed_plugins = Vec::new();
+        let mut skipped: Vec<SkippedPlugin> = Vec::new();
 
         // Resolution comes first: `agents.yaml` is what the project asked
         // for and the lock is only what asking produced, so a declaration
@@ -295,7 +482,28 @@ impl Project<'_> {
             // The declaration is the authority over its own source: a lock
             // recording where the plugin used to come from is the stale
             // half, so it is overwritten rather than defended.
-            let fetch_source = Self::declared_fetch_source(&canonical, marketplace, declared)?;
+            //
+            // A marketplace this machine cannot reach *by declaration* — a
+            // path only its author has — is skipped and named, not fatal.
+            // A project declaring one is not broken for everybody else who
+            // clones it, and failing the whole command over it hands a
+            // contributor nothing where they could have had all but one.
+            let fetch_source = match Self::declared_fetch_source(&canonical, marketplace, declared)
+            {
+                Ok(source) => source,
+                Err(UzeError::MissingPath(path)) => {
+                    skipped.push(SkippedPlugin {
+                        plugin: stale.plugin.clone(),
+                        marketplace: marketplace.to_owned(),
+                        reason: format!(
+                            "its marketplace is declared at {}, which this machine does not have",
+                            path.display()
+                        ),
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let request = MarketplaceRequest::of(&fetch_source)?;
             self.register_marketplace(marketplace, fetch_source, &request.repository.identity)?;
             self.resolve_into_lock(&mut lock, &stale.plugin, marketplace, &request, authority)?;
@@ -396,12 +604,16 @@ impl Project<'_> {
             None => false,
         };
 
-        if nothing_moved && !reconciled {
+        // A skip is not "nothing to do": it is something this machine
+        // could not do, and it has to be said even when everything else
+        // already agreed.
+        if nothing_moved && !reconciled && skipped.is_empty() {
             return Ok(InstallReport::NoChanges);
         }
         Ok(InstallReport::Installed {
             plugins: installed_plugins,
             removed: removed_plugins,
+            skipped,
             reconciled,
         })
     }
@@ -465,42 +677,67 @@ impl Project<'_> {
     /// installs it, and records what resolution produced. `add` and
     /// `install` differ in where the declaration came from — a command
     /// argument or `agents.yaml` — and must not differ in how it resolves.
-    fn resolve_into_lock(
+    /// Acquires one plugin from `marketplace` and installs it, returning
+    /// what landed.
+    ///
+    /// Deliberately writes nothing to the lock. `add`, `install` and
+    /// `update` must not differ in *how* they resolve — that is what this
+    /// being one function buys — and they legitimately differ in what they
+    /// record: a marketplace linked to a checkout on this machine is
+    /// resolved exactly like any other and pins nothing, which a branch
+    /// inside a shared function would be the wrong way to say.
+    fn resolve_and_install(
         &self,
-        lock: &mut ProjectLock,
         plugin: &str,
         marketplace: &str,
         request: &MarketplaceRequest,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        let materialized = request.materialize_plugin(plugin)?;
-        let report = self.0.plugins().install_materialized(
+        let materialized = request.materialize_plugin(
+            plugin,
+            super::marketplace::MirrorAt {
+                home: &self.0.home,
+                marketplace,
+            },
+        )?;
+        self.0.plugins().install_materialized(
             materialized,
             marketplace,
             None,
             authority,
             &uze_core::naming::NoNameCollisionAuthority,
-        )?;
+        )
+    }
 
-        // What actually landed is the source of truth, so both facts are
-        // read back from the Store rather than from the request — the
-        // discipline `Provenance` exists to enforce.
-        let stored = self.0.package_by_name(&report.plugin.id)?;
+    /// Records in `lock` what installing `plugin` from `marketplace`
+    /// produced.
+    ///
+    /// Read back from the Store rather than from the request — the
+    /// discipline `Provenance` exists to enforce: what actually landed is
+    /// the source of truth.
+    fn record_in_lock(
+        &self,
+        lock: &mut ProjectLock,
+        plugin: &str,
+        marketplace: &str,
+        request: &MarketplaceRequest,
+        installed_id: &str,
+    ) -> Result<bool> {
+        let stored = self.0.package_by_name(installed_id)?;
         let reproducible = stored.provenance.resolved.lock_revision().is_some();
+        // A marketplace read from a checkout this machine develops resolves
+        // to a path, not a commit, and pins nothing. Writing one would put
+        // a revision taken from unpublished work into a file a
+        // collaborator pulls — the mistake `pnpm link` also refuses. The
+        // project's existing entry is left exactly as it is.
+        let uze_core::acquisition::ResolvedSource::Git { commit, .. } = &stored.provenance.resolved
+        else {
+            return Ok(false);
+        };
         lock.plugins.insert(
             plugin.to_owned(),
             LockedPlugin::resolved(marketplace, &stored.root, reproducible),
         );
-        // The revision belongs to the marketplace, which is the thing that
-        // has one: a plugin is a directory inside it. The entry is written
-        // from what the clone reported, so it cannot exist without the
-        // commit it was read at.
-        let uze_core::acquisition::ResolvedSource::Git { commit, .. } = &stored.provenance.resolved
-        else {
-            return Err(UzeError::AcquisitionFailed(format!(
-                "`{marketplace}` did not resolve to a commit"
-            )));
-        };
         lock.marketplaces.insert(
             marketplace.to_owned(),
             LockedMarketplace {
@@ -510,6 +747,19 @@ impl Project<'_> {
                 revision: commit.clone(),
             },
         );
+        Ok(true)
+    }
+
+    fn resolve_into_lock(
+        &self,
+        lock: &mut ProjectLock,
+        plugin: &str,
+        marketplace: &str,
+        request: &MarketplaceRequest,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
+        let report = self.resolve_and_install(plugin, marketplace, request, authority)?;
+        self.record_in_lock(lock, plugin, marketplace, request, &report.plugin.id)?;
         Ok(report)
     }
 
@@ -600,6 +850,12 @@ pub struct ProjectEnvironmentPlan {
     pub surplus: Vec<String>,
     /// The projected instruction region has fallen behind the policy.
     pub stale_projection: Option<StaleProjection>,
+    /// Marketplaces this project declares that resolve nowhere but the
+    /// machine that declared them. Not a fault here — they work where they
+    /// are — but a project depending on one cannot be reproduced
+    /// elsewhere, and silence about that is what lets somebody find out by
+    /// handing a teammate a repository that does not work.
+    pub unreproducible_marketplaces: Vec<String>,
     pub has_changes: bool,
 }
 
@@ -622,6 +878,36 @@ pub enum RemoveProjectPluginReport {
     Removed { plugin: String },
 }
 
+/// What `uze update` did to each plugin it considered.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UpdateOutcome {
+    /// The declared ref had moved, and the project now points at where it
+    /// points.
+    Moved { plugin: String, revision: String },
+    /// The declared ref resolves to the revision already locked.
+    AlreadyCurrent { plugin: String },
+    /// Considered and deliberately not moved, with the reason — a
+    /// marketplace linked to a checkout on this machine pins nothing, and a
+    /// revision introducing execution waits for an explicit decision.
+    Held { plugin: String, reason: String },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UpdateReport {
+    pub outcomes: Vec<UpdateOutcome>,
+    /// Whether the project's context was reconciled afterwards.
+    pub reconciled: bool,
+}
+
+impl UpdateReport {
+    pub fn moved(&self) -> bool {
+        self.outcomes
+            .iter()
+            .any(|outcome| matches!(outcome, UpdateOutcome::Moved { .. }))
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InstallReport {
@@ -635,9 +921,22 @@ pub enum InstallReport {
         plugins: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         removed: Vec<String>,
+        /// Plugins whose marketplace this machine cannot reach. Named
+        /// rather than silently absent: a half-installed environment that
+        /// says nothing looks complete.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<SkippedPlugin>,
         #[serde(default)]
         reconciled: bool,
     },
+}
+
+/// One plugin `install` could not reach, and why.
+#[derive(Clone, Debug, Serialize)]
+pub struct SkippedPlugin {
+    pub plugin: String,
+    pub marketplace: String,
+    pub reason: String,
 }
 
 /// Read by the project environment, `uze status` and the workspace

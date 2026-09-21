@@ -59,6 +59,7 @@ impl Plugins<'_> {
             .collect();
         let reconciliation = self.0.reconcile_cached_report(package.id.as_str());
         Ok(PluginInspection {
+            revision: self.0.installed_revision(&package),
             plugin: self.0.plugin_summary(&package)?,
             capabilities: resources
                 .iter()
@@ -90,14 +91,73 @@ pub struct PluginSummary {
     pub source: String,
     pub store_path: PathBuf,
     pub capability_count: usize,
-    /// Whether the official marketplace snapshot currently carries
-    /// different content than what's installed — a pure read, computed by
-    /// comparing directory trees, never re-applied automatically (see
-    /// `ensure_default_plugins`). `None` for any package this composition
-    /// root has no offline way to compare (anything not sourced from the
-    /// embedded marketplace) — never re-acquired over the network or from
-    /// a mutable local path just to answer this question.
-    pub update_available: Option<bool>,
+    /// Whether the one installed is the one that exists, and when that was
+    /// last established.
+    pub freshness: Freshness,
+}
+
+/// What UZE can say about whether an installed package is current.
+///
+/// Every surface reports one of these, and `NotChecked` must never be drawn
+/// the way `UpToDate` is: "we have not looked" and "we looked and it is
+/// current" are different facts, and collapsing them is what made
+/// "Installed" mean both.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Freshness {
+    pub state: FreshnessState,
+    /// When the comparison behind `state` was made — for a marketplace,
+    /// when its mirror was last brought up to date. `None` when nothing was
+    /// compared, which is the only honest answer for `Unpinned` and
+    /// `NotChecked`.
+    pub established_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FreshnessState {
+    /// The installed revision is the one the marketplace's declared ref
+    /// points at.
+    UpToDate,
+    /// A newer revision exists. `commits` is how many, when the history to
+    /// count them is on this machine; `None` when it is not — a snapshot
+    /// compared by content rather than by history, or a mirror whose
+    /// history was rewritten under the pin. A distance that might be wrong
+    /// is worse than no distance, and "there is something newer" is true
+    /// either way.
+    Behind { commits: Option<usize> },
+    /// The marketplace is a checkout this machine develops: its working
+    /// tree is what exists, so "newer" means nothing.
+    Linked { checkout: PathBuf },
+    /// Nothing to compare against — a package installed straight from a
+    /// path or a URL, which belongs to no marketplace catalogue. Distinct
+    /// from `NotChecked`: there is no question to answer, rather than an
+    /// answer UZE does not have.
+    Unpinned,
+    /// UZE has not established it, or tried and could not. Never a guess.
+    NotChecked,
+}
+
+impl Freshness {
+    pub fn not_checked() -> Self {
+        Self {
+            state: FreshnessState::NotChecked,
+            established_at_unix: None,
+        }
+    }
+
+    pub fn unpinned() -> Self {
+        Self {
+            state: FreshnessState::Unpinned,
+            established_at_unix: None,
+        }
+    }
+
+    /// Whether a newer revision exists — the one question every caller
+    /// asking "is there an update" is really asking, answered without any
+    /// of them re-deriving it from the state.
+    pub fn behind(&self) -> bool {
+        matches!(self.state, FreshnessState::Behind { .. })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -117,6 +177,12 @@ pub struct MarketplaceSummary {
     /// open, and inventing a link is worse than admitting there is none.
     pub homepage: Option<String>,
     pub plugin_count: usize,
+    /// The checkout this machine reads it from, when its operator
+    /// develops it. Said out loud because it changes what every answer
+    /// about this marketplace means: its plugins follow a working tree,
+    /// and nothing pins from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -130,9 +196,9 @@ pub struct MarketplacePluginSummary {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub installed: bool,
-    /// `None` when not installed (nothing to compare against) or when the
-    /// comparison could not be made — never a guess.
-    pub update_available: Option<bool>,
+    /// The installed package's freshness. `NotChecked` when the plugin is
+    /// not installed at all: there is nothing of it here to be current.
+    pub freshness: Freshness,
     /// Whether `bootstrap::DEFAULT_PLUGIN_IDS` installs this plugin on a
     /// fresh `UZE_HOME` — product policy, not a marketplace fact.
     pub is_default: bool,
@@ -142,6 +208,9 @@ pub struct MarketplacePluginSummary {
 pub struct MarketplacePluginDetail {
     pub summary: MarketplacePluginSummary,
     pub capabilities: Vec<PluginCapability>,
+    /// When this plugin was last written in the marketplace that offers
+    /// it — what you would be installing, and how old it is.
+    pub revision: Option<Revision>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -162,8 +231,42 @@ pub struct HarnessDelivery {
     pub capabilities: Vec<CapabilityDelivery>,
 }
 
+/// When a plugin was last written, as something a person can place in
+/// time.
+///
+/// The freshness state says *whether* there is something newer; this says
+/// how old the thing in front of you is. Answered for a plugin that is
+/// merely on offer too — "should I install this, or is it abandoned" is
+/// the same question asked one step earlier.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Revision {
+    /// The last commit that touched this plugin's own directory, with
+    /// Git's account of how long ago it landed and what it was about.
+    ///
+    /// Its own directory, never the marketplace's head: a repository
+    /// carrying several plugins moves whenever any of them does, so its
+    /// head says nothing about this one.
+    Commit {
+        short: String,
+        age: String,
+        subject: String,
+    },
+    /// A checkout on this machine. There is no revision to name: what is
+    /// installed is whatever its author last saved.
+    Checkout { path: PathBuf },
+    /// Shipped inside the binary. It has no repository to ask, and the
+    /// release it came with is the only date that is true about it.
+    Bundled { version: String },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginInspection {
+    /// `None` for a package whose bytes came from nowhere a revision can
+    /// be read from — a direct install from a path or URL — or whose
+    /// mirror no longer holds the commit it was installed at. Absent
+    /// rather than guessed.
+    pub revision: Option<Revision>,
     pub plugin: PluginSummary,
     pub capabilities: Vec<PluginCapability>,
     pub deliveries: Vec<HarnessDelivery>,
@@ -197,11 +300,22 @@ pub struct PublicationOutcome {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct BlockedCapability {
+    pub integration: String,
+    pub capability: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct AddPluginReport {
     pub plugin: PluginSummary,
     pub package_plans: Vec<(String, PackageExposurePlan)>,
     pub attachments: Vec<AttachmentSummary>,
     pub publications: Vec<PublicationOutcome>,
+    /// Capabilities whose vendor-visible name is held by something UZE
+    /// does not own. The package is installed and everything else was
+    /// delivered; these are what a person has to settle.
+    pub blocked: Vec<BlockedCapability>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -676,6 +790,11 @@ pub struct EnvironmentDrift {
     pub missing: Vec<String>,
     /// The projected instruction region is behind the declared policy.
     pub stale_projection: bool,
+    /// Marketplaces that resolve nowhere but the machine that declared
+    /// them. Carried here so `uze status` and the overview say the same
+    /// thing about it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreproducible_marketplaces: Vec<String>,
 }
 
 /// The plan's answer, as `uze status` and the overview carry it: both read
@@ -686,6 +805,7 @@ impl From<&ProjectEnvironmentPlan> for EnvironmentDrift {
             unresolved: plan.unresolved.clone(),
             surplus: plan.surplus.clone(),
             missing: plan.missing.clone(),
+            unreproducible_marketplaces: plan.unreproducible_marketplaces.clone(),
             stale_projection: plan.stale_projection.is_some(),
         }
     }
@@ -778,9 +898,24 @@ pub struct HookHealth {
 pub struct UpgradeLeftovers {
     /// The newest few, which are the ones an operator can still act on.
     pub set_aside: Vec<SetAsideRecord>,
+    /// References into `$UZE_HOME` that resolve to nothing and that no
+    /// receipt claims — `uze doctor` removes these, unlike `set_aside`,
+    /// whose bytes only a person can judge.
+    pub dangling: Vec<DanglingReferenceRecord>,
     /// How many there are in all, including the ones not listed: a report
     /// that names forty is one nobody reads.
     pub total: usize,
+}
+
+/// A reference UZE wrote into a harness's shared discovery root that
+/// points into `$UZE_HOME` at something no longer there, and that no
+/// receipt claims. Nothing reads it, and it holds a name another package
+/// may need.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DanglingReferenceRecord {
+    pub path: PathBuf,
+    pub target: PathBuf,
+    pub remedy: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

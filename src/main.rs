@@ -48,6 +48,21 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Move this project's pins to where its declared refs point now
+    ///
+    /// `install` reproduces what `agents.lock` records, which is what lets
+    /// a clone reach the bytes the project was locked at. Moving a pin is
+    /// this command. Machine-wide package bytes are `uze plugin update`.
+    Update {
+        /// One plugin. Omit to consider every plugin the manifest declares.
+        plugin: Option<String>,
+        path: Option<PathBuf>,
+        /// Authorize executable capabilities
+        #[arg(long)]
+        trust: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Remove a plugin from this project
     ///
     /// Never touches the machine Store — see `uze plugin remove` for that.
@@ -219,6 +234,16 @@ enum MarketAction {
     },
     /// Remove a marketplace (blocked while plugins from it are installed).
     Remove { name: String },
+    /// Read a marketplace from a checkout on this machine you develop.
+    ///
+    /// Machine scope: nothing is written into any project's files, and the
+    /// project keeps declaring the remote. While a marketplace is linked
+    /// its plugins follow your working tree — ignored files excluded — and
+    /// `agents.lock` is not pinned from it, because a revision taken from
+    /// unpublished work is one a collaborator cannot reach.
+    Link { name: String, checkout: PathBuf },
+    /// Stop reading a marketplace from a checkout.
+    Unlink { name: String },
     /// Inspect one marketplace's own source and plugin count.
     ///
     /// Distinct from inspecting one plugin within a marketplace
@@ -768,6 +793,23 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             )?;
             emit(format, &report, render_install);
         }
+        Command::Update {
+            plugin,
+            path,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report = with_spinner(
+                "Moving this project's pins...",
+                "Failed to update the project",
+                || {
+                    app.project()
+                        .update(&context_path(path), plugin.as_deref(), authority.as_ref())
+                },
+            )?;
+            emit(format, &report, render_update_report);
+        }
         Command::Remove { plugin, format } => {
             let current_dir = cwd()?;
             let report = with_spinner(
@@ -1191,6 +1233,28 @@ fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
             app.marketplace().remove(&name)?;
             println!("Removed marketplace {name}");
         }
+        MarketAction::Link { name, checkout } => {
+            let checkout = checkout
+                .canonicalize()
+                .map_err(|_| uze_application::UzeError::MissingPath(checkout.clone()))?;
+            app.marketplace().link(&name, &checkout)?;
+            println!(
+                "{} {name} is read from {}\n  Its plugins follow your working tree; \
+                 agents.lock is not pinned from it.",
+                progress::success_icon(),
+                checkout.display()
+            );
+        }
+        MarketAction::Unlink { name } => {
+            if app.marketplace().unlink(&name)? {
+                println!(
+                    "{} {name} is read from its source again",
+                    progress::success_icon()
+                );
+            } else {
+                println!("{name} was not linked");
+            }
+        }
         MarketAction::Inspect { name, format } => {
             let detail = app.marketplace().inspect(&name)?;
             emit(format, &detail, render_market_detail);
@@ -1254,6 +1318,7 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
                         ));
                     }
                 }
+                warn_blocked(&report, app);
             }
         }
         PluginAction::List { format } => {
@@ -1859,6 +1924,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
             render_add_report(report, verbose || shorthand.verbose, app)
         )
     });
+    warn_blocked(&report, app);
     Ok(())
 }
 
@@ -2078,6 +2144,61 @@ fn terminal_error(error: impl std::fmt::Display) -> uze_application::UzeError {
     uze_application::UzeError::TerminalRuntime(error.to_string())
 }
 
+/// The one word each freshness state reads as, everywhere.
+///
+/// "not checked" is spelled out rather than left blank: a listing that says
+/// nothing about a plugin reads as a plugin with nothing to say, which is
+/// exactly the collapse this replaces — `update_available: None` drew the
+/// same as "current".
+fn freshness_label(freshness: &uze_application::application::Freshness) -> String {
+    use uze_application::application::FreshnessState;
+    match &freshness.state {
+        FreshnessState::UpToDate => "up to date".to_owned(),
+        FreshnessState::Behind { commits: None } => "behind".to_owned(),
+        FreshnessState::Behind {
+            commits: Some(commits),
+        } => format!("{commits} behind"),
+        FreshnessState::Linked { checkout } => format!("linked to {}", checkout.display()),
+        FreshnessState::Unpinned => "unpinned".to_owned(),
+        FreshnessState::NotChecked => "not checked".to_owned(),
+    }
+}
+
+/// What `uze update` moved, and what it deliberately did not.
+///
+/// A plugin already at its ref's head is said out loud rather than left
+/// out: "nothing moved" and "this plugin was not considered" are different
+/// answers, and a report that shows only what changed cannot tell them
+/// apart.
+fn render_update_report(report: &uze_application::application::UpdateReport) -> String {
+    use uze_application::application::UpdateOutcome;
+    let title = progress::report_title("Update", Some("This project's pins"));
+    if report.outcomes.is_empty() {
+        return format!("{title}\n  This project declares no plugins\n");
+    }
+    let rows = report
+        .outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            UpdateOutcome::Moved { plugin, revision } => vec![
+                progress::title(plugin),
+                progress::label(format!("moved to {}", &revision[..revision.len().min(12)])),
+            ],
+            UpdateOutcome::AlreadyCurrent { plugin } => {
+                vec![progress::title(plugin), progress::label("already current")]
+            }
+            UpdateOutcome::Held { plugin, reason } => {
+                vec![progress::title(plugin), progress::label(reason)]
+            }
+        })
+        .collect();
+    let mut text = format!("{title}\n{}\n", progress::aligned_rows(rows));
+    if report.reconciled {
+        text.push_str("  Project context reconciled\n");
+    }
+    text
+}
+
 fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -> String {
     let title = progress::report_title("Plugins", Some("Installed on this machine"));
     if plugins.is_empty() {
@@ -2095,6 +2216,7 @@ fn render_plugin_list(plugins: &[uze_application::application::PluginSummary]) -
                 progress::title(&plugin.active_name),
                 origin,
                 format!("{} capabilities", plugin.capability_count),
+                progress::label(freshness_label(&plugin.freshness)),
             ]
         })
         .collect();
@@ -2152,6 +2274,23 @@ fn render_inspection(report: &PluginInspection) -> String {
 /// `plugin inspect` state the same facts read-only. Harness rows carry the
 /// human label (`app.integration_label`) — the report's own keys stay the
 /// stable ids, which is what `--format json` emits.
+/// A capability whose vendor-visible name is held by something UZE does not
+/// own is warned about, never raised: the package is installed and its other
+/// capabilities are delivered, which is the same shape a failed publication
+/// already has (`PublicationOutcome::error`). Silence is what the naming
+/// rule forbids — an explicit conflict the operator can act on is what it
+/// asks for, and that is a sentence, not an exit code.
+fn warn_blocked(report: &AddPluginReport, app: &UzeApplication) {
+    for one in &report.blocked {
+        progress::warn(&format!(
+            "{}: {} was not delivered — {}",
+            app.health().integration_label(&one.integration),
+            one.capability,
+            one.reason
+        ));
+    }
+}
+
 fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplication) -> String {
     let mut out = format!("\n{}", progress::report_section("Delivery"));
     let attachments: BTreeMap<&str, &PathBuf> = report
@@ -2187,6 +2326,18 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
                 attachment.location.display()
             ));
         }
+    }
+    // A name held by something UZE does not own stops that one capability
+    // and nothing else. Said here rather than raised as a failure: the
+    // package is installed and the rest of it is delivered, so what the
+    // operator needs is the name and the reason, not an aborted command.
+    for one in &report.blocked {
+        out.push_str(&format!(
+            "  {}: {} not delivered — {}\n",
+            app.health().integration_label(&one.integration),
+            one.capability,
+            one.reason
+        ));
     }
     out
 }
@@ -2268,6 +2419,7 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
         InstallReport::Installed {
             plugins,
             removed,
+            skipped,
             reconciled,
         } => {
             let mut text = progress::report_title("Installed environment", None);
@@ -2285,6 +2437,14 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
                 text.push_str(&progress::report_section("Removed"));
                 for plugin in removed {
                     text.push_str(&format!("  {plugin}\n"));
+                }
+            }
+            // Named, never merely absent: an environment that is missing
+            // a plugin and says nothing about it looks complete.
+            if !skipped.is_empty() {
+                text.push_str(&progress::report_section("Not installed here"));
+                for one in skipped {
+                    text.push_str(&format!("  {} — {}\n", one.plugin, one.reason));
                 }
             }
             if *reconciled {
@@ -2697,7 +2857,16 @@ fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
             .map(|market| {
                 vec![
                     progress::title(&market.name),
-                    progress::label(&market.source),
+                    // A linked marketplace is read from somewhere other
+                    // than where it is registered, and every answer about
+                    // it means something different because of that — so it
+                    // takes the column that says where it comes from.
+                    match &market.linked_to {
+                        Some(checkout) => {
+                            progress::label(format!("linked to {}", checkout.display()))
+                        }
+                        None => progress::label(&market.source),
+                    },
                     format!("{} plugins", market.plugin_count),
                 ]
             })
@@ -2884,6 +3053,16 @@ fn render_drift(drift: &uze_application::application::EnvironmentDrift) -> Strin
         text.push_str(&format!(
             "  {} AGENTS.md is behind the declared worktree policy\n",
             progress::warning_icon()
+        ));
+    }
+    // Not a fault here — it works on this machine — but somebody has to be
+    // told before they hand the repository to a teammate.
+    if !drift.unreproducible_marketplaces.is_empty() {
+        text.push_str(&format!(
+            "  {} declared from a path only this machine has, so this project does not \
+             reproduce elsewhere: {}\n",
+            progress::warning_icon(),
+            drift.unreproducible_marketplaces.join(", ")
         ));
     }
     text.push_str(&format!(

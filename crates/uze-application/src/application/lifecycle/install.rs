@@ -129,6 +129,7 @@ impl Plugins<'_> {
         let resources: Vec<_> = resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
+        let mut blocked = Vec::new();
         for integration in &self.0.integrations {
             // A package must remain installable on a machine that has only a
             // subset of UZE's peer harnesses. `add` prepares and attaches to
@@ -155,12 +156,18 @@ impl Plugins<'_> {
                 package_plans.push((integration.id().to_owned(), plan));
             }
             attachments.extend(delivery.attachments);
+            blocked.extend(delivery.blocked.into_iter().map(|one| BlockedCapability {
+                integration: one.integration,
+                capability: one.capability,
+                reason: one.reason,
+            }));
         }
         Ok(AddPluginReport {
             plugin: self.0.plugin_summary(&installed)?,
             package_plans,
             attachments,
             publications,
+            blocked,
         })
     }
 

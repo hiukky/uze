@@ -116,3 +116,45 @@ to, and SHALL NOT check at all in continuous integration unless told to.
 
 - **WHEN** `CI` is set and `UZE_AUTOUPDATE` is not
 - **THEN** no release is asked for
+
+### Requirement: `uze upgrade` is the one verb for the binary
+
+The system SHALL provide `uze upgrade`: it asks for the newest release now
+and replaces the binary under the rules above, rather than waiting for a
+background pass, and reports what it did.
+
+It SHALL be the *only* name for that operation. The background check a CLI
+command hands to a detached process SHALL be this same command under a
+hidden flag, not a second verb — two spellings of one operation is what
+ADR-019 refused, and `self-update` beside `upgrade` would be exactly that.
+
+`upgrade` names the binary and nothing else. It sits at the root beside
+`setup`, `doctor` and `theme`, which are about the tool rather than about
+a project or about `~/.uze/*` package state — the category ADR-019's
+machine-level namespaces (`market`, `plugin`, `harness`) do not cover.
+
+#### Scenario: Asking for a release now
+- **WHEN** `uze upgrade` is run from a binary a receipt names and a newer
+  release is published
+- **THEN** that release is verified and placed, and the command reports the
+  version it installed and that a restart picks it up
+
+#### Scenario: Already current
+- **WHEN** `uze upgrade` is run and the running binary is the newest release
+- **THEN** it reports that nothing was to be done, and replaces nothing
+
+#### Scenario: A binary no receipt names
+- **WHEN** `uze upgrade` is run from a binary the installer did not place
+- **THEN** nothing is replaced, and the command reports the newer release and
+  where the running binary came from
+
+#### Scenario: The background pass is the same command
+- **WHEN** an ordinary command hands a stale release answer to a detached
+  process
+- **THEN** that process is `uze upgrade` under a hidden flag, and no second
+  release-checking verb exists
+
+#### Scenario: It touches no plugin
+- **WHEN** `uze upgrade` runs
+- **THEN** no package in the Store, no `agents.yaml` and no `agents.lock` is
+  modified by it

@@ -120,3 +120,182 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// A reference UZE wrote into a harness's discovery root, pointing into
+/// UZE's own home at something that is no longer there, which no receipt
+/// claims.
+///
+/// It can only be UZE's: nothing but UZE writes inside `$UZE_HOME`, so a
+/// reference into it was made by a UZE that no longer accounts for it —
+/// left by a capability that was renamed or removed while its receipt was
+/// lost. It delivers nothing (its target is gone) and it holds a name
+/// another package may need, which is the whole reason to report it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DanglingReference {
+    pub path: PathBuf,
+    /// Where it still points, which is what says it was UZE's.
+    pub target: PathBuf,
+}
+
+impl DanglingReference {
+    pub const REMEDY: &'static str = "nothing reads it; UZE can remove it";
+}
+
+/// Every dangling reference under `roots` that `claimed` does not account
+/// for, newest first by name so the answer is stable.
+///
+/// Scoped to the roots the caller passes, which today is the *shared* Agent
+/// Skills root: it is the one namespace where one package's leftover blocks
+/// a different package's attach. A root a single integration owns can only
+/// collide with itself, and asking every integration to enumerate its
+/// directories would make each answer a question only one shape of delivery
+/// raises.
+///
+/// Three conditions, all necessary. The entry is a symbolic link; its
+/// target is *absent* — not merely unreadable, since a volume not mounted
+/// or a directory this user may not traverse is a reference still doing its
+/// job; and that target is inside `home`.
+pub fn dangling_references(
+    home: &UzeHome,
+    roots: &[PathBuf],
+    claimed: &std::collections::BTreeSet<PathBuf>,
+) -> Vec<DanglingReference> {
+    let home_root = home.root();
+    let mut found = Vec::new();
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let path = entry.path();
+            if claimed.contains(&path) {
+                continue;
+            }
+            let Ok(target) = fs::read_link(&path) else {
+                continue;
+            };
+            if !target.starts_with(home_root) {
+                continue;
+            }
+            match fs::metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    found.push(DanglingReference { path, target });
+                }
+                _ => {}
+            }
+        }
+    }
+    found.sort_by(|left, right| left.path.cmp(&right.path));
+    found
+}
+
+/// Removes one dangling reference, re-checking every condition first: the
+/// answer it was found by may be stale by the time a person acts on it.
+pub fn remove_dangling(home: &UzeHome, reference: &DanglingReference) -> crate::Result<bool> {
+    let claimed = std::collections::BTreeSet::new();
+    let root = match reference.path.parent() {
+        Some(parent) => vec![parent.to_path_buf()],
+        None => return Ok(false),
+    };
+    if !dangling_references(home, &root, &claimed)
+        .iter()
+        .any(|found| found == reference)
+    {
+        return Ok(false);
+    }
+    fs::remove_file(&reference.path).map_err(|source| crate::UzeError::Write {
+        path: reference.path.clone(),
+        source,
+    })?;
+    Ok(true)
+}
+
+#[cfg(all(test, unix))]
+mod dangling_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn world(label: &str) -> (PathBuf, UzeHome, PathBuf) {
+        let root = uze_testkit::temp::scratch(label);
+        let home = UzeHome::at(root.join("uze-home"));
+        let discovery = root.join("agents/skills");
+        fs::create_dir_all(&discovery).unwrap();
+        fs::create_dir_all(home.root()).unwrap();
+        (root, home, discovery)
+    }
+
+    #[test]
+    fn a_reference_into_uze_home_whose_target_is_gone_is_found() {
+        let (root, home, discovery) = world("dangling-found");
+        let gone = home
+            .root()
+            .join("runtime/attachments/a-harness/skills/git/pr");
+        crate::persistence::create_symlink(&gone, &discovery.join("git:pr")).unwrap();
+
+        let found = dangling_references(&home, std::slice::from_ref(&discovery), &BTreeSet::new());
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, discovery.join("git:pr"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_reference_a_receipt_claims_is_never_reported() {
+        let (root, home, discovery) = world("dangling-claimed");
+        let gone = home
+            .root()
+            .join("runtime/attachments/a-harness/skills/git/pr");
+        let link = discovery.join("git:pr");
+        crate::persistence::create_symlink(&gone, &link).unwrap();
+
+        let claimed: BTreeSet<PathBuf> = [link].into_iter().collect();
+
+        assert!(dangling_references(&home, &[discovery], &claimed).is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_reference_that_resolves_is_never_reported() {
+        let (root, home, discovery) = world("dangling-resolves");
+        let alive = home.root().join("store/plugins/ai/git");
+        fs::create_dir_all(&alive).unwrap();
+        crate::persistence::create_symlink(&alive, &discovery.join("git:pr")).unwrap();
+
+        assert!(dangling_references(&home, &[discovery], &BTreeSet::new()).is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_reference_pointing_outside_uze_home_is_never_reported() {
+        let (root, home, discovery) = world("dangling-foreign");
+        let theirs = root.join("somewhere-else/their-skill");
+        crate::persistence::create_symlink(&theirs, &discovery.join("their:skill")).unwrap();
+
+        assert!(dangling_references(&home, &[discovery], &BTreeSet::new()).is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn removing_re_checks_before_it_deletes() {
+        let (root, home, discovery) = world("dangling-remove");
+        let gone = home
+            .root()
+            .join("runtime/attachments/a-harness/skills/git/pr");
+        let link = discovery.join("git:pr");
+        crate::persistence::create_symlink(&gone, &link).unwrap();
+        let found = dangling_references(&home, std::slice::from_ref(&discovery), &BTreeSet::new());
+
+        // The world changes under the answer: the target comes back.
+        fs::create_dir_all(&gone).unwrap();
+        assert!(
+            !remove_dangling(&home, &found[0]).unwrap(),
+            "a reference that resolves again is not removed"
+        );
+        assert!(link.is_symlink());
+
+        fs::remove_dir_all(&gone).unwrap();
+        assert!(remove_dangling(&home, &found[0]).unwrap());
+        assert!(!link.is_symlink());
+        fs::remove_dir_all(&root).unwrap();
+    }
+}

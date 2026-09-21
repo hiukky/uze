@@ -229,6 +229,12 @@ pub enum UzeError {
     /// A harness's own CLI could not be run, or refused what UZE asked of it.
     #[error("{0}")]
     HarnessCommand(String),
+    /// The repository could not be reached with this machine's
+    /// credentials. Separate from `AcquisitionFailed` because the action is
+    /// different: nothing about the package is wrong, and what the operator
+    /// needs is to know which marketplace, and that it is access.
+    #[error("could not access the repository with this machine's credentials\n{detail}")]
+    RepositoryAccessRefused { detail: String },
     #[error("no exposure route is available: {0}")]
     ExposureUnavailable(String),
     #[error("a non-UZE managed entry already exists at {0}")]

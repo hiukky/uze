@@ -3,7 +3,11 @@ title: Attachment lifecycle
 ---
 flowchart TD
   plan([Exposure plan]) --> kinds[One ManagedArtifact per side effect<br/>a symlink, a vendor config entry,<br/>a region of a shared file, a hook entry,<br/>or one only its integration can read]
-  kinds --> attach[Attach: the owning integration writes it]
+  kinds --> occupied{Is the name already taken?}
+  occupied -->|no| attach[Attach: the owning integration writes it]
+  occupied -->|taken, and it resolves to nothing| adopt[Adopt it: it delivers no capability,<br/>so refusing it preserves no work]
+  occupied -->|taken, and it resolves| held[Preserve it, report the capability,<br/>and deliver the rest]
+  adopt --> attach
   attach --> receipt[(A typed receipt in the ledger)]
   receipt --> inspect{Inspect the harness as it is now}
   inspect -->|it is as the receipt says| matched[MATCHED]
@@ -17,3 +21,4 @@ flowchart TD
   drifted --> refuse[Refuse the mutation, and report what was found]
   conflict --> refuse
   blocked --> refuse
+  sweep[/uze doctor: a reference into UZE's own home<br/>that resolves to nothing and no receipt claims/] --> remove[Remove it: nothing else writes there,<br/>so it can only be UZE's own leftover]

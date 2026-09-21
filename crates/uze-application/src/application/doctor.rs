@@ -159,6 +159,15 @@ impl Health<'_> {
             .map(|error| error.to_string());
         let found = uze_core::leftovers::set_aside(&self.0.home);
         let leftovers = UpgradeLeftovers {
+            dangling: self
+                .dangling_references()
+                .into_iter()
+                .map(|one| DanglingReferenceRecord {
+                    path: one.path,
+                    target: one.target,
+                    remedy: uze_core::leftovers::DanglingReference::REMEDY,
+                })
+                .collect(),
             total: found.len(),
             set_aside: found
                 .into_iter()
@@ -786,5 +795,38 @@ mod delivery_note_tests {
             None,
             "an unsupported hook has no delivery to describe"
         );
+    }
+}
+
+impl Health<'_> {
+    /// Every reference in a *shared* discovery root that points into
+    /// `$UZE_HOME` at something gone and that no receipt claims.
+    ///
+    /// Shared roots only: that is the namespace where one package's
+    /// leftover holds a name a different package needs, which is the whole
+    /// reason to look. A root one integration owns can only collide with
+    /// itself, and `IntegrationPort` deliberately exposes no directory
+    /// listing beyond this one.
+    pub(crate) fn dangling_references(&self) -> Vec<uze_core::leftovers::DanglingReference> {
+        let roots: Vec<std::path::PathBuf> = self
+            .0
+            .integrations
+            .iter()
+            .filter_map(|integration| integration.shared_agent_skill_root())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if roots.is_empty() {
+            return Vec::new();
+        }
+        let claimed = state::receipts(&self.0.home, None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|receipt| match receipt.artifact {
+                uze_core::integration::ManagedArtifact::SymlinkReference { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect();
+        uze_core::leftovers::dangling_references(&self.0.home, &roots, &claimed)
     }
 }

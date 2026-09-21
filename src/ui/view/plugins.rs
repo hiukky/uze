@@ -26,7 +26,9 @@ use ratatui::{
 };
 
 use uze_application::CapabilityKind;
-use uze_application::application::{DoctorReport, MarketplacePluginSummary, PluginCapability};
+use uze_application::application::{
+    DoctorReport, FreshnessState, MarketplacePluginSummary, PluginCapability, Revision,
+};
 
 use super::super::agent_support::capability_label;
 use super::super::hit::Hit;
@@ -367,17 +369,32 @@ fn plugin_line<'a>(
             "Available"
         }
     );
-    // "Updated" and "Update available" are the same slot and mutually
-    // exclusive by construction: the badge is only ever raised by an update
-    // that just landed, which is exactly what clears `update_available`.
-    // The remaining "Update available" therefore always means one uze
-    // declined to apply on its own — press `u`.
+    // One slot, and "Updated" wins it: the badge is only ever raised by an
+    // update that just landed, which is exactly what makes the row current.
+    //
+    // Every other word here is a different fact, and none of them may read
+    // like another. "Not checked" in particular must not look like being
+    // current — that collapse is what made "Installed" mean both "this is
+    // the one that exists" and "nobody has looked".
     let (update, update_style) = if just_updated {
-        ("Updated", theme::fg(Token::Accent))
-    } else if plugin.update_available == Some(true) {
-        ("Update available", theme::fg(Token::StateWarning))
+        ("Updated".to_owned(), theme::fg(Token::Accent))
     } else {
-        ("", Style::default())
+        match &plugin.freshness.state {
+            FreshnessState::Behind { commits: None } => (
+                "Update available".to_owned(),
+                theme::fg(Token::StateWarning),
+            ),
+            FreshnessState::Behind {
+                commits: Some(commits),
+            } => (format!("{commits} behind"), theme::fg(Token::StateWarning)),
+            FreshnessState::Linked { .. } => ("Linked".to_owned(), theme::fg(Token::Accent)),
+            FreshnessState::NotChecked if plugin.installed => {
+                ("Not checked".to_owned(), theme::fg(Token::TextDim))
+            }
+            FreshnessState::UpToDate | FreshnessState::Unpinned | FreshnessState::NotChecked => {
+                (String::new(), Style::default())
+            }
+        }
     };
     let update = format!("{update:<UPDATE_WIDTH$}");
     let mut spans = vec![
@@ -417,11 +434,14 @@ fn render_plugin_drawer(
     let offers = plugin.offers();
     let (body, status_area) = super::drawer_body_and_footer(inner, &offers);
 
-    let room = body.width as usize;
-    let mut lines = vec![Line::from(Span::styled(
-        "PLUGIN",
-        theme::fg_bold(Token::TextMuted),
-    ))];
+    // One cell short of the edge. Folding at the full width put every row
+    // flush against the border, which is what made a drawer with rows to
+    // spare read as crowded.
+    let room = body.width.saturating_sub(crate::ui::widget::TRAILING_PAD) as usize;
+    // No `PLUGIN` label: this drawer is about a plugin, so the name is the
+    // heading rather than a value under one. Every other label here says
+    // something its value would be ambiguous without.
+    let mut lines: Vec<Line<'static>> = Vec::new();
     lines.extend(text::fold(&plugin.name, room).into_iter().map(|row| {
         Line::from(Span::styled(
             row,
@@ -533,6 +553,73 @@ fn render_plugin_drawer(
         })
     });
 
+    // What you actually have, before what it offers. The row's status
+    // column says whether something newer exists; this says how old the
+    // thing in front of you is, which is the question the state alone
+    // cannot answer.
+    // Asked of whichever detail matches this row: what you have when it is
+    // installed, what you would be getting when it is not. "Is this
+    // abandoned" is the same question one step earlier.
+    let revision = installed_inspection
+        .flatten()
+        .and_then(|detail| detail.revision.as_ref())
+        .or_else(|| {
+            catalog_detail
+                .flatten()
+                .and_then(|detail| detail.revision.as_ref())
+        });
+    if let Some(revision) = revision {
+        lines.push(Line::from(Span::styled(
+            "REVISION",
+            theme::fg_bold(Token::TextMuted),
+        )));
+        match revision {
+            Revision::Commit {
+                short,
+                age,
+                subject,
+            } => {
+                lines.push(Line::from(vec![
+                    Span::styled(short.clone(), theme::fg(Token::TextSecondary)),
+                    Span::raw("  "),
+                    Span::styled(age.clone(), theme::fg(Token::TextMuted)),
+                ]));
+                // Folded, not elided: a commit subject is a sentence, and
+                // a truncated one loses the half that says what the
+                // change was. The drawer has rows to spare and the
+                // resource list below already folds the same way.
+                lines.extend(
+                    text::fold(subject, room)
+                        .into_iter()
+                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextDim)))),
+                );
+            }
+            // Shipped inside the binary: there is no repository to ask,
+            // and the release it came with is the only date that is true.
+            Revision::Bundled { version } => {
+                lines.push(Line::from(Span::styled(
+                    format!("ships with uze {version}"),
+                    theme::fg(Token::TextSecondary),
+                )));
+            }
+            // No revision to name: what is installed is whatever its
+            // author last saved, so the checkout is the only honest
+            // answer.
+            Revision::Checkout { path } => {
+                lines.push(Line::from(Span::styled(
+                    "follows your working tree",
+                    theme::fg(Token::TextSecondary),
+                )));
+                lines.extend(
+                    text::fold(&path.display().to_string(), room)
+                        .into_iter()
+                        .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextMuted)))),
+                );
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
     lines.push(Line::from(Span::styled(
         "RESOURCES",
         theme::fg_bold(Token::TextMuted),
@@ -571,11 +658,22 @@ fn render_plugin_drawer(
                 headline: "Updated",
                 subtitle: "Brought up to date automatically when uze started",
             }
-        } else if plugin.update_available == Some(true) {
+        // Only an actionable freshness state takes this slot. It carries
+        // attachment health — whether the plugin is actually delivered —
+        // and "nobody has compared this against its marketplace" says
+        // nothing about that. The row's own status column is where every
+        // freshness state is reported.
+        } else if plugin.freshness.behind() {
             DrawerStatus {
                 color: theme::color(Token::StateWarning),
                 headline: "Update available",
                 subtitle: "Needs your confirmation to apply",
+            }
+        } else if matches!(plugin.freshness.state, FreshnessState::Linked { .. }) {
+            DrawerStatus {
+                color: theme::color(Token::Accent),
+                headline: "Linked",
+                subtitle: "Follows a checkout on this machine",
             }
         } else {
             DrawerStatus {

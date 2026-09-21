@@ -18,7 +18,7 @@ use uze_keys::Action;
 
 use super::lifecycle::remove::is_protected_plugin;
 use super::profile::ProfileSummary;
-use super::read_models::{HarnessHealth, MarketplacePluginSummary};
+use super::read_models::{FreshnessState, HarnessHealth, MarketplacePluginSummary};
 
 /// One thing that can be done to one entity, and whether it can be done
 /// now.
@@ -72,16 +72,26 @@ impl MarketplacePluginSummary {
             } else {
                 ActionOffer::available(Action::InstallPlugin)
             },
-            match (self.installed, self.update_available) {
-                (true, Some(true)) => ActionOffer::available(Action::UpdatePlugin),
-                (true, Some(false)) => {
+            match (self.installed, &self.freshness.state) {
+                (false, _) => ActionOffer::unavailable(Action::UpdatePlugin, "not installed"),
+                (true, FreshnessState::Behind { .. }) => {
+                    ActionOffer::available(Action::UpdatePlugin)
+                }
+                (true, FreshnessState::UpToDate) => {
                     ActionOffer::unavailable(Action::UpdatePlugin, "already up to date")
                 }
-                (true, None) => ActionOffer::unavailable(
+                (true, FreshnessState::Linked { .. }) => ActionOffer::unavailable(
+                    Action::UpdatePlugin,
+                    "linked to a checkout on this machine, which is what it follows",
+                ),
+                (true, FreshnessState::Unpinned) => ActionOffer::unavailable(
+                    Action::UpdatePlugin,
+                    "installed from a source no marketplace tracks",
+                ),
+                (true, FreshnessState::NotChecked) => ActionOffer::unavailable(
                     Action::UpdatePlugin,
                     "its marketplace could not be compared against",
                 ),
-                (false, _) => ActionOffer::unavailable(Action::UpdatePlugin, "not installed"),
             },
             if !self.installed {
                 ActionOffer::unavailable(Action::RemovePlugin, "not installed")
@@ -162,6 +172,7 @@ pub fn key_offers(customised: bool) -> Vec<ActionOffer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::read_models::Freshness;
 
     fn plugin(
         installed: bool,
@@ -174,7 +185,17 @@ mod tests {
             description: None,
             keywords: Vec::new(),
             installed,
-            update_available: update,
+            freshness: match update {
+                Some(true) => Freshness {
+                    state: FreshnessState::Behind { commits: None },
+                    established_at_unix: Some(0),
+                },
+                Some(false) => Freshness {
+                    state: FreshnessState::UpToDate,
+                    established_at_unix: Some(0),
+                },
+                None => Freshness::not_checked(),
+            },
             is_default: false,
         }
     }

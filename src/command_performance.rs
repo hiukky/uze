@@ -74,6 +74,12 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "reconstructs the project's agent environment from agents.yaml, acquiring packages",
         ),
     ),
+    (
+        "update",
+        PerformanceClass::JustifiedSlow(
+            "re-resolves each declared marketplace ref, which reaches its remote, and reinstalls              what moved",
+        ),
+    ),
     // Machine scope: theme. Every one of these is a small JSON read plus a
     // directory listing under `$UZE_HOME` — no harness is probed, and no
     // theme is resolved that is not the one being asked about.
@@ -84,6 +90,11 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
+    // Both are a registry write plus dropping a cache entry. `link` also
+    // asks Git what repository the checkout is, which is local and answers
+    // in one call.
+    ("market link", PerformanceClass::Budgeted),
+    ("market unlink", PerformanceClass::Budgeted),
     ("market inspect", PerformanceClass::Budgeted),
     (
         "market add",
@@ -204,6 +215,14 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "market remove",
         "uze_application::application::performance_tests::removals_meet_the_budget",
+    ),
+    (
+        "market link",
+        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
+    ),
+    (
+        "market unlink",
+        "uze_application::application::performance_tests::market_link_and_unlink_meet_the_budget",
     ),
     (
         "market inspect",

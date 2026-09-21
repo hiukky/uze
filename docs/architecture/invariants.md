@@ -386,13 +386,24 @@ holding the pipe open is swept once before the reader is given up on.
 
 `~/.uze/cache` holds three caches, each reconstructable from a live read:
 harness detection (`harness_detection.json`), attachment inspection
-(`inspection.json`) and the catalogue of every marketplace registered by
-URL (`marketplaces/<name>/`). Deleting the directory costs one probe, one
-inspection or one clone; nothing installed depends on it, and no mutating
-path trusts it — removal planning re-inspects live, and a mutation
-invalidates the entries it touched.
+(`inspection.json`) and, for every marketplace registered by URL, a mirror
+of its repository (`marketplaces/<name>/repo`) with whatever plugins have
+been asked about written out beside it (`marketplaces/<name>/plugins`).
+Deleting the directory costs one probe, one inspection or one clone;
+nothing installed depends on it, and no mutating path trusts it — removal
+planning re-inspects live, and a mutation invalidates the entries it
+touched.
 
-> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_stored_catalogue_answers_without_the_source_being_reachable`
+The mirror is the cache tier's one piece of real machinery rather than a
+copy: bare and blobless, it answers what a marketplace offers, at which
+commit, and how far a pinned revision is behind — none of which a copied
+tree can answer, and all of which cost a clone to rebuild and nothing else.
+A package's bytes are never read from it: they are ingested into the Store,
+which is what every harness reads and what must stand with this gone.
+
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_mirrored_catalogue_answers_without_the_source_being_reachable`
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::nothing_is_materialized_until_a_plugin_is_asked_about`
+> `crates/uze-core/src/package/acquisition/mirror.rs::tests::a_mirror_of_another_repository_is_replaced_not_fetched_into`
 > `crates/uze-application/src/application/doctor.rs::tests::installation_invalidates_the_inspection_cache`
 
 ---
@@ -704,17 +715,78 @@ included — stays on the reporting side of that line.
 
 > `crates/uze-application/src/application/tests.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
 
-### Automatic update is local-only, and never grants trust
+### A managed reference that resolves to nothing is adopted, not preserved
 
-`auto_update_plugins` — the one caller of `update_plugin` that no person
-typed, run when the TUI opens — touches only `PackageSource::Embedded`
-packages (bytes already inside the running binary; no network, no
-re-resolution of a Git or path source) and runs under `NoTrustAuthority`,
-so a revision introducing new executable capability is reported and left
-for an explicit confirmation rather than applied.
+A reference occupying the name a capability needs is judged by whether it
+resolves. One that resolves to nothing carries no capability into the
+harness, so preserving it protects no work and blocks the attachment
+permanently — which is what a UZE-owned target that moved leaves behind on
+every machine that had one. Absence is the only ground: a target that
+cannot be read for any other reason is preserved, because UZE cannot tell it
+apart from one that resolves.
+
+A name something else still holds stops that capability and no other. The
+package is installed before delivery begins, so raising it as the command's
+failure reported total failure over partial work.
+
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_adopts_a_reference_whose_target_no_longer_exists`
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_preserves_a_reference_somebody_repointed_at_their_own_content`
+> `crates/uze-core/src/delivery/exposure.rs::tests::attach_preserves_a_reference_whose_target_cannot_be_read`
+> `tests/projection/shared_roots.rs::a_name_somebody_else_holds_blocks_its_own_capability_and_no_other`
+
+### A linked marketplace follows a working tree and pins nothing
+
+A marketplace linked to a checkout on this machine is read from that
+checkout: its content is what Git does not ignore — tracked, plus written
+and not yet committed — so an edit reaches every harness with no commit
+behind it, and an editor's temporary file never does.
+
+`agents.lock` is not written from it. Such a package's provenance resolves
+to a path rather than a commit, and recording reports that it recorded
+nothing instead of failing, so a revision taken from unpublished work never
+becomes a pin a collaborator cannot reach. UZE performs no Git on the
+checkout: the operator's branch and uncommitted work stay theirs.
+
+> `tests/lifecycle/manifest_and_lock.rs::a_linked_marketplace_follows_the_checkout_and_pins_nothing`
+> `crates/uze-core/src/package/acquisition/mirror.rs::linked_tests::a_file_the_checkout_ignores_is_not_package_content`
+> `crates/uze-core/src/package/acquisition/mirror.rs::linked_tests::a_file_written_and_not_yet_committed_is_package_content`
+
+### Install reproduces a pin; only update moves one
+
+`uze install` installs what `agents.lock` records, whatever the declared ref
+points at now — that is what lets a clone reach the bytes the project was
+locked at. `uze update` is the only command that moves a pin, and it
+replaces rather than installs again, because the Store is idempotent by
+origin and a marketplace's url and ref do not change between revisions.
+
+A marketplace this machine cannot reach by declaration is skipped and named
+rather than failing the command, so a contributor gets the half that is
+reachable.
+
+> `tests/lifecycle/manifest_and_lock.rs::install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it`
+> `tests/lifecycle/manifest_and_lock.rs::an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs`
+> `tests/lifecycle/manifest_and_lock.rs::updating_a_plugin_this_project_does_not_declare_writes_nothing`
+
+### Automatic update never asks a remote whether to act, and never grants trust
+
+`auto_update` — the one caller of `Plugins::update` that no person typed,
+run when the client opens — acts only on a package *already established* as
+behind. Establishing that is a local read: the commit a package was
+installed at against the head its marketplace's mirror last recorded. So no
+package is ever fetched to find out whether it needs fetching, and the
+CLI's read-only dispatch path, which never calls this, still reaches no
+remote.
+
+It runs under `NoTrustAuthority`, so a revision introducing executable
+capability the installed one did not have is reported and left for an
+explicit confirmation rather than applied.
+
+Acquisition happens outside the mutation lock, which covers only the write:
+held across a remote, one background update would refuse the operator's own
+command — and every mutating action inside the client itself.
 
 > `crates/uze-application/src/application/tests.rs::auto_update_applies_a_pending_official_snapshot_update`
-> `crates/uze-application/src/application/tests.rs::auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
+> `crates/uze-application/src/application/tests.rs::auto_update_never_fetches_to_find_out_whether_there_is_an_update`
 
 ### A default plugin crossing the trust boundary is never installed silently
 

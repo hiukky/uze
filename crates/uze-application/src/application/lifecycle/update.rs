@@ -12,9 +12,76 @@ use super::super::services::Plugins;
 use super::super::*;
 
 impl Plugins<'_> {
+    /// The package re-read from the checkout its marketplace is linked to,
+    /// or `None` when it is not linked.
+    ///
+    /// Best-effort by design: a link pointing at a checkout that has since
+    /// been moved or broken must not make the package un-updatable, so a
+    /// failure here falls back to the source the package was installed
+    /// from and the ordinary error surfaces from there.
+    fn linked_source(
+        &self,
+        installed: &uze_core::StoredPackage,
+    ) -> Option<uze_core::MaterializedPackage> {
+        let marketplace = installed.id.marketplace();
+        let record = uze_core::state::marketplace_get(&self.0.home, marketplace).ok()??;
+        record.link?;
+        let request = super::super::marketplace::MarketplaceRequest::of(&record.source).ok()?;
+        request
+            .materialize_plugin(
+                installed.id.plugin_name(),
+                super::super::marketplace::MirrorAt {
+                    home: &self.0.home,
+                    marketplace,
+                },
+            )
+            .ok()
+    }
+
     #[tracing::instrument(name = "plugins.update", skip_all, fields(id = %id), err)]
     pub fn update(&self, id: &str, authority: &dyn TrustAuthority) -> Result<UpdatePluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        // Reading which package this is, and fetching its new bytes, happen
+        // *outside* the mutation lock. That lock is global and exclusive,
+        // and acquisition reaches a remote: held across it, one background
+        // update would refuse the operator's own command in another
+        // terminal — and every mutating action inside the client itself,
+        // reporting the client's own pid back at them. Nothing is written
+        // until `deliver` below, which is where the lock belongs.
+        let installed = self.0.package_by_name(id)?;
+
+        // Re-resolve the *request*, not the resolution: that is what makes a
+        // branch move forward while a pinned commit stays put.
+        //
+        // Unless the marketplace is linked to a checkout on this machine,
+        // in which case the request is not where the bytes are any more.
+        // Asked here rather than by the caller because a link is a machine
+        // fact, and this is the machine-level way to bring a package up to
+        // date — so `uze plugin update` and a project's own update follow
+        // it alike.
+        let materialized = match self.linked_source(&installed) {
+            Some(request) => request,
+            None => self.acquire(&installed.provenance.requested)?,
+        };
+        self.replace_with(id, materialized, authority)
+    }
+
+    /// Replaces `id`'s installed revision with bytes the caller already
+    /// materialized, and puts the old one back if the new one cannot be
+    /// delivered.
+    ///
+    /// Separate from `update` because *where the new bytes come from* is
+    /// the caller's question and the replacement is not. A machine update
+    /// re-resolves the package's own request; a project's update resolves
+    /// the ref its manifest declares, which is a different revision
+    /// whenever the request was itself pinned — a package reproduced from
+    /// `agents.lock` has the locked commit *as* its request, so
+    /// re-resolving that can only ever return what is already installed.
+    pub(crate) fn replace_with(
+        &self,
+        id: &str,
+        materialized: uze_core::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdatePluginReport> {
         let installed = self.0.package_by_name(id)?;
         // An update is a version change, never a re-namespacing (ADR-038):
         // whatever local name this package currently answers to — its own
@@ -23,10 +90,6 @@ impl Plugins<'_> {
         // and recreates its registration.
         let active_name = installed.active_name.clone();
         let bare_name = installed.id.plugin_name().to_owned();
-
-        // Re-resolve the *request*, not the resolution: that is what makes a
-        // branch move forward while a pinned commit stays put.
-        let materialized = self.acquire(&installed.provenance.requested)?;
 
         let previous = {
             let resources = uze_core::engine::package_resources(&installed)?;
@@ -43,6 +106,14 @@ impl Plugins<'_> {
         // package is still installed. Reached after the removal it was a
         // plugin gone from the machine with nothing left to heal it.
         self.0.prepare_detected_integrations()?;
+
+        // From here on the machine changes, so this is where the lock
+        // belongs: everything above only read, and the bytes it fetched are
+        // in scratch nobody else can see.
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        // The package may have moved under us while the network was busy.
+        // Re-read it rather than acting on what was true before the fetch.
+        let installed = self.0.package_by_name(id)?;
 
         // What is left can still fail with the package already removed — the
         // ingest running out of disk, a revision whose environment will not
@@ -151,40 +222,40 @@ impl Plugins<'_> {
     /// Applies every pending update this machine can settle on its own,
     /// and reports what it did.
     ///
-    /// "On its own" is two deliberate restrictions, not an optimization:
+    /// "On its own" is one restriction, and it is a trust one, not a
+    /// transport one: **only under `NoTrustAuthority`**. A revision that
+    /// introduces executable capability the installed one did not have is
+    /// refused and reported, exactly as a non-interactive bootstrap refuses
+    /// one (see `docs/architecture/invariants.md`, "A default plugin
+    /// crossing the trust boundary is never installed silently"). The
+    /// operator is then still offered it explicitly, with the dialog.
     ///
-    /// - **Only an update uze can already see.** `update_available` is a
-    ///   local comparison against the embedded official snapshot — bytes
-    ///   that shipped inside the binary already being run. Nothing here
-    ///   reaches the network, so a Git- or path-sourced plugin is never
-    ///   re-resolved behind the operator's back; those still update only
-    ///   through an explicit `Plugins::update`.
-    /// - **Only under `NoTrustAuthority`.** A revision that introduces new
-    ///   executable capability is refused and reported, exactly as a
-    ///   non-interactive bootstrap refuses one (see
-    ///   `docs/architecture/invariants.md`, "A default plugin crossing the
-    ///   trust boundary is never installed silently"). The operator is then
-    ///   still offered the update explicitly, with the dialog.
+    /// It used to be a transport restriction too — only updates this
+    /// machine could already see, so a Git- or path-sourced plugin was
+    /// never re-resolved. That reasoning still holds where it was written:
+    /// `ensure_default_plugins` runs before *every* command, read-only ones
+    /// included, and a diagnostic must not reach a remote or rewrite plugin
+    /// content. It does not hold for the client opening, which is an
+    /// explicit interactive act — the same argument `spawn_startup` already
+    /// makes for the work it does there. So the rule is now about *who
+    /// calls this*, and the CLI dispatch path still never does.
     ///
     /// Best-effort per plugin: one failure never stops the rest, and a
     /// blocked or refused update leaves the installed revision untouched —
-    /// `Plugins::update` already inspects before it detaches.
+    /// `Plugins::update` inspects before it detaches.
     ///
-    /// This is not called from the CLI dispatch path: `ensure_default_plugins`
-    /// runs before every command, read-only ones included, and a diagnostic
-    /// must not rewrite plugin content. Interactive surfaces call this.
+    /// Not called from the CLI dispatch path. Interactive surfaces call it.
     #[tracing::instrument(name = "plugins.auto_update", skip_all)]
     pub fn auto_update(&self) -> Vec<AutoUpdateOutcome> {
+        // Only what is already known to be behind. Freshness is a local
+        // read — the installed commit against the head its mirror last
+        // recorded — so deciding *whether* to update costs no network at
+        // all, and only a package that needs one is fetched.
         let pending: Vec<String> = self
             .0
             .installed_packages()
             .into_iter()
-            .filter(|package| match &package.provenance.requested {
-                uze_core::PackageSource::Embedded { id } => {
-                    crate::bootstrap::has_update(id, &package.root).unwrap_or(false)
-                }
-                _ => false,
-            })
+            .filter(|package| self.0.freshness_of(package).behind())
             .map(|package| package.id.as_str().to_owned())
             .collect();
 

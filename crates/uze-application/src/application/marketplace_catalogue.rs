@@ -50,21 +50,98 @@ use uze_core::{
 const MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 const META_FILE: &str = "catalogue.json";
-const CHECKOUT_DIR: &str = "checkout";
+/// The mirror itself: a bare, blobless clone.
+const REPOSITORY_DIR: &str = "repo";
+/// Where a plugin's bytes are written when something asks about one.
+const MATERIALIZED_DIR: &str = "plugins";
 
-/// A marketplace's manifest, and the directory its plugin entries resolve
-/// against — the cached checkout for a Git source, the directory itself
-/// for a local one.
+/// A marketplace's manifest, and how to reach the bytes of a plugin it
+/// offers.
+///
+/// The two are separate because a Git marketplace has no directory: its
+/// catalogue is a mirror, which answers "what is offered" from history and
+/// materializes a plugin's own subdirectory only when something asks for
+/// it. A local marketplace is the directory, read where it is.
 #[derive(Clone, Debug)]
 pub struct Catalogue {
-    pub root: PathBuf,
     pub manifest: MarketplaceManifest,
+    pub reach: Reach,
+}
+
+/// Where a catalogue's plugins are read from.
+#[derive(Clone, Debug)]
+pub enum Reach {
+    /// The marketplace's own directory on this machine — its author is
+    /// editing it, so it is read in place and never copied.
+    InPlace { root: PathBuf },
+    /// A mirror and the commit this catalogue was read at. A plugin's
+    /// bytes are written out on demand, under `materialized`, and only
+    /// for the plugins something actually asks about.
+    Mirrored {
+        repository: PathBuf,
+        commit: String,
+        materialized: PathBuf,
+    },
+}
+
+impl Catalogue {
+    /// The directory holding `plugin`'s bytes, materializing them when the
+    /// catalogue is a mirror and they are not out yet.
+    ///
+    /// Bounded by what is asked for: browsing a marketplace's listing
+    /// materializes nothing, and looking at one plugin materializes that
+    /// plugin. The whole-tree copy this replaces wrote out every directory
+    /// in the repository, installed or not.
+    pub fn plugin_root(&self, plugin: &str) -> Result<PathBuf> {
+        match &self.reach {
+            Reach::InPlace { root } => {
+                acquisition::marketplace::resolve_plugin_source(&self.manifest, plugin, root)
+            }
+            Reach::Mirrored {
+                repository,
+                commit,
+                materialized,
+            } => {
+                let out = materialized.join(directory_name(plugin));
+                let within = acquisition::marketplace::plugin_subdirectory(&self.manifest, plugin)?;
+                // Asked of the plugin's own root, not of the directory that
+                // holds it. Materialization creates that directory before
+                // it writes anything, so one interrupted part-way leaves it
+                // there empty — and a guard on the directory then answers
+                // "already done" forever, leaving that plugin permanently
+                // unresolvable.
+                let root = if within == "." {
+                    out.clone()
+                } else {
+                    out.join(&within)
+                };
+                if !root.exists() {
+                    // Cleared first: what is there is the residue of a
+                    // materialization that did not finish, and writing over
+                    // it would mix two revisions' files.
+                    let _ = fs::remove_dir_all(&out);
+                    acquisition::mirror::materialize_subdirectory(
+                        repository,
+                        commit,
+                        Some(&within),
+                        &out,
+                    )?;
+                }
+                acquisition::marketplace::resolve_plugin_source(&self.manifest, plugin, &out)
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
 struct Meta {
     source: PackageSource,
     cached_at_unix_nanos: u128,
+    /// The commit the mirror was read at. Recorded because the whole
+    /// reason to keep a repository rather than a copied tree is to be able
+    /// to say which revision an answer is about.
+    #[serde(default)]
+    commit: Option<String>,
 }
 
 pub struct MarketplaceCatalogues {
@@ -108,49 +185,27 @@ impl MarketplaceCatalogues {
         Ok(catalogue)
     }
 
-    /// Records `checkout_root` — a marketplace just cloned from `source`
-    /// for some other reason — as `name`'s catalogue, so the clone is not
-    /// paid a second time by the listing that follows.
-    pub fn store_from(
-        &self,
-        name: &str,
-        source: &PackageSource,
-        checkout_root: &Path,
-    ) -> Result<Catalogue> {
-        let entry = self.entry_dir(name);
-        let staging = self.root.join(format!(
-            "{}.staging-{}-{}",
-            directory_name(name),
-            std::process::id(),
-            now_unix_nanos()
-        ));
-        let stored = (|| {
-            copy_tree(checkout_root, &staging.join(CHECKOUT_DIR))?;
-            let meta = Meta {
-                source: source.clone(),
-                cached_at_unix_nanos: now_unix_nanos(),
-            };
-            let payload = serde_json::to_vec_pretty(&meta).expect("catalogue meta is serializable");
-            fs::write(staging.join(META_FILE), payload).map_err(|source| UzeError::Write {
-                path: staging.join(META_FILE),
-                source,
-            })?;
-            if entry.exists() {
-                fs::remove_dir_all(&entry).map_err(|source| UzeError::Write {
-                    path: entry.clone(),
-                    source,
-                })?;
-            }
-            fs::rename(&staging, &entry).map_err(|source| UzeError::Write {
-                path: entry.clone(),
-                source,
-            })?;
-            read_in_place(&entry.join(CHECKOUT_DIR))
-        })();
-        if stored.is_err() {
-            let _ = fs::remove_dir_all(&staging);
+    /// The catalogue as it stands on this disk, however old — never
+    /// refilled.
+    ///
+    /// For a reader that must answer *now*: selecting a plugin used to
+    /// reach `read`, which refills an entry past its window, which is a
+    /// `git fetch` to a remote. A click then paid an SSH round trip, and a
+    /// second click during it cancelled the first part-way.
+    ///
+    /// Refreshing belongs to the background pass that already runs when
+    /// the client opens. An answer here is as old as the last one of those,
+    /// which is what the established-at date beside it is for.
+    pub fn read_as_it_stands(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
+        if let Some(catalogue) = self.memo.borrow().get(name) {
+            return Ok(catalogue.clone());
         }
-        let catalogue = stored?;
+        let catalogue = match source {
+            PackageSource::Local { path } => read_in_place(path)?,
+            _ => self
+                .on_disk(name, source, true)
+                .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))?,
+        };
         self.memo
             .borrow_mut()
             .insert(name.to_owned(), catalogue.clone());
@@ -163,10 +218,134 @@ impl MarketplaceCatalogues {
         let _ = fs::remove_dir_all(self.entry_dir(name));
     }
 
+    /// Brings `name`'s mirror up to date and reads the manifest out of it.
+    ///
+    /// The first call clones; every one after it fetches. Nothing is
+    /// checked out: the manifest is read from the commit, which is the
+    /// whole reason the mirror has no working tree.
     fn refill(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
-        let _span = tracing::info_span!("marketplace.clone", marketplace = name).entered();
-        let checkout = acquisition::acquire(source)?;
-        self.store_from(name, source, checkout.root())
+        let _span = tracing::info_span!("marketplace.fetch", marketplace = name).entered();
+        let PackageSource::Git { url, reference, .. } = source else {
+            return Err(UzeError::ExposureUnavailable(
+                "only a Git marketplace is mirrored".to_owned(),
+            ));
+        };
+        let entry = self.entry_dir(name);
+        let repository = entry.join(REPOSITORY_DIR);
+        super::marketplace::naming_the_marketplace(
+            acquisition::mirror::ensure(url, &repository),
+            name,
+            url,
+        )?;
+        let commit = acquisition::mirror::resolve(&repository, reference.as_deref())?;
+        let manifest = self.manifest_at(&repository, &commit)?;
+
+        let meta = Meta {
+            source: source.clone(),
+            cached_at_unix_nanos: now_unix_nanos(),
+            commit: Some(commit.clone()),
+        };
+        let payload = serde_json::to_vec_pretty(&meta).expect("catalogue meta is serializable");
+        fs::create_dir_all(&entry).map_err(|source| UzeError::Write {
+            path: entry.clone(),
+            source,
+        })?;
+        fs::write(entry.join(META_FILE), payload).map_err(|source| UzeError::Write {
+            path: entry.join(META_FILE),
+            source,
+        })?;
+        // A plugin materialized from an older commit is not this one's.
+        let _ = fs::remove_dir_all(entry.join(MATERIALIZED_DIR));
+
+        Ok(Catalogue {
+            manifest,
+            reach: Reach::Mirrored {
+                repository,
+                commit,
+                materialized: entry.join(MATERIALIZED_DIR),
+            },
+        })
+    }
+
+    fn manifest_at(&self, repository: &Path, commit: &str) -> Result<MarketplaceManifest> {
+        let bytes = acquisition::mirror::read_file(repository, commit, MARKETPLACE_MANIFEST_NAME)?;
+        acquisition::marketplace::parse_manifest(&bytes)
+    }
+
+    /// Registers a Git source whose marketplace name is not known yet:
+    /// mirrors it, reads the name out of the manifest, and keeps the mirror
+    /// under that name. `market add` used to clone the whole repository for
+    /// this and then hand the copy to the cache.
+    pub fn adopt(&self, source: &PackageSource) -> Result<(String, Catalogue)> {
+        let PackageSource::Git { url, reference, .. } = source else {
+            return Err(UzeError::ExposureUnavailable(
+                "only a Git marketplace is mirrored".to_owned(),
+            ));
+        };
+        let staging = self.root.join(format!(
+            ".adopting-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let adopted = (|| {
+            acquisition::mirror::ensure(url, &staging)?;
+            let commit = acquisition::mirror::resolve(&staging, reference.as_deref())?;
+            let manifest = self.manifest_at(&staging, &commit)?;
+            Ok((manifest.name.clone(), manifest, commit))
+        })();
+        let (name, manifest, commit) = match adopted {
+            Ok(answer) => answer,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        };
+
+        let entry = self.entry_dir(&name);
+        let repository = entry.join(REPOSITORY_DIR);
+        let moved = (|| {
+            if entry.exists() {
+                fs::remove_dir_all(&entry).map_err(|source| UzeError::Write {
+                    path: entry.clone(),
+                    source,
+                })?;
+            }
+            fs::create_dir_all(&entry).map_err(|source| UzeError::Write {
+                path: entry.clone(),
+                source,
+            })?;
+            fs::rename(&staging, &repository).map_err(|source| UzeError::Write {
+                path: repository.clone(),
+                source,
+            })?;
+            let meta = Meta {
+                source: source.clone(),
+                cached_at_unix_nanos: now_unix_nanos(),
+                commit: Some(commit.clone()),
+            };
+            let payload = serde_json::to_vec_pretty(&meta).expect("catalogue meta is serializable");
+            fs::write(entry.join(META_FILE), payload).map_err(|source| UzeError::Write {
+                path: entry.join(META_FILE),
+                source,
+            })
+        })();
+        if moved.is_err() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        moved?;
+
+        let catalogue = Catalogue {
+            manifest,
+            reach: Reach::Mirrored {
+                repository,
+                commit,
+                materialized: entry.join(MATERIALIZED_DIR),
+            },
+        };
+        self.memo
+            .borrow_mut()
+            .insert(name.clone(), catalogue.clone());
+        Ok((name, catalogue))
     }
 
     /// The on-disk entry for `name`, if it was read from `source` and,
@@ -186,7 +365,20 @@ impl MarketplaceCatalogues {
         if !accept_expired && age_nanos >= MAX_AGE.as_nanos() {
             return None;
         }
-        read_in_place(&entry.join(CHECKOUT_DIR)).ok()
+        // An entry written by a build that kept a copied tree has no
+        // commit; there is nothing to carry across in the cache tier, so it
+        // is a miss and the mirror is made.
+        let commit = meta.commit?;
+        let repository = entry.join(REPOSITORY_DIR);
+        let manifest = self.manifest_at(&repository, &commit).ok()?;
+        Some(Catalogue {
+            manifest,
+            reach: Reach::Mirrored {
+                repository,
+                commit,
+                materialized: entry.join(MATERIALIZED_DIR),
+            },
+        })
     }
 
     fn entry_dir(&self, name: &str) -> PathBuf {
@@ -202,9 +394,22 @@ pub(crate) fn read_in_place(root: &Path) -> Result<Catalogue> {
         source,
     })?;
     Ok(Catalogue {
-        root: root.to_path_buf(),
         manifest: acquisition::marketplace::parse_manifest(&bytes)?,
+        reach: Reach::InPlace {
+            root: root.to_path_buf(),
+        },
     })
+}
+
+/// Where `name`'s mirror lives under `home`.
+///
+/// Public so acquisition can install a plugin from the same mirror a
+/// listing already filled — which is the whole point of keeping one: the
+/// second plugin from a marketplace costs no second connection.
+pub(crate) fn mirror_dir(home: &UzeHome, name: &str) -> PathBuf {
+    home.marketplace_cache_dir()
+        .join(directory_name(name))
+        .join(REPOSITORY_DIR)
 }
 
 /// A marketplace name is whatever its manifest declared; as a directory
@@ -224,34 +429,6 @@ fn directory_name(name: &str) -> String {
     } else {
         sanitized
     }
-}
-
-fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir_all(destination).map_err(|error| UzeError::Write {
-        path: destination.to_path_buf(),
-        source: error,
-    })?;
-    let entries = fs::read_dir(source).map_err(|error| UzeError::Read {
-        path: source.to_path_buf(),
-        source: error,
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| UzeError::Read {
-            path: source.to_path_buf(),
-            source: error,
-        })?;
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        if from.is_dir() {
-            copy_tree(&from, &to)?;
-        } else {
-            fs::copy(&from, &to).map_err(|error| UzeError::Write {
-                path: to.clone(),
-                source: error,
-            })?;
-        }
-    }
-    Ok(())
 }
 
 fn now_unix_nanos() -> u128 {
@@ -286,6 +463,26 @@ mod tests {
         .unwrap();
     }
 
+    /// A marketplace that is a real repository, which is what one is.
+    /// The `Repository` is returned because dropping it releases the
+    /// isolated Git configuration the fixture runs under.
+    fn marketplace_repository(
+        label: &str,
+        name: &str,
+        plugins: &[&str],
+    ) -> (uze_testkit::git::Repository, PackageSource) {
+        let repository = uze_testkit::git::Repository::empty(label);
+        marketplace_at(repository.root(), name, plugins);
+        repository.git(&["add", "-A"]);
+        repository.git(&["commit", "-m", "marketplace"]);
+        let source = PackageSource::Git {
+            url: repository.root().to_string_lossy().into_owned(),
+            reference: None,
+            subdirectory: None,
+        };
+        (repository, source)
+    }
+
     fn git_source(url: &str) -> PackageSource {
         PackageSource::Git {
             url: url.to_owned(),
@@ -295,68 +492,99 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_catalogue_answers_without_the_source_being_reachable() {
-        let root = uze_testkit::temp::scratch("catalogue-stored");
-        let source_dir = root.join("remote");
-        marketplace_at(&source_dir, "remote", &["flow", "review"]);
-        let cache = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
-        let source = git_source("ssh://nowhere.invalid/remote.git");
+    fn a_mirrored_catalogue_answers_without_the_source_being_reachable() {
+        let root = uze_testkit::temp::scratch("catalogue-mirrored");
+        let (repository, source) =
+            marketplace_repository("cat-mirrored", "remote", &["flow", "review"]);
+        let home = UzeHome::at(root.join("uze"));
 
-        cache.store_from("remote", &source, &source_dir).unwrap();
-        fs::remove_dir_all(&source_dir).unwrap();
+        MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
+        fs::remove_dir_all(repository.root()).unwrap();
 
-        let fresh = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
+        let fresh = MarketplaceCatalogues::new(&home);
         let catalogue = fresh.read("remote", &source).unwrap();
         assert_eq!(catalogue.manifest.plugins.len(), 2);
-        assert!(catalogue.root.join("plugins/flow/plugin.json").is_file());
-        let _ = fs::remove_dir_all(&root);
+        assert!(
+            matches!(catalogue.reach, Reach::Mirrored { .. }),
+            "the entry is answered from its mirror, at a recorded commit"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_materialized_until_a_plugin_is_asked_about() {
+        let root = uze_testkit::temp::scratch("catalogue-lazy");
+        let (_repository, source) =
+            marketplace_repository("cat-lazy", "remote", &["flow", "review"]);
+        let home = UzeHome::at(root.join("uze"));
+        let cache = MarketplaceCatalogues::new(&home);
+        let (_, catalogue) = cache.adopt(&source).unwrap();
+
+        let entry = home.marketplace_cache_dir().join("remote");
+        assert!(
+            !entry.join(MATERIALIZED_DIR).exists(),
+            "listing a marketplace writes no plugin out"
+        );
+        assert!(
+            !entry
+                .join(REPOSITORY_DIR)
+                .join(MARKETPLACE_MANIFEST_NAME)
+                .exists(),
+            "the mirror has no working tree"
+        );
+
+        let flow = catalogue.plugin_root("flow").unwrap();
+        assert!(flow.join("plugin.json").is_file());
+        assert!(
+            !entry.join(MATERIALIZED_DIR).join("review").exists(),
+            "only the plugin asked about is written out"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn an_entry_read_from_another_source_is_a_miss() {
-        let root = uze_testkit::temp::scratch("catalogue-source-mismatch");
-        let source_dir = root.join("remote");
-        marketplace_at(&source_dir, "remote", &["flow"]);
-        let cache = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
-        cache
-            .store_from("remote", &git_source("ssh://a.invalid/r.git"), &source_dir)
-            .unwrap();
+        let root = uze_testkit::temp::scratch("catalogue-other-source");
+        let (_repository, source) = marketplace_repository("cat-other", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
 
-        let fresh = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
+        let fresh = MarketplaceCatalogues::new(&home);
+        let other = git_source("ssh://elsewhere.invalid/remote.git");
         assert!(
-            fresh
-                .on_disk("remote", &git_source("ssh://b.invalid/r.git"), true)
-                .is_none()
+            fresh.read("remote", &other).is_err(),
+            "a different source under the same name must not be answered from this entry"
         );
-        let _ = fs::remove_dir_all(&root);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn an_expired_entry_still_answers_when_the_refill_fails() {
-        let root = uze_testkit::temp::scratch("catalogue-expired-offline");
-        let source_dir = root.join("remote");
-        marketplace_at(&source_dir, "remote", &["flow"]);
+        let root = uze_testkit::temp::scratch("catalogue-expired");
+        let (repository, source) = marketplace_repository("cat-expired", "remote", &["flow"]);
         let home = UzeHome::at(root.join("uze"));
-        // A `file://` URL that resolves nowhere: Git refuses it at once, so
-        // the refill fails without a network round trip.
-        let source = git_source("file:///nonexistent/uze-catalogue-test/remote.git");
-        MarketplaceCatalogues::new(&home)
-            .store_from("remote", &source, &source_dir)
-            .unwrap();
-        let meta_path = home.marketplace_cache_dir().join("remote").join(META_FILE);
-        let expired = Meta {
-            source: source.clone(),
-            cached_at_unix_nanos: now_unix_nanos() - (MAX_AGE.as_nanos() + 1),
-        };
-        fs::write(&meta_path, serde_json::to_vec(&expired).unwrap()).unwrap();
+        MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
 
-        let cache = MarketplaceCatalogues::new(&home);
-        assert!(cache.on_disk("remote", &source, false).is_none());
-        // `read` tries to clone the source, which fails, and falls back to
-        // the expired entry.
-        let catalogue = cache.read("remote", &source).unwrap();
-        assert_eq!(catalogue.manifest.plugins[0].name, "flow");
-        let _ = fs::remove_dir_all(&root);
+        // Age the entry past its window, then take the source away.
+        let entry = home.marketplace_cache_dir().join("remote");
+        let mut meta: Meta =
+            serde_json::from_slice(&fs::read(entry.join(META_FILE)).unwrap()).unwrap();
+        meta.cached_at_unix_nanos = 0;
+        fs::write(
+            entry.join(META_FILE),
+            serde_json::to_vec_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        fs::remove_dir_all(repository.root()).unwrap();
+
+        let fresh = MarketplaceCatalogues::new(&home);
+        let catalogue = fresh.read("remote", &source).unwrap();
+        assert_eq!(
+            catalogue.manifest.plugins.len(),
+            1,
+            "an expired entry answers rather than nothing when the refill fails"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -364,33 +592,134 @@ mod tests {
         let root = uze_testkit::temp::scratch("catalogue-local");
         let source_dir = root.join("local");
         marketplace_at(&source_dir, "local", &["flow"]);
-        let cache = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
+        let home = UzeHome::at(root.join("uze"));
+        let cache = MarketplaceCatalogues::new(&home);
+
         let catalogue = cache
-            .read("local", &PackageSource::local(&source_dir))
+            .read(
+                "local",
+                &PackageSource::Local {
+                    path: source_dir.clone(),
+                },
+            )
             .unwrap();
-        assert_eq!(catalogue.root, source_dir);
-        assert!(!cache.root.exists(), "a local source leaves no cache entry");
-        let _ = fs::remove_dir_all(&root);
+
+        match &catalogue.reach {
+            Reach::InPlace { root } => assert_eq!(root, &source_dir),
+            other => panic!("a local marketplace is read in place, got {other:?}"),
+        }
+        assert!(
+            !home.marketplace_cache_dir().join("local").exists(),
+            "a local source leaves no cache entry"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn invalidating_drops_both_tiers() {
         let root = uze_testkit::temp::scratch("catalogue-invalidate");
-        let source_dir = root.join("remote");
-        marketplace_at(&source_dir, "remote", &["flow"]);
-        let cache = MarketplaceCatalogues::new(&UzeHome::at(root.join("uze")));
-        let source = git_source("ssh://nowhere.invalid/remote.git");
-        cache.store_from("remote", &source, &source_dir).unwrap();
+        let (repository, source) = marketplace_repository("cat-invalidate", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        let cache = MarketplaceCatalogues::new(&home);
+        cache.adopt(&source).unwrap();
+
         cache.invalidate("remote");
-        assert!(cache.memo.borrow().is_empty());
-        assert!(cache.on_disk("remote", &source, true).is_none());
-        let _ = fs::remove_dir_all(&root);
+
+        assert!(!home.marketplace_cache_dir().join("remote").exists());
+        fs::remove_dir_all(repository.root()).unwrap();
+        assert!(
+            cache.read("remote", &source).is_err(),
+            "the memo went with it"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A materialization interrupted part-way leaves the directory it
+    /// created and nothing inside it. Asking whether *that* exists answers
+    /// "already done" forever, so the plugin never resolves again — which
+    /// is what a second click during a slow first one produced.
+    #[test]
+    fn a_materialization_that_was_interrupted_is_done_again() {
+        let root = uze_testkit::temp::scratch("catalogue-interrupted");
+        let (_repository, source) = marketplace_repository("cat-interrupted", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        let (_, catalogue) = MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
+
+        // What an interrupted run leaves behind.
+        let abandoned = home
+            .marketplace_cache_dir()
+            .join("remote")
+            .join(MATERIALIZED_DIR)
+            .join("flow");
+        fs::create_dir_all(&abandoned).unwrap();
+
+        let resolved = catalogue.plugin_root("flow").unwrap();
+
+        assert!(
+            resolved.join("plugin.json").is_file(),
+            "the plugin is materialized again rather than left unresolvable"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Selecting a plugin must answer from what is on this disk. Reaching
+    /// a remote there put an SSH round trip inside a click, and a second
+    /// click during it cancelled the first part-way.
+    #[test]
+    fn reading_as_it_stands_answers_an_expired_entry_without_the_source() {
+        let root = uze_testkit::temp::scratch("catalogue-as-it-stands");
+        let (repository, source) = marketplace_repository("cat-stands", "remote", &["flow"]);
+        let home = UzeHome::at(root.join("uze"));
+        MarketplaceCatalogues::new(&home).adopt(&source).unwrap();
+
+        // Past its window, and the source gone.
+        let entry = home.marketplace_cache_dir().join("remote");
+        let mut meta: Meta =
+            serde_json::from_slice(&fs::read(entry.join(META_FILE)).unwrap()).unwrap();
+        meta.cached_at_unix_nanos = 0;
+        fs::write(
+            entry.join(META_FILE),
+            serde_json::to_vec_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        fs::remove_dir_all(repository.root()).unwrap();
+
+        let fresh = MarketplaceCatalogues::new(&home);
+        let catalogue = fresh.read_as_it_stands("remote", &source).unwrap();
+
+        assert_eq!(catalogue.manifest.plugins.len(), 1);
+        assert!(
+            fresh.read_as_it_stands("remote", &source).is_ok(),
+            "and it never tries to refill, however old the entry is"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn a_name_cannot_leave_the_cache_directory() {
         assert_eq!(directory_name("../../etc"), "______etc");
-        assert_eq!(directory_name("team/ai"), "team_ai");
+        assert_eq!(directory_name("a/b"), "a_b");
         assert_eq!(directory_name(""), "_");
     }
+}
+
+/// What `name`'s mirror last resolved its declared ref to, and when.
+///
+/// The read half of freshness: comparing an installed package against this
+/// is a JSON read, which is what keeps the answer off every listing's
+/// budget. `None` when there is no entry, or one written before a mirror
+/// recorded its commit — an answer UZE does not have, reported as such
+/// rather than as a claim with nothing behind it.
+pub(crate) struct MirroredHead {
+    pub commit: String,
+    pub at_unix: u64,
+}
+
+pub(crate) fn mirrored_head(home: &UzeHome, name: &str) -> Option<MirroredHead> {
+    let entry = home.marketplace_cache_dir().join(directory_name(name));
+    let meta: Meta = serde_json::from_slice(&fs::read(entry.join(META_FILE)).ok()?).ok()?;
+    Some(MirroredHead {
+        commit: meta.commit?,
+        at_unix: u64::try_from(meta.cached_at_unix_nanos / 1_000_000_000).ok()?,
+    })
 }

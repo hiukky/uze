@@ -385,14 +385,21 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
     )
     .unwrap();
 
-    let result = application.plugins().add(
-        PackageSource::local(package_dir),
-        &uze_core::trust::AlwaysTrust,
-    );
+    let report = application
+        .plugins()
+        .add(
+            PackageSource::local(package_dir),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .expect("the package is installed; one held name is not the install's fate");
     assert!(
-        matches!(result, Err(uze_core::UzeError::ManagedEntryConflict(_))),
+        report
+            .blocked
+            .iter()
+            .any(|one| one.capability.contains("review")),
         "a foreign occupant of the desired name must surface as an explicit conflict, \
-         not a silent skip or an automatic fallback retry: {result:?}"
+         not a silent skip or an automatic fallback retry: {:?}",
+        report.blocked
     );
     assert_eq!(
         fs::read_to_string(agents_home.join("skills/security:review/SKILL.md")).unwrap(),

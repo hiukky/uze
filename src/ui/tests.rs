@@ -26,7 +26,23 @@ fn plugin(id: &str) -> PluginSummary {
         source: "embedded:example".to_owned(),
         store_path: PathBuf::from("/store/example"),
         capability_count: 2,
-        update_available: None,
+        freshness: uze_application::application::Freshness::not_checked(),
+    }
+}
+
+/// A plugin with something newer waiting, and one already current — the
+/// two states every plugin row branches on.
+fn behind() -> uze_application::application::Freshness {
+    uze_application::application::Freshness {
+        state: uze_application::application::FreshnessState::Behind { commits: None },
+        established_at_unix: Some(0),
+    }
+}
+
+fn up_to_date() -> uze_application::application::Freshness {
+    uze_application::application::Freshness {
+        state: uze_application::application::FreshnessState::UpToDate,
+        established_at_unix: Some(0),
     }
 }
 
@@ -56,12 +72,13 @@ fn model_with_data() -> TuiModel {
     use uze_core::router::HarnessCapabilities;
 
     let mut model = model_with_plugins(&["one", "two"]);
-    model.remembered.plugins[0].update_available = Some(true);
+    model.remembered.plugins[0].freshness = behind();
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -69,7 +86,7 @@ fn model_with_data() -> TuiModel {
         description: Some("A flow plugin".to_owned()),
         keywords: vec!["flow".to_owned()],
         installed: true,
-        update_available: Some(false),
+        freshness: up_to_date(),
         is_default: true,
     }];
     // Renders the "Updated" badge branch on every route that shows plugin
@@ -442,7 +459,7 @@ fn update_only_offered_when_available() {
         Overlay::None,
         "no update available, no overlay"
     );
-    model.remembered.plugins[0].update_available = Some(true);
+    model.remembered.plugins[0].freshness = behind();
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     assert!(
         matches!(model.overlay, Overlay::Confirm { kind: Confirmation::UpdatePlugin(ref id), .. } if id == "one")
@@ -642,7 +659,7 @@ fn appearance_reopened_where_it_was_left_still_reads_its_lists() {
 #[test]
 fn a_route_action_key_works_from_the_sidebar_too() {
     let mut model = model_with_plugins(&["one"]);
-    model.remembered.plugins[0].update_available = Some(true);
+    model.remembered.plugins[0].freshness = behind();
     model.focus = Focus::Sidebar;
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     assert!(
@@ -891,7 +908,7 @@ fn read_only_navigation_never_produces_a_mutating_intent() {
         description: None,
         keywords: Vec::new(),
         installed: true,
-        update_available: Some(false),
+        freshness: up_to_date(),
         is_default: true,
     }];
     for key in [
@@ -1672,7 +1689,7 @@ fn marketplace_plugin(marketplace: &str, name: &str, installed: bool) -> Marketp
         description: None,
         keywords: Vec::new(),
         installed,
-        update_available: None,
+        freshness: uze_application::application::Freshness::not_checked(),
         is_default: false,
     }
 }
@@ -1843,6 +1860,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1850,7 +1868,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
         description: Some("A flow plugin".to_owned()),
         keywords: Vec::new(),
         installed: true,
-        update_available: Some(false),
+        freshness: up_to_date(),
         is_default: true,
     }];
 
@@ -1899,6 +1917,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1911,7 +1930,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
         ),
         keywords: vec!["context".to_owned(), "portability".to_owned()],
         installed: true,
-        update_available: Some(false),
+        freshness: up_to_date(),
         is_default: true,
     }];
 
@@ -1955,6 +1974,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
         source: "embedded:uze-official".to_owned(),
         homepage: Some("https://github.com/hiukky/uze".to_owned()),
         plugin_count: 1,
+        linked_to: None,
     }];
     model.remembered.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
@@ -1962,7 +1982,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
         description: Some("A flow plugin".to_owned()),
         keywords: Vec::new(),
         installed: true,
-        update_available: Some(false),
+        freshness: up_to_date(),
         is_default: true,
     }];
 
@@ -3826,7 +3846,7 @@ fn the_drawer_offers_what_can_be_done_as_buttons() {
         description: None,
         keywords: Vec::new(),
         installed: true,
-        update_available: Some(true),
+        freshness: behind(),
         is_default: false,
     };
     let mut model = TuiModel {
@@ -3921,7 +3941,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
         description: None,
         keywords: Vec::new(),
         installed: false,
-        update_available: None,
+        freshness: uze_application::application::Freshness::not_checked(),
         is_default: false,
     };
     let capability = |name: &str, kind| PluginCapability {
@@ -3933,6 +3953,7 @@ fn the_drawer_groups_resources_by_kind_and_leaves_actions_to_the_menu() {
         route: Route::Plugins,
         focus: Focus::Content,
         marketplace_detail: Some(MarketplacePluginDetail {
+            revision: None,
             summary: summary.clone(),
             capabilities: vec![
                 capability("review", CapabilityKind::AgentSkill),
@@ -5107,4 +5128,82 @@ fn the_wheel_walks_the_open_index() {
 
     // The wheel is not a click: the index is still open.
     assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
+}
+
+/// The drawer's own shape: the plugin's name is the heading rather than a
+/// value under a `PLUGIN` label, and no row is folded flush against the
+/// border — folding at the full width is what made a drawer with rows to
+/// spare read as crowded.
+#[test]
+fn the_drawer_leads_with_the_name_and_leaves_a_gutter() {
+    use uze_application::application::{MarketplacePluginDetail, Revision};
+
+    let summary = MarketplacePluginSummary {
+        marketplace: "ai".to_owned(),
+        name: "git".to_owned(),
+        description: Some(
+            "Personal git workflow conventions: a Conventional Commits skill and a \
+             pull/merge request skill."
+                .to_owned(),
+        ),
+        keywords: vec!["git".to_owned(), "conventional-commits".to_owned()],
+        installed: false,
+        freshness: uze_application::application::Freshness::not_checked(),
+        is_default: false,
+    };
+    let mut model = TuiModel {
+        route: Route::Plugins,
+        focus: Focus::Content,
+        marketplace_detail: Some(MarketplacePluginDetail {
+            revision: Some(Revision::Commit {
+                short: "f1f00f7".to_owned(),
+                age: "79 minutes ago".to_owned(),
+                subject: "feat(git): require technical descriptions in the commit and pr skills"
+                    .to_owned(),
+            }),
+            summary: summary.clone(),
+            capabilities: Vec::new(),
+        }),
+        remembered: Remembered {
+            plugin_screen: ListScreen::default(),
+            marketplace_plugins: vec![summary],
+            ..TuiModel::default().remembered
+        },
+        ..TuiModel::default()
+    };
+    let width = 52;
+    model.remembered.plugin_screen.drawer_width = Some(width);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+
+    assert!(
+        !rows.iter().any(|row| row.contains("PLUGIN")),
+        "the name is the heading, not a value under a label: {rows:#?}"
+    );
+    let revision = rows
+        .iter()
+        .position(|row| row.contains("REVISION"))
+        .unwrap_or_else(|| panic!("the revision block is drawn: {rows:#?}"));
+    assert!(
+        rows[revision + 1].contains("f1f00f7") && rows[revision + 1].contains("79 minutes ago"),
+        "the commit and its age share a row: {rows:#?}"
+    );
+
+    // Every drawer row stops short of the border. Measured against the
+    // widest row the drawer drew, since the panel's own edge is what the
+    // gutter is relative to.
+    let widest = rows
+        .iter()
+        .filter(|row| row.contains("git") || row.contains("feat("))
+        .map(|row| row.trim_end().chars().count())
+        .max()
+        .unwrap_or_default();
+    assert!(
+        widest > 0 && widest < 120,
+        "no row runs to the terminal's edge: {widest}"
+    );
 }

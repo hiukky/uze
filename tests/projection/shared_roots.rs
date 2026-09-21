@@ -478,27 +478,32 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         )
         .unwrap();
 
-        let result = application.plugins().add(
-            PackageSource::local(&fixture_root),
-            &uze_core::trust::AlwaysTrust,
+        let report = application
+            .plugins()
+            .add(
+                PackageSource::local(&fixture_root),
+                &uze_core::trust::AlwaysTrust,
+            )
+            .expect("the package installs; the contested entry is one capability's fate");
+        // The conflict must still be deterministic, named, and about the
+        // shared physical entry — reusing an incompatible wrapper must not
+        // silently drop the invocation policy. What changed is only where
+        // it is said: in the report, beside everything that did land,
+        // rather than as an error thrown over a package already ingested.
+        let contested = report
+            .blocked
+            .iter()
+            .find(|one| one.capability.contains("legacy"))
+            .unwrap_or_else(|| panic!("expected the contested entry to be reported: {report:#?}"));
+        assert!(
+            contested.reason.contains("flow:legacy"),
+            "the conflict names the shared physical entry: {}",
+            contested.reason
         );
-        match result {
-            Err(uze_core::UzeError::ProjectionConflict(details)) => {
-                assert!(
-                    details.entry.ends_with("skills/flow:legacy"),
-                    "the conflict is about the shared physical entry: {}",
-                    details.entry.display()
-                );
-                assert!(
-                    details.requested_integration == "opencode",
-                    "OpenCode is the integration whose invocation encoding is at stake"
-                );
-            }
-            Err(other) => panic!("expected a deterministic ProjectionConflict, got {other:#?}"),
-            Ok(_) => panic!(
-                "reusing an incompatible wrapper must not silently drop the invocation policy"
-            ),
-        }
+        assert_eq!(
+            contested.integration, "opencode",
+            "OpenCode is the integration whose invocation encoding is at stake"
+        );
         fs::remove_dir_all(root).unwrap();
     });
 }
@@ -1002,4 +1007,86 @@ fn detach_last_consumer_cleans_projection() {
         );
         fs::remove_dir_all(&root).unwrap();
     });
+}
+
+/// A name in the shared root held by something UZE does not own stops that
+/// one capability and nothing else: the package installs, its other
+/// capabilities are delivered, and the refusal is reported rather than
+/// raised. Before this, one such name failed the whole command — which is
+/// how a reference left by an earlier UZE could block every install on a
+/// machine (see `exposure::attach_symlink`).
+#[test]
+#[cfg(unix)]
+fn a_name_somebody_else_holds_blocks_its_own_capability_and_no_other() {
+    let root = temp("shared-blocked-one");
+    with_fake_codex(&root, || {
+        let agents_home = root.join("agents-home");
+        let uze_home = UzeHome::at(root.join("uze-home"));
+        let application = UzeApplication::new_with_runner(
+            uze_home.clone(),
+            vec![Box::new(always_present(OpenCodeIntegration::new(
+                agents_home.clone(),
+                root.join("opencode-config.json"),
+                uze_home.clone(),
+            )))],
+            Box::new(NoopProcessRunner),
+        );
+
+        // Two skills, so there is something left to deliver.
+        let fixture_root = root.join("two-skill-fixture");
+        for skill in ["review", "commit"] {
+            fs::create_dir_all(fixture_root.join(format!("skills/{skill}"))).unwrap();
+            fs::write(
+                fixture_root.join(format!("skills/{skill}/SKILL.md")),
+                user_only_body(skill),
+            )
+            .unwrap();
+        }
+        fs::write(
+            fixture_root.join("plugin.json"),
+            r#"{"name":"flow","description":"two-skill fixture"}"#,
+        )
+        .unwrap();
+
+        // Somebody else's entry, which resolves, at the name `review` needs.
+        let theirs = root.join("their-own-skill");
+        fs::create_dir_all(&theirs).unwrap();
+        let skills_root = agents_home.join("skills");
+        fs::create_dir_all(&skills_root).unwrap();
+        std::os::unix::fs::symlink(&theirs, skills_root.join("flow:review")).unwrap();
+
+        let report = application
+            .plugins()
+            .add(
+                PackageSource::local(&fixture_root),
+                &uze_core::trust::AlwaysTrust,
+            )
+            .expect("one held name does not fail the install");
+
+        assert_eq!(
+            fs::read_link(skills_root.join("flow:review")).unwrap(),
+            theirs,
+            "the entry UZE does not own is untouched"
+        );
+        assert!(
+            skills_root.join("flow:commit").is_symlink(),
+            "the capability whose name was free is delivered"
+        );
+        assert!(
+            report
+                .blocked
+                .iter()
+                .any(|one| one.capability.contains("review")),
+            "the refusal names the capability, got {:?}",
+            report.blocked
+        );
+        assert!(
+            report
+                .blocked
+                .iter()
+                .all(|one| !one.capability.contains("commit")),
+            "nothing else is reported blocked"
+        );
+    });
+    fs::remove_dir_all(&root).ok();
 }

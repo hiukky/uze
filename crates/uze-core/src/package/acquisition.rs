@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod git;
 pub mod marketplace;
+pub mod mirror;
 
 use crate::error::{Result, UzeError};
 
@@ -395,7 +396,7 @@ pub fn acquire(source: &PackageSource) -> Result<MaterializedPackage> {
 /// silent share. It also refuses a directory an attacker pre-created in a
 /// world-writable temp dir, and `0o700` keeps package bytes unreadable
 /// while they are being checked.
-fn scratch_directory() -> Result<PathBuf> {
+pub fn scratch_directory() -> Result<PathBuf> {
     static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     let nonce = std::time::SystemTime::now()
