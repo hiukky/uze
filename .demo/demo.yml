@@ -27,22 +27,34 @@ video:
   forbid:
     - Upstream request limit
     - Retry attempt
-    # The account's own state, which the harness prints unasked and which
-    # no sandbox can pre-answer: a quota line, the promo that rides with
-    # it, and — the reason this is not merely untidy — the timezone it
-    # names, which is the operator's region on a published video. The leak
-    # scan looks for a username and a hostname; a place is neither.
+    # The account's own state, which the harness prints unasked and which no
+    # sandbox can pre-answer: the quota line, and — the reason this is not
+    # merely untidy — the timezone it names, which is the operator's region
+    # on a published video. The leak scan looks for a username and a
+    # hostname; a place is neither. `TZ` above should keep the second one
+    # from ever firing; it stays as the proof that it did.
+    #
+    # The quota line is the one thing here a re-take cannot clear: it is
+    # true until the week resets. When it fires, blank that sentence in the
+    # `.raw.cast` — spaces, the same count of characters, so nothing on the
+    # row reflows — and `recut`. Not `redact`, which substitutes `x` and
+    # would put a bar of them on camera where the line was.
     - weekly limit
-    - usage credits
     - America/
-  # Known false positive, on this machine only: the leak scan searches for
-  # the operator's login name, and here that is also the GitHub organisation
-  # this project is published under — so the Plugins screen showing
-  # `https://github.com/hiukky/uze`, which is exactly what it should show,
-  # trips `username`. The scan has no allow list, so `run` stops before
-  # publishing and the copy is made by hand after reading the hits. What
-  # would matter — the home path, a hostname, a token — does not appear;
-  # check that each time rather than assuming this is the same hit again.
+    # `usage credits` was here too, for the referral promo that rides with
+    # the quota line. It is gone because the same sentence is the static
+    # description of Claude's own `/passes` command, which the command
+    # palette beat is *meant* to show — the phrase does not say whose
+    # account it is, and the line above does.
+  # What is meant to be on camera and happens to look like a leak. The scan
+  # searches for the operator's login name, and here that is also the GitHub
+  # organisation this project is published under, so the Plugins screen
+  # showing the project's own URL trips both `username` and `hostname`. The
+  # span is allowed, not the name: a home path, a token or this login
+  # anywhere else still stops the run, and the count excused is printed
+  # every time so this cannot quietly widen.
+  allow:
+    - https://github\.com/hiukky/uze
   cast: '{root}/uze-hero.cast'
   cols: 152                 # wide enough for the Integrations cards, narrow
   rows: 36                  # enough that GitHub's ~900px column stays readable
