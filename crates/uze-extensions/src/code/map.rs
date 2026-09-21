@@ -930,6 +930,36 @@ mod tests {
         assert_eq!((big.heat, busy.heat), (Heat::Untouched, Heat::Hot));
     }
 
+    /// Every cell of the map belongs to a tile.
+    ///
+    /// The other half of `two_tiles_never_draw_on_the_same_cell`, and the
+    /// half a click depends on: no overlap says a cell is claimed at most
+    /// once, and this says at least once. Together they are a tiling, which
+    /// is what lets a click be answered by asking which tile holds the
+    /// cell. A gap would be a region of the picture that quietly does
+    /// nothing when it is clicked — and a person cannot see the gap, only
+    /// that the map stopped responding there.
+    #[test]
+    fn every_cell_of_the_map_belongs_to_a_tile() {
+        let mut files = vec![file("Cargo.lock", 3799, 2), file("AGENTS.md", 620, 9)];
+        files.extend((0..6).map(|n| file(&format!("crates/m{n}.rs"), 1400 + n * 300, n)));
+        files.extend((0..4).map(|n| file(&format!("src/u{n}.rs"), 2400, 20 + n)));
+        files.extend((0..9).map(|n| file(&format!("docs/{n:03}.md"), 380, 1)));
+        let map = map(files);
+
+        for space in [(40, 12), (70, 20), SPACE, (150, 38), (200, 50)] {
+            let tiles = map.tiles(space);
+            for y in 0..space.1 {
+                for x in 0..space.0 {
+                    assert!(
+                        tiles.iter().any(|tile| tile.frame.contains(x, y)),
+                        "({x}, {y}) of {space:?} belongs to no tile"
+                    );
+                }
+            }
+        }
+    }
+
     /// No two tiles draw on one cell.
     ///
     /// A cell has one colour, so a border two tiles shared came out in

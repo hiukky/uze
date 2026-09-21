@@ -1091,9 +1091,17 @@ impl Attach<'_> {
     fn architect_press(&mut self, column: u16, row: u16) {
         let hit = self.architect_hit_at(column, row);
         let view_hit = hit.map(|(rect, hit)| match hit {
+            // The same arithmetic the code surface does, through the same
+            // function: a second copy of it here was missing the gutter
+            // term, and subtracted without saturating.
             ViewHit::PlaceCaret { line, cell } => ViewHit::PlaceCaret {
                 line,
-                cell: cell + usize::from(column - rect.x),
+                cell: crate::ui::extension_view::caret_cell_at(
+                    rect,
+                    cell,
+                    column,
+                    self.model.code_scrollbars.content_gutter,
+                ),
             },
             other => other,
         });
@@ -1147,21 +1155,22 @@ impl Attach<'_> {
     /// How much room the code surface has, which depends on what it is
     /// showing: the map takes the frame, everything else the column
     /// beside the tree.
+    /// The room the last frame laid the code surface out in.
+    ///
+    /// Read from what that frame recorded, never recomputed here. The two
+    /// must agree exactly — a surface that places things in the room it is
+    /// given resolves a click by laying itself out again — and the size
+    /// this reached for before, `last_size`, is the *pane's*, which is the
+    /// frame less the sidebar and the tab strip. See
+    /// `extension_view::Rendered::content_space`.
     fn code_space(&self) -> uze_extensions::view::Size {
-        crate::ui::extension_view::code_space(
-            Rect::new(0, 0, self.model.last_size.0, self.model.last_size.1),
-            self.model.code_tree_width,
-            self.model.code.as_ref(),
-        )
+        self.model.code_scrollbars.content_space
     }
 
+    /// The same, for the architect's board — and for the same reason: its
+    /// diagrams are placed in the room they are given.
     fn architect_space(&self) -> uze_extensions::view::Size {
-        crate::ui::extension_view::board_space(Rect::new(
-            0,
-            0,
-            self.model.last_size.0,
-            self.model.last_size.1,
-        ))
+        self.model.code_scrollbars.content_space
     }
 
     fn drag_diagram(&mut self, column: u16, row: u16) {
