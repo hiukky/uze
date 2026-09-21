@@ -198,6 +198,7 @@ where
     // A journal that cannot be opened is not a reason to fail the run the
     // journal is about: the process goes on with nothing written, exactly
     // as it did before there was one.
+    restrict_to_owner(&dir);
     prune_to_size(&dir, &name, JOURNAL_BYTES);
     let appender = match tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -218,6 +219,31 @@ where
         .with_writer(writer)
         .boxed();
     (layer, Some(guard))
+}
+
+/// Makes the journal's directory reachable by its owner alone, before
+/// anything is written into it.
+///
+/// The directory rather than the files: it is created once, where the
+/// appender's daily roll opens a new file this has no hook on, and a
+/// directory nobody else may traverse protects every file under it
+/// whatever mode each carries. The same answer `prompt_history` already
+/// gives for the record it keeps — and the journal holds the paths,
+/// branches and project names of everything the operator ran.
+///
+/// Best-effort: a journal that cannot be restricted is still a journal,
+/// and failing the run over its mode would lose the record this exists
+/// to keep.
+#[cfg(unix)]
+fn restrict_to_owner(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
 }
 
 /// Drops the oldest days of `name`'s journal until what is left fits in
@@ -467,6 +493,34 @@ mod tests {
         prune_to_size(&scratch, "probe", 50);
 
         assert!(scratch.join("probe.2026-09-19.log").exists());
+    }
+
+    /// The journal holds the paths, branches and project names of
+    /// everything the operator ran, on a machine that may have other
+    /// users. `prompt_history` already keeps its own record at `0600`;
+    /// leaving the journal beside it world-readable answered the same
+    /// question two different ways.
+    #[cfg(unix)]
+    #[test]
+    fn the_journal_is_reachable_by_its_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = uze_testkit::temp::scratch("telemetry-private");
+        let dir = scratch.join("logs");
+
+        let (layer, guard) = text_layer(Sink::journal(dir.clone(), "probe"));
+        let _subscriber = tracing_subscriber::registry().with(layer);
+
+        let mode = std::fs::metadata(&dir)
+            .expect("the journal directory was created")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "nobody but the owner may traverse into the journal"
+        );
+        drop(guard);
+        let _ = std::fs::remove_dir_all(scratch);
     }
 
     /// The point of the journal: it is written because the process is one

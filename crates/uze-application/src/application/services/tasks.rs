@@ -124,7 +124,18 @@ impl Workspace<'_> {
     /// Records one prompt submitted into an agent tab of `root`'s
     /// workspace. Best-effort by construction: an empty prompt is ignored
     /// rather than refused.
-    #[tracing::instrument(name = "workspace.record_prompt", skip_all, fields(root = %root.display(), prompt = %prompt), err)]
+    ///
+    /// The span carries the prompt's length, never the prompt. What this
+    /// writes is `prompt-history.json`, which [`prompt_history`] opens and
+    /// keeps at `0600` on purpose; the journal beside it is world-readable
+    /// and is attached to bug reports. A field interpolating the text put
+    /// the same bytes in both places, and only one of them was protected.
+    #[tracing::instrument(
+        name = "workspace.record_prompt",
+        skip_all,
+        fields(root = %root.display(), bytes = prompt.len()),
+        err
+    )]
     pub fn record_prompt(
         &self,
         root: &Path,
@@ -3048,6 +3059,97 @@ mod placement_tests {
 
 #[cfg(test)]
 mod task_service_tests {
+    /// `prompt_history` keeps a *truncated preview* of what the operator
+    /// typed, in a file it holds at `0600`, and says why in its own doc:
+    /// a full prompt body on disk is a larger promise about user content
+    /// than the feature needs to make. A span field interpolating the
+    /// prompt wrote the whole thing, untruncated, into the journal under
+    /// `~/.uze/cache/logs` — world-readable, and the file an operator
+    /// attaches to a bug report.
+    #[test]
+    fn a_recorded_prompt_never_reaches_the_journal() {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Clone, Default)]
+        struct Fields(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+        impl<S> tracing_subscriber::Layer<S> for Fields
+        where
+            S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+        {
+            fn on_new_span(
+                &self,
+                attrs: &tracing::span::Attributes<'_>,
+                _id: &tracing::span::Id,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                if attrs.metadata().name() != "workspace.record_prompt" {
+                    return;
+                }
+                struct Seen<'a>(&'a mut Vec<String>);
+                impl tracing::field::Visit for Seen<'_> {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        self.0.push(format!("{}={value:?}", field.name()));
+                    }
+                    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                        self.0.push(format!("{}={value}", field.name()));
+                    }
+                    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                        self.0.push(format!("{}={value}", field.name()));
+                    }
+                }
+                let mut recorded = self.0.lock().unwrap();
+                attrs.record(&mut Seen(&mut recorded));
+            }
+        }
+
+        let repository = uze_testkit::git::Repository::new("prompt-not-journalled");
+        let root = repository.root().to_path_buf();
+        let app = UzeApplication::new(
+            UzeHome::at(uze_testkit::temp::scratch("prompt-not-journalled-home")),
+            Vec::new(),
+        );
+        let secret = "deploy with the production key hunter2";
+
+        let fields = Fields::default();
+        let subscriber = tracing_subscriber::registry().with(fields.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            app.workspace()
+                .record_prompt(
+                    &root,
+                    &prompt_history::PromptOrigin {
+                        space_label: "demo".to_owned(),
+                        tab_id: 1,
+                        tab_label: "claude".to_owned(),
+                        agent_binary: "claude-code".to_owned(),
+                    },
+                    secret,
+                )
+                .unwrap();
+        });
+
+        let said = fields.0.lock().unwrap().join(" ");
+        assert!(
+            !said.contains("hunter2"),
+            "the prompt itself must not be a span field: {said}"
+        );
+        assert!(
+            said.contains(&format!("bytes={}", secret.len())),
+            "its length is what the span says instead: {said}"
+        );
+        assert!(
+            app.workspace()
+                .prompt_history(&root, 10)
+                .iter()
+                .any(|entry| entry.preview.contains("hunter2")),
+            "while the record it wrote still holds its preview"
+        );
+    }
+
     /// Records what a launch would have recorded, without the checkout a
     /// launch would also have cut. `preserved_work` answers from the record
     /// alone, so the record is what a test of it should set up — and a
