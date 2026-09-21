@@ -28,6 +28,7 @@ pub use uze_core::{
     conversation::Claim,
     features::{ALL_FEATURES, Feature},
     integration::{AttachmentState, PublicationStatus},
+    landing::Forge,
     naming::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,

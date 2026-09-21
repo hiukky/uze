@@ -58,6 +58,7 @@ mod workspace_tests {
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
+    use uze_application::Forge;
     use uze_core::UzeHome;
     use uze_extensions::view::ViewHit;
     use uze_terminal::{
@@ -223,6 +224,7 @@ mod workspace_tests {
             ahead,
             published_as: None,
             published_request: None,
+            forge: Forge::Unknown,
             unsynced: None,
             created_at_unix: 1,
         }
@@ -1656,9 +1658,9 @@ mod workspace_tests {
             "{}",
             ending(CompletionBehavior::Merge)
         );
-        // A request with no number yet is still a request, and "#" is the
-        // idiom both forges write — where `pr`/`mr` is one vendor's word
-        // for the other's thing.
+        // A remote that did not say which forge it is leaves "#", the
+        // idiom both of them write — naming one would be picking a
+        // vendor's word for the other's thing.
         assert!(
             ending(CompletionBehavior::Pr).contains("# ⇡3"),
             "{}",
@@ -1669,6 +1671,48 @@ mod workspace_tests {
             "a completion that writes to nothing names no target: {}",
             ending(CompletionBehavior::Handoff)
         );
+    }
+
+    /// The forge's word stands in for the number until there is one, and
+    /// steps aside the moment there is: `#41` says what it is about
+    /// without help, and a word in front of it would be length spent on
+    /// nothing.
+    #[test]
+    fn a_known_forge_names_a_request_that_has_no_number_yet() {
+        let strip = |forge, request| {
+            let mut model = agent_with_task(WorkStateView::Ready, 3);
+            for task in model.remembered.tasks.values_mut().flatten() {
+                task.completion = CompletionBehavior::Pr;
+                task.forge = forge;
+                task.published_request = request;
+            }
+            let (rows, _) = tab_strip(&model);
+            rows.join("\n")
+        };
+
+        assert!(
+            strip(Forge::GitHub, None).contains("PR ⇡3"),
+            "{}",
+            strip(Forge::GitHub, None)
+        );
+        assert!(
+            strip(Forge::GitLab, None).contains("MR ⇡3"),
+            "{}",
+            strip(Forge::GitLab, None)
+        );
+        assert!(
+            strip(Forge::Unknown, None).contains("# ⇡3"),
+            "an unrecognized remote claims neither name: {}",
+            strip(Forge::Unknown, None)
+        );
+        for forge in [Forge::GitHub, Forge::GitLab, Forge::Unknown] {
+            let drawn = strip(forge, Some(41));
+            assert!(drawn.contains("#41"), "{drawn}");
+            assert!(
+                !drawn.contains("PR") && !drawn.contains("MR"),
+                "a number needs no word in front of it: {drawn}"
+            );
+        }
     }
 
     /// `Ready` is the one state whose sidebar mark the strip may not

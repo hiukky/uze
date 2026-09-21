@@ -605,7 +605,14 @@ fn describe_delivery_outcome(report: &DeliveryReport) -> String {
         DeliveryOutcome::Published { request, .. } => {
             format!("synced {} #{request}", theme::glyph(Symbol::ArrowTo))
         }
-        DeliveryOutcome::AwaitingRequest(_) => "pushed · agent opening pr".to_owned(),
+        // The one line with room for the whole word, and the one place
+        // there is no number to say it instead: the forge's own word
+        // where `origin` said which forge this is, and the neutral one
+        // where it did not — which is the word the agent was handed too.
+        DeliveryOutcome::AwaitingRequest(_) => format!(
+            "pushed · agent opening the {}",
+            report.task.forge.request_term().unwrap_or("request")
+        ),
         DeliveryOutcome::Refused(reason) => reason.clone(),
         DeliveryOutcome::ReturnedToAgent(_) => "back to its agent".to_owned(),
     }

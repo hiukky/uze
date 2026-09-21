@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     Result, UzeError, checkout, client_layout,
     conversation::{self, Claim},
-    landing::{self, Delivered, DeliveryFailure, Readiness},
+    landing::{self, Delivered, DeliveryFailure, Forge, Readiness},
     manifest, prompt_history,
     task::{self, Agent, AgentId, AgentStore, Base, Isolation, WorkState},
     workspace,
@@ -594,7 +594,13 @@ impl Workspace<'_> {
     fn placed_view(&self, primary: &Path, id: &str, policy: &WorktreePolicy) -> Option<AgentView> {
         let target = target_of(primary, policy);
         let store = task::load(&self.0.home, primary).ok()?;
-        AgentView::from_agent(primary, store.agent(id)?, policy.completion, &target)
+        AgentView::from_agent(
+            primary,
+            store.agent(id)?,
+            policy.completion,
+            &target,
+            landing::forge(primary),
+        )
     }
 
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
@@ -968,6 +974,7 @@ impl Workspace<'_> {
                 &agent,
                 policy.completion,
                 &target_of(primary, policy),
+                landing::forge(primary),
             )?,
             outcome,
             warnings: Vec::new(),
@@ -1017,6 +1024,7 @@ impl Workspace<'_> {
                 agent,
                 policy.completion,
                 &target_of(primary, policy),
+                landing::forge(primary),
             )?,
             outcome: DeliveryOutcome::Refused(format!("the delivery could not start: {error}")),
             warnings: Vec::new(),
@@ -1517,10 +1525,20 @@ fn task_views(
     completion: CompletionBehavior,
     target: &str,
 ) -> Vec<AgentView> {
+    // A property of the repository, not of a row: asked once here rather
+    // than once per agent, since every task of one project reaches the
+    // same remote. Only where the completion publishes — the word this
+    // buys is a word for a request, and a project that opens none has no
+    // use for it.
+    let forge = if completion == CompletionBehavior::Pr {
+        landing::forge(primary)
+    } else {
+        Forge::default()
+    };
     store
         .agents
         .iter()
-        .filter_map(|agent| AgentView::from_agent(primary, agent, completion, target))
+        .filter_map(|agent| AgentView::from_agent(primary, agent, completion, target, forge))
         .collect()
 }
 
@@ -1763,6 +1781,12 @@ pub struct AgentView {
     /// The request open on the forge for the published branch, once there
     /// is one: what turns the delivery button from an errand into a sync.
     pub published_request: Option<u32>,
+    /// Which forge `origin` points at, so a surface reporting the request
+    /// can use that forge's own word for it — a pull request and a merge
+    /// request are one thing under two names, and the remote is what says
+    /// which name this project's reader reads. [`Forge::Unknown`] where
+    /// it did not say, and then nothing is claimed.
+    pub forge: Forge,
     /// Commits the published branch does not carry yet — what a sync would
     /// send. `None` until the branch has been published at all, and
     /// `Some(0)` once the request is level with the branch: work already
@@ -1806,9 +1830,10 @@ impl AgentView {
         agent: &Agent,
         completion: CompletionBehavior,
         target: &str,
+        forge: Forge,
     ) -> Option<Self> {
         let Some(task) = agent.isolation() else {
-            return Some(Self::in_the_root(primary, agent, completion, target));
+            return Some(Self::in_the_root(primary, agent, completion, target, forge));
         };
         // What the remote holds, not what UZE remembers having sent: a
         // push the agent made is a push, and a view built from UZE's own
@@ -1837,6 +1862,7 @@ impl AgentView {
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: published.map(|published| published.branch),
             published_request: task.published_request,
+            forge,
             unsynced,
             created_at_unix: agent.created_at_unix,
         })
@@ -1856,6 +1882,7 @@ impl AgentView {
         agent: &Agent,
         completion: CompletionBehavior,
         target: &str,
+        forge: Forge,
     ) -> Self {
         let branch = checkout::current_branch(primary).unwrap_or_default();
         Self {
@@ -1874,6 +1901,7 @@ impl AgentView {
             isolated: false,
             published_as: None,
             published_request: None,
+            forge,
             unsynced: None,
             created_at_unix: agent.created_at_unix,
         }

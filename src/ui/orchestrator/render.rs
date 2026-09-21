@@ -2315,21 +2315,25 @@ fn delivery_notification(
 }
 
 /// What a delivery is *about*, in the fewest characters that name it: the
-/// request's own number once the forge has one, an unnumbered request
-/// before that, and — for the two completions that are not a request at
-/// all — where the work is going instead.
+/// request's own number once the forge has one, the forge's word for a
+/// request before that, and — for the two completions that are not a
+/// request at all — where the work is going instead.
 ///
-/// Never "PR" or "MR". Those are two forges' names for one thing, and a
-/// strip that picks one takes a side its reader may not be on; `#` is the
-/// idiom both of them already write. The branch's published name is not
-/// here either: it is the one part of this that has no bound on its
-/// length, and a zone that changes width with a branch name moves every
-/// button left of it.
+/// A number needs no word in front of it: `#41` is already unambiguous,
+/// and "PR" there would be length spent on nothing. The word earns its
+/// place only in the one case that used to leave a bare `#` standing
+/// alone — a request that does not exist yet — and only where `origin`
+/// said which forge this is. Picking one of the two names blind would
+/// take a side the reader may not be on, so an unrecognized remote keeps
+/// the `#` both forges write. The branch's published name is not here
+/// either: it is the one part of this that has no bound on its length,
+/// and a zone that changes width with a branch name moves every button
+/// left of it.
 fn delivery_subject(task: &AgentView) -> String {
     match task.completion {
         CompletionBehavior::Pr => match task.published_request {
             Some(request) => format!("#{request}"),
-            None => "#".to_owned(),
+            None => task.forge.request_abbreviation().unwrap_or("#").to_owned(),
         },
         CompletionBehavior::Merge => {
             format!("{} {}", theme::glyph(Symbol::ArrowTo), task.target)

@@ -31,6 +31,97 @@ use crate::{
 pub const GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const REMOTE: &str = "origin";
 
+/// Which family of forge `origin` points at, and therefore which word the
+/// thing UZE publishes goes by there.
+///
+/// One thing has two names — a pull request and a merge request — and a
+/// surface that picks one blind takes a side its reader may not be on.
+/// Asking the remote removes the guess: the word is the one the reader's
+/// own forge writes, and where the remote does not say, nothing is
+/// claimed and `#` stands alone as it always did.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Forge {
+    /// The remote says nothing this recognizes — a bare repository, a
+    /// self-hosted host named after the company rather than the product.
+    #[default]
+    Unknown,
+    GitHub,
+    GitLab,
+}
+
+impl Forge {
+    /// The forge's own word for a request, for prose that has room for a
+    /// word. `None` where the remote did not say, and then the sentence
+    /// must name both or neither.
+    pub const fn request_term(self) -> Option<&'static str> {
+        match self {
+            Self::GitHub => Some("pull request"),
+            Self::GitLab => Some("merge request"),
+            Self::Unknown => None,
+        }
+    }
+
+    /// The two-letter form, for a zone with room for two letters and
+    /// nothing to put in them — a request that has no number yet. Once
+    /// there is a number the number says everything, and the word in
+    /// front of it is only length.
+    pub const fn request_abbreviation(self) -> Option<&'static str> {
+        match self {
+            Self::GitHub => Some("PR"),
+            Self::GitLab => Some("MR"),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Reads the family off a remote URL.
+    ///
+    /// The host is the whole of the evidence, in both spellings Git
+    /// accepts — `https://host/owner/repo` and `git@host:owner/repo` —
+    /// and a label match rather than an exact one, so an enterprise
+    /// `github.acme.com` and a self-hosted `gitlab.acme.com` answer like
+    /// the hosted product they are. A host naming neither is `Unknown`:
+    /// guessing from a path or a protocol would be inventing an answer
+    /// the reader has to check.
+    ///
+    /// The path is cut off before the user is, not after: an `@` is legal
+    /// in a path, and taking the last one in the whole URL reads a tag
+    /// as a host.
+    pub fn from_remote_url(url: &str) -> Self {
+        let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+        let authority = after_scheme.split('/').next().unwrap_or_default();
+        let authority = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, rest)| rest);
+        let host = authority
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        match host
+            .split('.')
+            .find(|label| matches!(*label, "github" | "gitlab"))
+        {
+            Some("github") => Self::GitHub,
+            Some("gitlab") => Self::GitLab,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// The forge this repository's `origin` points at.
+///
+/// A property of the project rather than of a task, so a surface drawing
+/// many rows asks once. Cheap — one `git remote get-url` — but still a
+/// process, so it belongs where the rest of a view's Git reads are and
+/// never on a render path.
+pub fn forge(primary: &Path) -> Forge {
+    uze_git::read(primary, &["remote", "get-url", REMOTE])
+        .ok()
+        .and_then(|output| output.successful().ok())
+        .map(|url| Forge::from_remote_url(url.trim()))
+        .unwrap_or_default()
+}
+
 /// What the task's checkout says about the task.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Readiness {
@@ -965,7 +1056,7 @@ fn publish(primary: &Path, isolation: &mut Isolation) -> Result<Delivered, Deliv
             request,
         }),
         None => Ok(Delivered::AwaitingRequest {
-            instruction: open_request_message(isolation, &name),
+            instruction: open_request_message(forge(primary), isolation, &name),
             branch: name,
         }),
     }
@@ -1021,16 +1112,21 @@ fn discover_request(primary: &Path, tip: &str) -> Option<u32> {
 /// The message written into the owning agent's pane when its branch is
 /// published and the request is still its to open.
 ///
-/// Names no forge and no tool: the agent is in the repository and knows
-/// which one this is, and the projects that reach different forges are
-/// the reason this text does not pick one.
-fn open_request_message(isolation: &Isolation, branch: &str) -> String {
+/// Names the forge's own word once the remote has said which forge this
+/// is, and names both when it has not — the projects that reach a forge
+/// this cannot recognize are the reason the second half still exists.
+/// Names no tool either way: the agent is in the repository and knows
+/// which one this is.
+fn open_request_message(forge: Forge, isolation: &Isolation, branch: &str) -> String {
+    let request = match forge.request_term() {
+        Some(term) => format!("a {term}"),
+        None => "a pull request — a merge request, on a forge that calls it that —".to_owned(),
+    };
     format!(
         "Your branch is published as `{branch}` on `{REMOTE}`, rebased onto `{target}` and past \
-         the project's checks. Open a pull request — a merge request, on a forge that calls it \
-         that — from `{branch}` against `{target}`, naming and describing it by this project's \
-         own convention. Do not merge it and do not integrate the branch yourself: open the \
-         request and end your turn.",
+         the project's checks. Open {request} from `{branch}` against `{target}`, naming and \
+         describing it by this project's own convention. Do not merge it and do not integrate \
+         the branch yourself: open the request and end your turn.",
         target = isolation.target,
     )
 }
@@ -1087,7 +1183,7 @@ mod tests {
     use super::*;
     use crate::{
         checkout::{acquire, tip_of},
-        task::{AgentStore, Base},
+        task::{AgentId, AgentStore, Base},
     };
     use std::fs;
     use uze_testkit::git::Repository;
@@ -1841,6 +1937,69 @@ mod tests {
             Some(tip_of(primary, &work(&isolation).branch)),
             "what the request carries, so a surface can tell a sync that \
              would send something from one that would send nothing"
+        );
+    }
+
+    /// The host is the whole of the evidence, in both spellings Git
+    /// accepts and for a forge hosted somewhere else under its own name.
+    /// Anything else is `Unknown`, which is what keeps a wrong word off
+    /// the screen: an answer nobody can check is worse than none.
+    #[test]
+    fn the_forge_is_read_off_the_remote_host_and_nothing_else() {
+        for url in [
+            "https://github.com/hiukky/uze.git",
+            "git@github.com:hiukky/uze.git",
+            "ssh://git@github.acme.example/team/service",
+        ] {
+            assert_eq!(Forge::from_remote_url(url), Forge::GitHub, "{url}");
+        }
+        for url in [
+            "https://gitlab.com/hiukky/uze.git",
+            "git@gitlab.acme.example:team/service.git",
+            "https://GitLab.com/hiukky/uze.git",
+        ] {
+            assert_eq!(Forge::from_remote_url(url), Forge::GitLab, "{url}");
+        }
+        for url in [
+            "https://git.acme.example/team/service.git",
+            "/srv/bare/service.git",
+            "https://example.com/github/mirror.git",
+            // An `@` in the path is not a user, and what precedes it is
+            // not a host.
+            "https://git.acme.example/team/service@github.com",
+            "",
+        ] {
+            assert_eq!(
+                Forge::from_remote_url(url),
+                Forge::Unknown,
+                "a host naming neither claims neither: {url}"
+            );
+        }
+    }
+
+    /// Each forge's own word for the request, and both of them where the
+    /// remote did not say — the agent reading it is in the repository and
+    /// knows which one this is.
+    #[test]
+    fn the_agent_is_told_to_open_the_request_its_forge_calls_it() {
+        let isolation = Isolation::cut(
+            &AgentId::generate(),
+            Base::Ref(TARGET.into()),
+            "abc123".into(),
+            TARGET.into(),
+        );
+        assert!(
+            open_request_message(Forge::GitHub, &isolation, "fix/redirect")
+                .contains("Open a pull request from")
+        );
+        assert!(
+            open_request_message(Forge::GitLab, &isolation, "fix/redirect")
+                .contains("Open a merge request from")
+        );
+        let unknown = open_request_message(Forge::Unknown, &isolation, "fix/redirect");
+        assert!(
+            unknown.contains("pull request") && unknown.contains("merge request"),
+            "{unknown}"
         );
     }
 
