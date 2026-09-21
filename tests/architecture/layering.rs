@@ -245,6 +245,38 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
+        name: "a click resolves against the space the frame recorded",
+        scope: "src/ui/orchestrator",
+        forbidden: "last_size",
+        reason: "`last_size` is the *pane's* geometry — the rect a tab's PTY is \
+                 sized by, which is the frame less the sidebar and the tab strip. \
+                 An extension surface is drawn over the whole frame, and one that \
+                 places things in the room it is given (the code map's tiles, the \
+                 architect's diagrams) resolves a click by laying itself out \
+                 again. Handing it the pane's size to do that laid it out twice \
+                 in two different spaces: everything right of the pane's width \
+                 and below its height belonged to no tile at all, and everything \
+                 else belonged to the wrong one.",
+        remedy: "read `extension_view::Rendered::content_space`, which the frame \
+                 records from the rect it actually drew in — the same rule \
+                 `content_gutter` already follows. `last_size` stays the pane's, \
+                 for sizing panes.",
+        sanctioned: &[
+            (
+                "src/ui/orchestrator.rs",
+                "where the pane's size is what is meant: it is kept in step with \
+                 the layout and sizes the PTY on a resize",
+            ),
+            (
+                "src/ui/orchestrator/session.rs",
+                "one use, and it is a pane's: the size a newly placed agent's \
+                 PTY opens at. Nothing here may hand it to an extension — that \
+                 is what this rule is about.",
+            ),
+        ],
+        budget: &[],
+    },
+    Rule {
         name: "drawing the workspace reaches nothing",
         scope: "src/ui/orchestrator",
         forbidden: "WorkspaceHost",

@@ -19,7 +19,7 @@
 
 /// The space the host has for the view. Advisory: the extension uses it to
 /// decide how much to produce, not where to put it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
     pub width: u16,
     pub height: u16,

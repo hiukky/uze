@@ -1,0 +1,126 @@
+journey: a region somebody edited by hand is reported, never rewritten
+tags: [gate, cli, context]
+proves: web/content/docs/concepts/context.mdx
+about: |
+  UZE owns a marked region inside a page the team owns. The marks are what
+  make that ownership takeable back — and they are also an invitation, since
+  the easiest thing in the world is to open AGENTS.md, see a sentence that is
+  nearly right, and fix it in place without noticing which side of a comment
+  you are on.
+
+  What must not happen next is the one thing a naive reconcile does: compose
+  the region again from the plugin, silently, and take the edit with it. A
+  person who loses a sentence that way loses their trust in the command, not
+  just the sentence — and they lose it quietly, which is worse, because the
+  next reconcile is the one that costs them something they needed.
+
+  So the rule is the same one receipts hold for packages: what UZE did not
+  write, UZE does not destroy. It reports the region as drifted and leaves
+  it exactly as the person left it, and this journey reads the page
+  afterwards to check it did.
+
+world:
+  project: demo-app
+  commits:
+    - message: "chore: initial commit"
+      files:
+        README.md: "# demo-app\n"
+    - message: "docs: the team's own conventions"
+      files:
+        AGENTS.md: |
+          # demo-app
+
+          Hand-written by the team, and never UZE's to rewrite.
+
+          ## Conventions
+
+          - Conventional Commits for commit subjects.
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [
+          { "name": "house-rules", "source": "./plugins/house-rules", "description": "Instructions plugin." }
+        ]
+      }
+    market/plugins/house-rules/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "house-rules",
+        "version": "1.0.0",
+        "description": "Shared house rules."
+      }
+    market/plugins/house-rules/AGENTS.md: |
+      # House rules
+
+      - Always run `make check` before committing.
+
+scenes:
+  - scene: a contribution composed into the region UZE owns
+    when:
+      - shell: "{uze} setup"
+        check: false
+      - shell: "{uze} market add {world}/market"
+      - shell: "{uze} plugin install house-rules@demo"
+      - shell: "{uze} agent context reconcile"
+        say: compose the plugin's instructions into the project's page
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: "Always run `make check` before committing."
+        about: the plugin's own words are on the page
+      - cmd:
+          run: "{uze} agent context inspect | grep house-rules@demo"
+          stdout_contains: "Matched"
+        about: |
+          and UZE reads the region as its own — which is what makes the
+          next scene a change rather than a coincidence
+
+  - scene: somebody edits inside the marks, and reconciling leaves it alone
+    when:
+      - shell: |
+          set -e
+          python3 - <<'EDIT'
+          from pathlib import Path
+          page = Path("{project}/AGENTS.md")
+          body = page.read_text()
+          before = "Always run `make check` before committing."
+          after = "Always run `make check` before committing, never on a Friday."
+          assert before in body, "the plugin's sentence is the one being edited"
+          page.write_text(body.replace(before, after))
+          EDIT
+        say: |
+          a person opens the page and fixes a sentence that happens to sit
+          inside UZE's region — the ordinary mistake this rule exists for
+      - shell: "{uze} agent context reconcile"
+        say: reconcile again, the way any later command would
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: "Always run `make check` before committing, never on a Friday."
+        about: |
+          the person's sentence is still on the page, word for word — the
+          region was not composed again over the top of it
+      - file: "{project}/AGENTS.md"
+        contains: "Conventional Commits for commit subjects."
+        about: with the team's own section untouched as always
+      - cmd:
+          run: "grep -c 'Always run' {project}/AGENTS.md"
+          stdout_contains: "1"
+        about: |
+          and said once, not twice: a reconcile that could not own the
+          region did not append a second copy beside it either
+
+  - scene: it is reported rather than passed over in silence
+    then:
+      - cmd:
+          run: "{uze} agent context inspect | grep house-rules@demo"
+          stdout_contains: "Drifted"
+        about: |
+          UZE names the region as drifted, so a person who wants the
+          plugin's version back knows there is something to decide
+      - cmd:
+          run: "{uze} agent context inspect | grep house-rules@demo"
+          stdout_excludes: "Matched"
+        about: |
+          and stops calling it matched — "we left it alone" and "it is
+          what we wrote" are different facts, and reading as matched is
+          what would let the next release quietly rewrite it

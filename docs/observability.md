@@ -165,5 +165,5 @@ Nothing subscribed — every one-shot command, unless asked: a branch per
 span. Journal: formatting on the calling thread, and a move onto the
 writer's. OTLP: a clone of each span's fields onto the exporter's
 thread. The budget tests in `crates/uze-application/src/application/
-performance_tests.rs` run with no subscriber, which is the release
+tests/performance.rs` run with no subscriber, which is the release
 configuration.

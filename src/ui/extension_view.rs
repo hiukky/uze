@@ -325,6 +325,20 @@ pub(crate) struct Rendered {
     /// the map is a tile or two over, and near an edge is nothing at
     /// all.
     pub(crate) content_gutter: u16,
+    /// The room the extension was given to lay this frame out in, so a
+    /// click resolves against the geometry that produced what is on
+    /// screen.
+    ///
+    /// Recorded for the same reason as `content_gutter`, and against a
+    /// worse failure. The click path used to recompute it from the
+    /// *pane's* size — the rect a tab's PTY is sized by, which is the
+    /// frame less the sidebar and the tab strip — while this drew in the
+    /// whole frame. A surface that lays itself out in the room it is
+    /// given, as the map and the architect's diagrams do, was then laid
+    /// out twice in two different spaces: everything to the right of the
+    /// pane's width and below its height belonged to no tile at all, and
+    /// everything else belonged to the wrong one.
+    pub(crate) content_space: uze_extensions::view::Size,
 }
 
 pub(crate) fn render(
@@ -375,7 +389,9 @@ pub(crate) fn render(
     hits.push((close_rect, ViewHit::Close));
 
     if view.layout == ViewLayout::Board {
-        return render_board(frame, view, area, scope, hits);
+        let mut rendered = render_board(frame, view, area, scope, hits);
+        rendered.content_space = board_space(area);
+        return rendered;
     }
     let (navigator_area, content_area, footer) = content_columns(area, navigator_width_override);
     // The nav is the surface's, not the list's: it spans the frame, and
@@ -457,6 +473,10 @@ pub(crate) fn render(
         }
     }
     render_footer(frame, footer, &view.footer, scope);
+    rendered.content_space = uze_extensions::view::Size {
+        width: content_area.width,
+        height: content_area.height,
+    };
     rendered
 }
 
@@ -2209,6 +2229,108 @@ mod tests {
             })
             .collect();
         (rows, hits)
+    }
+
+    /// A click anywhere on a board's drawing resolves to the cell that was
+    /// drawn there, in the space the frame reports having drawn in.
+    ///
+    /// Both halves matter, and the second is the one that was wrong. A
+    /// surface that places things in the room it is given — the map's
+    /// tiles, the architect's diagrams — answers a click by laying itself
+    /// out again, so it has to be told the same room twice. The click path
+    /// used to recompute that from the pane's size instead of the frame's,
+    /// which is smaller by the sidebar and the tab strip: the right and
+    /// bottom bands of the drawing belonged to no tile at all, and
+    /// everything else belonged to the wrong one.
+    #[test]
+    fn a_board_click_resolves_in_the_space_the_frame_drew_in() {
+        for (width, height) in [(90u16, 24u16), (120, 36), (70, 20)] {
+            let area = Rect::new(0, 0, width, height);
+            let (_, board_rect, _) = board_rows(area);
+            let space = board_space(area);
+            let lines: Vec<ContentLine> = (0..space.height)
+                .map(|_| ContentLine {
+                    gutter: String::new(),
+                    number: String::new(),
+                    tone: LineTone::Neutral,
+                    spans: vec![Span::new("x".repeat(space.width as usize), Role::Default)],
+                })
+                .collect();
+            let view = View {
+                title: vec![Span::new("Map", Role::Bright)],
+                caption: Vec::new(),
+                navigator: None,
+                content: Content::Lines {
+                    first: 0,
+                    heading: String::new(),
+                    scroll: 0,
+                    total: lines.len(),
+                    lines,
+                    caret: None,
+                },
+                footer: vec![Command::Close],
+                modes: Vec::new(),
+                subjects: Vec::new(),
+                layout: ViewLayout::Board,
+                trail: Vec::new(),
+            };
+
+            let mut hits = Vec::new();
+            let mut reported = uze_extensions::view::Size::default();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    reported = render(
+                        frame,
+                        &view,
+                        frame.area(),
+                        Some(24),
+                        NavigatorScroll::default(),
+                        uze_keys::Scope::Architect,
+                        &mut hits,
+                    )
+                    .content_space;
+                })
+                .unwrap();
+
+            assert_eq!(
+                reported, space,
+                "{width}x{height}: the frame must report the board it drew in"
+            );
+
+            for row in board_rect.y..board_rect.bottom() {
+                for column in board_rect.x..board_rect.right() {
+                    let (rect, hit) = hits
+                        .iter()
+                        .find(|(rect, hit)| {
+                            matches!(hit, ViewHit::PlaceCaret { .. })
+                                && rect.x <= column
+                                && column < rect.right()
+                                && rect.y <= row
+                                && row < rect.bottom()
+                        })
+                        .expect("every drawn cell of a board is clickable");
+                    let ViewHit::PlaceCaret { line, cell } = hit else {
+                        unreachable!("filtered to PlaceCaret");
+                    };
+                    let resolved = caret_cell_at(*rect, *cell, column, 0);
+                    assert_eq!(
+                        (*line, resolved),
+                        (
+                            usize::from(row - board_rect.y),
+                            usize::from(column - board_rect.x)
+                        ),
+                        "{width}x{height}: cell ({column}, {row})"
+                    );
+                    assert!(
+                        *line < usize::from(reported.height)
+                            && resolved < usize::from(reported.width),
+                        "{width}x{height}: ({column}, {row}) resolved outside the \
+                         space the surface was laid out in"
+                    );
+                }
+            }
+        }
     }
 
     /// A board menu of `groups` areas, each holding `items` artifacts,

@@ -438,6 +438,27 @@ fn now_unix_nanos() -> u128 {
         .as_nanos()
 }
 
+/// What `name`'s mirror last resolved its declared ref to, and when.
+///
+/// The read half of freshness: comparing an installed package against this
+/// is a JSON read, which is what keeps the answer off every listing's
+/// budget. `None` when there is no entry, or one written before a mirror
+/// recorded its commit — an answer UZE does not have, reported as such
+/// rather than as a claim with nothing behind it.
+pub(crate) struct MirroredHead {
+    pub commit: String,
+    pub at_unix: u64,
+}
+
+pub(crate) fn mirrored_head(home: &UzeHome, name: &str) -> Option<MirroredHead> {
+    let entry = home.marketplace_cache_dir().join(directory_name(name));
+    let meta: Meta = serde_json::from_slice(&fs::read(entry.join(META_FILE)).ok()?).ok()?;
+    Some(MirroredHead {
+        commit: meta.commit?,
+        at_unix: u64::try_from(meta.cached_at_unix_nanos / 1_000_000_000).ok()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,25 +722,4 @@ mod tests {
         assert_eq!(directory_name("a/b"), "a_b");
         assert_eq!(directory_name(""), "_");
     }
-}
-
-/// What `name`'s mirror last resolved its declared ref to, and when.
-///
-/// The read half of freshness: comparing an installed package against this
-/// is a JSON read, which is what keeps the answer off every listing's
-/// budget. `None` when there is no entry, or one written before a mirror
-/// recorded its commit — an answer UZE does not have, reported as such
-/// rather than as a claim with nothing behind it.
-pub(crate) struct MirroredHead {
-    pub commit: String,
-    pub at_unix: u64,
-}
-
-pub(crate) fn mirrored_head(home: &UzeHome, name: &str) -> Option<MirroredHead> {
-    let entry = home.marketplace_cache_dir().join(directory_name(name));
-    let meta: Meta = serde_json::from_slice(&fs::read(entry.join(META_FILE)).ok()?).ok()?;
-    Some(MirroredHead {
-        commit: meta.commit?,
-        at_unix: u64::try_from(meta.cached_at_unix_nanos / 1_000_000_000).ok()?,
-    })
 }
