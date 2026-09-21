@@ -27,6 +27,14 @@ video:
   forbid:
     - Upstream request limit
     - Retry attempt
+    # The account's own state, which the harness prints unasked and which
+    # no sandbox can pre-answer: a quota line, the promo that rides with
+    # it, and — the reason this is not merely untidy — the timezone it
+    # names, which is the operator's region on a published video. The leak
+    # scan looks for a username and a hostname; a place is neither.
+    - weekly limit
+    - usage credits
+    - America/
   # Known false positive, on this machine only: the leak scan searches for
   # the operator's login name, and here that is also the GitHub organisation
   # this project is published under — so the Plugins screen showing

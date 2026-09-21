@@ -1,6 +1,6 @@
 journey: a state document this uze cannot read costs neither the work nor the next agent
 tags: [gate, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   The record of a project's agents is one JSON document under UZE's own
   state directory, and it outlives the binary that wrote it: installing a

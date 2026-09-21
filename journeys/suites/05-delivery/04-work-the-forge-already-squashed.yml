@@ -1,6 +1,6 @@
 journey: work the target already carries is delivered, never replayed onto itself
 tags: [gate, tui, delivery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   Most forges squash what they merge, so none of a branch's own commits ever
   becomes reachable from the target — and a target that moved is one a live

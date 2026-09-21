@@ -1,6 +1,6 @@
 journey: an agent that comes back after a restart comes back to its own conversation
 tags: [gate, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   The process holding the panes is a daemon, and daemons die — a machine
   reboots, a session is logged out, somebody kills the wrong thing. What

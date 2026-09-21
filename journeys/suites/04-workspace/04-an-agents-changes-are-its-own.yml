@@ -1,6 +1,6 @@
 journey: an agent's changes are read, and written, in its own checkout
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   Every agent's tab has a changes surface, and it answers for one checkout:
   the tab's own. Git answers repository-wide from anywhere inside the

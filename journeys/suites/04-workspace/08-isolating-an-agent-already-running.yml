@@ -1,6 +1,6 @@
 journey: an agent already running is given a checkout of its own
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   Isolation is asked of one agent, after it is running. The operator
   starts an agent beside them, works alongside it, and then decides that

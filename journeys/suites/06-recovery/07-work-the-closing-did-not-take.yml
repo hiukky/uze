@@ -1,6 +1,6 @@
 journey: closing what an agent was working in does not take its work
 tags: [gate, tui, recovery]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   An agent's work is bound to the project it belongs to and never to what
   it happened to be opened in: its record carries a base, a branch, a

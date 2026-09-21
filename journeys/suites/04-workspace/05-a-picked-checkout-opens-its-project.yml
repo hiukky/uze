@@ -1,6 +1,6 @@
 journey: a directory picked inside an agent's checkout opens the project, not the checkout
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/index.mdx
 about: |
   A space is a project. An agent's checkout under `.worktrees/<id>` belongs
   to the repository it was cut from, so picking it as a new space's root

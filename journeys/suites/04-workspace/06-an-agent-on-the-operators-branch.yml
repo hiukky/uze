@@ -1,6 +1,6 @@
 journey: an agent starts on the operator's own branch, beside them
 tags: [gate, tui, workspace]
-proves: web/content/docs/workspace.mdx
+proves: web/content/docs/workspace/agents.mdx
 about: |
   A space is a directory and nothing else. An agent started in one begins
   where the project says, and the project here says nothing — so it begins
