@@ -163,6 +163,7 @@ pub(super) fn content_line(cell: &DiffCell) -> ContentLine {
                 text: text.clone(),
                 role: Role::Default,
                 color: Some(*color),
+                ground: None,
                 bold: false,
                 italic: false,
             })

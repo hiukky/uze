@@ -57,19 +57,27 @@ const FOOTER_GAP: u16 = 2;
 /// The extension's palette, resolved. An extension names meaning; the host
 /// names colour, exactly once, here.
 fn color(role: Role) -> Color {
+    theme::color(token(role))
+}
+
+/// The token a role means. Kept apart from [`color`] because a role is
+/// asked for two different things — the ink it draws in, and the hue it
+/// lends a ground — and both have to answer from one mapping or a
+/// selection stops matching what it is marking.
+fn token(role: Role) -> Token {
     match role {
-        Role::Default => theme::color(Token::TextBright),
-        Role::Muted => theme::color(Token::TextMuted),
-        Role::Secondary => theme::color(Token::TextSecondary),
-        Role::Bright => theme::color(Token::TextBright),
-        Role::Inactive => theme::color(Token::TextInactive),
-        Role::Accent => theme::color(Token::Accent),
-        Role::Dim => theme::color(Token::TextDim),
-        Role::Faint => theme::color(Token::TextFaint),
-        Role::Info => theme::color(Token::StateInfo),
-        Role::Success => theme::color(Token::StateSuccess),
-        Role::Warning => theme::color(Token::StateWarning),
-        Role::Danger => theme::color(Token::StateDanger),
+        Role::Default => Token::TextBright,
+        Role::Muted => Token::TextMuted,
+        Role::Secondary => Token::TextSecondary,
+        Role::Bright => Token::TextBright,
+        Role::Inactive => Token::TextInactive,
+        Role::Accent => Token::Accent,
+        Role::Dim => Token::TextDim,
+        Role::Faint => Token::TextFaint,
+        Role::Info => Token::StateInfo,
+        Role::Success => Token::StateSuccess,
+        Role::Warning => Token::StateWarning,
+        Role::Danger => Token::StateDanger,
     }
 }
 
@@ -78,6 +86,12 @@ fn styled(span: &Span) -> TextSpan<'static> {
         .color
         .map(|rgb| theme::content(rgb.0, rgb.1, rgb.2))
         .unwrap_or_else(|| color(span.role)));
+    // A ground the span named: its own hue, let into the surface far
+    // enough to mark the area and not far enough to compete with what is
+    // written on it — the same strength a selected row wears.
+    if let Some(ground) = span.ground {
+        style = style.bg(theme::tinted(token(ground), Token::SurfaceBackground));
+    }
     // Emphasis is stated both ways round, never left to whatever the
     // span is drawn inside. A ratatui title carries a style its spans
     // are patched over, so a span that only *omits* bold comes out bold
@@ -1947,6 +1961,7 @@ mod tests {
                         text: "let x = 1;".to_owned(),
                         role: Role::Default,
                         color: Some(Rgb(1, 2, 3)),
+                        ground: None,
                         bold: false,
                         italic: false,
                     }],
@@ -2840,6 +2855,7 @@ mod tests {
                 text: text.to_owned(),
                 role: Role::Default,
                 color: None,
+                ground: None,
                 bold: false,
                 italic: false,
             }],

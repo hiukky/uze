@@ -70,6 +70,14 @@ pub struct Span {
     pub text: String,
     pub role: Role,
     pub color: Option<Rgb>,
+    /// The role whose hue tints the ground under this span, when
+    /// something has to be marked *without* being recoloured. A selected
+    /// tile on the map is the case it exists for: its border and its name
+    /// already say how hot the file is, and repainting them to say
+    /// "selected" costs the reader the one thing the map is drawn to
+    /// show. Named as a role and not as a colour, because how much of the
+    /// hue reaches the surface is the host's to decide.
+    pub ground: Option<Role>,
     pub bold: bool,
     /// Emphasis, in the typographic sense. Here because rendered
     /// markdown has two weights of it and a role cannot carry the
@@ -84,6 +92,7 @@ impl Span {
             text: text.into(),
             role,
             color: None,
+            ground: None,
             bold: false,
             italic: false,
         }

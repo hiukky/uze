@@ -521,6 +521,7 @@ fn contents_content(code: &CodeView, space: Size) -> Content {
                                 text: piece.clone(),
                                 role: Role::Default,
                                 color: Some(*colour),
+                                ground: None,
                                 bold: false,
                                 italic: false,
                             })
