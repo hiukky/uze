@@ -7385,6 +7385,117 @@ mod workspace_tests {
         assert_eq!(at[1] - at[0], 2, "a row over it again: {rows:?}");
     }
 
+    /// Exactly one name in the column is bright and bold, and it is
+    /// whatever is receiving keystrokes: an agent, or the header of a
+    /// space that is minimized or speaks for no agent of its own.
+    ///
+    /// The hue used to follow the space's own context agent while the
+    /// weight followed the *current* one, and every space names a context
+    /// agent — the ones nobody is in included. Walking from one space to
+    /// another left the first one's agent bright and merely unbolded, so
+    /// two rows claimed to be where the keyboard was.
+    #[test]
+    fn one_name_in_the_column_is_bright_and_bold() {
+        // By hue alone, and the weight asserted on what it finds: the
+        // defect this is here for was a name left *bright* and merely
+        // unbolded, which a search for both at once walks straight past.
+        let bright = |model: &WorkspaceModel| {
+            let Sidebar { rows, buffer, .. } = sidebar(model, &identities_fixture());
+            let hue = theme::color(Token::TextBright);
+            let lit: Vec<(u16, String)> = (0..buffer.area.height)
+                .filter(|row| {
+                    (0..buffer.area.width).any(|column| {
+                        let cell = &buffer[(column, *row)];
+                        cell.fg == hue && cell.symbol() != " "
+                    })
+                })
+                .map(|row| (row, rows[row as usize].trim().to_owned()))
+                .collect();
+            for (row, _) in &lit {
+                assert!(
+                    (0..buffer.area.width).any(|column| {
+                        let cell = &buffer[(column, *row)];
+                        cell.fg == hue && cell.modifier.contains(ratatui::style::Modifier::BOLD)
+                    }),
+                    "bright and not bold is the half-state this forbids: {rows:?}"
+                );
+            }
+            (rows, lit)
+        };
+
+        let mut model = three_spaces();
+        model.first_steps_collapsed = true;
+        // `three_spaces` leaves the third in front, on its own agent.
+        let (rows, lit) = bright(&model);
+        assert_eq!(lit.len(), 1, "one row, not one per space: {rows:?}");
+        assert!(lit[0].1.contains("shell"), "the agent in front: {rows:?}");
+
+        // Walking to another space moves it rather than adding to it.
+        model
+            .session
+            .as_mut()
+            .expect("a session")
+            .workspace
+            .selected_space = SpaceId(1);
+        let (rows, moved) = bright(&model);
+        assert_eq!(moved.len(), 1, "still one: {rows:?}");
+        assert_ne!(
+            moved[0].0, lit[0].0,
+            "and it moved rather than multiplied: {rows:?}"
+        );
+        assert!(
+            moved[0].1.contains("shell"),
+            "onto the other agent: {rows:?}"
+        );
+
+        // Minimized, the space speaks for itself and its header takes it.
+        toggle_space_collapsed(&mut model, SpaceId(1));
+        let (rows, folded) = bright(&model);
+        assert_eq!(folded.len(), 1, "one row: {rows:?}");
+        assert!(
+            folded[0].1.contains("one"),
+            "the header of the space in front: {rows:?}"
+        );
+    }
+
+    /// The name of the space in front is bold whether or not its header
+    /// is the row receiving keystrokes — which, for a space of nothing
+    /// but agents, it can never be: there is no tab of its own to land
+    /// on, so clicking its header changed nothing a reader could see.
+    /// The weight answers which block, where the hue answers which row.
+    #[test]
+    fn the_name_of_the_space_in_front_is_bold_even_when_an_agent_is_current() {
+        let model = three_spaces();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        let weight = |space: SpaceId, name: &str| {
+            let header = space_header(&hits, space);
+            let column = rows[header.y as usize]
+                .find(name)
+                .map(|byte| rows[header.y as usize][..byte].chars().count())
+                .unwrap_or_else(|| panic!("{name} heads its space: {rows:?}"))
+                as u16;
+            let cell = &buffer[(column, header.y)];
+            (
+                cell.modifier.contains(ratatui::style::Modifier::BOLD),
+                cell.fg,
+            )
+        };
+
+        // The third is in front, on an agent of its own, so its header is
+        // not the current row — and its name is bold all the same.
+        let (bold, hue) = weight(SpaceId(3), "three");
+        assert!(bold, "the space in front: {rows:?}");
+        assert_ne!(
+            hue,
+            theme::color(Token::TextBright),
+            "without taking the hue off the agent: {rows:?}"
+        );
+        let (bold, _) = weight(SpaceId(1), "one");
+        assert!(!bold, "and no other space's name is: {rows:?}");
+    }
+
     /// The leading column carries a rail beside the selected space and
     /// nothing beside any other: down that one block, in the faintest
     /// tone, with the accent along the stretch that is selected within
@@ -8564,6 +8675,26 @@ mod workspace_tests {
             )
             .expect("the row that lost its checkout closes");
         assert!(created < closed, "the new tab opens first: {sent:?}");
+
+        // And the space keeps a shell of its own. Every tab of this space
+        // is an agent, and the tab the resume lands is another one, so
+        // closing the dead row left the space with nothing of its own to
+        // land on — a header that answers no click. Every other way a tab
+        // closes opens the replacement; this one went around the guard.
+        let shell = sent
+            .iter()
+            .position(|request| {
+                matches!(
+                    request,
+                    ClientRequest::CreateTab {
+                        agent: None,
+                        command: None,
+                        ..
+                    }
+                )
+            })
+            .expect("a shell of the space's own opens in its place");
+        assert!(shell < closed, "before the row goes: {sent:?}");
     }
 
     /// Resuming a preserved task whose checkout is still there opens the

@@ -2861,8 +2861,15 @@ impl Attach<'_> {
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
         // after the new tab, so the space is never left without one.
+        //
+        // Through the same guard every other close goes through. The tab
+        // that lands above is an *agent*, and a space's own shell is the
+        // one thing an agent is not: a space whose tabs were all agents
+        // came out of this with nothing of its own to land on, which is a
+        // space whose header answers no click at all. It took four agents
+        // and one resume to reach, and nothing on the way said so.
         if let Some(tab) = replacing {
-            let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
+            close_tab_keeping_a_shell(&mut self.stream, &self.model, &self.identities, tab);
         }
     }
 

@@ -973,8 +973,6 @@ struct SidebarAgent<'a> {
     /// the group its row sits in, the hue it wears, and whether the tree
     /// branches for it.
     isolated: bool,
-    /// The agent the space is about (see `space_context_agent`).
-    selected: bool,
     /// Selected *and* in the active space: the one agent receiving
     /// keystrokes.
     is_current: bool,
@@ -1083,7 +1081,6 @@ impl<'a> SidebarAgent<'a> {
         Self {
             tab,
             isolated: agent_group(model, tab.id).is_isolated(),
-            selected,
             is_current,
             status: model.agent_tab_status(tab.pane.id, is_current),
             renaming,
@@ -1104,19 +1101,29 @@ impl<'a> SidebarAgent<'a> {
                     .add_modifier(Modifier::BOLD),
             ),
             None => {
-                // Bold belongs to the agent, not the space it runs in (see
-                // `render_space_header`, which never bolds its own label) —
-                // the tab actually receiving keystrokes is the thing worth
-                // shouting about, not the container it happens to sit in.
-                let mut style = Style::default().fg(if self.selected {
-                    theme::color(Token::TextBright)
-                } else {
-                    theme::color(Token::TextInactive)
-                });
-                if self.is_current {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                Span::styled(text::elide(&self.tab.label, room as usize), style)
+                // One item in the whole column is bright and bold, and it
+                // is whatever is receiving keystrokes — here, or the
+                // header of the space in front (see
+                // `render_space_header`, which wears the same style under
+                // the same predicate).
+                //
+                // The hue used to follow the space's own context agent
+                // while the weight followed `is_current`, and every space
+                // names a context agent — the ones nobody is in
+                // included. Walking from space A to space B left A's
+                // agent in the bright hue and merely unbolded, so two
+                // rows claimed to be where the keyboard was.
+                //
+                // What that hue was worth saying — which agent a space
+                // would land on — is now said only once the space is
+                // entered, by the same row going bright. A second, dimmer
+                // register for it in the spaces nobody is in would be a
+                // third level of emphasis in a column that is asking for
+                // fewer.
+                Span::styled(
+                    text::elide(&self.tab.label, room as usize),
+                    label_style(self.is_current, false),
+                )
             }
         }
     }
@@ -1710,10 +1717,13 @@ pub(super) fn render_space_header(
         .as_ref()
         .filter(|(target, _)| *target == RenameTarget::Space(space.id))
         .map(|(_, buffer)| buffer.as_str());
-    // Never bright, never bold, selected or not — the background fill
-    // below already carries "this is where you are"; the label itself
-    // stays out of the way of the agent name bolded underneath it.
-    let label_style = theme::fg(Token::TextInactive);
+    // Bold while this is the space in front, and bright with it only
+    // while the header is also the row receiving keystrokes — which is
+    // when the space is minimized or speaks for no agent of its own, and
+    // exactly when no agent row of it can be current. So the column
+    // holds one bright name and, above it, the weight saying which block
+    // that name is in.
+    let name_style = label_style(is_current, selected);
     let fold = mark::disclosure(!collapsed);
     let mut spans = vec![
         space_gutter(selected, is_current),
@@ -1738,7 +1748,7 @@ pub(super) fn render_space_header(
             // [`render_space_caption`]) once the fold asks — a row that
             // can hold a path of any length, which this one, one line wide
             // and already carrying a name, could not.
-            spans.push(Span::styled(space.label.clone(), label_style));
+            spans.push(Span::styled(space.label.clone(), name_style));
             if collapsed && let Some(status) = folded_status(model, space, identities) {
                 spans.push(Span::styled(
                     format!(" {}", status.glyph(model.tick)),
@@ -1874,6 +1884,32 @@ fn space_gutter(selected: bool, lit: bool) -> Span<'static> {
         return Span::raw(" ".repeat(theme::width(Symbol::BarThin) as usize));
     }
     Span::styled(theme::glyph(Symbol::BarThin), gutter_style(lit))
+}
+
+/// What a name wears: bright *and* bold for the one row receiving
+/// keystrokes, bold alone for a name that is in front without being that
+/// row, and quiet otherwise.
+///
+/// Two levels because there are two questions and one of them is not the
+/// other's. Exactly one row in the column is `current` — an agent, or
+/// the header of a space that is minimized or speaks for no agent — so
+/// exactly one name is ever bright, which is what the hue is for. Which
+/// *space* is in front is a second fact, and its header carried no mark
+/// of it at all: a space of nothing but agents can never be the current
+/// row, because there is no tab of its own to land on, so its name had
+/// no state to reach however it was clicked. The weight answers that one
+/// on its own, and costs the hue nothing.
+fn label_style(current: bool, in_front: bool) -> Style {
+    let style = Style::default().fg(if current {
+        theme::color(Token::TextBright)
+    } else {
+        theme::color(Token::TextInactive)
+    });
+    if current || in_front {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
 }
 
 fn gutter_style(lit: bool) -> Style {
