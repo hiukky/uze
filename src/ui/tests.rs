@@ -2096,9 +2096,7 @@ fn the_sidebar_announces_a_release_above_the_steps() {
     // As long as the real versions are: the first cut put the version in a
     // caption beside the heading, where the column elided it — and the
     // closing mark at the caption's end went with it.
-    model.release = Some(crate::self_update::Notice::Available(
-        "0.0.0-alpha.14".to_owned(),
-    ));
+    model.release = Some(crate::self_update::Notice("0.0.0-alpha.14".to_owned()));
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, frame.area(), &model, &mut hits))
@@ -2116,8 +2114,8 @@ fn the_sidebar_announces_a_release_above_the_steps() {
         "the version, whole, with the mark on its row: {version:?}"
     );
     assert!(
-        action.contains("available") && action.contains("what's new"),
-        "what happened and what to do, on one row: {action:?}"
+        action.contains("restart uze to use it"),
+        "what to do, on one row: {action:?}"
     );
     assert_eq!(
         hits.iter()

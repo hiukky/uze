@@ -97,6 +97,17 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Replace the uze binary with the latest release (not plugins)
+    ///
+    /// Only a uze placed by the install script is replaced; any other says
+    /// how it was installed and is left to that.
+    Upgrade {
+        /// Internal: the release check a CLI command hands to a detached
+        /// process of its own once the last answer has gone stale (see
+        /// `uze::self_update`). Silent, and bound by `UZE_AUTOUPDATE`.
+        #[arg(long, hide = true)]
+        background: bool,
+    },
     /// Provision harness integrations, or inspect their readiness
     Setup {
         /// Harness ids to provision. Omit to provision every registered harness.
@@ -117,11 +128,6 @@ enum Command {
         #[command(subcommand)]
         action: AgentAction,
     },
-    /// Internal: the release check a CLI command hands to a detached
-    /// process of its own once the last answer has gone stale (see
-    /// `uze::self_update`). Not for interactive use and hidden from help.
-    #[command(hide = true)]
-    SelfUpdate,
     /// Reached only when the first argument matches none of the built-ins
     /// above — `clap`'s own generated matcher tries every named variant
     /// first, so this is the *sole* place `<plugin>@<market>` project
@@ -765,9 +771,12 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
     }
     // Ahead of the application: a check running detached from the command
     // that started it has no business seeding plugins on the way.
-    if matches!(command, Command::SelfUpdate) {
-        uze::self_update::check_now(&home);
-        return Ok(());
+    if let Command::Upgrade { background } = command {
+        if background {
+            uze::self_update::check_now(&home);
+            return Ok(());
+        }
+        return run_upgrade(&home);
     }
     die_quietly_on_a_closed_pipe();
     let app = UzeApplication::from_env(home.clone())?;
@@ -861,7 +870,9 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
         Command::Terminal { .. } => {
             unreachable!("terminal commands return before application setup")
         }
-        Command::SelfUpdate => unreachable!("the release check returns before application setup"),
+        Command::Upgrade { .. } => {
+            unreachable!("the release check returns before application setup")
+        }
     }
     Ok(())
 }
@@ -872,8 +883,55 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
 fn tells_about_releases(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Agent { .. } | Command::Terminal { .. } | Command::SelfUpdate
+        Command::Agent { .. } | Command::Terminal { .. } | Command::Upgrade { .. }
     )
+}
+
+fn run_upgrade(home: &UzeHome) -> Result<()> {
+    use uze::self_update::Upgrade;
+    let outcome = with_spinner("Checking for a new release...", "Failed to upgrade", || {
+        uze::self_update::upgrade(home).map_err(uze_application::UzeError::Upgrade)
+    })?;
+    match outcome {
+        Upgrade::Current(version) => {
+            progress::success(&format!("uze {version} is the latest release"))
+        }
+        Upgrade::Replaced { from, to } => {
+            progress::success(&format!("uze upgraded {from} → {to}"));
+            println!(
+                "{}",
+                progress::label(format!(
+                    "uze windows already open keep running {from}; restart them to use {to}"
+                ))
+            );
+        }
+        Upgrade::NotInstalled {
+            running,
+            placed,
+            latest,
+        } => {
+            let running =
+                running.map_or_else(|| "this uze".to_owned(), |path| path.display().to_string());
+            let reason = match placed {
+                Some(placed) => format!(
+                    "the install script placed uze at {}, but the uze that ran is {running}",
+                    placed.display()
+                ),
+                None => format!("{running} was not placed by the install script"),
+            };
+            progress::warn(&format!("not upgraded to {latest}: {reason}"));
+            println!(
+                "{}",
+                progress::label(
+                    "update it the way it was installed, or install the release with: curl -fsSL https://uze.hiukky.com/i | sh"
+                )
+            );
+            return Err(uze_application::UzeError::Upgrade(format!(
+                "{latest} was not installed"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn run_setup_command(

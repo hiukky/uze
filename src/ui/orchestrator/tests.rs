@@ -4512,9 +4512,7 @@ mod workspace_tests {
             "no release, no notice"
         );
 
-        model.release = Some(crate::self_update::Notice::Installed(
-            "0.0.0-alpha.14".to_owned(),
-        ));
+        model.release = Some(crate::self_update::Notice("0.0.0-alpha.14".to_owned()));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let (mark, _) = hits
             .iter()

@@ -3,8 +3,8 @@
 //! Only a binary `install.sh` placed is ever replaced. The installer leaves
 //! a receipt (`state/install.json`) naming the file it wrote, and a binary
 //! running from anywhere else — `cargo install`, `make install`, a package
-//! manager, `target/debug` — belongs to whatever put it there: the most this
-//! module does for it is say that a newer release exists. That receipt is
+//! manager, `target/debug` — belongs to whatever put it there, and is left
+//! to it: `uze upgrade` says why when asked. That receipt is
 //! what ADR-034 was guarding when it kept a self-update out of scope; a
 //! replacement that cannot tell whose file it is replacing is the thing to
 //! refuse, and the receipt answers the question.
@@ -14,8 +14,12 @@
 //! keeps the inode it started from, and the next launch is the first to run
 //! the new release. Nothing here restarts anything.
 //!
+//! `uze upgrade` is the same replacement asked for by a person: it runs in
+//! the foreground, and when it replaces nothing it says why — the receipt
+//! missing, or naming a different file than the `uze` that is running.
+//!
 //! `UZE_AUTOUPDATE=off` stops the check entirely, `notify` checks without
-//! ever replacing, and `CI` being set means off unless the variable says
+//! ever replacing — leaving it to `uze upgrade` — and `CI` being set means off unless the variable says
 //! otherwise: a disposable machine has no use for a newer binary than the
 //! one it was handed.
 //!
@@ -59,43 +63,22 @@ const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 const RUNNING: &str = env!("CARGO_PKG_VERSION");
 
-/// What the sidebar says about releases, when it says anything.
+/// What the sidebar says about releases: that a newer release replaced
+/// this binary on disk and the next launch runs it. It is the only thing
+/// said. A release that is merely available is news the reader can do
+/// nothing with while the updater is doing it for them, and one the updater
+/// cannot install is `uze upgrade`'s to explain.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Notice {
-    /// A newer release replaced this binary on disk; the next launch runs it.
-    Installed(String),
-    /// This process is a release the updater put in place, and nobody has
-    /// looked at what it changed yet.
-    Updated(String),
-    /// A newer release exists and this binary is not the updater's to
-    /// replace — or replacing it was turned off, or did not work.
-    Available(String),
-}
+pub(crate) struct Notice(pub(crate) String);
 
 impl Notice {
     pub(crate) fn version(&self) -> &str {
-        match self {
-            Self::Installed(version) | Self::Updated(version) | Self::Available(version) => version,
-        }
+        &self.0
     }
 
-    /// What happened, when the action alone does not say it. An update
-    /// waiting on a restart is the one whose action already does.
-    pub(crate) fn state(&self) -> Option<&'static str> {
-        match self {
-            Self::Installed(_) => None,
-            Self::Updated(_) => Some("updated"),
-            Self::Available(_) => Some("available"),
-        }
-    }
-
-    /// What the reader can do about it. Every notice opens the release's
-    /// own notes when clicked; this is what the row says.
+    /// What the row says. Clicking it opens the release's own notes.
     pub(crate) fn action(&self) -> &'static str {
-        match self {
-            Self::Installed(_) => "restart uze to use it",
-            Self::Updated(_) | Self::Available(_) => "what's new",
-        }
+        "restart uze to use it"
     }
 
     pub(crate) fn notes(&self) -> String {
@@ -153,7 +136,7 @@ pub(crate) fn watch(home: UzeHome) {
 }
 
 /// The check a CLI command handed off, run to the end in the process it
-/// was handed to — `uze self-update`, which nobody types.
+/// was handed to — `uze upgrade --background`, which nobody types.
 pub fn check_now(home: &UzeHome) {
     let policy = Policy::current();
     if policy != Policy::Off {
@@ -174,7 +157,7 @@ pub fn check_now(home: &UzeHome) {
 /// Nothing here touches the network: a command is budgeted in
 /// milliseconds, and a download cannot outlive the process that started it
 /// on a thread. When the last answer has gone stale the check is handed to
-/// a detached `uze self-update` instead, and what it finds is what the
+/// a detached `uze upgrade --background` instead, and what it finds is what the
 /// *next* command says — the same trade `gh` and npm's notifier make.
 pub fn after_command(home: &UzeHome) -> Option<String> {
     if Policy::current() == Policy::Off {
@@ -188,31 +171,23 @@ pub fn after_command(home: &UzeHome) -> Option<String> {
         amend_ledger(home, |stored| stored.checked_at = now);
         hand_off_check();
     }
-    let this = this_binary();
-    let on_disk = read_json::<Receipt>(&receipt_path(home))
-        .filter(|receipt| {
-            this.as_deref()
-                .is_some_and(|this| is_same_file(this, &receipt.binary))
-        })
-        .map(|receipt| receipt.version);
-    let notice = decide(RUNNING, on_disk.as_deref(), &ledger)?;
-    let version = notice.version().to_owned();
+    updated_line(home, ledger)
+}
+
+/// A command is a process of its own, so the one after an update is
+/// already the new release: what it says is that it was updated, once.
+fn updated_line(home: &UzeHome, ledger: Ledger) -> Option<String> {
+    let version = ledger.installed.filter(|installed| installed == RUNNING)?;
     if ledger.told.as_deref() == Some(version.as_str()) {
         return None;
     }
     amend_ledger(home, |stored| stored.told = Some(version.clone()));
-    Some(match notice {
-        Notice::Installed(_) | Notice::Updated(_) => {
-            format!(
-                "uze was updated to {version} · what's new: {}",
-                notice.notes()
-            )
-        }
-        Notice::Available(_) => format!("uze {version} is available · {}", notice.notes()),
-    })
+    Some(format!(
+        "uze was updated to {version} · what's new: {RELEASES}/tag/v{version}"
+    ))
 }
 
-/// Starts `uze self-update` in a process group of its own, so the Ctrl+C
+/// Starts `uze upgrade --background` in a process group of its own, so the Ctrl+C
 /// that ends the next command in this terminal cannot end it too.
 fn hand_off_check() {
     use std::os::unix::process::CommandExt as _;
@@ -220,7 +195,7 @@ fn hand_off_check() {
         return;
     };
     let _ = Command::new(binary)
-        .arg("self-update")
+        .args(["upgrade", "--background"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -332,14 +307,8 @@ fn pass(
     if let (Some(owned), Some(latest), Policy::Install) = (&mut receipt, &ledger.latest, policy)
         && newer(latest, &owned.version)
     {
-        let _span = tracing::info_span!("self_update.install", version = %latest).entered();
-        match releases.install(latest, &owned.binary, &home.cache_dir()) {
-            Ok(()) => {
-                owned.version = latest.clone();
-                let _ = write_json(&receipt_path(home), owned);
-                amend_ledger(home, |stored| stored.installed = Some(latest.clone()));
-                ledger.installed = Some(latest.clone());
-            }
+        match install_over(home, owned, latest, releases) {
+            Ok(()) => ledger.installed = Some(latest.clone()),
             Err(error) => tracing::warn!(%error, "the release could not be installed"),
         }
     }
@@ -350,22 +319,93 @@ fn pass(
     )
 }
 
-/// What to say, from what is running, what the installer's file now is
-/// (when this is the installer's binary at all), and what the ledger knows.
-fn decide(running: &str, on_disk: Option<&str>, ledger: &Ledger) -> Option<Notice> {
-    let unseen = |version: &str| ledger.acknowledged.as_deref() != Some(version);
-    if let Some(on_disk) = on_disk {
-        if newer(on_disk, running) {
-            return unseen(on_disk).then(|| Notice::Installed(on_disk.to_owned()));
-        }
-        if ledger.installed.as_deref() == Some(running) && unseen(running) {
-            return Some(Notice::Updated(running.to_owned()));
-        }
+/// Replaces the installer's file with `latest` and moves the receipt and
+/// the ledger with it — the one step the background pass and
+/// `uze upgrade` share.
+fn install_over(
+    home: &UzeHome,
+    owned: &mut Receipt,
+    latest: &str,
+    releases: &dyn Releases,
+) -> Result<(), String> {
+    let _span = tracing::info_span!("self_update.install", version = %latest).entered();
+    releases.install(latest, &owned.binary, &home.cache_dir())?;
+    owned.version = latest.to_owned();
+    let _ = write_json(&receipt_path(home), owned);
+    amend_ledger(home, |stored| stored.installed = Some(latest.to_owned()));
+    Ok(())
+}
+
+/// What `uze upgrade` did.
+#[derive(Debug, Eq, PartialEq)]
+pub enum Upgrade {
+    /// The installer's binary already is the latest release.
+    Current(String),
+    /// The installer's binary was replaced; processes already running keep
+    /// the release they started from.
+    Replaced { from: String, to: String },
+    /// This binary is not the one `install.sh` placed, so it is not this
+    /// command's to replace. `placed` is the file the installer did place,
+    /// when there is one — a different `uze` earlier on `PATH` is the usual
+    /// reason a curl install never seems to update.
+    NotInstalled {
+        running: Option<PathBuf>,
+        placed: Option<PathBuf>,
+        latest: String,
+    },
+}
+
+/// The update a person asked for, run to the end in the foreground. Unlike
+/// the background pass it ignores `UZE_AUTOUPDATE` — asking is the consent
+/// the setting withholds — and it says why whenever it does nothing.
+pub fn upgrade(home: &UzeHome) -> Result<Upgrade, String> {
+    upgrade_with(
+        home,
+        this_binary().as_deref(),
+        &Published::current(),
+        unix_now(),
+    )
+}
+
+fn upgrade_with(
+    home: &UzeHome,
+    this: Option<&Path>,
+    releases: &dyn Releases,
+    now: u64,
+) -> Result<Upgrade, String> {
+    let _span = tracing::info_span!("self_update.upgrade", running = RUNNING).entered();
+    let latest = releases
+        .latest()
+        .ok_or_else(|| format!("cannot reach {RELEASES} to ask for the latest release"))?;
+    amend_ledger(home, |stored| {
+        stored.checked_at = now;
+        stored.latest = Some(latest.clone());
+    });
+    let receipt = read_json::<Receipt>(&receipt_path(home));
+    let Some(mut owned) = receipt
+        .clone()
+        .filter(|receipt| this.is_some_and(|this| is_same_file(this, &receipt.binary)))
+    else {
+        return Ok(Upgrade::NotInstalled {
+            running: this.map(Path::to_owned),
+            placed: receipt.map(|receipt| receipt.binary),
+            latest,
+        });
+    };
+    if !newer(&latest, &owned.version) {
+        return Ok(Upgrade::Current(owned.version));
     }
-    let latest = ledger.latest.as_deref()?;
-    let current = on_disk.unwrap_or(running);
-    (newer(latest, current) && newer(latest, running) && unseen(latest))
-        .then(|| Notice::Available(latest.to_owned()))
+    let from = owned.version.clone();
+    install_over(home, &mut owned, &latest, releases)?;
+    Ok(Upgrade::Replaced { from, to: latest })
+}
+
+/// What to say, from what is running and what the installer's file now
+/// is (when this is the installer's binary at all).
+fn decide(running: &str, on_disk: Option<&str>, ledger: &Ledger) -> Option<Notice> {
+    let on_disk = on_disk?;
+    (newer(on_disk, running) && ledger.acknowledged.as_deref() != Some(on_disk))
+        .then(|| Notice(on_disk.to_owned()))
 }
 
 /// The releases `install.sh` downloads, fetched the way it fetches them.
@@ -783,64 +823,50 @@ mod tests {
     }
 
     #[test]
-    fn what_the_sidebar_says_follows_from_what_is_on_disk() {
-        let installed = |version: &str| Some(Notice::Installed(version.to_owned()));
-        let updated = |version: &str| Some(Notice::Updated(version.to_owned()));
-        let available = |version: &str| Some(Notice::Available(version.to_owned()));
+    fn the_sidebar_speaks_only_of_an_update_waiting_on_a_restart() {
+        let replaced = ledger(Some("1.1.0"), Some("1.1.0"), None);
 
         // The installer's binary was replaced; this process is the old one.
+        assert_eq!(
+            decide("1.0.0", Some("1.1.0"), &replaced),
+            Some(Notice("1.1.0".to_owned()))
+        );
         assert_eq!(
             decide(
                 "1.0.0",
                 Some("1.1.0"),
-                &ledger(Some("1.1.0"), Some("1.1.0"), None)
-            ),
-            installed("1.1.0")
-        );
-        // The next launch runs it, and says so until the notice is put away.
-        assert_eq!(
-            decide(
-                "1.1.0",
-                Some("1.1.0"),
-                &ledger(Some("1.1.0"), Some("1.1.0"), None)
-            ),
-            updated("1.1.0")
-        );
-        assert_eq!(
-            decide(
-                "1.1.0",
-                Some("1.1.0"),
                 &ledger(Some("1.1.0"), Some("1.1.0"), Some("1.1.0"))
             ),
-            None
-        );
-        // Installed by hand rather than by the updater: nothing to announce.
-        assert_eq!(
-            decide("1.1.0", Some("1.1.0"), &ledger(Some("1.1.0"), None, None)),
-            None
-        );
-        // Not the installer's binary: a newer release is only ever offered.
-        assert_eq!(
-            decide("1.0.0", None, &ledger(Some("1.1.0"), None, None)),
-            available("1.1.0")
-        );
-        assert_eq!(
-            decide("1.0.0", None, &ledger(Some("1.1.0"), None, Some("1.1.0"))),
             None,
             "until it is put away"
         );
-        // The installer's binary, but the replacement did not happen.
+        // The restart ran it: there is nothing left to do.
+        assert_eq!(decide("1.1.0", Some("1.1.0"), &replaced), None);
+        // A newer release that was not installed is not the sidebar's news.
         assert_eq!(
             decide("1.0.0", Some("1.0.0"), &ledger(Some("1.1.0"), None, None)),
-            available("1.1.0")
-        );
-        // A build ahead of the latest release is told nothing.
-        assert_eq!(
-            decide("1.2.0-dev", None, &ledger(Some("1.1.0"), None, None)),
             None
         );
-        // Nothing known about releases at all.
+        assert_eq!(
+            decide("1.0.0", None, &ledger(Some("1.1.0"), None, None)),
+            None,
+            "nor is one for a binary the installer did not place"
+        );
         assert_eq!(decide("1.0.0", Some("1.0.0"), &Ledger::default()), None);
+    }
+
+    #[test]
+    fn a_command_says_once_that_it_is_the_updated_release() {
+        let (_dir, home, _binary) = world();
+        let stored = || read_json::<Ledger>(&ledger_path(&home)).unwrap_or_default();
+        write_json(&ledger_path(&home), &ledger(None, Some(RUNNING), None)).unwrap();
+
+        let line = updated_line(&home, stored()).expect("the first command after it says so");
+        assert!(
+            line.contains(&format!("uze was updated to {RUNNING}")),
+            "{line}"
+        );
+        assert_eq!(updated_line(&home, stored()), None, "and only the first");
     }
 
     struct Fake {
@@ -912,7 +938,7 @@ mod tests {
             releases.installs.borrow().as_slice(),
             [("999.0.0".to_owned(), binary.clone())]
         );
-        assert_eq!(notice, Some(Notice::Installed("999.0.0".to_owned())));
+        assert_eq!(notice, Some(Notice("999.0.0".to_owned())));
         let written = read_json::<Receipt>(&receipt_path(&home)).unwrap();
         assert_eq!(written.version, "999.0.0", "the receipt follows the file");
 
@@ -940,7 +966,7 @@ mod tests {
         );
 
         assert!(releases.installs.borrow().is_empty());
-        assert_eq!(notice, Some(Notice::Available("999.0.0".to_owned())));
+        assert_eq!(notice, None);
     }
 
     #[test]
@@ -959,7 +985,7 @@ mod tests {
         );
 
         assert!(releases.installs.borrow().is_empty());
-        assert_eq!(notice, Some(Notice::Available("999.0.0".to_owned())));
+        assert_eq!(notice, None);
     }
 
     #[test]
@@ -980,11 +1006,65 @@ mod tests {
             false,
         );
 
-        assert_eq!(notice, Some(Notice::Available("999.0.0".to_owned())));
+        assert_eq!(notice, None);
         assert_eq!(
             read_json::<Receipt>(&receipt_path(&home)).unwrap().version,
             RUNNING
         );
+    }
+
+    #[test]
+    fn upgrade_replaces_the_installers_binary_and_says_from_what() {
+        let (_dir, home, binary) = world();
+        receipt(&home, &binary, RUNNING);
+        let releases = fake(Some("999.0.0"));
+
+        let outcome = upgrade_with(&home, Some(&binary), &releases, 10_000).unwrap();
+
+        assert_eq!(
+            outcome,
+            Upgrade::Replaced {
+                from: RUNNING.to_owned(),
+                to: "999.0.0".to_owned()
+            }
+        );
+        assert_eq!(
+            read_json::<Receipt>(&receipt_path(&home)).unwrap().version,
+            "999.0.0"
+        );
+        assert_eq!(
+            upgrade_with(&home, Some(&binary), &releases, 10_001).unwrap(),
+            Upgrade::Current("999.0.0".to_owned()),
+            "asked again, there is nothing newer"
+        );
+    }
+
+    #[test]
+    fn upgrade_names_the_file_the_installer_placed_when_another_uze_ran() {
+        let (dir, home, binary) = world();
+        receipt(&home, &binary, RUNNING);
+        let shadowing = dir.path().join("cargo-bin-uze");
+        fs::write(&shadowing, "").unwrap();
+        let releases = fake(Some("999.0.0"));
+
+        let outcome = upgrade_with(&home, Some(&shadowing), &releases, 10_000).unwrap();
+
+        assert_eq!(
+            outcome,
+            Upgrade::NotInstalled {
+                running: Some(shadowing),
+                placed: Some(binary),
+                latest: "999.0.0".to_owned()
+            }
+        );
+        assert!(releases.installs.borrow().is_empty());
+    }
+
+    #[test]
+    fn upgrade_offline_is_an_error_rather_than_up_to_date() {
+        let (_dir, home, binary) = world();
+        receipt(&home, &binary, RUNNING);
+        assert!(upgrade_with(&home, Some(&binary), &fake(None), 10_000).is_err());
     }
 
     #[test]

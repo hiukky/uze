@@ -699,15 +699,8 @@ impl ReleaseNotice<'_> {
         frame.render_widget(Paragraph::new(Line::from(spans)), version);
 
         let mut spans = vec![Span::raw(" ".repeat(usize::from(gutter)))];
-        let mut used = 0;
-        if let Some(state) = notice.state() {
-            let joint = format!(" {} ", theme::glyph(Symbol::MarkDot));
-            used = (state.chars().count() + joint.chars().count()) as u16;
-            spans.push(Span::styled(state, theme::fg(theme::Token::TextSecondary)));
-            spans.push(Span::styled(joint, theme::fg(theme::Token::TextFaint)));
-        }
         spans.push(Span::styled(
-            text::elide(notice.action(), room(Symbol::ArrowExternal, used)),
+            text::elide(notice.action(), room(Symbol::ArrowExternal, 0)),
             theme::fg(theme::Token::TextDim),
         ));
         row::push_trailing(

@@ -82,6 +82,9 @@ pub enum UzeError {
     /// reported a missing socket as `could not acquire package`.
     #[error("terminal runtime: {0}")]
     TerminalRuntime(String),
+    /// `uze upgrade` could not replace the binary, or was not allowed to.
+    #[error("upgrade: {0}")]
+    Upgrade(String),
     #[error("setup incomplete: {0}")]
     ProvisioningIncomplete(String),
     /// A lifecycle mutation the safety check refused (ADR-009): drift or a
