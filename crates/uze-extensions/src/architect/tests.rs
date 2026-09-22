@@ -274,6 +274,10 @@ fn a_surface_with_nothing_to_draw_says_why_and_what_to_do() {
         panic!("an empty directory is a message");
     };
     assert!(text.contains("docs/diagrams"), "{text}");
+    assert!(
+        view(&state, SPACE).footer.is_empty(),
+        "no keys stand under a message with nothing to act on"
+    );
 }
 
 #[test]

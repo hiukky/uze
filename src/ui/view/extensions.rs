@@ -21,9 +21,9 @@ use ratatui::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
+use super::catalog::{Badge, Card, render_card};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::RowState;
 
 pub(crate) fn render_extensions(
     frame: &mut ratatui::Frame<'_>,
@@ -51,76 +51,44 @@ pub(crate) fn render_extensions(
             theme::fg(Token::TextMuted),
         )),
     );
-    let filter_area = Rect::new(content.x, content.y, content.width, 2);
-    super::filter_box(
-        frame,
-        filter_area,
-        &model.remembered.extension_screen.filter,
-        "Filter extensions…",
-        model.filtering,
-    );
-    hits.push((filter_area, Hit::FocusFilter));
-    let catalog_area = Rect::new(
-        content.x,
-        content.y.saturating_add(3),
-        content.width,
-        content.height.saturating_sub(3),
-    );
+    let mut y = content.y;
+    let bottom = content.y + content.height;
+    if y + 2 <= bottom {
+        let filter_area = Rect::new(content.x, y, content.width, 2);
+        hits.push((filter_area, Hit::FocusFilter));
+        super::filter_box(
+            frame,
+            filter_area,
+            &model.remembered.extension_screen.filter,
+            "Filter extensions…",
+            model.filtering,
+        );
+        y += 3;
+    }
+    let catalog_area = Rect::new(content.x, y, content.width, bottom.saturating_sub(y));
 
-    if model.extensions.is_empty() {
+    let visible = model.extension_visible_indices();
+    if model.extensions.is_empty() || visible.is_empty() {
+        let message = if model.extensions.is_empty() {
+            "No extensions available.".to_owned()
+        } else {
+            format!(
+                "No extensions match \"{}\".",
+                model.remembered.extension_screen.filter.trim()
+            )
+        };
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "No extensions available.",
-                theme::fg(Token::TextMuted),
-            )),
+            Paragraph::new(Span::styled(message, theme::fg(Token::TextMuted))),
             catalog_area,
         );
-    } else {
-        let visible = model.extension_visible_indices();
-        if visible.is_empty() {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    format!(
-                        "No extensions match \"{}\".",
-                        model.remembered.extension_screen.filter.trim()
-                    ),
-                    theme::fg(Token::TextMuted),
-                )),
-                catalog_area,
-            );
-        }
-        let columns = if catalog_area.width >= 110 {
-            3
-        } else if catalog_area.width >= 72 {
-            2
-        } else {
-            1
-        };
-        let gap = 1;
-        let card_width = (catalog_area.width.saturating_sub(gap * (columns - 1))) / columns;
-        let card_height = 7;
-        for (position, extension_index) in visible.iter().enumerate() {
-            let column = position as u16 % columns;
-            let row = position as u16 / columns;
-            let rect = Rect::new(
-                catalog_area.x + column * (card_width + gap),
-                catalog_area.y + row * (card_height + gap),
-                card_width,
-                card_height,
-            );
-            if rect.y + rect.height > catalog_area.y + catalog_area.height {
-                break;
-            }
-            let selected = position == model.remembered.extension_screen.selected;
-            render_extension_card(
-                frame,
-                rect,
-                &model.extensions[*extension_index],
-                selected,
-                hits,
-                position,
-            );
-        }
+    }
+    for (position, (rect, &extension_index)) in super::catalog::cards(catalog_area, visible.len())
+        .zip(&visible)
+        .enumerate()
+    {
+        let selected = position == model.remembered.extension_screen.selected;
+        render_extension_card(frame, rect, &model.extensions[extension_index], selected);
+        hits.push((rect, Hit::ExtensionRow(position)));
     }
 
     if let Some(extension) = model.selected_extension() {
@@ -133,64 +101,26 @@ fn render_extension_card(
     rect: Rect,
     extension: &uze_extensions::registry::BuiltinExtension,
     selected: bool,
-    hits: &mut Vec<(Rect, Hit)>,
-    index: usize,
 ) {
-    let background = theme::color(
-        RowState::of(selected, false)
-            .ground()
-            .unwrap_or(Token::SurfaceRecessed),
-    );
-    frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(background)),
+    render_card(
+        frame,
         rect,
+        Card {
+            name: extension.name,
+            badge: Some(Badge {
+                mark: theme::glyph(Symbol::MarkOfficial),
+                label: "Official",
+                color: theme::color(Token::StateInfo),
+            }),
+            description: extension.description,
+            caption: Line::from(vec![
+                Span::styled(extension.surface, theme::fg(Token::TextMuted)),
+                Span::raw("  "),
+                Span::styled("Built-in", theme::fg(Token::TextMuted)),
+            ]),
+        },
+        selected,
     );
-    let inner = Rect::new(
-        rect.x.saturating_add(2),
-        rect.y.saturating_add(1),
-        rect.width.saturating_sub(4),
-        rect.height.saturating_sub(2),
-    );
-    let name = Span::styled(
-        extension.name,
-        Style::default()
-            .fg(if selected {
-                theme::color(Token::TextBright)
-            } else {
-                theme::color(Token::TextPrimary)
-            })
-            .add_modifier(Modifier::BOLD),
-    );
-    let badge = Span::styled(
-        format!("{} Official", theme::glyph(Symbol::MarkOfficial)),
-        theme::fg(Token::StateInfo),
-    );
-    let gap = inner
-        .width
-        .saturating_sub((name.width() + badge.width()) as u16);
-    let header = Line::from(vec![name, Span::raw(" ".repeat(gap as usize)), badge]);
-    frame.render_widget(
-        Paragraph::new(header),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            extension.description,
-            theme::fg(Token::TextSecondary),
-        ))
-        .wrap(Wrap { trim: true }),
-        Rect::new(inner.x, inner.y + 1, inner.width, 2),
-    );
-    let tags = Line::from(vec![
-        Span::styled(extension.surface, theme::fg(Token::TextMuted)),
-        Span::raw("  "),
-        Span::styled("Built-in", theme::fg(Token::TextMuted)),
-    ]);
-    frame.render_widget(
-        Paragraph::new(tags),
-        Rect::new(inner.x, inner.y + 4, inner.width, 1),
-    );
-    hits.push((rect, Hit::ExtensionRow(index)));
 }
 
 fn render_extension_drawer(
