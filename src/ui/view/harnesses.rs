@@ -19,9 +19,9 @@ use uze_application::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
+use super::catalog::{Badge, Card, render_card};
 use super::{DrawerStatus, render_drawer_footer};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::RowState;
 
 /// Two states, because there are two answers a person can act on: UZE has
 /// set this harness up, or it has not. A binary that is not on the machine
@@ -66,11 +66,6 @@ impl HarnessStatus {
             Self::Configured => Some(theme::glyph(Symbol::MarkOk)),
             Self::NotConfigured => None,
         }
-    }
-
-    /// The mark with the word for it, for a card wide enough to say it.
-    fn badge(self) -> Option<String> {
-        self.mark().map(|mark| format!("{mark} {}", self.label()))
     }
 
     fn label(self) -> &'static str {
@@ -203,30 +198,17 @@ pub(crate) fn render_harnesses(
                     );
                 }
             } else {
-                let columns = if content.width >= 110 { 3 } else { 2 };
-                let gap = 1;
-                let card_width = (content.width.saturating_sub(gap * (columns - 1))) / columns;
-                let card_height = 7;
-                for (position, &raw_index) in visible.iter().enumerate() {
-                    let harness = &doctor.harnesses[raw_index];
-                    let column = position as u16 % columns;
-                    let row = position as u16 / columns;
-                    let rect = Rect::new(
-                        content.x + column * (card_width + gap),
-                        y + row * (card_height + gap),
-                        card_width,
-                        card_height,
-                    );
-                    if rect.y + rect.height > bottom {
-                        break;
-                    }
+                let area = Rect::new(content.x, y, content.width, bottom.saturating_sub(y));
+                for (position, (rect, &raw_index)) in super::catalog::cards(area, visible.len())
+                    .zip(&visible)
+                    .enumerate()
+                {
                     let selected = position == model.remembered.harness_screen.selected;
-                    let status = HarnessStatus::from(harness);
-                    render_harness_card(frame, rect, harness, status, selected, hits, position);
+                    let harness = &doctor.harnesses[raw_index];
+                    render_harness_card(frame, rect, harness, selected);
+                    hits.push((rect, Hit::HarnessRow(position)));
                 }
-
-                let rows = (visible.len() as u16).div_ceil(columns);
-                y += rows * (card_height + gap);
+                y += super::catalog::height(content.width, visible.len());
             }
             if let Some(status) = &model.remembered.context_status
                 && !status.warnings.is_empty()
@@ -259,84 +241,29 @@ fn render_harness_card(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,
     harness: &HarnessHealth,
-    status: HarnessStatus,
     selected: bool,
-    hits: &mut Vec<(Rect, Hit)>,
-    index: usize,
 ) {
-    let background = theme::color(
-        RowState::of(selected, false)
-            .ground()
-            .unwrap_or(Token::SurfaceRecessed),
-    );
-    frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(background)),
-        rect,
-    );
-    let inner = Rect::new(
-        rect.x.saturating_add(2),
-        rect.y.saturating_add(1),
-        rect.width.saturating_sub(4),
-        rect.height.saturating_sub(2),
-    );
-    let name = Span::styled(
-        harness.display_name.clone(),
-        Style::default()
-            .fg(if selected {
-                theme::color(Token::TextBright)
-            } else {
-                theme::color(Token::TextSecondary)
-            })
-            .add_modifier(Modifier::BOLD),
-    );
-    // Right-aligned beside the name, and only what fits there with a gap
-    // between the two: a card the drawer has narrowed wears the mark
-    // alone, because a word clipped mid-way and glued to the name
-    // ("Claude Code✓ Configur") says less than the mark on its own does.
     // No mark at all is a harness UZE has not configured.
-    let mut title = vec![name];
-    let fits = |text: &Option<String>| {
-        text.as_deref().is_some_and(|text| {
-            title[0].width() + 1 + Span::raw(text).width() <= inner.width as usize
-        })
-    };
-    let badge = status.badge();
-    let mark = status.mark();
-    let worn = if fits(&badge) {
-        badge
-    } else if fits(&mark) {
-        mark
-    } else {
-        None
-    };
-    if let Some(worn) = worn {
-        let worn = Span::styled(worn, Style::default().fg(status.color()));
-        let gap = inner
-            .width
-            .saturating_sub((title[0].width() + worn.width()) as u16);
-        title.push(Span::raw(" ".repeat(gap as usize)));
-        title.push(worn);
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(title)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
+    let status = HarnessStatus::from(harness);
+    let badge = status.mark().map(|mark| Badge {
+        mark,
+        label: status.label(),
+        color: status.color(),
+    });
+    render_card(
+        frame,
+        rect,
+        Card {
+            name: &harness.display_name,
+            badge,
+            description: &harness.description,
+            caption: Line::from(Span::styled(
+                harness.integration.as_str(),
+                theme::fg(Token::TextMuted),
+            )),
+        },
+        selected,
     );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            harness.description.clone(),
-            theme::fg(Token::TextDim),
-        ))
-        .wrap(Wrap { trim: true }),
-        Rect::new(inner.x, inner.y + 1, inner.width, 2),
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            harness.integration.clone(),
-            theme::fg(Token::TextMuted),
-        )),
-        Rect::new(inner.x, inner.y + 4, inner.width, 1),
-    );
-    hits.push((rect, Hit::HarnessRow(index)));
 }
 
 fn render_harness_drawer(
@@ -581,10 +508,7 @@ mod tests {
         assert_eq!(status, HarnessStatus::Configured);
         assert_eq!(status.label(), "Configured");
         assert_eq!(status_note(&harness), "Ready to receive plugins");
-        assert_eq!(
-            status.badge(),
-            Some(format!("{} Configured", theme::glyph(Symbol::MarkOk)))
-        );
+        assert_eq!(status.mark(), Some(theme::glyph(Symbol::MarkOk)));
     }
 
     /// One state, two shapes. A harness nobody installed and one the
@@ -603,7 +527,7 @@ mod tests {
             let status = HarnessStatus::from(harness);
             assert_eq!(status, HarnessStatus::NotConfigured);
             assert_eq!(status.label(), "Not configured");
-            assert_eq!(status.badge(), None, "and the card wears nothing");
+            assert_eq!(status.mark(), None, "and the card wears nothing");
             assert_eq!(status.color(), theme::color(Token::TextMuted));
         }
 

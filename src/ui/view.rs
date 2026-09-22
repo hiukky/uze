@@ -15,6 +15,7 @@ use crate::ui::widget::{Align, Button, Edge, Field, Rule, button_row};
 use uze_application::application::offers::ActionOffer;
 
 pub mod appearance;
+pub mod catalog;
 pub mod extensions;
 pub mod harnesses;
 pub mod health;
