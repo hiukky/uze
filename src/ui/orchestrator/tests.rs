@@ -2685,41 +2685,30 @@ mod workspace_tests {
             "the opening corner is not the carrying one: {rows:?}"
         );
 
-        // A group of one has nothing for a line to join, so it gets the
-        // arm to its row and no trunk at all.
-        let lone = sidebar(&a_space_with_both_groups(), &identities_in_the_root());
-        let at = agent_rows(&lone.hits);
-        let column = (gutter_column(&lone.hits) + 1) as usize;
-        let cell = |row: u16| {
-            lone.rows[row as usize]
-                .chars()
-                .nth(column)
-                .expect("the trunk column is drawn")
-                .to_string()
-        };
-        assert_eq!(cell(at[2]), stem(Symbol::TreeDivider), "{:?}", lone.rows);
-        assert_eq!(cell(at[3]), " ", "{:?}", lone.rows);
-
         // An agent in the space's own root spends no column on a trunk:
-        // that column is where its own status glyph stands.
-        let root = sidebar(&agents_in_the_root_session(), &identities_in_the_root());
-        let at = agent_rows(&root.hits);
-        let column = (gutter_column(&root.hits) + 1) as usize;
+        // that column is where its own status glyph stands. Nor does a
+        // group of one, which has nothing for a line to join.
         let marks = [
             theme::glyph(Symbol::StatusIdle),
             theme::glyph(Symbol::StatusSelected),
         ];
-        assert!(
-            marks.contains(
-                &root.rows[at[0] as usize]
-                    .chars()
-                    .nth(column)
-                    .expect("the column is drawn")
-                    .to_string()
-            ),
-            "the root's own agent stands there itself: {:?}",
-            root.rows
-        );
+        for model in [agents_in_the_root_session(), a_space_with_both_groups()] {
+            let drawn = sidebar(&model, &identities_in_the_root());
+            let column = (gutter_column(&drawn.hits) + 1) as usize;
+            for at in agent_rows(&drawn.hits).into_iter().step_by(2) {
+                assert!(
+                    marks.contains(
+                        &drawn.rows[at as usize]
+                            .chars()
+                            .nth(column)
+                            .expect("the column is drawn")
+                            .to_string()
+                    ),
+                    "the agent stands there itself: {:?}",
+                    drawn.rows
+                );
+            }
+        }
     }
 
     #[test]
@@ -5731,37 +5720,27 @@ mod workspace_tests {
         );
     }
 
-    /// One grid down the column: a section at the foot folds from the
-    /// column a space folds from and names itself in the column a space
-    /// names itself in, with a row of air between the tree and the foot so
-    /// a tree that grows to meet it still reads as two things.
+    /// A section at the foot stands flush against the column's edge, where
+    /// a space's block begins, with a row of air between the tree and the
+    /// foot so a tree that grows to meet it still reads as two things.
     #[test]
     fn the_foot_sections_stand_on_the_columns_own_grid() {
         let mut model = three_spaces();
         model.first_steps_collapsed = false;
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let column = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
-        let header = space_header(&hits, SpaceId(1)).y as usize;
         let steps = rows
             .iter()
             .position(|row| row.contains("first steps"))
             .expect("the steps are at the foot");
 
         assert_eq!(
-            column(&rows[steps], "first steps"),
-            column(&rows[header], "one"),
-            "a section names itself where a space does: {rows:?}"
-        );
-        assert_eq!(
             column(
                 &rows[steps],
                 &theme::glyph(crate::ui::theme::Symbol::ChevronExpanded)
             ),
-            column(
-                &rows[header],
-                &theme::glyph(crate::ui::theme::Symbol::ChevronExpanded)
-            ),
-            "and folds from the column a space folds from: {rows:?}"
+            usize::from(gutter_column(&hits)),
+            "a section folds from the column's edge: {rows:?}"
         );
         assert!(
             rows[steps - 1].trim_end_matches('│').trim().is_empty(),
@@ -7536,22 +7515,21 @@ mod workspace_tests {
             .count()
     }
 
-    /// A blank row over every space that has something under its header,
-    /// the first one included — and none between two that come to a
-    /// single line, which is what a minimized space nobody is in is.
+    /// A blank row beside every expanded space, and over the first one
+    /// whatever it is — and none between two minimized ones, the one in
+    /// front included, whose caption does not make it a block of its own.
     ///
     /// The fill alone was tried: every card but the one in front is
     /// faded, so where two faded cards meet there is no edge to find, and
     /// with a column of them it reads as one surface with headers in it
-    /// rather than as a list of blocks. Between two single rows there is
-    /// nothing to mistake for anything — one line is one space — and a
-    /// row of nothing between them spends half the column on the spaces
-    /// nobody is in.
+    /// rather than as a list of blocks. Between two minimized headers a
+    /// row of nothing spends half the column on the spaces nobody is
+    /// looking into.
     ///
     /// Measured over a column that mixes both shapes, because they are
     /// drawn by different arms of the same loop.
     #[test]
-    fn the_row_between_two_spaces_closes_when_both_come_to_one_line() {
+    fn the_row_between_two_spaces_closes_when_both_are_minimized() {
         let mut model = three_spaces();
         model.first_steps_collapsed = true;
         // `three_spaces` leaves the third in front, so minimizing the
@@ -7589,6 +7567,16 @@ mod workspace_tests {
             .map(|id| space_header(&hits, SpaceId(id)).y)
             .collect();
         assert_eq!(at[1] - at[0], 2, "a row over it again: {rows:?}");
+
+        // Minimized while it is the one in front, a space keeps its
+        // caption row and still packs against its minimized neighbours.
+        toggle_space_collapsed(&mut model, SpaceId(2));
+        toggle_space_collapsed(&mut model, SpaceId(3));
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let at: Vec<u16> = (1..=3)
+            .map(|id| space_header(&hits, SpaceId(id)).y)
+            .collect();
+        assert_eq!(at[2] - at[1], 1, "the one in front packs too: {rows:?}");
     }
 
     /// Exactly one name in the column is bright and bold, and it is
@@ -7775,11 +7763,11 @@ mod workspace_tests {
     /// fold's column and its name in the header's, with its caption under
     /// that name — the same in either kind of space.
     ///
-    /// One column further for an agent isolated in a checkout of its own,
-    /// and that is the only indent in the column: the agent that is
-    /// somewhere else is the only one with somewhere else to be, which is
-    /// the whole of what tells the two groups apart now that nothing
-    /// branches off the gutter.
+    /// One column further for agents isolated in checkouts of their own,
+    /// and that is the only indent in the column: the group that is
+    /// somewhere else is the only one with somewhere else to be. A group
+    /// of one takes no step — it has no trunk to hang off — and the blank
+    /// row above it is what sets it apart.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -7813,11 +7801,22 @@ mod workspace_tests {
         let Sidebar { rows, hits, .. } = sidebar(&both, &identities_in_the_root());
         let agents = agent_rows(&hits);
         let root = column_of(&rows[agents[0] as usize], "agent 1");
-        let isolated = column_of(&rows[agents[2] as usize], "agent 2");
-        assert_eq!(isolated, root + 1, "a step further in: {rows:?}");
+        let lone = column_of(&rows[agents[2] as usize], "agent 2");
+        assert_eq!(lone, root, "a group of one takes no step: {rows:?}");
+
+        let isolated = a_space_of_isolated_agents();
+        let Sidebar { rows, hits, .. } = sidebar(&isolated, &identities_in_the_root());
+        let header = space_header(&hits, SpaceId(1)).y as usize;
+        let name = column_of(&rows[header], "repo");
+        let agents = agent_rows(&hits);
         assert_eq!(
-            column_of(&rows[agents[3] as usize], "codex"),
-            column_of(&rows[agents[1] as usize], "claude") + 1,
+            column_of(&rows[agents[0] as usize], "agent 1"),
+            name + 1,
+            "a step further in: {rows:?}"
+        );
+        assert_eq!(
+            column_of(&rows[agents[1] as usize], "claude"),
+            name + 1,
             "and its caption keeps under its name: {rows:?}"
         );
     }

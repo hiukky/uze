@@ -617,12 +617,11 @@ pub(super) fn render_sidebar(
     // neighbour it touches rather than as its own thing. The row over the
     // first card is the same argument against the rule above it.
     //
-    // Except between two spaces that are each a single row — minimized,
-    // with nobody in them (see `render_space_caption`). A row of nothing
-    // between two rows of something is half the column spent on the
-    // spaces nobody is in, and there is nothing to mistake for anything:
-    // one line is one space. They pack, and the rows open again around
-    // whichever one grows, which is the one in front.
+    // Except between two minimized spaces, the one in front included: a
+    // row of nothing between two headers is half the column spent on
+    // spaces nobody is looking into, and the fill of the one in front is
+    // edge enough on its own. They pack, and the rows open again around
+    // whichever one is expanded.
     let rearranging = model.dragging_space.is_some_and(|dragging| dragging.armed);
     let mut gap_above = rows.slot(1).visible();
     // While the root picker is open it owns the column: the listing it
@@ -712,14 +711,14 @@ pub(super) fn render_sidebar(
     for (index, space) in session.workspace.spaces.iter().enumerate() {
         let is_active_space = space.id == session.workspace.selected_space;
         // The row under this space is also the row over the next one. It
-        // is wanted unless both of them are a single line — and always
-        // while a space is being carried, because it is the one place a
-        // drop can be drawn.
+        // is wanted beside a space that is open — and always while a
+        // space is being carried, because it is the one place a drop can
+        // be drawn.
         let margin = rearranging
-            || !is_one_line(model, session, space)
+            || !model.space_folded(space)
             || session.workspace.spaces[index + 1..]
                 .first()
-                .is_none_or(|next| !is_one_line(model, session, next));
+                .is_none_or(|next| !model.space_folded(next));
         if dropping == Some(PendingDrop::Before(space.id)) {
             draw_space_drop(frame, gap_above);
         }
@@ -785,7 +784,7 @@ pub(super) fn render_sidebar(
         crate::ui::extension_view::render_section(
             frame,
             &steps.section(),
-            &mut Rows::over(section_column(rect)),
+            &mut Rows::over(rect),
             false,
             &mut section_hits,
         );
@@ -847,7 +846,7 @@ fn tree_rows(
             let agents = agent_tabs_of(space, identities).len() as u16;
             // The same conditions `render_sidebar` draws by: a minimized
             // space nobody is in is its header and nothing else, and two
-            // of those in a row have no blank row between them.
+            // minimized spaces in a row have no blank row between them.
             let body = if model.space_folded(space) {
                 u16::from(space.id == session.workspace.selected_space)
             } else if agents == 0 {
@@ -856,24 +855,16 @@ fn tree_rows(
                 agent_rows(agents)
             };
             let margin = rearranging
-                || !is_one_line(model, session, space)
+                || !model.space_folded(space)
                 || spaces[index + 1..]
                     .first()
-                    .is_none_or(|next| !is_one_line(model, session, next));
+                    .is_none_or(|next| !model.space_folded(next));
             1 + body + u16::from(margin)
         })
         .sum::<u16>()
         // The column's own top margin, which is a row above the first
         // space rather than one of the rows between a pair of them.
         + 1
-}
-
-/// Whether a space comes to a single row: minimized, and not the one in
-/// front, so it has no caption under its header (see
-/// [`render_space_caption`]). What decides whether the row between it and
-/// its neighbour is worth reserving.
-fn is_one_line(model: &WorkspaceModel, session: &Session, space: &Space) -> bool {
-    model.space_folded(space) && space.id != session.workspace.selected_space
 }
 
 /// Where a dragged space would land: an accent hairline across the blank
@@ -1222,7 +1213,8 @@ fn block_ground(lifted: bool) -> Color {
 /// works there, so there is no level to draw. The isolated ones hang off
 /// a trunk of their own, one column in, because their work does: the
 /// group that is somewhere else gets the one indent in the column, and
-/// the line down it says those rows are one collection.
+/// the line down it says those rows are one collection. A group of one
+/// is no collection, so it stands where the root's agents stand.
 ///
 /// That trunk is the group's, not the space's, which is why it reads
 /// where the old `├─` did not: the space's gutter is a bar flush against
@@ -1489,12 +1481,7 @@ fn render_timeline(
         model.timeline_scroll,
     );
     let mut section_hits = Vec::new();
-    let mut column = Rows::over(section_column(Rect::new(
-        rows.x,
-        rows.y,
-        rows.width,
-        rows.remaining(),
-    )));
+    let mut column = Rows::over(Rect::new(rows.x, rows.y, rows.width, rows.remaining()));
     // The branch name this header carries is the one caption in the
     // column with no natural length — it is whatever somebody called the
     // work — so it is the one that runs past its room. While the pointer
@@ -1833,12 +1820,16 @@ pub(super) fn render_space_header(
 /// The trunk is drawn by its ends, not by one glyph repeated: a `├`
 /// carries a stem *upward* as well, so at the top of a group it pointed
 /// at the blank row above and read as a line broken off rather than a
-/// line starting. Each end closes — which is also why a group of one
-/// gets a plain arm and no trunk at all: there is nothing for a line to
-/// join.
+/// line starting. Each end closes.
+///
+/// A group of one takes no step at all: there is nothing for a line to
+/// join, and an arm to a single row read as a stray mark beside a name
+/// standing where every other name stands. The blank row above it still
+/// says it is the other collection.
 #[derive(Clone, Copy)]
 enum Branch {
-    /// In the space's own root: no level, no line.
+    /// In the space's own root, or the only isolated one: no level, no
+    /// line.
     None,
     /// The first of the isolated ones, opening the trunk.
     Opens,
@@ -1847,15 +1838,12 @@ enum Branch {
     /// The last of them: the trunk closes on its name and nothing runs
     /// under its caption.
     Closes,
-    /// The only one: an arm to its row, and no trunk to open or close.
-    Alone,
 }
 
 impl Branch {
     fn of(isolated: bool, first: bool, last: bool) -> Self {
         match (isolated, first, last) {
-            (false, ..) => Self::None,
-            (true, true, true) => Self::Alone,
+            (false, ..) | (true, true, true) => Self::None,
             (true, true, false) => Self::Opens,
             (true, false, false) => Self::Carries,
             (true, false, true) => Self::Closes,
@@ -1869,7 +1857,6 @@ impl Branch {
             Self::Opens => Self::drawn(Symbol::TreeFirst),
             Self::Carries => Self::drawn(Symbol::TreeBranch),
             Self::Closes => Self::drawn(Symbol::TreeLast),
-            Self::Alone => Self::drawn(Symbol::TreeDivider),
         }
     }
 
@@ -1880,7 +1867,7 @@ impl Branch {
         match self {
             Self::Opens | Self::Carries => Self::drawn(Symbol::TreeVertical),
             Self::None => Span::raw(""),
-            Self::Closes | Self::Alone => Span::raw(" "),
+            Self::Closes => Span::raw(" "),
         }
     }
 
@@ -2399,21 +2386,6 @@ const PICKER_LEAD: usize = 1;
 
 /// The gap on either side of the rule between the header's two controls.
 const HEADER_GAP: u16 = 1;
-
-/// A foot section's own column: one step in from the column's edge, where
-/// a space's fold sits, so its title lands in the column a space's name
-/// does and the two read as one grid rather than two.
-fn section_column(area: Rect) -> Rect {
-    Rect::new(
-        area.x + SECTION_LEAD,
-        area.y,
-        area.width.saturating_sub(SECTION_LEAD),
-        area.height,
-    )
-}
-
-/// The width of that step.
-const SECTION_LEAD: u16 = 1;
 
 /// The row being typed into: what is being looked for, with the directory
 /// it is being looked for in at the row's other end — a prompt that opened
