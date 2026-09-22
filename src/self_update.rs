@@ -87,6 +87,11 @@ impl Notice {
     }
 }
 
+/// The release this binary is.
+pub(crate) fn running() -> &'static str {
+    RUNNING
+}
+
 /// The release's own page, where its notes are published.
 pub(crate) fn release_page(version: &str) -> String {
     format!("{RELEASES}/tag/v{version}")

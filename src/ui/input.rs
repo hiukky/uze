@@ -572,6 +572,7 @@ impl TuiModel {
                     _ => None,
                 };
                 self.source_link_hovered = matches!(hovered, Some(Hit::OpenLink(_)));
+                self.version_hovered = matches!(hovered, Some(Hit::RunningReleaseNotes));
                 self.hovered_offer = match hovered {
                     Some(Hit::OfferedAction(action)) => Some(action),
                     _ => None,

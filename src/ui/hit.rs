@@ -58,6 +58,8 @@ pub(crate) enum Hit {
     /// The mark in the release notes modal's corner. Ahead of the body it
     /// sits on, and like every click that is not on the body, it closes.
     ReleaseNotesClose,
+    /// The footer's version: the notes of the release this binary is.
+    RunningReleaseNotes,
     /// A detail view's button for one of the selected row's offers.
     OfferedAction(uze_keys::Action),
     /// One line of the Keys screen.
@@ -223,6 +225,13 @@ impl TuiModel {
             Hit::CloseFirstSteps => {
                 self.first_steps_closed = true;
                 Intent::None
+            }
+            Hit::RunningReleaseNotes => {
+                let version = crate::self_update::running().to_owned();
+                self.overlay = Overlay::ReleaseNotes(
+                    crate::ui::release_notes::ReleaseNotesModal::opening(&version),
+                );
+                Intent::ReadReleaseNotes(version)
             }
             Hit::OpenReleaseNotes => match &self.release {
                 Some(notice) => {
