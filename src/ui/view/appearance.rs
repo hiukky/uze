@@ -34,7 +34,7 @@ use super::super::hit::Hit;
 use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{self, Surface};
+use crate::ui::widget::{self, Scrollbar, Surface};
 
 /// The marks a preview shows. Chosen to be the ones that differ most
 /// between sets, and to include a two-cell glyph (`arrow.to` is `->` in
@@ -83,94 +83,215 @@ const CARD_GAP: u16 = 1;
 /// Selection stays linear — reading order, left to right and down — so
 /// `up`/`down` mean what they did when this was a list, and a heading is
 /// crossed rather than landed on.
+///
+/// Laid out onto a canvas first and windowed onto the screen after, the
+/// way the keys screen windows its list. Drawing straight down the area
+/// and stopping at its foot was enough while the cards fit: narrow the
+/// column and they wrap onto more lines than there are rows, and
+/// everything past the last one was invisible and unreachable at once —
+/// the selection walked off the bottom and nothing followed it.
+///
+/// The window moves in whole bands — a heading, a blank, or a line of
+/// cards — rather than in rows. A card is four rows tall, and a window
+/// free to stop between them would either clip one or drop it and leave
+/// the gap where it stood.
 fn render_catalog(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let columns = usize::from(((area.width + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).max(1));
-    let mut y = area.y;
-    let mut column = 0usize;
-    let mut opened = false;
+    let bands = bands_of(model, area.width);
+    let total: u16 = bands.iter().map(Band::height).sum();
+    // A column for the track, and only when there is more catalogue than
+    // screen: a scrollbar on a page that fits says the opposite of what
+    // it is for. Taken before the cards are placed, so the width they are
+    // laid out against is the width they are drawn in.
+    let track_width = Scrollbar::width().max(1);
+    let track = (total > area.height).then(|| {
+        Rect::new(
+            area.right().saturating_sub(track_width),
+            area.y,
+            track_width,
+            area.height,
+        )
+    });
+    let area = match track {
+        Some(_) => Rect::new(
+            area.x,
+            area.y,
+            area.width.saturating_sub(track_width + 1),
+            area.height,
+        ),
+        None => area,
+    };
+    let bands = bands_of(model, area.width);
+    let total: u16 = bands.iter().map(Band::height).sum();
 
-    for (index, row) in model.appearance_rows().iter().enumerate() {
-        if let AppearanceRow::Heading(title) = row {
-            // Close whatever line of cards is open before starting a group.
-            if column > 0 {
-                y += CARD_HEIGHT;
-                column = 0;
-            }
-            if opened {
-                y += 1;
-            }
-            opened = true;
-            if y >= area.bottom() {
-                return;
-            }
-            frame.render_widget(
+    // The window stays at the top until the selection passes the middle,
+    // so reading down from the first card does not move the page.
+    let first = first_band(&bands, model.appearance_selected, area.height);
+    let mut y = area.y;
+    let skipped: u16 = bands.iter().take(first).map(Band::height).sum();
+    for band in bands.iter().skip(first) {
+        if y + band.height() > area.bottom() {
+            break;
+        }
+        match band {
+            Band::Gap => {}
+            Band::Heading(title) => frame.render_widget(
                 Paragraph::new(Span::styled(
                     title.to_uppercase(),
                     theme::fg(Token::TextDim).add_modifier(Modifier::BOLD),
                 )),
                 Rect::new(area.x, y, area.width, 1),
-            );
-            y += 1;
-            continue;
-        }
-
-        let x = area.x + column as u16 * (CARD_WIDTH + CARD_GAP);
-        let width = CARD_WIDTH.min(area.right().saturating_sub(x));
-        if y + CARD_HEIGHT > area.bottom() {
-            return;
-        }
-        let rect = Rect::new(x, y, width, CARD_HEIGHT);
-        let selected = index == model.appearance_selected;
-        match row {
-            AppearanceRow::Theme { id, active, path } => {
-                let source = match path {
-                    // The file's own name, not its path: a card has room for
-                    // one, and the drawer beside it carries the other.
-                    Some(path) => path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |name| name.to_string_lossy().into_owned(),
-                    ),
-                    None => "built in".to_owned(),
-                };
-                render_card(
-                    frame,
-                    rect,
-                    id,
-                    *active,
-                    selected,
-                    &source,
-                    swatch_spans(model, id),
-                );
+            ),
+            Band::Cards(cards) => {
+                for (column, index) in cards.iter().enumerate() {
+                    let x = area.x + column as u16 * (CARD_WIDTH + CARD_GAP);
+                    let width = CARD_WIDTH.min(area.right().saturating_sub(x));
+                    let rect = Rect::new(x, y, width, CARD_HEIGHT);
+                    render_row(frame, rect, model, *index);
+                    hits.push((rect, Hit::AppearanceRow(*index)));
+                }
             }
-            AppearanceRow::GlyphSet { id, active } => {
-                let room = usize::from(rect.width).saturating_sub(4);
-                render_card(
-                    frame,
-                    rect,
-                    id,
-                    *active,
-                    selected,
-                    glyph_set_tagline(id),
-                    preview_spans(id, room),
-                );
-            }
-            AppearanceRow::Heading(_) => unreachable!("headings return above"),
         }
-        hits.push((rect, Hit::AppearanceRow(index)));
+        y += band.height();
+    }
+    if let Some(track) = track
+        && let Some(bar) = Scrollbar::measure(track, usize::from(area.height), usize::from(total))
+    {
+        bar.render(frame, usize::from(skipped));
+    }
+}
 
-        column += 1;
-        if column == columns {
-            column = 0;
-            y += CARD_HEIGHT;
+/// One stretch of the catalogue that moves as a unit: a group heading,
+/// the blank row between two groups, or one line of cards.
+enum Band<'a> {
+    Heading(&'a str),
+    Gap,
+    Cards(Vec<usize>),
+}
+
+impl Band<'_> {
+    fn height(&self) -> u16 {
+        match self {
+            Self::Heading(_) => 1,
+            Self::Gap => 1,
+            Self::Cards(_) => CARD_HEIGHT,
         }
     }
 }
 
+/// The catalogue laid out for a column `width` wide, in reading order.
+fn bands_of(model: &TuiModel, width: u16) -> Vec<Band<'_>> {
+    let columns = usize::from(((width + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).max(1));
+    let mut bands = Vec::new();
+    let mut line: Vec<usize> = Vec::new();
+    for (index, row) in model.appearance_rows().iter().enumerate() {
+        if let AppearanceRow::Heading(title) = row {
+            if !line.is_empty() {
+                bands.push(Band::Cards(std::mem::take(&mut line)));
+            }
+            if !bands.is_empty() {
+                bands.push(Band::Gap);
+            }
+            bands.push(Band::Heading(title));
+            continue;
+        }
+        line.push(index);
+        if line.len() == columns {
+            bands.push(Band::Cards(std::mem::take(&mut line)));
+        }
+    }
+    if !line.is_empty() {
+        bands.push(Band::Cards(line));
+    }
+    bands
+}
+
+/// The first band to draw so the `selected` card is on screen, held so the
+/// last page ends on the last band rather than on empty rows.
+fn first_band(bands: &[Band<'_>], selected: usize, height: u16) -> usize {
+    let anchor = bands
+        .iter()
+        .position(|band| matches!(band, Band::Cards(cards) if cards.contains(&selected)))
+        .unwrap_or(0);
+    // Back off from the anchor until half the screen is filled behind it,
+    // then forward again while the tail still fits: two walks over a list
+    // of bands, because their heights differ and no arithmetic on indices
+    // answers where a variable-height window starts.
+    let fits_from = |first: usize| -> bool {
+        let mut used = 0;
+        for band in bands.iter().skip(first) {
+            used += band.height();
+        }
+        used <= height
+    };
+    let mut first = anchor;
+    let mut behind = 0;
+    while first > 0 {
+        let candidate = first - 1;
+        behind += bands[candidate].height();
+        if behind > height / 2 {
+            break;
+        }
+        first = candidate;
+    }
+    while first > 0 && fits_from(first - 1) {
+        first -= 1;
+    }
+    first
+}
+
+/// One card of the catalogue, by its index into `appearance_rows`: which
+/// kind it is decides what is drawn under the name and what the preview
+/// line shows.
+fn render_row(frame: &mut ratatui::Frame<'_>, rect: Rect, model: &TuiModel, index: usize) {
+    let rows = model.appearance_rows();
+    let Some(row) = rows.get(index) else {
+        return;
+    };
+    let selected = index == model.appearance_selected;
+    match row {
+        AppearanceRow::Theme { id, active, path } => {
+            let source = match path {
+                // The file's own name, not its path: a card has room for
+                // one, and the drawer beside it carries the other.
+                Some(path) => path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                ),
+                None => "built in".to_owned(),
+            };
+            render_card(
+                frame,
+                rect,
+                id,
+                *active,
+                selected,
+                &source,
+                swatch_spans(model, id),
+            );
+        }
+        AppearanceRow::GlyphSet { id, active } => {
+            let room = usize::from(rect.width).saturating_sub(4);
+            render_card(
+                frame,
+                rect,
+                id,
+                *active,
+                selected,
+                glyph_set_tagline(id),
+                preview_spans(id, room),
+            );
+        }
+        // Headings are bands of their own and never reach a card rect.
+        AppearanceRow::Heading(_) => {}
+    }
+}
+
+/// One choice: its name in the frame, what it is beneath, and — the whole
 /// One choice: its name in the frame, what it is beneath, and — the whole
 /// reason this is a card — what it actually looks like on the last line.
 ///

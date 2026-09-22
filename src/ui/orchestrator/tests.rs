@@ -543,7 +543,10 @@ mod workspace_tests {
     /// loop — and returns the matching layout, the pair the drag-reorder
     /// helpers need to classify a hit's rect.
     fn full_frame(model: &mut WorkspaceModel) -> WorkspaceLayout {
-        let area = Rect::new(0, 0, 80, 24);
+        full_frame_at(model, Rect::new(0, 0, 80, 24))
+    }
+
+    fn full_frame_at(model: &mut WorkspaceModel, area: Rect) -> WorkspaceLayout {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         let mut hits = Vec::new();
         let mut metrics = render::FrameMetrics::default();
@@ -4734,10 +4737,17 @@ mod workspace_tests {
 
     /// The header's trailing control opens the modal; a click inside it
     /// is the modal's own, a click beside it closes it.
+    ///
+    /// On a terminal with room for a margin. Below `management::ROOMY_*`
+    /// the modal takes the whole frame and there is no beside to click —
+    /// the mark on its title and the chord still close it, which is the
+    /// trade the fill is: a small screen spends its columns on the
+    /// screens in front rather than on proving the workspace is behind.
     #[test]
     fn the_header_control_opens_the_modal_and_a_click_beside_it_closes_it() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-click"));
-        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
+        let mut driven =
+            driven(agent_with_task(WorkStateView::Ready, 1), &home).on_a_roomy_terminal();
         driven.frame();
         let more = driven
             .attach
@@ -6889,13 +6899,27 @@ mod workspace_tests {
         /// socket stops answering, which is how this client learns the
         /// terminal server is gone.
         events_sender: Option<std::sync::mpsc::Sender<ClientEvent>>,
+        /// The terminal every frame is drawn at and every click resolved
+        /// against. Small by default, because most of what this drives
+        /// does not depend on the room: the ones that do say so with
+        /// [`Driven::on_a_roomy_terminal`].
+        area: Rect,
     }
 
     impl Driven<'_> {
+        /// Draws at a terminal big enough for the surfaces that keep a
+        /// margin — the manage modal takes the whole frame below
+        /// `management::ROOMY_*`, so the gestures that need something
+        /// beside it need a screen that has one.
+        fn on_a_roomy_terminal(mut self) -> Self {
+            self.area = Rect::new(0, 0, 120, 40);
+            self
+        }
+
         /// Draws the frame the next click is tested against, storing its
         /// hits on the model exactly as the attach loop does.
         fn frame(&mut self) {
-            full_frame(&mut self.attach.model);
+            full_frame_at(&mut self.attach.model, self.area);
         }
 
         fn press(&mut self, column: u16, row: u16) {
@@ -6905,7 +6929,7 @@ mod workspace_tests {
         /// Any other mouse event at the same viewport the click helpers
         /// use — the rest of a drag, which `press` alone cannot say.
         fn mouse(&mut self, column: u16, row: u16, kind: MouseEventKind) {
-            let area = Rect::new(0, 0, 80, 24);
+            let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
                 size: ratatui::layout::Size::new(area.width, area.height),
@@ -6919,7 +6943,7 @@ mod workspace_tests {
 
         /// One key, through the same dispatch the attach loop uses.
         fn press_key(&mut self, key: crossterm::event::KeyEvent) {
-            let area = Rect::new(0, 0, 80, 24);
+            let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
                 size: ratatui::layout::Size::new(area.width, area.height),
@@ -7019,6 +7043,7 @@ mod workspace_tests {
             server,
             events: events_rx,
             events_sender: Some(events),
+            area: Rect::new(0, 0, 80, 24),
         }
     }
 
