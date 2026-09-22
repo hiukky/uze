@@ -3344,12 +3344,12 @@ fn render_notice_chip(
         ),
         Span::raw(" "),
         // The zone divider, in the same hue and on the same plain backdrop
-        // as the "/" that separates the tabs from the strip's own buttons.
+        // as every other hairline between the header's zones.
         // No filled chip behind any of this: a message is not a control,
         // and the raised surface is what made it read as one.
         Span::styled(
             theme::glyph(Symbol::TreeColumnDivider),
-            theme::fg(Token::TextMuted),
+            theme::fg(Token::TextFaint),
         ),
     ];
     // Never past the strip's left edge: what does not fit is this
