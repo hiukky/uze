@@ -33,7 +33,7 @@ mod workspace_tests {
 
     use super::WorkspaceHit;
     use super::{
-        AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
+        AGENT_BEATS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
         AgentTabStatus, AgentView, Attach, CommitDetailPopup, CommitDetailResolution,
         CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer,
         GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
@@ -148,15 +148,15 @@ mod workspace_tests {
         ClientEvent::Damage(damage)
     }
 
-    /// Paints `pane` the way a harness animating a running turn does:
-    /// several frames, spread over enough time to be animation rather than
+    /// Paints `pane` the way a harness keeps time while a turn runs: a few
+    /// frames, spread over enough of a stretch to be a beat rather than
     /// one repaint whose bytes reached the client in pieces.
     fn animate(model: &mut WorkspaceModel, pane: PaneId, start: Instant) {
-        for step in 0..=AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..=AGENT_BEATS as u64 {
             model.note_agent_output(
                 pane,
                 &identities_fixture(),
-                start + Duration::from_millis(120 * step),
+                start + Duration::from_millis(500 * step),
             );
         }
     }
@@ -6144,7 +6144,7 @@ mod workspace_tests {
         // Frame count alone would read that burst as a running turn.
         let mut model = agent_session();
         let start = Instant::now();
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             model.note_agent_output(
                 PaneId(1),
                 &identities_fixture(),
@@ -6185,7 +6185,7 @@ mod workspace_tests {
         // comparable baseline to diff against. Counting those made every
         // open agent spin for a few seconds each time the workspace opened.
         let mut model = agent_session();
-        for _ in 0..AGENT_BUSY_REPAINTS {
+        for _ in 0..AGENT_BEATS {
             model.apply(repainted_whole_grid(PaneId(1)), &identities_fixture());
         }
         assert_eq!(
@@ -6215,13 +6215,110 @@ mod workspace_tests {
         );
     }
 
+    /// Looking at a finished agent must not put it back on the spinner.
+    ///
+    /// Selecting a tab resizes its pane, and the harness answers by
+    /// re-laying out its whole conversation — frames as regular as any
+    /// beat, for as long as that takes. The window that excuses them used
+    /// to be a flat second, so a long conversation painted straight
+    /// through it and the remainder read as a turn starting: `✓` became a
+    /// spinner the moment it was looked at, which is the one gesture that
+    /// was supposed to settle it.
+    #[test]
+    fn the_redraw_that_selecting_an_agent_provokes_is_not_a_turn_starting() {
+        let mut model = agent_session();
+        model.remembered.completed_agent_panes.insert(PaneId(1));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Completed
+        );
+
+        // Selected: the client asks for a redraw, and the harness spends
+        // two seconds re-laying out — well past the flat window.
+        model.note_pane_redraw(PaneId(1));
+        let selected = Instant::now();
+        for step in 0..20u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                selected + Duration::from_millis(100 * step),
+            );
+        }
+        assert_ne!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "settling after a resize is not a turn"
+        );
+
+        // And the promise that the excuse ends: a pane still painting
+        // past the cap is painting for itself.
+        for step in 0..20u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                selected + Duration::from_millis(3000 + 100 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "a turn that really starts still reaches the spinner"
+        );
+    }
+
+    /// A harness waiting on a tool call is still working, and it says so
+    /// the only way a terminal can: its elapsed counter ticks. Once a
+    /// second is the slowest any of them keep time, and it is the case
+    /// this used to miss — the old rule wanted five frames inside one
+    /// second, which only a spinner mid-animation can give, so an agent
+    /// sitting on `· 1m 23s` through a long tool call read as stopped
+    /// with the terminal moving the whole time.
+    #[test]
+    fn a_counter_ticking_once_a_second_is_the_agent_working() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for second in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_secs(second),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "a beat a second is a turn running"
+        );
+    }
+
+    /// And the thing the old threshold was protecting: a pane that paints
+    /// now and then is not keeping time. A rotating hint beside a banner
+    /// printed half a minute earlier is two repaints, not a rhythm.
+    #[test]
+    fn a_pane_that_paints_now_and_then_is_not_the_agent_working() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_secs(30 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle,
+            "sporadic painting is an agent sitting open"
+        );
+    }
+
     #[test]
     fn the_echo_of_a_prompt_being_typed_is_not_the_agent_working() {
         // Every keystroke opens its own grace window, so a prompt typed
         // steadily paints as many frames, as spread out, as a running turn.
         let mut model = agent_session();
         let start = Instant::now();
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
             model.note_agent_output(
@@ -6259,7 +6356,7 @@ mod workspace_tests {
         let mut model = agent_session();
         let start = Instant::now();
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
             model.note_agent_output(
