@@ -1889,13 +1889,11 @@ impl Attach<'_> {
                 // the action replaces it with a plain shell. A space can
                 // always close: the last one is replaced by a space at
                 // home. Renaming a lone shell remains its only action.
-                // Anywhere on a space's header is the space, its fold and
-                // its `⇄` included: they are the header's own controls,
-                // not targets of a menu of their own.
+                // Anywhere on a space's header is the space, its fold
+                // included: that is the header's own control, not a target
+                // of a menu of its own.
                 if let Some(
-                    WorkspaceHit::SelectSpace(space)
-                    | WorkspaceHit::ToggleSpaceCollapsed(space)
-                    | WorkspaceHit::ToggleSpaceRoot(space),
+                    WorkspaceHit::SelectSpace(space) | WorkspaceHit::ToggleSpaceCollapsed(space),
                 ) = hit
                 {
                     let items = vec![Action::RenameSelection, Action::CloseTab];
@@ -2184,11 +2182,8 @@ impl Attach<'_> {
                 begin_rename(&mut self.model, MenuTarget::Space(space));
                 self.model.dirty = true;
             }
-            // Two quick clicks on the toggle are two
-            // toggles, not a gesture of their own.
-            WorkspaceHit::ToggleSpaceRoot(space) => {
-                toggle_space_root(&mut self.model, space);
-            }
+            // Two quick clicks on the fold are two
+            // folds, not a gesture of their own.
             WorkspaceHit::ToggleSpaceCollapsed(space) => {
                 toggle_space_collapsed(&mut self.model, space);
             }
@@ -2428,9 +2423,6 @@ impl Attach<'_> {
             WorkspaceHit::OpenArchitect => open_architect(&mut self.model),
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
-            }
-            WorkspaceHit::ToggleSpaceRoot(space) => {
-                toggle_space_root(&mut self.model, space);
             }
             WorkspaceHit::ToggleSpaceCollapsed(space) => {
                 toggle_space_collapsed(&mut self.model, space);
@@ -2869,8 +2861,15 @@ impl Attach<'_> {
         // longer exists: nothing it is told can reach the task any more,
         // and the operator asked for that task to continue here. Sent
         // after the new tab, so the space is never left without one.
+        //
+        // Through the same guard every other close goes through. The tab
+        // that lands above is an *agent*, and a space's own shell is the
+        // one thing an agent is not: a space whose tabs were all agents
+        // came out of this with nothing of its own to land on, which is a
+        // space whose header answers no click at all. It took four agents
+        // and one resume to reach, and nothing on the way said so.
         if let Some(tab) = replacing {
-            let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
+            close_tab_keeping_a_shell(&mut self.stream, &self.model, &self.identities, tab);
         }
     }
 
@@ -3266,11 +3265,12 @@ impl Attach<'_> {
         if self.model.expire_press(Instant::now()) {
             self.model.dirty = true;
         }
-        // The same clock drives the notice chip's spinner and the
-        // delivering button's, so it has to turn for either even with
-        // every agent idle.
+        // The same clock drives the notice chip's spinner, the delivering
+        // button's, and a caption sliding under the pointer, so it has to
+        // turn for any of them even with every agent idle.
         if workspace_has_active_agent_operation(&self.model, &self.identities)
             || self.model.notice_is_busy()
+            || self.model.marquee
             || !self.model.remembered.delivery_pending.is_empty()
         {
             let now = Instant::now();

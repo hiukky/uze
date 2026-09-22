@@ -92,6 +92,49 @@ pub(crate) fn fill(spans: &mut Vec<Span<'_>>, width: u16, state: RowState) {
 /// be cut there by the frame — which is how a long branch name on the Git
 /// section header became an unreadable fragment with no "…" to say it had
 /// been shortened.
+/// The same, with the text slid sideways by `offset` columns when it is
+/// too long for the room: a caption that cannot be shortened without
+/// losing the end of it — a branch name is read from both ends — passes
+/// through instead of stopping at an "…".
+///
+/// Only while something is asking to read it, which is the caller's
+/// business: this draws the frame it is given an offset for and says
+/// whether there was anything to slide. The run is the text, a gap, and
+/// the text again, so it leaves on one side as it arrives on the other
+/// rather than jumping back to the start.
+pub(crate) fn push_trailing_marquee<'a>(
+    spans: &mut Vec<Span<'a>>,
+    width: u16,
+    text: String,
+    hue: Color,
+    offset: usize,
+) -> bool {
+    let leading: u16 = spans.iter().map(|span| span.width() as u16).sum();
+    let room = usize::from(width.saturating_sub(leading + TRAILING_PAD + 1).max(1));
+    let length = text.chars().count();
+    if length <= room {
+        push_trailing(spans, width, text, hue);
+        return false;
+    }
+    /// Blank columns between the end of the run and its start coming
+    /// round again, so the two ends are never read as one word.
+    const GAP: usize = 3;
+    let cycle = length + GAP;
+    let run: Vec<char> = text
+        .chars()
+        .chain(std::iter::repeat_n(' ', GAP))
+        .chain(text.chars())
+        .collect();
+    let start = offset % cycle;
+    let window: String = run.iter().skip(start).take(room).collect();
+    spans.push(Span::raw(" ".repeat(usize::from(width).saturating_sub(
+        usize::from(leading) + room + usize::from(TRAILING_PAD),
+    ))));
+    spans.push(Span::styled(window, Style::default().fg(hue)));
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+    true
+}
+
 pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
     let leading: u16 = spans.iter().map(|span| span.width() as u16).sum();
     // One column of gap between the leading spans and the caption, so the

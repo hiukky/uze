@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Clear, Paragraph, Wrap},
 };
 
 use crate::ui::hit::Hit;
@@ -23,21 +23,28 @@ pub mod overview;
 pub mod plugins;
 pub mod profiles;
 
-pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
+pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 44;
 /// The narrowest a drawer, or the list beside it, is ever drawn.
 const DRAWER_MIN_WIDTH: u16 = 24;
 
 /// How wide `panel`'s drawer is drawn over `content`: where it was dragged
 /// to, or the default, never squeezing itself or the list beside it past
-/// the minimum.
+/// the minimum, and never taking more than half of what there is.
+///
+/// The half is the part the minimum alone could not do. Leaving the list
+/// its 24 columns is a floor, not a share: on a narrow screen a drawer at
+/// its default took two thirds of the content and the list it is a detail
+/// *of* got what was left over. A detail panel is read a paragraph at a
+/// time and the list beside it is read as a whole, so when there is not
+/// enough for both, the list is the one that keeps its shape.
 pub(crate) fn drawer_width(panel: ResizablePanel, model: &TuiModel, content: Rect) -> u16 {
-    panel.width(model).unwrap_or(DRAWER_DEFAULT_WIDTH).clamp(
-        DRAWER_MIN_WIDTH,
-        content
-            .width
-            .saturating_sub(DRAWER_MIN_WIDTH)
-            .max(DRAWER_MIN_WIDTH),
-    )
+    let ceiling = (content.width / 2)
+        .min(content.width.saturating_sub(DRAWER_MIN_WIDTH))
+        .max(DRAWER_MIN_WIDTH);
+    panel
+        .width(model)
+        .unwrap_or(DRAWER_DEFAULT_WIDTH)
+        .clamp(DRAWER_MIN_WIDTH, ceiling)
 }
 
 /// A detail drawer's shell off the right of `content`: a recessed slab
@@ -113,15 +120,25 @@ pub(crate) struct DrawerStatus<'a> {
     pub subtitle: &'a str,
 }
 
-/// Rows [`render_drawer_footer`] needs: the divider and the two status
-/// lines, plus a gap and a row of buttons when anything can be done now.
+/// Rows [`render_drawer_footer`] needs: the divider, the headline and the
+/// two rows its note is allowed to take, plus a gap and a row of buttons
+/// when anything can be done now.
+///
+/// Two rows for the note, because it is a sentence and the drawer is a
+/// width the operator drags. On one row it was clipped mid-word the
+/// moment the drawer was narrower than the longest note anyone had
+/// written — "setting it up installs it" became "setting it up install",
+/// which is not a shorter sentence but a broken one.
 pub(crate) fn drawer_footer_height(offers: &[ActionOffer]) -> u16 {
     if drawer_buttons(offers).is_empty() {
-        3
+        NOTE_ROWS + 2
     } else {
-        5
+        NOTE_ROWS + 4
     }
 }
+
+/// How many rows a drawer's note may wrap onto before it is elided.
+const NOTE_ROWS: u16 = 2;
 
 /// The offers a drawer draws as buttons: the available ones, what builds
 /// before what destroys. `Activate` is left out — it is what opened the
@@ -193,11 +210,16 @@ pub(crate) fn render_drawer_footer(
         )),
     ];
     frame.render_widget(
-        Paragraph::new(lines),
-        Rect::new(inner.x, inner.y, inner.width, inner.height.min(2)),
+        Paragraph::new(lines).wrap(Wrap { trim: true }),
+        Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.min(1 + NOTE_ROWS),
+        ),
     );
 
-    let row_y = inner.y + 3;
+    let row_y = inner.y + 1 + NOTE_ROWS;
     if row_y >= area.bottom() {
         return;
     }
@@ -224,4 +246,40 @@ pub(crate) fn render_drawer_footer(
         .collect();
     let row = Rect::new(inner.x, row_y, inner.width, 1);
     hits.extend(button_row(frame, row, &buttons, Align::Left));
+}
+
+#[cfg(test)]
+mod drawer_tests {
+    use super::*;
+
+    /// A drawer never takes more than half of what there is, whatever it
+    /// was dragged to or defaults to.
+    ///
+    /// Leaving the list its minimum is a floor, not a share: on a narrow
+    /// screen the default took two thirds of the content and the list it
+    /// is a detail *of* got the remainder. The default itself is the
+    /// width a paragraph reads at, not the width there is.
+    #[test]
+    fn a_drawer_never_takes_more_than_half_the_content() {
+        let model = TuiModel::default();
+        let panel = ResizablePanel::AppearanceDrawer;
+        for width in [60u16, 80, 100, 140, 200] {
+            let content = Rect::new(0, 0, width, 40);
+            let drawn = drawer_width(panel, &model, content);
+            assert!(
+                drawn <= (width / 2).max(DRAWER_MIN_WIDTH),
+                "{width} wide: {drawn}"
+            );
+            assert!(
+                content.width.saturating_sub(drawn) >= DRAWER_MIN_WIDTH,
+                "and the list keeps its own minimum at {width}: {drawn}"
+            );
+        }
+        // Wide enough for both, it is the default and not a share of the
+        // screen: a detail panel does not get better by getting wider.
+        assert_eq!(
+            drawer_width(panel, &model, Rect::new(0, 0, 200, 40)),
+            DRAWER_DEFAULT_WIDTH
+        );
+    }
 }

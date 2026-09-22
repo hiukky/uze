@@ -2824,8 +2824,18 @@ fn every_harness_in_the_catalog_can_be_set_up() {
         offered,
         "and so can one that is not — setting it up is what installs it: {rows}"
     );
+    // Read down the drawer's own column and closed up, because the note
+    // wraps: it is a sentence in a panel whose width is dragged, and a
+    // row-by-row search for it finds it only at the widths it happens to
+    // fit on one line.
+    let drawer: String = rows
+        .lines()
+        .filter_map(|row| row.rsplit('\u{2502}').next())
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
-        rows.contains("setting it up installs it"),
+        drawer.contains("setting it up installs it"),
         "which is what the drawer says it will do: {rows}"
     );
 }
@@ -2895,7 +2905,7 @@ fn a_harness_card_marks_only_what_uze_configured() {
         "least of all a sentence about this machine's PATH: {rows:?}"
     );
 
-    let (narrow, _) = titles(140);
+    let (narrow, _) = titles(120);
     let squeezed = card(&narrow, "Claude Code");
     assert!(
         squeezed.contains(&theme::glyph(theme::Symbol::MarkOk)),
@@ -4672,6 +4682,72 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
             "{route:?}'s drawer does not run the height {first_route:?}'s does"
         );
     }
+}
+
+/// Every card of the catalogue is reachable however narrow the column
+/// gets, and the last of them can be brought on screen.
+///
+/// The catalogue is a grid: narrow the column and the cards wrap onto
+/// more lines than there are rows. It used to draw from the top and stop
+/// at the foot, so everything past the last full line was invisible and
+/// unreachable at once — the selection walked off the bottom and nothing
+/// followed it.
+#[test]
+fn the_appearance_catalog_follows_its_selection_down_a_narrow_column() {
+    let mut model = model_with_data();
+    model.set_route(Route::Appearance);
+    model.focus = Focus::Content;
+    model.appearance_themes = (0..8)
+        .map(|index| uze_application::application::ThemeSummary {
+            id: format!("theme-{index}"),
+            active: index == 0,
+            path: None,
+        })
+        .collect();
+    model.appearance_glyph_sets = (0..4)
+        .map(|index| uze_application::application::GlyphSetSummary {
+            id: format!("set-{index}"),
+            active: false,
+        })
+        .collect();
+    model.settle_appearance_selection();
+
+    // One card per line, and more lines than rows.
+    let drawn = |model: &TuiModel| {
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, frame.area(), model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal).join("\n");
+        let cards: Vec<usize> = hits
+            .iter()
+            .filter_map(|(_, hit)| match hit {
+                Hit::AppearanceRow(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        (cards, rows)
+    };
+
+    let last = model.appearance_rows().len() - 1;
+    let (first_page, rows) = drawn(&model);
+    assert!(!first_page.is_empty(), "the catalogue is drawn: {rows}");
+    assert!(
+        !first_page.contains(&last),
+        "the last card is past the first screenful: {rows}"
+    );
+
+    model.appearance_selected = last;
+    let (followed, rows) = drawn(&model);
+    assert!(
+        followed.contains(&last),
+        "and the window follows the selection to it: {rows}"
+    );
+    assert!(
+        !followed.contains(&first_page[0]),
+        "leaving the first behind rather than drawing both: {rows}"
+    );
 }
 
 /// A dialog answered only by a key would be the one place in the product

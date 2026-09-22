@@ -88,7 +88,10 @@ const CODE_MEASURE_FRESH: Duration = Duration::from_secs(30);
 /// never as a state the control got stuck in.
 const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// How long an agent pane must stay quiet before its work reads as
-/// finished. Agent harnesses animate while they work — a spinner, an
+/// finished. Counted in missed beats: at the once-a-second a harness
+/// keeps while it waits, this is five of them, which a phase change
+/// between tools does not reach and a finished turn passes straight
+/// through. Agent harnesses animate while they work — a spinner, an
 /// elapsed-token counter — so a pane that is genuinely busy keeps emitting
 /// damage well inside this window even across a slow tool call, and a pane
 /// that stops emitting has stopped working. Long enough to ride out a
@@ -96,25 +99,40 @@ const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// while the user still cares; unlike the previous 10s window, guessing
 /// low is no longer terminal because renewed output re-enters `Working`
 /// on its own (see [`WorkspaceModel::note_agent_output`]).
-const AGENT_QUIET_AFTER: Duration = Duration::from_secs(3);
+const AGENT_QUIET_AFTER: Duration = Duration::from_secs(5);
 
-/// How much repainting a pane must do before it reads as an agent at
-/// work. A harness running a turn *animates* — a spinner, an elapsed
-/// counter — so it repaints many times a second; an idle one still
-/// repaints, just sporadically: a status line, a rotating hint, a pasted
-/// image being laid out, the full redraw a reattach provokes. Counting
-/// frames inside one short window is what separates the two without
-/// reading vendor-specific pixels. Treating any single repaint as work
-/// is what left merely-open agents spinning forever.
+/// What a pane's repainting has to look like before it reads as an agent
+/// at work: a *beat*, not a rate.
 ///
-/// The frames must also be *spread* across [`AGENT_BUSY_SPAN`], not just
-/// numerous: one repaint whose bytes reach the client in several chunks
-/// arrives as several damage events a few milliseconds apart, and counting
-/// that as animation would put every reattach, resize and pasted image
-/// straight back on the spinner.
-const AGENT_BUSY_WINDOW: Duration = Duration::from_millis(1000);
-const AGENT_BUSY_SPAN: Duration = Duration::from_millis(300);
-const AGENT_BUSY_REPAINTS: usize = 5;
+/// A harness running a turn keeps its own clock on screen — a spinner
+/// while it thinks, an elapsed counter while it waits on a tool — and the
+/// slowest of those ticks about once a second. An idle one repaints too,
+/// but sporadically: a rotating hint, a status line, a pasted image being
+/// laid out. What tells them apart is the *rhythm*, and this used to ask
+/// the wrong question of it: five frames inside one second, which only a
+/// spinner mid-animation can answer. A harness sitting on `· 1m 23s`
+/// while a tool call runs paints once a second, never reaches five, and
+/// read as stopped — with the terminal moving the whole time.
+///
+/// So: enough beats to be a rhythm ([`AGENT_BEATS`]) inside a window
+/// short enough that only a rhythm fits in it
+/// ([`AGENT_BEAT_WINDOW`]), spanning long enough not to be one frame
+/// arriving in pieces ([`AGENT_BEAT_SPAN`]). A once-a-second counter
+/// passes. A hint that turns over every half minute does not, which is
+/// what the old threshold was protecting against — treating any single
+/// repaint as work is what left merely-open agents spinning forever.
+///
+/// Counted, deliberately, rather than measured against the widest gap in
+/// the window. Judging the gaps was tried and is worse: a harness that
+/// pauses two seconds between phases puts one wide pair in the window,
+/// and every call for as long as that pair is retained fails on it — the
+/// status dropped out of `Working` and came back once the pair aged off,
+/// which is a flicker where the old rule at least held still. A count
+/// over a short window says the same thing about cadence and cannot be
+/// poisoned by one hiccup.
+const AGENT_BEAT_WINDOW: Duration = Duration::from_millis(3500);
+const AGENT_BEAT_SPAN: Duration = Duration::from_millis(900);
+const AGENT_BEATS: usize = 3;
 
 /// A pane echoes what the user types or pastes, and that echo is damage
 /// like any other. Damage inside the window that input opens is treated
@@ -128,10 +146,20 @@ const AGENT_PASTE_GRACE: Duration = Duration::from_millis(750);
 
 /// A pane the client just resized — on attach, on a tab switch, on a
 /// terminal resize — redraws because we asked it to, and that redraw is
-/// not the agent working either. Long enough for a harness to repaint a
-/// full screen, short enough that a turn genuinely running through the
-/// resize is only briefly understated.
+/// not the agent working either.
+///
+/// A fixed window could not say how long that takes. Re-laying out a long
+/// conversation runs well past a second, so the window shut in the middle
+/// of the redraw and the rest of it read as a beat: selecting a finished
+/// agent put it straight back on the spinner, which is the one thing
+/// looking at it was supposed to settle. So the window *follows* the
+/// redraw — each frame pushes it out by [`AGENT_SETTLE_QUIET`] — and
+/// [`AGENT_SETTLE_CAP`] is the promise that it ends: past that, a pane
+/// still painting is painting for itself, and a turn running through a
+/// resize is understated once rather than muted for as long as it runs.
 const AGENT_REDRAW_GRACE: Duration = Duration::from_millis(1000);
+const AGENT_SETTLE_QUIET: Duration = Duration::from_millis(400);
+const AGENT_SETTLE_CAP: Duration = Duration::from_millis(2500);
 
 mod input;
 mod render;
@@ -1274,6 +1302,7 @@ pub(crate) fn attach_workspace(
             let identities = &attach.identities;
             terminal.draw(|frame| render(frame, model, identities, &mut hits, &mut metrics))?;
             attach.model.hits = hits;
+            attach.model.marquee = metrics.marquee;
             attach.model.tree_overflow = metrics.tree_overflow;
             attach.model.remembered.tree_scroll = attach
                 .model
@@ -1343,9 +1372,6 @@ pub(super) enum WorkspaceHit {
     /// A space's header row in the sidebar — click selects it (switching
     /// which space's tabs the tab strip and pane show).
     SelectSpace(SpaceId),
-    /// The `⇄` behind a space's name — flips that header between its label
-    /// and its root (see `WorkspaceModel::roots_shown`).
-    ToggleSpaceRoot(SpaceId),
     /// The fold in front of a space's name — minimizes the space to its
     /// header, or opens it again (see `Remembered::collapsed_spaces`).
     ToggleSpaceCollapsed(SpaceId),
@@ -1877,10 +1903,22 @@ impl AgentTabStatus {
     }
 }
 
+/// How long damage in a pane still reads as something the client asked
+/// for rather than the agent working: the deadline now, and the furthest
+/// it may ever be pushed to.
+///
+/// Two instants because the window has to answer two things at once — a
+/// redraw is over when the painting stops, and no redraw runs forever.
+#[derive(Clone, Copy, Debug)]
+struct EchoWindow {
+    until: Instant,
+    cap: Instant,
+}
+
 /// One agent pane's recent repaints and the deadline its busy state runs
 /// to. Both halves are load-bearing: the repaints are the evidence that
-/// the pane is animating rather than blinking once, and the deadline is
-/// what carries "working" across the gaps in that animation.
+/// the pane keeps a beat rather than having blinked once, and the
+/// deadline is what carries "working" across the gaps in that beat.
 #[derive(Debug, Default)]
 struct AgentActivity {
     repaints: VecDeque<Instant>,
@@ -1892,16 +1930,17 @@ impl AgentActivity {
         self.working_until.is_some()
     }
 
-    /// Records one repaint and reports whether the pane has now painted
-    /// often enough, recently enough, to read as an animating agent.
+    /// Records one repaint and reports whether the pane is now keeping a
+    /// beat — the shape a harness paints in while a turn is running (see
+    /// [`AGENT_BEATS`]).
     fn note_repaint(&mut self, now: Instant) -> bool {
         self.forget_repaints_before(now);
         self.repaints.push_back(now);
-        let spread = match self.repaints.front() {
-            Some(oldest) => now.duration_since(*oldest),
-            None => Duration::ZERO,
+        let Some(oldest) = self.repaints.front() else {
+            return false;
         };
-        self.repaints.len() >= AGENT_BUSY_REPAINTS && spread >= AGENT_BUSY_SPAN
+        let spread = now.duration_since(*oldest);
+        self.repaints.len() >= AGENT_BEATS && spread >= AGENT_BEAT_SPAN
     }
 
     /// Drops the deadline once it has passed, reporting whether this call
@@ -1920,7 +1959,7 @@ impl AgentActivity {
         while self
             .repaints
             .front()
-            .is_some_and(|at| now.duration_since(*at) >= AGENT_BUSY_WINDOW)
+            .is_some_and(|at| now.duration_since(*at) >= AGENT_BEAT_WINDOW)
         {
             self.repaints.pop_front();
         }
@@ -2267,13 +2306,6 @@ struct Remembered {
     lost_checkouts: BTreeSet<PaneId>,
     /// Whether the sweep for tasks nobody's session restored has run.
     slots_swept: bool,
-    /// The spaces whose header row shows its root instead of its label —
-    /// flipped by the `⇄` behind the name (see
-    /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
-    /// one line wide and a path is the one thing on it that can be any
-    /// length. Remembered across attaches like any other sidebar
-    /// resolution, so an attach does not flip it back.
-    roots_shown: BTreeSet<SpaceId>,
     /// Which tab each agent was last left on: the agent's own tab, or one
     /// of the shells opened beside it in its strip.
     ///
@@ -2303,8 +2335,14 @@ struct WorkspaceModel {
     /// Until when each pane's own repaints are the echo of input we
     /// forwarded to it, rather than the agent working (see
     /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
-    input_echo_until: BTreeMap<PaneId, Instant>,
+    input_echo_until: BTreeMap<PaneId, EchoWindow>,
     hits: Vec<(Rect, WorkspaceHit)>,
+    /// Whether the last frame drew a caption sliding under the pointer
+    /// (see `render::FrameMetrics::marquee`). The clock turns for it the
+    /// way it turns for a spinner — without this the caption moved one
+    /// column and then stopped, because nothing else asked for the next
+    /// frame.
+    marquee: bool,
     /// The piece of chrome the pointer is over, read from the same hit
     /// list a click reads. Only ever set while no modal is open: what
     /// sits under an overlay is not what the pointer is on.
@@ -3017,7 +3055,14 @@ impl WorkspaceModel {
     /// user's own typing or pasting is ignored, as is damage in a shell
     /// pane.
     fn note_agent_output(&mut self, pane: PaneId, identities: &[AgentIdentity], now: Instant) {
-        if !self.is_agent_pane(pane, identities) || self.is_echoing_input(pane, now) {
+        if !self.is_agent_pane(pane, identities) {
+            return;
+        }
+        if self.is_echoing_input(pane, now) {
+            // Still settling from what we asked for: hold the window open
+            // around this frame rather than letting the clock run out
+            // underneath the redraw (see [`AGENT_SETTLE_QUIET`]).
+            self.extend_echo_window(pane, now);
             return;
         }
         let activity = self.remembered.agent_activity.entry(pane).or_default();
@@ -3037,7 +3082,17 @@ impl WorkspaceModel {
     fn is_echoing_input(&self, pane: PaneId, now: Instant) -> bool {
         self.input_echo_until
             .get(&pane)
-            .is_some_and(|until| now < *until)
+            .is_some_and(|window| now < window.until)
+    }
+
+    /// Holds an open window around a frame that arrived inside it: the
+    /// redraw is not over while it is still painting. Never past the cap
+    /// the window was opened with, so a pane that simply keeps painting
+    /// stops being excused.
+    fn extend_echo_window(&mut self, pane: PaneId, now: Instant) {
+        if let Some(window) = self.input_echo_until.get_mut(&pane) {
+            window.until = (now + AGENT_SETTLE_QUIET).min(window.cap).max(window.until);
+        }
     }
 
     /// Opens the window in which `pane`'s own repaints read as the echo of
@@ -3132,7 +3187,13 @@ impl WorkspaceModel {
     }
 
     fn open_echo_window(&mut self, pane: PaneId, now: Instant, grace: Duration) {
-        self.input_echo_until.insert(pane, now + grace);
+        self.input_echo_until.insert(
+            pane,
+            EchoWindow {
+                until: now + grace,
+                cap: now + grace.max(AGENT_SETTLE_CAP),
+            },
+        );
     }
 
     fn is_agent_pane(&self, pane: PaneId, identities: &[AgentIdentity]) -> bool {
@@ -3163,7 +3224,7 @@ impl WorkspaceModel {
         // A closed echo window, and a pane holding neither a deadline nor
         // recent repaints, have nothing left to say about themselves —
         // dropping them keeps this tick's early exit reachable.
-        self.input_echo_until.retain(|_, until| now < *until);
+        self.input_echo_until.retain(|_, window| now < window.until);
         self.remembered
             .agent_activity
             .retain(|_, activity| activity.is_working() || !activity.repaints.is_empty());
@@ -4090,7 +4151,7 @@ fn space_own_tab(space: &Space, identities: &[AgentIdentity]) -> Option<TabId> {
 /// Where a space currently is: the directory its own shell stands in, and
 /// the root it was opened at while it has none. A shell is a person's way
 /// of moving around, so a `cd` in it moves the space — what its agents are
-/// placed from, what its caption names, and what its `⇄` shows — rather
+/// placed from and what its caption names — rather
 /// than leaving the space pinned to the directory it was created in.
 pub(super) fn space_cwd(space: &Space, identities: &[AgentIdentity]) -> PathBuf {
     space_own_tab(space, identities)
@@ -4660,18 +4721,9 @@ fn toggle_space_collapsed(model: &mut WorkspaceModel, space: SpaceId) {
     model.dirty = true;
 }
 
-/// Flips one space's header between its label and its root. Purely local
-/// state, no server round trip to eventually mark the model dirty — same
-/// as `OpenStatusCatalog`.
-fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
-    if !model.remembered.roots_shown.remove(&space) {
-        model.remembered.roots_shown.insert(space);
-    }
-    model.dirty = true;
-}
-
 /// Folds the sidebar's timeline section to its header, or opens it back
-/// up. Local state, same as `toggle_space_root`.
+/// up. Purely local state, no server round trip to eventually mark the
+/// model dirty — same as `OpenStatusCatalog`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
     // One section open at a time. They stack at the foot of the same

@@ -12,8 +12,8 @@ about: |
   then accumulated shells — and, because a slot is only free when nobody is
   standing in it, left a live pane inside a checkout that could never be
   given to the next agent. The space also took the dead agent's directory as
-  its own, which is where its caption, its `⇄` and the next placement all
-  read from.
+  its own, which is where its caption and the next placement both read
+  from.
 
   So: the agent's shells go with it, the space's own are untouched, the task
   ends, and the slot is free — *because* nothing is left in it. That last
@@ -83,8 +83,9 @@ scenes:
         in: sidebar
         say: confirm close
         # Nothing on screen appears when a row goes, so the gate is no
-        # agent item being left on the tree.
-        expect: '\A(?![\s\S]*├─)'
+        # agent item being left on the tree — no row led by the trunk of
+        # the isolated group (see `01-agents-and-slots`).
+        expect: '(?m)\A(?![\s\S]*^[▏ ][┌├└─])'
         expect_timeout: 25
         pause: 3.0
     then:
@@ -119,7 +120,7 @@ scenes:
         # number, so this one is `agent 1` again — a string the screen was
         # showing a moment ago. The tree it left had no items at all, so the
         # first one back cannot be a stale frame.
-        expect: '├─'
+        expect: '(?m)^[▏ ][┌├└─]'
         expect_timeout: 90
         pause: 2.0
     then:

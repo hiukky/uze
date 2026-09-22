@@ -33,15 +33,16 @@ mod workspace_tests {
 
     use super::WorkspaceHit;
     use super::{
-        AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
-        AgentTabStatus, AgentView, Attach, CommitDetailPopup, CommitDetailResolution,
-        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer,
-        GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
-        ScrollDirection, TabDragGroup, UpstreamSync, Viewport, WorkResolution, WorkStateView,
-        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
-        answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
-        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_architect, open_code, open_commit_detail, pane_relative, pending_tab_drop,
+        AGENT_BEATS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AGENT_QUIET_AFTER, AgentGroup,
+        AgentIdentity, AgentTabStatus, AgentView, Attach, CommitDetailPopup,
+        CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
+        Flow, GitAnswer, GitBadge, GitResolution, PendingDrop, PlacementResolution,
+        PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup, UpstreamSync, Viewport,
+        WorkResolution, WorkStateView, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
+        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
+        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
+        next_shell_label, open_architect, open_code, open_commit_detail, pane_relative,
+        pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -148,15 +149,15 @@ mod workspace_tests {
         ClientEvent::Damage(damage)
     }
 
-    /// Paints `pane` the way a harness animating a running turn does:
-    /// several frames, spread over enough time to be animation rather than
+    /// Paints `pane` the way a harness keeps time while a turn runs: a few
+    /// frames, spread over enough of a stretch to be a beat rather than
     /// one repaint whose bytes reached the client in pieces.
     fn animate(model: &mut WorkspaceModel, pane: PaneId, start: Instant) {
-        for step in 0..=AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..=AGENT_BEATS as u64 {
             model.note_agent_output(
                 pane,
                 &identities_fixture(),
-                start + Duration::from_millis(120 * step),
+                start + Duration::from_millis(500 * step),
             );
         }
     }
@@ -543,7 +544,10 @@ mod workspace_tests {
     /// loop — and returns the matching layout, the pair the drag-reorder
     /// helpers need to classify a hit's rect.
     fn full_frame(model: &mut WorkspaceModel) -> WorkspaceLayout {
-        let area = Rect::new(0, 0, 80, 24);
+        full_frame_at(model, Rect::new(0, 0, 80, 24))
+    }
+
+    fn full_frame_at(model: &mut WorkspaceModel, area: Rect) -> WorkspaceLayout {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         let mut hits = Vec::new();
         let mut metrics = render::FrameMetrics::default();
@@ -2410,7 +2414,7 @@ mod workspace_tests {
         let branch = theme::glyph(theme::Symbol::TreeBranch);
         assert!(
             !rows.iter().any(|row| row.contains(&branch)),
-            "flat: nothing branches off the gutter: {rows:?}"
+            "nothing branches off the rail, in either group: {rows:?}"
         );
     }
 
@@ -2468,7 +2472,8 @@ mod workspace_tests {
         let model = agents_in_the_root_session();
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
         let agents = agent_rows(&hits);
-        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        use crate::ui::theme::Symbol;
+        let idle = theme::glyph(Symbol::StatusIdle);
         let selected = theme::glyph(crate::ui::theme::Symbol::StatusSelected);
         assert!(rows[agents[0] as usize].contains(&idle), "{rows:?}");
         assert!(rows[agents[2] as usize].contains(&selected), "{rows:?}");
@@ -2507,8 +2512,7 @@ mod workspace_tests {
         let model = model_of(session);
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
         assert!(
-            rows.iter()
-                .any(|row| row.trim_matches(|c: char| c == '│' || c == ' ') == "/repo"),
+            rows.iter().any(|row| without_chrome(row) == "/repo"),
             "{rows:?}"
         );
         assert!(
@@ -2617,6 +2621,107 @@ mod workspace_tests {
         model
     }
 
+    /// A space whose agents all work in checkouts of their own, so the
+    /// group's trunk has to carry through one row and close on the next.
+    fn a_space_of_isolated_agents() -> WorkspaceModel {
+        let mut model = agents_in_the_root_session();
+        let mut tasks = Vec::new();
+        for id in ["a1", "a2"] {
+            let checkout = format!("/repo/.worktrees/{id}");
+            let stamped = model.session.as_mut().unwrap().workspace.spaces[0]
+                .tabs
+                .iter_mut()
+                .find(|tab| {
+                    tab.env.iter().any(|(key, value)| {
+                        key == uze_terminal::launch::AGENT_IDENTITY_VARIABLE && value == id
+                    })
+                })
+                .expect("the agent its launch stamped");
+            stamped.pane.cwd = PathBuf::from(&checkout);
+            let mut task = task_in(&checkout, id, WorkStateView::Running, 0);
+            task.id = id.into();
+            task.branch = format!("agent/{id}");
+            tasks.push(task);
+        }
+        model.remembered.tasks.insert(PathBuf::from("/repo"), tasks);
+        model
+    }
+
+    /// The isolated group hangs off a trunk of its own, one column in
+    /// from the space's gutter: a corner beside each agent's name and the
+    /// line running on through the caption under it. Both ends close — a
+    /// `├` carries a stem upward as well, so at the top of the group it
+    /// pointed at the blank row above and read as a line broken off
+    /// rather than one starting.
+    #[test]
+    fn the_isolated_group_hangs_off_a_trunk_of_its_own() {
+        let model = a_space_of_isolated_agents();
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
+        let at = agent_rows(&hits);
+        assert_eq!(at.len(), 4, "two rows per agent: {rows:?}");
+        let column = gutter_column(&hits) + 1;
+        let glyph = |row: u16| {
+            rows[row as usize]
+                .chars()
+                .nth(column as usize)
+                .expect("the trunk column is drawn")
+                .to_string()
+        };
+        let stem = |symbol| {
+            theme::glyph(symbol)
+                .chars()
+                .next()
+                .expect("the glyph")
+                .to_string()
+        };
+        use crate::ui::theme::Symbol;
+        assert_eq!(glyph(at[0]), stem(Symbol::TreeFirst), "opens: {rows:?}");
+        assert_eq!(glyph(at[1]), stem(Symbol::TreeVertical), "{rows:?}");
+        assert_eq!(glyph(at[2]), stem(Symbol::TreeLast), "closes: {rows:?}");
+        assert_eq!(glyph(at[3]), " ", "the group closed above: {rows:?}");
+        assert_ne!(
+            stem(Symbol::TreeFirst),
+            stem(Symbol::TreeBranch),
+            "the opening corner is not the carrying one: {rows:?}"
+        );
+
+        // A group of one has nothing for a line to join, so it gets the
+        // arm to its row and no trunk at all.
+        let lone = sidebar(&a_space_with_both_groups(), &identities_in_the_root());
+        let at = agent_rows(&lone.hits);
+        let column = (gutter_column(&lone.hits) + 1) as usize;
+        let cell = |row: u16| {
+            lone.rows[row as usize]
+                .chars()
+                .nth(column)
+                .expect("the trunk column is drawn")
+                .to_string()
+        };
+        assert_eq!(cell(at[2]), stem(Symbol::TreeDivider), "{:?}", lone.rows);
+        assert_eq!(cell(at[3]), " ", "{:?}", lone.rows);
+
+        // An agent in the space's own root spends no column on a trunk:
+        // that column is where its own status glyph stands.
+        let root = sidebar(&agents_in_the_root_session(), &identities_in_the_root());
+        let at = agent_rows(&root.hits);
+        let column = (gutter_column(&root.hits) + 1) as usize;
+        let marks = [
+            theme::glyph(Symbol::StatusIdle),
+            theme::glyph(Symbol::StatusSelected),
+        ];
+        assert!(
+            marks.contains(
+                &root.rows[at[0] as usize]
+                    .chars()
+                    .nth(column)
+                    .expect("the column is drawn")
+                    .to_string()
+            ),
+            "the root's own agent stands there itself: {:?}",
+            root.rows
+        );
+    }
+
     #[test]
     fn the_two_groups_are_drawn_in_order_with_one_blank_row_between_them() {
         let model = a_space_with_both_groups();
@@ -2639,9 +2744,7 @@ mod workspace_tests {
             "exactly one row stands between the groups: {rows:?}"
         );
         assert!(
-            rows[gap as usize]
-                .trim_matches(|character: char| character == '│' || character == ' ')
-                .is_empty(),
+            without_chrome(&rows[gap as usize]).is_empty(),
             "and it says nothing: {rows:?}"
         );
     }
@@ -2661,45 +2764,33 @@ mod workspace_tests {
 
     /// Isolating an agent moves its row out of the root's group and into
     /// the other one, which is how the operator sees the action happened
-    /// — the same tab, in a different place, in a different hue.
+    /// — the same tab, in a different place, under a separator that was
+    /// not there before.
     #[test]
     fn isolating_an_agent_moves_its_row_into_the_other_group() {
+        let row_of = |hits: &[(Rect, WorkspaceHit)]| {
+            hits.iter()
+                .find_map(|(rect, hit)| match hit {
+                    WorkspaceHit::SelectTab(tab) if *tab == TabId(3) => Some(rect.y),
+                    _ => None,
+                })
+                .expect("the second agent's row")
+        };
         let before = agents_in_the_root_session();
-        let Sidebar { hits, buffer, .. } = sidebar(&before, &identities_in_the_root());
-        let second = hits
-            .iter()
-            .find_map(|(rect, hit)| match hit {
-                WorkspaceHit::SelectTab(tab) if *tab == TabId(3) => Some(rect.y),
-                _ => None,
-            })
-            .expect("the second agent's row");
-        let column = gutter_column(&hits);
-        assert_eq!(
-            buffer[(column, second)].symbol(),
-            theme::glyph(crate::ui::theme::Symbol::TreeVertical),
-            "in the root it sits beside the trunk"
+        let Sidebar { rows, hits, .. } = sidebar(&before, &identities_in_the_root());
+        let second = row_of(&hits);
+        assert!(
+            !without_chrome(&rows[second as usize - 1]).is_empty(),
+            "in the root it follows the agent above it: {rows:?}"
         );
 
         let after = a_space_with_both_groups();
-        let Sidebar {
-            rows, hits, buffer, ..
-        } = sidebar(&after, &identities_in_the_root());
-        let moved = hits
-            .iter()
-            .find_map(|(rect, hit)| match hit {
-                WorkspaceHit::SelectTab(tab) if *tab == TabId(3) => Some(rect.y),
-                _ => None,
-            })
-            .expect("the same tab, still drawn");
+        let Sidebar { rows, hits, .. } = sidebar(&after, &identities_in_the_root());
+        let moved = row_of(&hits);
         assert!(moved > second, "it moved down past the separator: {rows:?}");
-        assert_eq!(
-            buffer[(gutter_column(&hits), moved)].symbol(),
-            theme::glyph(crate::ui::theme::Symbol::TreeBranch)
-                .chars()
-                .next()
-                .expect("the branch glyph")
-                .to_string(),
-            "and now branches off the trunk: {rows:?}"
+        assert!(
+            without_chrome(&rows[moved as usize - 1]).is_empty(),
+            "and now stands in the other collection: {rows:?}"
         );
     }
 
@@ -2762,12 +2853,9 @@ mod workspace_tests {
             None,
         ));
 
-        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let Sidebar { rows, .. } = sidebar(&model, &identities_fixture());
         assert!(
-            !hits
-                .iter()
-                .any(|(_, hit)| matches!(hit, WorkspaceHit::ToggleSpaceRoot(_))
-                    && rows.iter().any(|row| row.contains("worktree"))),
+            !rows.iter().any(|row| row.contains("worktree")),
             "no kind to choose: {rows:#?}"
         );
         assert_eq!(
@@ -2960,9 +3048,9 @@ mod workspace_tests {
         );
     }
 
-    /// The task mark stands at the row's right edge, in the column the
-    /// space header's `⇄` does, and the row no longer spends that edge on
-    /// naming the harness.
+    /// The task mark stands at the row's right edge, the one trailing
+    /// column every row in the sidebar keeps, and the row no longer spends
+    /// that edge on naming the harness.
     #[test]
     fn a_task_mark_is_pinned_to_the_sidebars_right_column() {
         let model = agent_with_task(WorkStateView::Ready, 1);
@@ -2974,13 +3062,17 @@ mod workspace_tests {
                 _ => None,
             })
             .expect("the task is marked");
-        let toggle = hits
+        let row = hits
             .iter()
             .find_map(|(rect, hit)| {
-                matches!(hit, WorkspaceHit::ToggleSpaceRoot(_)).then_some(*rect)
+                (matches!(hit, WorkspaceHit::SelectTab(_)) && rect.y == mark.y).then_some(*rect)
             })
-            .expect("the space header has its toggle");
-        assert_eq!(mark.x, toggle.x, "one right-hand column: {rows:#?}");
+            .expect("the mark sits on an agent row");
+        assert_eq!(
+            mark.x,
+            row.right() - 1 - crate::ui::widget::TRAILING_PAD,
+            "one right-hand column: {rows:#?}"
+        );
         let alias = crate::ui::widget::text::small_caps("agent");
         // Past the header block — its label and its count name the column,
         // not a harness.
@@ -2993,11 +3085,10 @@ mod workspace_tests {
     /// An agent's caption says what runs there, and never the branch: a
     /// task's label is derived from its branch, so the caption used to
     /// repeat the name above it — `agent/t1` under `t1` for work nobody
-    /// named, `fix/thing` under `thing` for work somebody did. The
-    /// space's `⇄` is the header's alone and does not touch it.
+    /// named, `fix/thing` under `thing` for work somebody did.
     #[test]
     fn an_agents_caption_names_the_harness_running_it_never_its_branch() {
-        let mut model = agent_with_task(WorkStateView::Running, 0);
+        let model = agent_with_task(WorkStateView::Running, 0);
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let caption = agent_rows(&hits)[1] as usize;
         assert!(
@@ -3008,21 +3099,15 @@ mod workspace_tests {
             !rows.iter().any(|row| row.contains("agent/t1")),
             "and the branch is nowhere in the column: {rows:#?}"
         );
-
-        let space = model.session.as_ref().unwrap().workspace.selected_space;
-        model.remembered.roots_shown.insert(space);
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            rows[caption].contains("agent") && !rows[caption].contains("agent/t1"),
-            "which the header's own toggle leaves alone: {rows:#?}"
-        );
     }
 
-    /// A space header says one thing at a time — its name, or where its
-    /// work lives — and the `⇄` behind the text is the one way between
-    /// them: a click on the name itself still selects the space.
+    /// A space header says what the space is called, and the fold beside
+    /// it is what asks where that is: minimized, the caption under the
+    /// name says the directory, pinned to the row's right edge like every
+    /// other caption in the column. The whole row still selects the space
+    /// — the header carries no control of its own but the fold.
     #[test]
-    fn the_root_toggle_flips_a_space_header_between_label_and_root() {
+    fn the_fold_is_what_asks_a_space_where_it_is() {
         let mut model = agent_session_in("/repo");
         // A name the root does not contain, so each reads as itself alone.
         let label = "workbench".to_owned();
@@ -3032,42 +3117,39 @@ mod workspace_tests {
             session.workspace.spaces[0].label = label.clone();
             id
         };
-        let header_row = |rows: &[String]| {
-            rows.iter()
-                .find(|row| row.contains(&label) || row.contains("/repo"))
-                .cloned()
-                .expect("the space header is drawn")
-        };
 
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
-        let row = header_row(&rows);
-        assert!(row.contains(&label) && !row.contains("/repo"), "{row}");
-        let toggles: Vec<Rect> = hits
-            .iter()
-            .filter_map(|(rect, hit)| match hit {
-                WorkspaceHit::ToggleSpaceRoot(id) if *id == space => Some(*rect),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(toggles.len(), 1, "one toggle per header: {rows:?}");
-        let toggle = toggles[0];
-        assert_eq!((toggle.width, toggle.height), (1, 1));
-        let glyph = rows[toggle.y as usize]
-            .chars()
-            .nth(toggle.x as usize)
-            .expect("the toggle is inside the row");
-        assert_eq!(glyph, '⇄', "the hit is the toggle glyph: {rows:?}");
+        let header = space_header(&hits, space);
+        let open = rows[header.y as usize].clone();
+        assert!(open.contains(&label) && !open.contains("/repo"), "{open}");
+        assert!(
+            !rows.iter().any(|row| row.contains('\u{21c4}')),
+            "and nothing on it offers to flip it: {rows:?}"
+        );
         assert!(
             hits.iter().any(|(rect, hit)| {
                 matches!(hit, WorkspaceHit::SelectSpace(id) if *id == space) && rect.width > 1
             }),
-            "the row itself still selects the space"
+            "the row itself selects the space"
         );
 
-        model.remembered.roots_shown.insert(space);
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let row = header_row(&rows);
-        assert!(row.contains("/repo") && !row.contains(&label), "{row}");
+        toggle_space_collapsed(&mut model, space);
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let header = space_header(&hits, space);
+        let caption = rows[header.y as usize + 1].clone();
+        let at = caption.find("/repo");
+        assert!(at.is_some(), "minimized, it says where: {caption}");
+        // Against the row's trailing column, the one every caption in the
+        // sidebar ends in, whatever the path's length.
+        // By column, not by byte: the gutter ahead of it is three bytes
+        // wide and one column.
+        let at = at.expect("asserted above");
+        let end = (caption[..at].chars().count() + "/repo".chars().count()) as u16;
+        assert_eq!(
+            end,
+            header.right() - crate::ui::widget::TRAILING_PAD,
+            "pinned to the right edge: {rows:?}"
+        );
     }
 
     /// A tab is bound to the task its launch named, once an evaluation
@@ -4656,10 +4738,17 @@ mod workspace_tests {
 
     /// The header's trailing control opens the modal; a click inside it
     /// is the modal's own, a click beside it closes it.
+    ///
+    /// On a terminal with room for a margin. Below `management::ROOMY_*`
+    /// the modal takes the whole frame and there is no beside to click —
+    /// the mark on its title and the chord still close it, which is the
+    /// trade the fill is: a small screen spends its columns on the
+    /// screens in front rather than on proving the workspace is behind.
     #[test]
     fn the_header_control_opens_the_modal_and_a_click_beside_it_closes_it() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-manage-click"));
-        let mut driven = driven(agent_with_task(WorkStateView::Ready, 1), &home);
+        let mut driven =
+            driven(agent_with_task(WorkStateView::Ready, 1), &home).on_a_roomy_terminal();
         driven.frame();
         let more = driven
             .attach
@@ -5264,6 +5353,17 @@ mod workspace_tests {
         }
     }
 
+    /// A sidebar row with the column's own chrome taken off it: the rail
+    /// beside the selected space, the divider down the right edge, and
+    /// the padding between. What is left is what the row *says*.
+    fn without_chrome(row: &str) -> &str {
+        let rail = theme::glyph(crate::ui::theme::Symbol::BarThin);
+        let divider = theme::glyph(crate::ui::theme::Symbol::TreeColumnDivider);
+        row.trim_matches(|character: char| {
+            character == ' ' || rail.contains(character) || divider.contains(character)
+        })
+    }
+
     /// The rows whose gutter is lit — drawn in the hue of the space's own
     /// kind, in the sidebar's leading column `column`, which every space's
     /// gutter runs down.
@@ -5387,13 +5487,13 @@ mod workspace_tests {
         );
     }
 
-    /// The operator's own tree is where a pull or a push is due, so an
-    /// agent there carries what each would move at the right edge of its
-    /// caption — an arrow for the direction and the count in subscript,
+    /// The operator's own tree is where a pull or a push is due, so the
+    /// space standing in it carries what each would move at the right
+    /// edge of its header — an arrow for the direction and the count,
     /// red for what is to pull and green for what is to push — and only
     /// the halves that have a count.
     #[test]
-    fn an_agent_outside_any_slot_is_captioned_with_what_a_pull_and_a_push_would_move() {
+    fn a_space_outside_any_slot_says_what_a_pull_and_a_push_would_move() {
         let mut model = agent_session_in("/repo");
         model
             .remembered
@@ -5403,60 +5503,90 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows
-            .iter()
-            .position(|row| row.contains("Agent"))
-            .expect("the agent's row");
-        let caption = &rows[agent + 1];
+        let header = |model: &WorkspaceModel| {
+            let Sidebar {
+                rows, hits, buffer, ..
+            } = sidebar(model, &identities_fixture());
+            let at = space_header(&hits, SpaceId(1)).y as usize;
+            let hue = |text: &str| {
+                rows[at].find(text).map(|offset| {
+                    let column = rows[at][..offset].chars().count() as u16;
+                    buffer[(column, at as u16)].fg
+                })
+            };
+            (
+                at,
+                rows.clone(),
+                rows[at].clone(),
+                hue("\u{21e3}"),
+                hue("\u{21e1}"),
+            )
+        };
+
+        let (at, rows, row, pull, push) = header(&model);
         assert!(
-            caption.contains("agent"),
-            "the harness captions the agent: {caption:?}"
+            row.ends_with("\u{21e3}1 \u{21e1}12 \u{2502}"),
+            "the arrows sit at the right edge, one pad off the divider: {row:?}"
         );
+        assert_eq!(pull, Some(theme::color(Token::StateDanger)));
+        assert_eq!(push, Some(theme::color(Token::StateSuccess)));
+        // And no other row says it.
         assert!(
-            caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
-            "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "agent"),
-            theme::color(Token::StateWarning)
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "\u{21e3}"),
-            theme::color(Token::StateDanger)
-        );
-        assert_eq!(
-            caption_color_of(&model, "Agent", "\u{21e1}"),
-            theme::color(Token::StateSuccess)
+            rows.iter()
+                .enumerate()
+                .filter(|(index, _)| *index != at)
+                .all(|(_, row)| !row.contains('\u{21e3}') && !row.contains('\u{21e1}')),
+            "the header is the only row that carries it: {rows:?}"
         );
 
         model
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
-        let caption = &rows[agent + 1];
+        let (_, _, row, ..) = header(&model);
         assert!(
-            !caption.contains('\u{21e3}') && caption.ends_with("\u{21e1}\u{2083} \u{2502}"),
-            "nothing to pull, three to push: {caption:?}"
+            !row.contains('\u{21e3}') && row.ends_with("\u{21e1}3 \u{2502}"),
+            "nothing to pull, three to push: {row:?}"
         );
 
         model
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync::default());
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        let agent = rows.iter().position(|row| row.contains("Agent")).unwrap();
-        let caption = &rows[agent + 1];
+        let (_, _, row, ..) = header(&model);
         assert!(
-            !caption.contains('\u{21e1}') && !caption.contains('\u{21e3}'),
-            "in sync says nothing: {caption:?}"
+            !row.contains('\u{21e1}') && !row.contains('\u{21e3}'),
+            "in sync says nothing: {row:?}"
+        );
+    }
+
+    /// It is read from the checkout, not from the agent, so a space's
+    /// agents all stand in the same one and used to print the same two
+    /// numbers each — four in a root is an ordinary day. Said once, on the
+    /// header of the space whose checkout it is about.
+    #[test]
+    fn what_a_pull_and_a_push_would_move_is_said_once_per_checkout() {
+        let mut model = agents_in_the_root_session();
+        model
+            .remembered
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_in_the_root());
+        assert_eq!(
+            agent_rows(&hits).len(),
+            4,
+            "two agents, two rows each: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.contains('\u{21e1}')).count(),
+            1,
+            "one row carries it, whatever the agents number: {rows:?}"
         );
     }
 
     /// Inside a slot the remote is the target's business, not the task's:
-    /// whatever the primary's sync reads, a slot's caption never shows it.
+    /// an agent standing in one carries no arrow of its own, whatever the
+    /// space it hangs under reads.
     #[test]
     fn a_slot_never_shows_the_primary_sync() {
         let mut model = agent_session_in("/repo/.worktrees/ai");
@@ -5464,13 +5594,14 @@ mod workspace_tests {
             .remembered
             .upstream_syncs
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 2, push: 2 });
-        let rows = sidebar(&model, &identities_fixture()).rows;
-        assert!(
-            !rows
-                .iter()
-                .any(|row| row.contains('\u{21e1}') || row.contains('\u{21e3}')),
-            "no arrow in a slot: {rows:?}"
-        );
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        for row in agent_rows(&hits) {
+            let row = &rows[row as usize];
+            assert!(
+                !row.contains('\u{21e1}') && !row.contains('\u{21e3}'),
+                "no arrow on a slot's own rows: {row:?}"
+            );
+        }
     }
 
     /// A shell opened beside an agent is part of that agent's context:
@@ -5805,9 +5936,15 @@ mod workspace_tests {
             .iter()
             .find(|row| row.contains(&cursor))
             .expect("the prompt row is drawn");
+        // The rail leading the row, stripped exactly once: it is the same
+        // glyph the caret is drawn with (both are `bar.thin`, told apart
+        // by hue), so trimming every leading one would take the caret
+        // this asserts on with it.
+        let rail = theme::glyph(crate::ui::theme::Symbol::BarThin);
         let typed = prompt
             .trim_start()
-            .trim_start_matches(&theme::glyph(crate::ui::theme::Symbol::TreeVertical))
+            .strip_prefix(rail.as_str())
+            .unwrap_or(prompt)
             .trim_start();
         assert!(
             typed.starts_with(&cursor),
@@ -5967,7 +6104,11 @@ mod workspace_tests {
             AgentTabStatus::Working
         );
 
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert!(!workspace_has_active_agent_operation(
             &model,
             &identities_fixture()
@@ -6008,7 +6149,7 @@ mod workspace_tests {
         // Frame count alone would read that burst as a running turn.
         let mut model = agent_session();
         let start = Instant::now();
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             model.note_agent_output(
                 PaneId(1),
                 &identities_fixture(),
@@ -6049,7 +6190,7 @@ mod workspace_tests {
         // comparable baseline to diff against. Counting those made every
         // open agent spin for a few seconds each time the workspace opened.
         let mut model = agent_session();
-        for _ in 0..AGENT_BUSY_REPAINTS {
+        for _ in 0..AGENT_BEATS {
             model.apply(repainted_whole_grid(PaneId(1)), &identities_fixture());
         }
         assert_eq!(
@@ -6066,7 +6207,11 @@ mod workspace_tests {
         // the turn showing as finished.
         let mut model = agent_session();
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
@@ -6079,13 +6224,173 @@ mod workspace_tests {
         );
     }
 
+    /// Looking at a finished agent must not put it back on the spinner.
+    ///
+    /// Selecting a tab resizes its pane, and the harness answers by
+    /// re-laying out its whole conversation — frames as regular as any
+    /// beat, for as long as that takes. The window that excuses them used
+    /// to be a flat second, so a long conversation painted straight
+    /// through it and the remainder read as a turn starting: `✓` became a
+    /// spinner the moment it was looked at, which is the one gesture that
+    /// was supposed to settle it.
+    #[test]
+    fn the_redraw_that_selecting_an_agent_provokes_is_not_a_turn_starting() {
+        let mut model = agent_session();
+        model.remembered.completed_agent_panes.insert(PaneId(1));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Completed
+        );
+
+        // Selected: the client asks for a redraw, and the harness spends
+        // two seconds re-laying out — well past the flat window.
+        model.note_pane_redraw(PaneId(1));
+        let selected = Instant::now();
+        for step in 0..20u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                selected + Duration::from_millis(100 * step),
+            );
+        }
+        assert_ne!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "settling after a resize is not a turn"
+        );
+
+        // And the promise that the excuse ends: a pane still painting
+        // past the cap is painting for itself.
+        for step in 0..20u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                selected + Duration::from_millis(3000 + 100 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "a turn that really starts still reaches the spinner"
+        );
+    }
+
+    /// A harness waiting on a tool call is still working, and it says so
+    /// the only way a terminal can: its elapsed counter ticks. Once a
+    /// second is the slowest any of them keep time, and it is the case
+    /// this used to miss — the old rule wanted five frames inside one
+    /// second, which only a spinner mid-animation can give, so an agent
+    /// sitting on `· 1m 23s` through a long tool call read as stopped
+    /// with the terminal moving the whole time.
+    #[test]
+    fn a_counter_ticking_once_a_second_is_the_agent_working() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for second in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_secs(second),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working,
+            "a beat a second is a turn running"
+        );
+    }
+
+    /// Not every harness keeps time at exactly a second. One that ticks
+    /// every second and a half is keeping time just as plainly, and the
+    /// rule has to read it as such.
+    ///
+    /// This is the case that decides how cadence is judged. The rule this
+    /// replaced measured the *widest gap* in the window against a
+    /// threshold, so a beat a shade slower than that threshold never
+    /// entered `Working` at all — no matter how many of them arrived, or
+    /// how regular they were. Counting them over a short window asks the
+    /// same question without having to guess a tempo.
+    #[test]
+    fn a_beat_slower_than_a_second_is_still_a_running_turn() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_millis(1600 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), true),
+            AgentTabStatus::Working,
+            "a steady beat is a turn, whatever its tempo"
+        );
+    }
+
+    /// A beat that stutters is still a beat. A harness changing phase —
+    /// one tool ending, the next starting — goes quiet for a second or
+    /// two and picks the count back up, and the status must not blink out
+    /// and back over it.
+    ///
+    /// The rule this replaced judged the *widest gap* in the window, so
+    /// one two-second pause disqualified every call until that pair aged
+    /// out of it: `Working` dropped to the plain selected dot and returned
+    /// seconds later, with the agent running and its timer on screen the
+    /// whole time. Counting beats over a short window says the same thing
+    /// about cadence and cannot be poisoned by one hiccup.
+    #[test]
+    fn a_beat_that_stutters_stays_a_running_turn() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        // A second apart, then a two-second pause, then a second apart
+        // again. The first two beats are not yet a rhythm — one frame
+        // never is, which is the whole point of the threshold — so the
+        // claim starts once it is established and holds from there.
+        let beats = [0u64, 1000, 2000, 4000, 5000, 6000, 7000];
+        for beat in beats {
+            let at = start + Duration::from_millis(beat);
+            model.note_agent_output(PaneId(1), &identities_fixture(), at);
+            model.expire_agent_activity(at);
+            if beat < 2000 {
+                continue;
+            }
+            assert_eq!(
+                model.agent_tab_status(PaneId(1), true),
+                AgentTabStatus::Working,
+                "at {beat}ms the turn is still running"
+            );
+        }
+    }
+
+    /// And the thing the old threshold was protecting: a pane that paints
+    /// now and then is not keeping time. A rotating hint beside a banner
+    /// printed half a minute earlier is two repaints, not a rhythm.
+    #[test]
+    fn a_pane_that_paints_now_and_then_is_not_the_agent_working() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_secs(30 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle,
+            "sporadic painting is an agent sitting open"
+        );
+    }
+
     #[test]
     fn the_echo_of_a_prompt_being_typed_is_not_the_agent_working() {
         // Every keystroke opens its own grace window, so a prompt typed
         // steadily paints as many frames, as spread out, as a running turn.
         let mut model = agent_session();
         let start = Instant::now();
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
             model.note_agent_output(
@@ -6123,7 +6428,7 @@ mod workspace_tests {
         let mut model = agent_session();
         let start = Instant::now();
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
-        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+        for step in 0..4 * AGENT_BEATS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
             model.note_agent_output(
@@ -6133,7 +6438,7 @@ mod workspace_tests {
             );
         }
 
-        assert!(model.expire_agent_activity(start + Duration::from_secs(4)));
+        assert!(model.expire_agent_activity(start + (AGENT_QUIET_AFTER + Duration::from_secs(2))));
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
@@ -6181,7 +6486,11 @@ mod workspace_tests {
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Completed
@@ -6214,7 +6523,11 @@ mod workspace_tests {
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Completed
@@ -6223,7 +6536,11 @@ mod workspace_tests {
         if let Some(session) = model.session.as_mut() {
             session.workspace.spaces[0].selected_tab = agent_tab;
         }
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Idle
@@ -6763,13 +7080,27 @@ mod workspace_tests {
         /// socket stops answering, which is how this client learns the
         /// terminal server is gone.
         events_sender: Option<std::sync::mpsc::Sender<ClientEvent>>,
+        /// The terminal every frame is drawn at and every click resolved
+        /// against. Small by default, because most of what this drives
+        /// does not depend on the room: the ones that do say so with
+        /// [`Driven::on_a_roomy_terminal`].
+        area: Rect,
     }
 
     impl Driven<'_> {
+        /// Draws at a terminal big enough for the surfaces that keep a
+        /// margin — the manage modal takes the whole frame below
+        /// `management::ROOMY_*`, so the gestures that need something
+        /// beside it need a screen that has one.
+        fn on_a_roomy_terminal(mut self) -> Self {
+            self.area = Rect::new(0, 0, 120, 40);
+            self
+        }
+
         /// Draws the frame the next click is tested against, storing its
         /// hits on the model exactly as the attach loop does.
         fn frame(&mut self) {
-            full_frame(&mut self.attach.model);
+            full_frame_at(&mut self.attach.model, self.area);
         }
 
         fn press(&mut self, column: u16, row: u16) {
@@ -6779,7 +7110,7 @@ mod workspace_tests {
         /// Any other mouse event at the same viewport the click helpers
         /// use — the rest of a drag, which `press` alone cannot say.
         fn mouse(&mut self, column: u16, row: u16, kind: MouseEventKind) {
-            let area = Rect::new(0, 0, 80, 24);
+            let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
                 size: ratatui::layout::Size::new(area.width, area.height),
@@ -6793,7 +7124,7 @@ mod workspace_tests {
 
         /// One key, through the same dispatch the attach loop uses.
         fn press_key(&mut self, key: crossterm::event::KeyEvent) {
-            let area = Rect::new(0, 0, 80, 24);
+            let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
                 size: ratatui::layout::Size::new(area.width, area.height),
@@ -6893,6 +7224,7 @@ mod workspace_tests {
             server,
             events: events_rx,
             events_sender: Some(events),
+            area: Rect::new(0, 0, 80, 24),
         }
     }
 
@@ -7057,46 +7389,62 @@ mod workspace_tests {
         model_of(session)
     }
 
-    /// Every space is a block, the ones nobody is working in included:
-    /// their ground is the same panel at part of its strength, so the
-    /// column reads as blocks rather than as rows floating on the
-    /// backdrop — and the space in front keeps the only ground at full
-    /// strength.
+    /// An open space is a block at full strength whether or not anybody
+    /// is working in it: its agent rows stand on it, and on the faded
+    /// ground they stood on the panel instead — the block had a header
+    /// and then nothing under it, so its rows read as loose in the column
+    /// rather than as its contents.
+    ///
+    /// Minimized, nobody in it, the fade stays: two rows reading as one
+    /// item need an edge, not a ground. Which space is in front is the
+    /// gutter's answer either way.
     #[test]
-    fn a_space_nobody_is_working_in_is_a_fainter_block_of_its_own() {
+    fn an_open_space_is_a_block_whether_or_not_anybody_is_in_it() {
         let mut model = three_spaces();
         model.first_steps_collapsed = true;
+        // One minimized, one open, neither of them the one in front.
+        toggle_space_collapsed(&mut model, SpaceId(1));
         let Sidebar {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
-        let active = space_header(&hits, SpaceId(3));
-        let resting = space_header(&hits, SpaceId(1));
-        let ground = |header: Rect, offset: u16| buffer[(header.x + 2, header.y + offset)].bg;
+        let ground = |space: SpaceId, offset: u16| {
+            let header = space_header(&hits, space);
+            buffer[(header.x + 2, header.y + offset)].bg
+        };
 
         assert_eq!(
-            ground(active, 0),
+            ground(SpaceId(2), 0),
             theme::color(Token::SurfaceRaised),
-            "the space being worked in wears its header at full strength: {rows:?}"
+            "an open space wears its header at full strength: {rows:?}"
         );
         assert_eq!(
-            ground(resting, 0),
-            crate::ui::theme::faded(Token::SurfaceRaised),
-            "and the others wear the same one, faded: {rows:?}"
-        );
-        assert_eq!(
-            ground(resting, 1),
-            crate::ui::theme::faded(Token::SurfaceRaisedSubtle),
-            "their rows are the panel, faded with them: {rows:?}"
-        );
-        assert_ne!(
-            ground(resting, 1),
-            theme::color(Token::SurfaceBackground),
-            "a block nobody is in is still a block"
-        );
-        assert_ne!(
-            ground(resting, 1),
+            ground(SpaceId(2), 1),
             theme::color(Token::SurfaceRaisedSubtle),
-            "and never reads as the one in front"
+            "and its agents stand on the panel, not on the backdrop: {rows:?}"
+        );
+        assert_eq!(
+            ground(SpaceId(2), 0),
+            ground(SpaceId(3), 0),
+            "the same ground the space in front stands on: {rows:?}"
+        );
+
+        // Minimized and nobody in it, the card is its header alone (see
+        // `only_the_minimized_space_in_front_says_where_it_is`), and the
+        // fade is what gives that one row an edge.
+        assert_eq!(
+            ground(SpaceId(1), 0),
+            crate::ui::theme::faded(Token::SurfaceRaised),
+            "a minimized space nobody is in is faded: {rows:?}"
+        );
+        assert_ne!(
+            ground(SpaceId(1), 0),
+            theme::color(Token::SurfaceBackground),
+            "and it is still a block"
+        );
+        assert_ne!(
+            ground(SpaceId(1), 0),
+            ground(SpaceId(2), 0),
+            "never the ground an open one stands on: {rows:?}"
         );
     }
 
@@ -7188,13 +7536,180 @@ mod workspace_tests {
             .count()
     }
 
-    /// Every row of a space hangs off one muted gutter down its leading
-    /// column, at no level of indent; only the selected agent's stretch of
-    /// it is heavier and in the accent, whichever group it is in. An agent
-    /// in the root sits beside the trunk, so both of its rows are the
-    /// trunk itself.
+    /// A blank row over every space that has something under its header,
+    /// the first one included — and none between two that come to a
+    /// single line, which is what a minimized space nobody is in is.
+    ///
+    /// The fill alone was tried: every card but the one in front is
+    /// faded, so where two faded cards meet there is no edge to find, and
+    /// with a column of them it reads as one surface with headers in it
+    /// rather than as a list of blocks. Between two single rows there is
+    /// nothing to mistake for anything — one line is one space — and a
+    /// row of nothing between them spends half the column on the spaces
+    /// nobody is in.
+    ///
+    /// Measured over a column that mixes both shapes, because they are
+    /// drawn by different arms of the same loop.
     #[test]
-    fn a_space_is_one_block_down_its_gutter() {
+    fn the_row_between_two_spaces_closes_when_both_come_to_one_line() {
+        let mut model = three_spaces();
+        model.first_steps_collapsed = true;
+        // `three_spaces` leaves the third in front, so minimizing the
+        // other two leaves each of them a single row.
+        toggle_space_collapsed(&mut model, SpaceId(1));
+        toggle_space_collapsed(&mut model, SpaceId(2));
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let at: Vec<u16> = (1..=3)
+            .map(|id| space_header(&hits, SpaceId(id)).y)
+            .collect();
+
+        assert!(
+            without_chrome(&rows[at[0] as usize - 1]).is_empty(),
+            "the column's own top margin: {rows:?}"
+        );
+        assert_eq!(
+            at[1] - at[0],
+            1,
+            "two single rows stand one under the other: {rows:?}"
+        );
+        assert_eq!(
+            at[2] - at[1],
+            2,
+            "and the row opens again over the one that grew: {rows:?}"
+        );
+        assert!(
+            without_chrome(&rows[at[2] as usize - 1]).is_empty(),
+            "which says nothing: {rows:?}"
+        );
+
+        // Opened, it is no longer a single line and takes its row back.
+        toggle_space_collapsed(&mut model, SpaceId(2));
+        let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
+        let at: Vec<u16> = (1..=2)
+            .map(|id| space_header(&hits, SpaceId(id)).y)
+            .collect();
+        assert_eq!(at[1] - at[0], 2, "a row over it again: {rows:?}");
+    }
+
+    /// Exactly one name in the column is bright and bold, and it is
+    /// whatever is receiving keystrokes: an agent, or the header of a
+    /// space that is minimized or speaks for no agent of its own.
+    ///
+    /// The hue used to follow the space's own context agent while the
+    /// weight followed the *current* one, and every space names a context
+    /// agent — the ones nobody is in included. Walking from one space to
+    /// another left the first one's agent bright and merely unbolded, so
+    /// two rows claimed to be where the keyboard was.
+    #[test]
+    fn one_name_in_the_column_is_bright_and_bold() {
+        // By hue alone, and the weight asserted on what it finds: the
+        // defect this is here for was a name left *bright* and merely
+        // unbolded, which a search for both at once walks straight past.
+        let bright = |model: &WorkspaceModel| {
+            let Sidebar { rows, buffer, .. } = sidebar(model, &identities_fixture());
+            let hue = theme::color(Token::TextBright);
+            let lit: Vec<(u16, String)> = (0..buffer.area.height)
+                .filter(|row| {
+                    (0..buffer.area.width).any(|column| {
+                        let cell = &buffer[(column, *row)];
+                        cell.fg == hue && cell.symbol() != " "
+                    })
+                })
+                .map(|row| (row, rows[row as usize].trim().to_owned()))
+                .collect();
+            for (row, _) in &lit {
+                assert!(
+                    (0..buffer.area.width).any(|column| {
+                        let cell = &buffer[(column, *row)];
+                        cell.fg == hue && cell.modifier.contains(ratatui::style::Modifier::BOLD)
+                    }),
+                    "bright and not bold is the half-state this forbids: {rows:?}"
+                );
+            }
+            (rows, lit)
+        };
+
+        let mut model = three_spaces();
+        model.first_steps_collapsed = true;
+        // `three_spaces` leaves the third in front, on its own agent.
+        let (rows, lit) = bright(&model);
+        assert_eq!(lit.len(), 1, "one row, not one per space: {rows:?}");
+        assert!(lit[0].1.contains("shell"), "the agent in front: {rows:?}");
+
+        // Walking to another space moves it rather than adding to it.
+        model
+            .session
+            .as_mut()
+            .expect("a session")
+            .workspace
+            .selected_space = SpaceId(1);
+        let (rows, moved) = bright(&model);
+        assert_eq!(moved.len(), 1, "still one: {rows:?}");
+        assert_ne!(
+            moved[0].0, lit[0].0,
+            "and it moved rather than multiplied: {rows:?}"
+        );
+        assert!(
+            moved[0].1.contains("shell"),
+            "onto the other agent: {rows:?}"
+        );
+
+        // Minimized, the space speaks for itself and its header takes it.
+        toggle_space_collapsed(&mut model, SpaceId(1));
+        let (rows, folded) = bright(&model);
+        assert_eq!(folded.len(), 1, "one row: {rows:?}");
+        assert!(
+            folded[0].1.contains("one"),
+            "the header of the space in front: {rows:?}"
+        );
+    }
+
+    /// The name of the space in front is bold whether or not its header
+    /// is the row receiving keystrokes — which, for a space of nothing
+    /// but agents, it can never be: there is no tab of its own to land
+    /// on, so clicking its header changed nothing a reader could see.
+    /// The weight answers which block, where the hue answers which row.
+    #[test]
+    fn the_name_of_the_space_in_front_is_bold_even_when_an_agent_is_current() {
+        let model = three_spaces();
+        let Sidebar {
+            rows, hits, buffer, ..
+        } = sidebar(&model, &identities_fixture());
+        let weight = |space: SpaceId, name: &str| {
+            let header = space_header(&hits, space);
+            let column = rows[header.y as usize]
+                .find(name)
+                .map(|byte| rows[header.y as usize][..byte].chars().count())
+                .unwrap_or_else(|| panic!("{name} heads its space: {rows:?}"))
+                as u16;
+            let cell = &buffer[(column, header.y)];
+            (
+                cell.modifier.contains(ratatui::style::Modifier::BOLD),
+                cell.fg,
+            )
+        };
+
+        // The third is in front, on an agent of its own, so its header is
+        // not the current row — and its name is bold all the same.
+        let (bold, hue) = weight(SpaceId(3), "three");
+        assert!(bold, "the space in front: {rows:?}");
+        assert_ne!(
+            hue,
+            theme::color(Token::TextBright),
+            "without taking the hue off the agent: {rows:?}"
+        );
+        let (bold, _) = weight(SpaceId(1), "one");
+        assert!(!bold, "and no other space's name is: {rows:?}");
+    }
+
+    /// The leading column carries a rail beside the selected space and
+    /// nothing beside any other: down that one block, in the faintest
+    /// tone, with the accent along the stretch that is selected within
+    /// it. A space nobody is in leaves the column blank — the fill under
+    /// its rows already says it is a block, and a rail per space said the
+    /// same thing three times over.
+    #[test]
+    fn the_gutter_marks_the_selected_space_and_no_other() {
         let mut model = three_spaces();
         // All three spaces in the column, with the steps folded at the foot.
         model.first_steps_collapsed = true;
@@ -7202,76 +7717,69 @@ mod workspace_tests {
             rows, hits, buffer, ..
         } = sidebar(&model, &identities_fixture());
         use crate::ui::theme::{Symbol, Token};
-        let resting = theme::color(Token::TextMuted);
+        let rail = theme::glyph(Symbol::BarThin);
+        let resting = theme::color(Token::TextFaint);
         let lit = theme::color(Token::Accent);
         // Space 1 is in the background; space 3 is selected, on its agent.
-        for (space, branch, caption, hues) in [
-            (
-                SpaceId(1),
-                Symbol::TreeVertical,
-                Symbol::TreeVertical,
-                [resting, resting, resting],
-            ),
-            (
-                SpaceId(3),
-                Symbol::TreeVertical,
-                Symbol::TreeVertical,
-                [resting, lit, lit],
-            ),
-        ] {
+        for (space, drawn) in [(SpaceId(1), None), (SpaceId(3), Some([resting, lit, lit]))] {
             let header = space_header(&hits, space);
             // The header, then the agent's two rows.
             let (column, span) = (header.x, header.y..header.y + 3);
-            for (row, hue) in span.clone().zip(hues) {
-                assert_eq!(
-                    buffer[(column, row)].fg,
-                    hue,
-                    "row {row} of {space:?}: {rows:?}"
-                );
+            for (row, index) in span.clone().zip(0..) {
+                let cell = &buffer[(column, row)];
+                match drawn {
+                    Some(hues) => {
+                        assert_eq!(cell.symbol(), rail, "row {row} of {space:?}: {rows:?}");
+                        assert_eq!(cell.fg, hues[index], "row {row} of {space:?}: {rows:?}");
+                    }
+                    None => assert_eq!(cell.symbol(), " ", "row {row} of {space:?}: {rows:?}"),
+                }
             }
-            let item = &rows[span.start as usize + 1];
-            assert!(
-                item.trim_start().starts_with(&theme::glyph(branch)),
-                "the agent branches off the gutter: {item:?}"
-            );
-            let below = &rows[span.start as usize + 2];
-            assert!(
-                below.trim_start().starts_with(&theme::glyph(caption)),
-                "and its caption runs down it: {below:?}"
-            );
-            assert_eq!(
-                buffer[(column, span.end)].symbol(),
-                " ",
-                "the blank row after the space is outside its gutter: {rows:?}"
-            );
         }
 
-        // The fill runs under the gutter: the line is drawn inside the
-        // block rather than alongside it. Filling up to the line and no
-        // further left the line sitting on the column's own background,
-        // which reads as a decoration outside the card with a gap between
-        // them — the card's edge is where the fill ends, and the fill has
-        // to end past the line for the line to be in it.
+        // The fill runs under the rail: the line is drawn inside the block
+        // rather than alongside it. Filling up to the line and no further
+        // left the line sitting on the column's own background, which
+        // reads as a decoration outside the card with a gap between them
+        // — the card's edge is where the fill ends, and the fill has to
+        // end past the line for the line to be in it.
         let header = space_header(&hits, SpaceId(3));
         for row in header.y..header.y + 3 {
             assert_eq!(
                 buffer[(header.x, row)].bg,
                 buffer[(header.x + 1, row)].bg,
-                "row {row}: the gutter sits outside the block's fill: {rows:?}"
+                "row {row}: the rail sits outside the block's fill: {rows:?}"
             );
         }
+        // What the fill says is a separate question, and
+        // `an_open_space_is_a_block_whether_or_not_anybody_is_in_it`
+        // owns it: here the claim is that the rail alone answers which
+        // space is in front, so two open headers are told apart by their
+        // leading column and by nothing else.
         let outside = space_header(&hits, SpaceId(1));
+        assert_eq!(
+            buffer[(outside.x + 2, outside.y)].bg,
+            buffer[(header.x + 2, header.y)].bg,
+            "both headers stand on the same ground: {rows:?}"
+        );
         assert_ne!(
-            buffer[(outside.x, outside.y)].bg,
-            buffer[(header.x, header.y)].bg,
-            "a space nobody is in is not filled at all: {rows:?}"
+            buffer[(outside.x, outside.y)].symbol(),
+            buffer[(header.x, header.y)].symbol(),
+            "and only their leading column differs: {rows:?}"
         );
     }
 
-    /// The column reads space > agent: the header's fold against the
-    /// gutter and its name just after; each agent's status glyph a blank
-    /// column past the connector, its name after that, its caption under
+    /// The column spends no width on saying an agent is in its space: the
+    /// header's fold sits against the gutter with its name just after,
+    /// and an agent in that space's own root puts its status glyph in the
+    /// fold's column and its name in the header's, with its caption under
     /// that name — the same in either kind of space.
+    ///
+    /// One column further for an agent isolated in a checkout of its own,
+    /// and that is the only indent in the column: the agent that is
+    /// somewhere else is the only one with somewhere else to be, which is
+    /// the whole of what tells the two groups apart now that nothing
+    /// branches off the gutter.
     #[test]
     fn agents_sit_one_step_inside_their_space() {
         let column_of = |row: &str, text: &str| {
@@ -7280,27 +7788,38 @@ mod workspace_tests {
                 .unwrap_or_else(|| panic!("{text:?} in {row:?}"));
             row[..byte].chars().count()
         };
-        let idle = theme::glyph(crate::ui::theme::Symbol::StatusIdle);
+        use crate::ui::theme::Symbol;
+        let idle = theme::glyph(Symbol::StatusIdle);
         let tree = three_spaces();
         let Sidebar { rows, hits, .. } = sidebar(&tree, &identities_fixture());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "one");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let fold = column_of(&rows[header], &theme::glyph(Symbol::ChevronExpanded));
+        assert_eq!(column_of(&rows[header + 1], &idle), fold, "{rows:?}");
         let agent = column_of(&rows[header + 1], "shell");
-        assert_eq!(agent, name + 2, "{rows:?}");
+        assert_eq!(agent, name, "{rows:?}");
         assert_eq!(column_of(&rows[header + 2], "agent"), agent, "{rows:?}");
 
         let flat = agents_in_the_root_session();
         let Sidebar { rows, hits, .. } = sidebar(&flat, &identities_in_the_root());
         let header = space_header(&hits, SpaceId(1)).y as usize;
         let name = column_of(&rows[header], "repo");
-        assert_eq!(column_of(&rows[header + 1], &idle), name, "{rows:?}");
+        let fold = column_of(&rows[header], &theme::glyph(Symbol::ChevronExpanded));
+        assert_eq!(column_of(&rows[header + 1], &idle), fold, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 1], "agent 1"), name, "{rows:?}");
+        assert_eq!(column_of(&rows[header + 2], "claude"), name, "{rows:?}");
+
+        let both = a_space_with_both_groups();
+        let Sidebar { rows, hits, .. } = sidebar(&both, &identities_in_the_root());
+        let agents = agent_rows(&hits);
+        let root = column_of(&rows[agents[0] as usize], "agent 1");
+        let isolated = column_of(&rows[agents[2] as usize], "agent 2");
+        assert_eq!(isolated, root + 1, "a step further in: {rows:?}");
         assert_eq!(
-            column_of(&rows[header + 1], "agent 1"),
-            name + 2,
-            "{rows:?}"
+            column_of(&rows[agents[3] as usize], "codex"),
+            column_of(&rows[agents[1] as usize], "claude") + 1,
+            "and its caption keeps under its name: {rows:?}"
         );
-        assert_eq!(column_of(&rows[header + 2], "claude"), name + 2, "{rows:?}");
     }
 
     /// A space is where its own shell is: a `cd` there moves what the space
@@ -7333,12 +7852,6 @@ mod workspace_tests {
         assert!(
             rows[header + 1].contains("api"),
             "the caption names where it is now: {rows:?}"
-        );
-        model.remembered.roots_shown.insert(space);
-        let rows = sidebar(&model, &identities_in_the_root()).rows;
-        assert!(
-            rows[header].contains("api"),
-            "and so does the header's own toggle: {rows:?}"
         );
 
         // Nothing of its own left to follow: the root it was opened at.
@@ -7410,8 +7923,8 @@ mod workspace_tests {
         let two = space_header(&hits, SpaceId(2));
         assert_eq!(
             two.y,
-            space_header(&hits, one).y + 3,
-            "the next space follows the header, its caption and its blank row"
+            space_header(&hits, one).y + 2,
+            "nobody is in it, so the next space follows its header and the blank row"
         );
         assert!(
             driven.sent().is_empty(),
@@ -7458,42 +7971,53 @@ mod workspace_tests {
         assert!(lit, "{folded:?}");
     }
 
-    /// A minimized space keeps a caption under its header saying where its
-    /// work is — the branch its root is on, else the root, pinned under its
-    /// `⇄`, never an agent; open over its agents, it has none.
+    /// A minimized space keeps a caption under its header saying where
+    /// its work is — the directory, never an agent and never the branch
+    /// its root is on, which its agents say for themselves once it is
+    /// open — and only while it is the space in front. Open over its
+    /// agents it has no caption at all.
     #[test]
-    fn a_folded_space_caption_names_where_it_is_and_an_open_one_has_none() {
+    fn only_the_minimized_space_in_front_says_where_it_is() {
         let rows_at = |model: &WorkspaceModel, space: SpaceId| {
             let Sidebar { rows, hits, .. } = sidebar(model, &identities_fixture());
             let header = space_header(&hits, space).y as usize;
             (rows[header].clone(), rows[header + 1].clone())
         };
         let mut model = three_spaces();
-        let one = SpaceId(1);
-        let (_, open) = rows_at(&model, one);
+        // `three_spaces` leaves the third in front.
+        let (front, behind) = (SpaceId(3), SpaceId(1));
+
+        let (_, open) = rows_at(&model, front);
         assert!(
             open.contains("shell"),
             "open, the agents follow the header: {open:?}"
         );
 
-        toggle_space_collapsed(&mut model, one);
-        let (header, row) = rows_at(&model, one);
+        toggle_space_collapsed(&mut model, front);
+        let (_, row) = rows_at(&model, front);
         assert!(
-            row.contains("/one") && !row.contains("shell"),
-            "no branch, the root: {row:?}"
+            row.contains("/three") && !row.contains("shell"),
+            "minimized and in front, the directory it is in: {row:?}"
         );
-        let column = |row: &str, text: &str| row[..row.find(text).unwrap()].chars().count();
-        assert_eq!(
-            column(&row, "/one") + 3,
-            column(&header, "⇄"),
-            "pinned under the toggle"
-        );
+
+        // Known, the branch stays out of it: the row answers where, and a
+        // branch name does not say where.
         model
             .remembered
             .branches
-            .insert(PathBuf::from("/one"), "main".into());
-        let (_, row) = rows_at(&model, one);
-        assert!(row.contains("main"), "the branch: {row:?}");
+            .insert(PathBuf::from("/three"), "main".into());
+        let (_, row) = rows_at(&model, front);
+        assert!(
+            row.contains("/three") && !row.contains("main"),
+            "still the directory: {row:?}"
+        );
+
+        // Behind, the name is the whole of it: a path under every space
+        // in a long column is a second column to read past.
+        toggle_space_collapsed(&mut model, behind);
+        let (header, under) = rows_at(&model, behind);
+        assert!(header.contains("one"), "its name: {header:?}");
+        assert!(!under.contains("/one"), "and nothing under it: {under:?}");
     }
 
     /// The scroll bound is measured with the folds, so a column of folded
@@ -7514,8 +8038,8 @@ mod workspace_tests {
         assert!(open > 2, "the column overflows: {open}");
         assert_eq!(
             open - folded,
-            1,
-            "the agent's two rows give way to one caption"
+            2,
+            "nobody is in it, so the agent's two rows give way to nothing"
         );
     }
 
@@ -8357,6 +8881,26 @@ mod workspace_tests {
             )
             .expect("the row that lost its checkout closes");
         assert!(created < closed, "the new tab opens first: {sent:?}");
+
+        // And the space keeps a shell of its own. Every tab of this space
+        // is an agent, and the tab the resume lands is another one, so
+        // closing the dead row left the space with nothing of its own to
+        // land on — a header that answers no click. Every other way a tab
+        // closes opens the replacement; this one went around the guard.
+        let shell = sent
+            .iter()
+            .position(|request| {
+                matches!(
+                    request,
+                    ClientRequest::CreateTab {
+                        agent: None,
+                        command: None,
+                        ..
+                    }
+                )
+            })
+            .expect("a shell of the space's own opens in its place");
+        assert!(shell < closed, "before the row goes: {sent:?}");
     }
 
     /// Resuming a preserved task whose checkout is still there opens the

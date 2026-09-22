@@ -198,7 +198,13 @@ scenes:
         # `agent 3` again — a string the screen was showing a moment ago,
         # which would let the gate pass on a stale frame. A third item on
         # the tree cannot.
-        expect: '(├─[\s\S]*?){3}'
+        #
+        # An item is the leading column of a row the isolated group's
+        # trunk runs down: the space's own rail, then the corner that
+        # opens, carries or closes the group — or the lone arm a group of
+        # one gets. Anchored to the row's start, because the rule under
+        # the header is made of the same ─ the lone arm is.
+        expect: '(?m)(^[▏ ][┌├└─][\s\S]*?){3}'
         expect_timeout: 90
         pause: 2.0
     then:

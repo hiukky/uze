@@ -243,7 +243,18 @@ fn context_root() -> PathBuf {
 /// so the workspace is visibly still there behind it. The inset scales
 /// down with the terminal rather than being a fixed margin — on a small
 /// one the screens need the columns more than the backdrop needs to show.
+///
+/// Below [`ROOMY_WIDTH`]×[`ROOMY_HEIGHT`] it takes the whole frame. The
+/// scaling inset answered the wrong question there: it kept the margin
+/// proportional while the thing inside it was already short of room, so
+/// a small laptop paid a border, two rules and a backdrop out of the
+/// columns a menu, a list and a drawer were sharing. Showing the
+/// workspace behind is worth a margin only once the screens in front do
+/// not need it.
 pub(crate) fn modal_area(frame: Rect) -> Rect {
+    if frame.width < ROOMY_WIDTH || frame.height < ROOMY_HEIGHT {
+        return frame;
+    }
     let horizontal = (frame.width / 16).min(6);
     let vertical = (frame.height / 12).min(2);
     Rect::new(
@@ -253,6 +264,17 @@ pub(crate) fn modal_area(frame: Rect) -> Rect {
         frame.height.saturating_sub(2 * vertical),
     )
 }
+
+/// The frame a modal is willing to spend a margin out of. Under either
+/// measure it fills the screen instead.
+///
+/// The width is what the management surface itself asks for: a menu, a
+/// list at its minimum and a drawer at its minimum come to the high
+/// seventies, and `render`'s own `narrow` fold sits at 90. Below that the
+/// screens are already giving things up, and a margin makes them give up
+/// more. The height is two rows of cards plus the chrome around them.
+const ROOMY_WIDTH: u16 = 100;
+const ROOMY_HEIGHT: u16 = 30;
 
 /// Where the management surface is drawn inside a modal at `area`: inside
 /// the border, and one blank row under the title, so the menu's first
@@ -775,4 +797,36 @@ fn footer_line(model: &TuiModel) -> Line<'static> {
         model::Status::Error(value) => (Token::StateDanger, value.clone()),
     };
     Line::from(Span::styled(text, theme::fg_bold(hue)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A terminal with room to spare keeps the backdrop visible around
+    /// the modal; one without gives the whole frame to what is in front.
+    ///
+    /// The inset used to scale and never reach zero, which answered the
+    /// wrong question on a small screen: it held the margin proportional
+    /// while a menu, a list and a drawer were already short of columns,
+    /// so the border and the backdrop were paid for out of them.
+    #[test]
+    fn the_modal_fills_a_small_frame_and_insets_a_roomy_one() {
+        let roomy = Rect::new(0, 0, ROOMY_WIDTH, ROOMY_HEIGHT);
+        let inset = modal_area(roomy);
+        assert!(inset.x > roomy.x, "a margin beside it: {inset:?}");
+        assert!(inset.width < roomy.width, "and narrower for it: {inset:?}");
+
+        for cramped in [
+            Rect::new(0, 0, ROOMY_WIDTH - 1, ROOMY_HEIGHT),
+            Rect::new(0, 0, ROOMY_WIDTH, ROOMY_HEIGHT - 1),
+            Rect::new(0, 0, 80, 24),
+        ] {
+            assert_eq!(
+                modal_area(cramped),
+                cramped,
+                "either measure short of roomy takes the frame: {cramped:?}"
+            );
+        }
+    }
 }

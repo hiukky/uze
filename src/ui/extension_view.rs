@@ -1808,9 +1808,24 @@ pub(crate) fn render_section(
     rows: &mut crate::ui::Rows,
     dragging: bool,
     hits: &mut Vec<(Rect, ViewHit)>,
-) {
+) -> bool {
+    render_section_with(frame, section, rows, dragging, None, hits)
+}
+
+/// The same, with `marquee` the clock a caption too long for its room
+/// slides by — `Some` while the pointer is on this header, `None`
+/// otherwise. Answers whether a caption actually slid, which is what
+/// tells the host's own clock it has a reason to keep turning.
+pub(crate) fn render_section_with(
+    frame: &mut ratatui::Frame<'_>,
+    section: &Section,
+    rows: &mut crate::ui::Rows,
+    dragging: bool,
+    marquee: Option<usize>,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) -> bool {
     let Some(header_rect) = rows.next(1) else {
-        return;
+        return false;
     };
     let fold = theme::glyph(if section.collapsed {
         Symbol::ChevronCollapsed
@@ -1828,12 +1843,26 @@ pub(crate) fn render_section(
         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
         TextSpan::styled(section.title.clone(), title_style),
     ];
-    row::push_trailing(
-        &mut spans,
-        header_rect.width,
-        section.caption.text.clone(),
-        color(section.caption.role),
-    );
+    let sliding = match marquee {
+        Some(tick) => row::push_trailing_marquee(
+            &mut spans,
+            header_rect.width,
+            section.caption.text.clone(),
+            color(section.caption.role),
+            // A column every other tick: one per tick reads as a flicker
+            // at the clock the spinners turn on.
+            tick / 2,
+        ),
+        None => {
+            row::push_trailing(
+                &mut spans,
+                header_rect.width,
+                section.caption.text.clone(),
+                color(section.caption.role),
+            );
+            false
+        }
+    };
     // Filled only while there is something under it. A band across the
     // column says "this is a heading over content"; on a folded section
     // there is no content, and the band reads as a control of its own —
@@ -1848,7 +1877,7 @@ pub(crate) fn render_section(
     frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
     hits.push((header_rect, ViewHit::ToggleSection));
     if section.collapsed {
-        return;
+        return sliding;
     }
     // The divider between the header and its rows doubles as the drag
     // handle, the way the sidebar's own border does — lit in the accent
@@ -1907,6 +1936,7 @@ pub(crate) fn render_section(
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, ViewHit::SelectItem(index)));
     }
+    sliding
 }
 
 #[cfg(test)]
@@ -1914,6 +1944,65 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
     use uze_extensions::view::{ContentLine, LineTone, Rgb};
+
+    /// A caption that fits is drawn where it always was; one that does
+    /// not passes through the room it has, a column at a time, and comes
+    /// round again — and says so, which is what keeps the clock turning
+    /// for it.
+    ///
+    /// A branch name is the caption with no natural length, and it is
+    /// read from both ends: the end is exactly the half an "…" eats.
+    #[test]
+    fn a_caption_too_long_for_its_room_passes_through_it() {
+        let header = |caption: &str, tick: Option<usize>| {
+            let section = Section {
+                title: "timeline".to_owned(),
+                caption: Span::new(caption, Role::Muted),
+                collapsed: true,
+                resizable: false,
+                scroll: 0,
+                rows: Vec::new(),
+            };
+            let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+            let mut hits = Vec::new();
+            let mut slid = false;
+            terminal
+                .draw(|frame| {
+                    let mut rows = crate::ui::Rows::over(frame.area());
+                    slid = render_section_with(frame, &section, &mut rows, false, tick, &mut hits);
+                })
+                .unwrap();
+            let row: String = (0..40)
+                .map(|column| terminal.backend().buffer()[(column, 0)].symbol())
+                .collect();
+            (slid, row)
+        };
+
+        let short = "main";
+        let (slid, row) = header(short, Some(0));
+        assert!(!slid, "a caption that fits does not move: {row:?}");
+        assert!(row.contains(short), "{row:?}");
+
+        // Longer than the room the title leaves it.
+        let long = "refactor/a-branch-nobody-shortened";
+        let (slid, at_rest) = header(long, None);
+        assert!(!slid, "and nothing moves unasked: {at_rest:?}");
+
+        let (slid, first) = header(long, Some(0));
+        assert!(slid, "asked, it slides: {first:?}");
+        // Two ticks a column, so the clock the spinners turn on does not
+        // read as a flicker here.
+        let (_, same) = header(long, Some(1));
+        assert_eq!(first, same, "a column every other tick: {first:?}");
+        let (_, moved) = header(long, Some(2));
+        assert_ne!(first, moved, "and then it has moved: {moved:?}");
+
+        // It comes round rather than jumping back: one full cycle of the
+        // run lands on what it started from.
+        let cycle = long.chars().count() + 3;
+        let (_, round) = header(long, Some(cycle * 2));
+        assert_eq!(first, round, "one cycle returns it: {round:?}");
+    }
 
     /// Which drawn row a board's menu lands on: the frame's own top edge
     /// carrying the title, then the menu straight under it.
