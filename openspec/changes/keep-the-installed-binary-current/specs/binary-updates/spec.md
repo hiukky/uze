@@ -23,8 +23,8 @@ SHALL NOT replace a binary running from any other path, whatever installed it.
 
 - **WHEN** the running `uze` is not the file the installer recorded — or no
   record exists — and a newer release is published
-- **THEN** no file is replaced, and the operator is told the newer release
-  exists
+- **THEN** no file is replaced, and `uze upgrade` tells the operator the
+  newer release exists and why this binary was not replaced
 
 ### Requirement: A replacement is verified before it is placed
 
@@ -58,17 +58,33 @@ process. The new release SHALL first run at the next launch.
 ### Requirement: The workspace sidebars announce releases
 
 Both sidebars SHALL show, above the sections at their foot, a notice for an
-update that was installed and not yet running, for a release the updater
-installed that has not yet been acknowledged, or for a newer release this
-binary will not install itself. The notice SHALL name the version and SHALL
+update that was installed and is not yet running, and for nothing else: a
+release that is only available, or that this binary will not install
+itself, is not announced there — `uze upgrade` is where a person asks, and
+where the reason is told. The notice SHALL name the version and SHALL
 keep its dismissal visible at any sidebar width. Activating the notice SHALL
-open that release's notes; dismissing it SHALL put away the notice for that
-release in every client and every later run.
+open that release's notes — its own section of the `CHANGELOG.md` published
+at its tag, and no other release's — in a modal inside the client, from
+which the release page can be opened; dismissing it
+SHALL put away the notice for that release in every client and every later
+run.
+
+#### Scenario: A release this binary will not install
+
+- **WHEN** a newer release is published and the running binary is not the
+  one a receipt names
+- **THEN** neither sidebar shows a notice
 
 #### Scenario: Opening the notes
 
 - **WHEN** the operator activates the notice's row
-- **THEN** the release notes for the version it names open in their browser
+- **THEN** a modal opens on the notes of the version it names, rendered
+  rather than shown as Markdown, and shows no other release
+
+#### Scenario: Notes that cannot be read
+
+- **WHEN** the changelog cannot be fetched, or does not carry the release
+- **THEN** the modal says so and still opens the release page on request
 
 #### Scenario: Dismissing it
 
@@ -110,7 +126,8 @@ to, and SHALL NOT check at all in continuous integration unless told to.
 #### Scenario: Notify only
 
 - **WHEN** `UZE_AUTOUPDATE` is `notify`
-- **THEN** a newer release is announced and never installed
+- **THEN** a newer release is never installed automatically, and
+  `uze upgrade` still installs it when asked
 
 #### Scenario: In CI
 

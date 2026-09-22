@@ -4512,9 +4512,7 @@ mod workspace_tests {
             "no release, no notice"
         );
 
-        model.release = Some(crate::self_update::Notice::Installed(
-            "0.0.0-alpha.14".to_owned(),
-        ));
+        model.release = Some(crate::self_update::Notice("0.0.0-alpha.14".to_owned()));
         let Sidebar { rows, hits, .. } = sidebar(&model, &identities_fixture());
         let (mark, _) = hits
             .iter()
@@ -4539,6 +4537,121 @@ mod workspace_tests {
             .position(|line| line.contains("first steps"))
             .expect("the steps are still there");
         assert!(y < steps, "and the notice sits on them: {rows:?}");
+    }
+
+    /// The notes open over everything, take the keys and the pointer from
+    /// what is underneath, and a click on them is reading rather than a
+    /// way out.
+    #[test]
+    fn release_notes_open_over_the_workspace() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        let mut modal = crate::ui::release_notes::ReleaseNotesModal::opening("0.0.0-alpha.14");
+        modal.absorb(
+            "0.0.0-alpha.14",
+            Some(crate::self_update::ReleaseNotes {
+                version: "0.0.0-alpha.14".to_owned(),
+                date: None,
+                body: "### Fixes\n\n- **terminal:** the fix".to_owned(),
+            }),
+        );
+        model.release_notes = Some(modal);
+        assert!(!model.no_modal_open(), "the pane gets no keys under it");
+
+        let rows = frame_rows(&mut model);
+        let drawn = rows.join("\n");
+        assert!(drawn.contains("v0.0.0-alpha.14"), "{drawn}");
+        assert!(drawn.contains("the fix"), "{drawn}");
+        full_frame(&mut model);
+        assert!(
+            matches!(
+                model.hits.get(..2),
+                Some([
+                    (_, WorkspaceHit::ReleaseNotesClose),
+                    (_, WorkspaceHit::ReleaseNotesBody)
+                ])
+            ),
+            "its area answers before anything underneath"
+        );
+    }
+
+    /// Clicked, the notice opens the notes of the release it names — and
+    /// no other — read off the drawing thread; the corner mark puts the
+    /// modal away.
+    #[test]
+    fn the_notice_opens_the_notes_of_its_own_release() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-release-notes"));
+        std::fs::create_dir_all(home.cache_dir()).unwrap();
+        std::fs::write(
+            home.release_notes_cache_path(),
+            "# Changelog\n\n## [9.0.1](https://x) - 2026-09-23\n\n- **ui:** newer thing\n\n\
+             ## [9.0.0](https://x) - 2026-09-22\n\n- **terminal:** older thing\n",
+        )
+        .unwrap();
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.release = Some(crate::self_update::Notice("9.0.1".to_owned()));
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let (notice, _) = *driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::OpenReleaseNotes))
+            .expect("the notice answers a click");
+        driven.press(notice.x, notice.y);
+        assert!(
+            driven.attach.model.release_notes.is_some(),
+            "opened at once"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !frame_rows(&mut driven.attach.model)
+            .join("\n")
+            .contains("newer thing")
+        {
+            assert!(Instant::now() < deadline, "the notes never arrived");
+            driven.pump();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let drawn = frame_rows(&mut driven.attach.model).join("\n");
+        assert!(
+            !drawn.contains("older thing"),
+            "only the release the notice names: {drawn}"
+        );
+
+        driven.frame();
+        let (body, _) = *driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::ReleaseNotesBody))
+            .expect("the modal answers for its own area");
+        driven.press(body.x + 2, body.y + 2);
+        assert!(
+            driven.attach.model.release_notes.is_some(),
+            "a click on the notes is reading"
+        );
+
+        driven.frame();
+        let (close, _) = *driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::ReleaseNotesClose))
+            .expect("the corner mark answers a click");
+        assert!(
+            close.y == body.y && close.right() > body.x + body.width / 2,
+            "on the top border, at the right: {close:?} of {body:?}"
+        );
+        driven.press(close.x + close.width / 2, close.y);
+        assert!(
+            driven.attach.model.release_notes.is_none(),
+            "the mark closes it"
+        );
     }
 
     /// The header folds it, and it stays folded: a section that came back

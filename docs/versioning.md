@@ -143,12 +143,12 @@ receipt at `~/.uze/state/install.json` naming the file it wrote and the
 release it was, and that file is the only one the updater ever replaces: a
 `uze` running from anywhere else — `cargo install`, `make install`, a
 package manager, a build tree — was put there by something else, and is
-told a newer release exists rather than replaced.
+left to it.
 
 The terminal workspace checks when it opens and every hour it stays open,
 on a thread of its own. A CLI command never touches the network: when the
 last answer is more than an hour old it hands the check to a detached
-`uze self-update` and exits, and what that finds is what the next command
+`uze upgrade --background` and exits, and what that finds is what the next command
 mentions — once per release, on stderr, and never after `uze agent` or
 `terminal`, whose reader is not a person at a prompt.
 
@@ -159,7 +159,12 @@ release it claims to be, and only then is it renamed over the old file —
 beside it, on the same filesystem, so the swap is one rename and a pane's
 shim never runs a half-written binary. Anything already running keeps the
 binary it started from; the next launch is the first to run the new one,
-and both sidebars say so, linking to the release's notes.
+and both sidebars say so — "restart uze to use it". Clicking the notice
+opens that release's notes in a modal — its own section of the
+`CHANGELOG.md` at its tag, fetched with the release and kept in
+`~/.uze/cache/release-notes.md` — from which the release page opens. That is the only thing they say about releases: one that
+is merely available, or that this binary will not install itself, is left
+to `uze upgrade`. The first CLI command after an update mentions it once.
 
 One consequence is worth knowing before it happens: when a release changes
 the terminal protocol, the first client of the new release replaces the
@@ -167,6 +172,13 @@ server the old one left running. Tabs are restored and every agent's
 conversation resumes (see ADR-047), but a program in the middle of
 something in a pane is restarted. That is what any upgrade does today; an
 automatic one only changes who started it.
+
+`uze upgrade` does the same replacement now, in the foreground, and reports
+it: the version it placed, that it is already current, or — when it
+replaces nothing — why. A receipt that names a different file than the
+`uze` that ran is the usual reason a curl install seems never to update:
+another `uze` earlier on `PATH` is the one being run. `UZE_AUTOUPDATE`
+governs only the automatic check; asking is consent enough.
 
 `UZE_AUTOUPDATE=off` stops the check, `notify` checks without replacing,
 and `on` is the default — except where `CI` is set, which is off unless the

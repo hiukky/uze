@@ -141,13 +141,10 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "provisions or updates harness executables through each harness's official installer",
         ),
     ),
-    // Internal: the release check a CLI command hands to a detached process
-    // of its own once the last answer has gone stale, so the command that
-    // noticed it never waits on the network.
     (
-        "self-update",
+        "upgrade",
         PerformanceClass::JustifiedSlow(
-            "internal: asks for the latest release and downloads it, in a detached process the CLI starts",
+            "asks for the latest release and downloads it — in the foreground when asked, in a detached process when a command hands off a stale check",
         ),
     ),
 ];

@@ -424,6 +424,9 @@ pub(crate) enum Overlay {
         filter: String,
         selected: usize,
     },
+    /// The notes of the release the sidebar's notice names, and of every
+    /// other the changelog carries.
+    ReleaseNotes(crate::ui::release_notes::ReleaseNotesModal),
     /// The Harnesses screen's own glossary — what each status/delivery/
     /// compatibility label actually means. Reference material about what
     /// the data *means*, which is a different question from what can be
@@ -642,6 +645,9 @@ pub(crate) struct TuiModel {
     /// is the only thing that can answer the pointer — see the address's
     /// own style in `view::plugins`.
     pub(crate) source_link_hovered: bool,
+    /// Whether the pointer is on the footer's version, which opens this
+    /// release's notes. Colour is the only answer a terminal has to hover.
+    pub(crate) version_hovered: bool,
     /// The detail drawer's button under the pointer, if any.
     pub(crate) hovered_offer: Option<uze_keys::Action>,
 
@@ -792,6 +798,7 @@ impl TuiModel {
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             overview_prompt_hovered: None,
             source_link_hovered: false,
+            version_hovered: false,
             hovered_offer: None,
             tick: 0,
             hits: Vec::new(),

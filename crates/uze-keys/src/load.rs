@@ -303,6 +303,14 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::ActionIndex, "enter", Action::Activate),
         bind(Scope::ActionIndex, "esc", Action::Dismiss),
         bind(Scope::ActionIndex, "backspace", Action::EraseBack),
+        // --- Release notes, in either mode -----------------------------
+        // The notes are read, so every key that moves moves them.
+        bind(Scope::ReleaseNotes, "down", Action::SelectNext),
+        bind(Scope::ReleaseNotes, "up", Action::SelectPrevious),
+        bind(Scope::ReleaseNotes, "pagedown", Action::ScrollPageDown),
+        bind(Scope::ReleaseNotes, "pageup", Action::ScrollPageUp),
+        bind(Scope::ReleaseNotes, "enter", Action::Activate),
+        bind(Scope::ReleaseNotes, "esc", Action::Dismiss),
         // --- Workspace, the container -----------------------------------
         bind(Scope::Workspace, "ctrl+t", Action::NewShellTab),
         bind(Scope::Workspace, "ctrl+w", Action::CloseTab),

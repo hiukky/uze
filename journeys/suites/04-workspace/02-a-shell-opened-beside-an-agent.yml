@@ -83,9 +83,10 @@ scenes:
         in: sidebar
         say: confirm close
         # Nothing on screen appears when a row goes, so the gate is no
-        # agent item being left on the tree — no row led by the trunk of
-        # the isolated group (see `01-agents-and-slots`).
-        expect: '(?m)\A(?![\s\S]*^[▏ ][┌├└─])'
+        # agent item being left on the tree. A lone isolated agent stands at
+        # the root indent with no trunk, so its row is known by its status
+        # mark and name rather than by a tree glyph.
+        expect: '(?m)\A(?![\s\S]*^[▏ ][^\s▾▸] agent \d)'
         expect_timeout: 25
         pause: 3.0
     then:
@@ -120,7 +121,7 @@ scenes:
         # number, so this one is `agent 1` again — a string the screen was
         # showing a moment ago. The tree it left had no items at all, so the
         # first one back cannot be a stale frame.
-        expect: '(?m)^[▏ ][┌├└─]'
+        expect: '(?m)^[▏ ][^\s▾▸] agent \d'
         expect_timeout: 90
         pause: 2.0
     then:

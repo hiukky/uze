@@ -337,6 +337,13 @@ pub(crate) fn render_modal(
         close,
     );
 
+    // A dialog open inside recedes the modal's own chrome too — its title
+    // row and the row under it sit outside the surface `render` dims.
+    // `render` paints its whole area afresh, so what it draws is dimmed
+    // once, by itself.
+    if !matches!(model.overlay, Overlay::None) {
+        widget::scrim::render(frame, area);
+    }
     render(frame, modal_surface(area), model, hits);
     ModalChrome { area, close }
 }
@@ -434,7 +441,7 @@ pub(crate) fn render(
         }
     }
 
-    render_footer(frame, layout.footer, model);
+    render_footer(frame, layout.footer, model, hits);
 
     // Every arm below is a dialog: drawn in the middle of the surface, and
     // the only thing in it that answers until it is dealt with. The scrim
@@ -454,6 +461,16 @@ pub(crate) fn render(
             selected,
         } => overlay::render_action_index(frame, area, model, scopes, filter, *selected, hits),
         Overlay::HarnessHelp => overlay::render_harness_help(frame, area),
+        Overlay::ReleaseNotes(modal) => {
+            let targets = super::release_notes::render(frame, area, modal);
+            hits.splice(
+                0..0,
+                [
+                    (targets.close, Hit::ReleaseNotesClose),
+                    (targets.popup, Hit::ReleaseNotesBody),
+                ],
+            );
+        }
         Overlay::Confirm { kind, focus } => {
             overlay::render_confirmation(frame, area, kind, *focus, hits)
         }
@@ -725,12 +742,17 @@ fn route_row(
     }
 }
 
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+fn render_footer(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     let inner = Rule::new(Edge::Top)
         .padding(Padding::new(1, 1, 0, 0))
         .render(frame, area);
 
-    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let version = format!("v{}", crate::self_update::running());
     // The way into the index is at the foot of the sidebar now, with the
     // other chrome that belongs to uze rather than to a screen — one place
     // in both surfaces, rather than a button here and a chip on the tab
@@ -748,11 +770,19 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let mut line = footer_line(model);
     text::clip(&mut line, columns[0].width as usize);
     frame.render_widget(Paragraph::new(line), columns[0]);
+    // Brighter than the hints beside it because it answers a click: it
+    // opens this release's notes. Brighter still under the pointer.
+    let tone = if model.version_hovered {
+        Token::TextBright
+    } else {
+        Token::TextSecondary
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
+        Paragraph::new(Span::styled(version, theme::fg(tone)))
             .alignment(ratatui::layout::Alignment::Right),
         columns[2],
     );
+    hits.push((columns[2], Hit::RunningReleaseNotes));
 }
 
 /// The hint line: what can be done here, with the keys that do it.

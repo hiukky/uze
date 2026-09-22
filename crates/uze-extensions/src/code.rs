@@ -87,6 +87,7 @@ mod treemap;
 pub use changes::{ChangeSummary, change_summary};
 pub use history::{Commit, CommitDetail, Timeline, commit_detail, timeline, timeline_section};
 pub use map::{FileMeasure, Measure, measure};
+pub use markdown::render as markdown;
 pub use render::view;
 pub use request::{FileAnswer, FileRequest, LoadedFile, fulfill, unanswered};
 

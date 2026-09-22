@@ -2096,9 +2096,7 @@ fn the_sidebar_announces_a_release_above_the_steps() {
     // As long as the real versions are: the first cut put the version in a
     // caption beside the heading, where the column elided it — and the
     // closing mark at the caption's end went with it.
-    model.release = Some(crate::self_update::Notice::Available(
-        "0.0.0-alpha.14".to_owned(),
-    ));
+    model.release = Some(crate::self_update::Notice("0.0.0-alpha.14".to_owned()));
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, frame.area(), &model, &mut hits))
@@ -2116,8 +2114,8 @@ fn the_sidebar_announces_a_release_above_the_steps() {
         "the version, whole, with the mark on its row: {version:?}"
     );
     assert!(
-        action.contains("available") && action.contains("what's new"),
-        "what happened and what to do, on one row: {action:?}"
+        action.contains("restart uze to use it"),
+        "what to do, on one row: {action:?}"
     );
     assert_eq!(
         hits.iter()
@@ -2139,8 +2137,17 @@ fn the_sidebar_announces_a_release_above_the_steps() {
         .expect("the action row opens the notes");
     assert_eq!(
         model.click(row.x, row.y),
-        Intent::OpenLink("https://github.com/hiukky/uze/releases/tag/v0.0.0-alpha.14".to_owned())
+        Intent::ReadReleaseNotes("0.0.0-alpha.14".to_owned()),
+        "the notes are read for a modal, not handed to a browser"
     );
+    assert!(
+        matches!(&model.overlay, Overlay::ReleaseNotes(modal) if modal.version == "0.0.0-alpha.14"),
+        "{:?}",
+        model.overlay
+    );
+    assert!(model.scopes().contains(&uze_keys::Scope::ReleaseNotes));
+    model.overlay_action(uze_keys::Action::Dismiss);
+    assert_eq!(model.overlay, Overlay::None, "esc closes it");
     assert_eq!(
         model.click(mark.x, mark.y),
         Intent::AcknowledgeRelease("0.0.0-alpha.14".to_owned()),
@@ -2149,6 +2156,85 @@ fn the_sidebar_announces_a_release_above_the_steps() {
     assert!(
         model.release.is_none(),
         "put away at once, not on the next check"
+    );
+}
+
+/// A dialog open inside the manage modal recedes the modal's own chrome
+/// with the rest: its title row sits outside the surface `render` dims, and
+/// was left lit above the scrim.
+#[test]
+fn a_dialog_in_the_manage_modal_recedes_its_title_too() {
+    let title_style = |model: &TuiModel| {
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::management::render_modal(frame, frame.area(), model, &mut Vec::new());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (0..buffer.area.height)
+            .find_map(|y| {
+                let row: String = (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                row.find(" manage ").map(|at| (at as u16 + 1, y))
+            })
+            .expect("the modal's title");
+        buffer[(x, y)].fg
+    };
+    let mut model = model_with_plugins(&["flow"]);
+    let lit = title_style(&model);
+    model.overlay = Overlay::ReleaseNotes(crate::ui::release_notes::ReleaseNotesModal::opening(
+        "9.0.1",
+    ));
+    assert_ne!(
+        title_style(&model),
+        lit,
+        "the title recedes behind the dialog"
+    );
+}
+
+/// The footer's version is the way to this release's own notes: brighter
+/// than the hints beside it, and a click opens them.
+#[test]
+fn the_footers_version_opens_this_releases_notes() {
+    let mut model = model_with_plugins(&["flow"]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let version = format!("v{}", crate::self_update::running());
+    let (rect, _) = *hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::RunningReleaseNotes)
+        .expect("the version answers a click");
+    let drawn = buffer_rows(&terminal);
+    assert!(
+        drawn[usize::from(rect.y)].contains(&version),
+        "the hit is the version itself: {:?}",
+        drawn[usize::from(rect.y)]
+    );
+
+    model.hits = hits;
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        Rect::new(0, 0, 120, 40),
+    );
+    assert!(model.version_hovered, "it answers the pointer");
+    assert_eq!(
+        model.click(rect.x, rect.y),
+        Intent::ReadReleaseNotes(crate::self_update::running().to_owned())
+    );
+    assert!(
+        matches!(&model.overlay, Overlay::ReleaseNotes(modal) if modal.version == crate::self_update::running()),
+        "{:?}",
+        model.overlay
     );
 }
 

@@ -22,9 +22,20 @@ impl TuiModel {
     /// question on screen is answered, dismissed, or left alone, and a
     /// keystroke that means nothing here no longer closes it by accident.
     pub(crate) fn overlay_action(&mut self, action: Action) -> Intent {
+        if let Overlay::ReleaseNotes(modal) = &mut self.overlay {
+            use crate::ui::release_notes::Outcome;
+            return match modal.act(action) {
+                Outcome::None => Intent::None,
+                Outcome::OpenLink(url) => Intent::OpenLink(url),
+                Outcome::Close => {
+                    self.close_overlay();
+                    Intent::None
+                }
+            };
+        }
         let overlay = self.overlay.clone();
         match overlay {
-            Overlay::None | Overlay::HarnessHelp => Intent::None,
+            Overlay::None | Overlay::HarnessHelp | Overlay::ReleaseNotes(_) => Intent::None,
             Overlay::ActionIndex {
                 scopes,
                 filter,

@@ -723,6 +723,28 @@ struct CommitDetailResolution {
     detail: Option<code::CommitDetail>,
 }
 
+/// A release's notes, read off the UI thread: reading them may reach the
+/// network. Tagged with the release asked about, so an answer for a modal
+/// since closed and opened on another is dropped.
+struct ReleaseNotesResolution {
+    version: String,
+    notes: Option<crate::self_update::ReleaseNotes>,
+}
+
+fn spawn_release_notes(
+    home: UzeHome,
+    version: String,
+    sender: mpsc::Sender<ReleaseNotesResolution>,
+) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.release_notes").entered();
+        let notes = crate::self_update::release_notes(&home, &version);
+        let _ = sender.send(ReleaseNotesResolution { version, notes });
+    });
+}
+
 fn spawn_commit_detail(
     cwd: PathBuf,
     hash: String,
@@ -1450,6 +1472,12 @@ pub(super) enum WorkspaceHit {
     QuickAction(Action),
     /// One row of the open index, by position in it.
     ActionIndexEntry(usize),
+    /// The release notes modal's own area: a click on it is reading, and
+    /// only one outside it closes the modal.
+    ReleaseNotesBody,
+    /// The mark in the release notes modal's corner. Ahead of the body it
+    /// sits on, and like every click that is not on the body, it closes.
+    ReleaseNotesClose,
     ResizeSidebar,
 }
 
@@ -2170,6 +2198,7 @@ struct Channels {
     /// answering inline on the render path.
     git: Answers<GitResolution>,
     commit_details: Answers<CommitDetailResolution>,
+    release_notes: Answers<ReleaseNotesResolution>,
     code_changes: Answers<ChangesResolution>,
     /// The surface's file reads and writes, off-thread for the same
     /// reason its changes are.
@@ -2509,6 +2538,9 @@ struct WorkspaceModel {
     /// out — so this is the one place that answers "what can I do", in the
     /// mode where the keyboard mostly belongs to something else.
     action_index: Option<ActionIndexOverlay>,
+    /// The notes of the release the sidebar's notice names, open over
+    /// everything; `None` when closed.
+    release_notes: Option<crate::ui::release_notes::ReleaseNotesModal>,
     /// What each root the picker landed on allows, once a worker answered:
     /// asked once per root and kept for the attach, so walking back over a
     /// directory never asks Git again.
@@ -2858,6 +2890,7 @@ impl WorkspaceModel {
             && self.code.is_none()
             && self.architect.is_none()
             && self.action_index.is_none()
+            && self.release_notes.is_none()
             && self.manage.is_none()
             && !self.commit_detail_open()
     }

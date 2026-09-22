@@ -169,6 +169,10 @@ scopes! {
     /// The tab/space context menu.
     ContextMenu => "context-menu", "A tab's actions", Workspace, seals: true, text: false;
 
+    /// A release's notes, read in a modal, in either mode.
+    ReleaseNotes => "release-notes", "Reading release notes", Both,
+        seals: true, text: false;
+
     /// The index of everything, in either mode.
     ActionIndex => "action-index", "The index", Both, seals: true, text: true;
     /// The Keys screen waiting for a chord to bind. Takes every keystroke,

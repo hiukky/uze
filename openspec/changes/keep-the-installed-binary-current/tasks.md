@@ -40,7 +40,7 @@
 - [x] 4.2 After a successful command whose reader is a person, a stale answer
   is handed to a detached `uze self-update` in its own process group, and a
   release is mentioned once on stderr.
-- [ ] 4.3 `uze self-update` becomes `uze upgrade`, visible in `uze --help`
+- [x] 4.3 `uze self-update` becomes `uze upgrade`, visible in `uze --help`
   with a line saying it is the binary and not the plugins; the detached
   background pass runs the same command under a hidden flag, so only one
   verb exists. Same `JustifiedSlow` classification.

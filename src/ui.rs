@@ -53,6 +53,7 @@ mod management;
 mod model;
 mod orchestrator;
 mod overlay;
+mod release_notes;
 mod root_picker;
 pub(crate) mod theme;
 
@@ -660,7 +661,7 @@ impl ReleaseNotice<'_> {
     /// caption is the first thing a narrow column elides, and a mark at its
     /// end went with it — a notice nobody could put away. What gives way on
     /// a narrow column is the text, the way a section row's name does; the
-    /// mark and the arrow never do.
+    /// mark never does.
     pub(crate) fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect) -> ReleaseTargets {
         use ratatui::{text::Line, widgets::Paragraph};
 
@@ -668,14 +669,12 @@ impl ReleaseNotice<'_> {
         let version = Rect::new(area.x, area.y, area.width, 1);
         let action = Rect::new(area.x, area.y + 1, area.width, 1);
         let gutter = theme::width(Symbol::ArrowUp) + 1;
-        // The room a row's text has once its gutter, the gap `push_trailing`
-        // keeps and its right-aligned glyph are paid for.
-        let room = |trailing: Symbol, used: u16| {
-            usize::from(
-                area.width
-                    .saturating_sub(gutter + used + 1 + theme::width(trailing) + TRAILING_PAD),
-            )
-        };
+        // The room the version has once its gutter, the gap `push_trailing`
+        // keeps and the dismissing mark are paid for.
+        let room = usize::from(
+            area.width
+                .saturating_sub(gutter + 1 + theme::width(Symbol::MarkClose) + TRAILING_PAD),
+        );
 
         let mut spans = vec![
             Span::styled(
@@ -683,10 +682,7 @@ impl ReleaseNotice<'_> {
                 theme::fg(theme::Token::Accent),
             ),
             Span::styled(
-                text::elide(
-                    &format!("v{}", notice.version()),
-                    room(Symbol::MarkClose, 0),
-                ),
+                text::elide(&format!("v{}", notice.version()), room),
                 theme::fg(theme::Token::TextPrimary),
             ),
         ];
@@ -698,24 +694,18 @@ impl ReleaseNotice<'_> {
         );
         frame.render_widget(Paragraph::new(Line::from(spans)), version);
 
-        let mut spans = vec![Span::raw(" ".repeat(usize::from(gutter)))];
-        let mut used = 0;
-        if let Some(state) = notice.state() {
-            let joint = format!(" {} ", theme::glyph(Symbol::MarkDot));
-            used = (state.chars().count() + joint.chars().count()) as u16;
-            spans.push(Span::styled(state, theme::fg(theme::Token::TextSecondary)));
-            spans.push(Span::styled(joint, theme::fg(theme::Token::TextFaint)));
-        }
-        spans.push(Span::styled(
-            text::elide(notice.action(), room(Symbol::ArrowExternal, used)),
-            theme::fg(theme::Token::TextDim),
-        ));
-        row::push_trailing(
-            &mut spans,
-            action.width,
-            theme::glyph(Symbol::ArrowExternal),
-            theme::color(theme::Token::TextFaint),
-        );
+        // No trailing glyph: the notes open here, in a modal, and an
+        // external-link arrow would promise the browser.
+        let spans = vec![
+            Span::raw(" ".repeat(usize::from(gutter))),
+            Span::styled(
+                text::elide(
+                    notice.action(),
+                    usize::from(area.width.saturating_sub(gutter + TRAILING_PAD)),
+                ),
+                theme::fg(theme::Token::TextDim),
+            ),
+        ];
         frame.render_widget(Paragraph::new(Line::from(spans)), action);
 
         let mark = theme::width(Symbol::MarkClose);
