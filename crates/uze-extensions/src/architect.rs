@@ -1118,8 +1118,12 @@ pub fn view(state: &ArchitectView, space: Size) -> View {
 
 /// What the surface can be asked right now. The way up is named only
 /// where there is a level to leave — which is also where the key that
-/// closes stops closing and starts going up.
+/// closes stops closing and starts going up. With nothing to draw there
+/// is nothing to ask either, so a message stands alone.
 fn footer(state: &ArchitectView) -> Vec<Command> {
+    if state.nothing.is_some() {
+        return Vec::new();
+    }
     let mut commands = vec![Command::Close];
     if state.depth() > 0 {
         commands.push(Command::Back);
