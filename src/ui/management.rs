@@ -454,6 +454,10 @@ pub(crate) fn render(
             selected,
         } => overlay::render_action_index(frame, area, model, scopes, filter, *selected, hits),
         Overlay::HarnessHelp => overlay::render_harness_help(frame, area),
+        Overlay::ReleaseNotes(modal) => {
+            let popup = super::release_notes::render(frame, area, modal);
+            hits.insert(0, (popup, Hit::ReleaseNotesBody));
+        }
         Overlay::Confirm { kind, focus } => {
             overlay::render_confirmation(frame, area, kind, *focus, hits)
         }

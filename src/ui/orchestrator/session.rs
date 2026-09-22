@@ -339,6 +339,10 @@ impl Attach<'_> {
             scopes.push(Scope::ActionIndex);
             return scopes;
         }
+        if self.model.release_notes.is_some() {
+            scopes.push(Scope::ReleaseNotes);
+            return scopes;
+        }
         scopes.push(if self.model.root_picker.is_some() {
             Scope::RootPicker
         } else if self.model.renaming.is_some() {
@@ -516,6 +520,16 @@ impl Attach<'_> {
         }
         if self.model.action_index.is_some() {
             return self.action_index_action(action, viewport);
+        }
+        if let Some(modal) = &mut self.model.release_notes {
+            use crate::ui::release_notes::Outcome;
+            match modal.act(action) {
+                Outcome::None => {}
+                Outcome::Close => self.model.release_notes = None,
+                Outcome::OpenLink(url) => open_link(url),
+            }
+            self.model.dirty = true;
+            return Flow::Continue;
         }
         if self.model.root_picker.is_some() {
             self.root_picker_action(action, viewport);
@@ -1452,6 +1466,15 @@ impl Attach<'_> {
             ..
         } = *viewport;
         match mouse {
+            _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
+                if !matches!(
+                    self.model.hit_at(mouse.column, mouse.row),
+                    Some(WorkspaceHit::ReleaseNotesBody)
+                ) {
+                    self.model.release_notes = None;
+                    self.model.dirty = true;
+                }
+            }
             _ if self.model.action_index.is_some() => {
                 // A click on a row performs it, the way choosing it with
                 // the keyboard does; anywhere else closes without acting.
@@ -2056,6 +2079,12 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
+                if let Some(modal) = &mut self.model.release_notes {
+                    modal.wheel(mouse.kind == MouseEventKind::ScrollDown);
+                    self.model.dirty = true;
+                }
+            }
             // The index is nothing but a long list, so the wheel walks it
             // the way the arrows do. It sits ahead of every surface below
             // because it is drawn over all of them.
@@ -2230,14 +2259,16 @@ impl Attach<'_> {
             }
             WorkspaceHit::OpenReleaseNotes => {
                 if let Some(notice) = &self.model.release {
-                    let url = notice.notes();
-                    // Handing a URL over spawns a process, which is not
-                    // something the thread drawing the frame should wait on.
-                    let parent = tracing::Span::current();
-                    std::thread::spawn(move || {
-                        let _parent = parent.enter();
-                        crate::ui::worker::open_in_browser(&url);
-                    });
+                    let version = notice.version().to_owned();
+                    self.model.release_notes = Some(
+                        crate::ui::release_notes::ReleaseNotesModal::opening(&version),
+                    );
+                    spawn_release_notes(
+                        self.home.clone(),
+                        version,
+                        self.channels.release_notes.sender.clone(),
+                    );
+                    self.model.dirty = true;
                 }
             }
             WorkspaceHit::DismissRelease => {
@@ -2262,7 +2293,7 @@ impl Attach<'_> {
             }
             // Only reachable while the index is open, which the guarded
             // arm in `press` answers first.
-            WorkspaceHit::ActionIndexEntry(_) => {}
+            WorkspaceHit::ActionIndexEntry(_) | WorkspaceHit::ReleaseNotesBody => {}
             WorkspaceHit::SelectTab(tab) => {
                 // Whether this click landed on the tab already
                 // holding its space's selection — read before
@@ -3253,6 +3284,11 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.git.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_git_read(resolution);
         }
+        while let Ok(resolution) = self.channels.release_notes.receiver.try_recv() {
+            if let Some(modal) = &mut self.model.release_notes {
+                self.model.dirty |= modal.absorb(&resolution.version, resolution.notes);
+            }
+        }
         while let Ok(resolution) = self.channels.commit_details.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_commit_detail(resolution);
         }
@@ -3301,4 +3337,14 @@ impl Attach<'_> {
         }
         Flow::Continue
     }
+}
+
+/// Hands a URL to the reader's browser. That spawns a process, which is not
+/// something the thread drawing the frame should wait on.
+fn open_link(url: String) {
+    let parent = tracing::Span::current();
+    std::thread::spawn(move || {
+        let _parent = parent.enter();
+        crate::ui::worker::open_in_browser(&url);
+    });
 }

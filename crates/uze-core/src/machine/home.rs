@@ -275,6 +275,13 @@ impl UzeHome {
         self.cache_dir().join("inspection.json")
     }
 
+    /// The changelog of the release the updater last installed, as published
+    /// at that release's tag. Observed again whenever it is missing, so it is
+    /// a cache and never a record.
+    pub fn release_notes_cache_path(&self) -> PathBuf {
+        self.cache_dir().join("release-notes.md")
+    }
+
     /// Cross-invocation cache of registered marketplaces' catalogues (see
     /// `application::marketplace_catalogue`): one checkout per Git
     /// marketplace, so listing what it offers reads a directory instead of
@@ -471,6 +478,7 @@ mod tests {
             home.harness_detection_cache_path(),
             home.inspection_cache_path(),
             home.marketplace_cache_dir(),
+            home.release_notes_cache_path(),
             home.logs_dir(),
             home.generated_attachments_dir("claude"),
             home.runtime_project_dir("abc"),

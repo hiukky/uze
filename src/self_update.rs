@@ -56,6 +56,11 @@ use uze_application::UzeHome;
 /// Where releases are published, and where a notice's link points.
 const RELEASES: &str = "https://github.com/hiukky/uze/releases";
 
+/// Where a release's own `CHANGELOG.md` is read from: the file at its tag.
+/// A constant for the same reason [`RELEASES`] is one, although what comes
+/// from here is only ever shown.
+const SOURCES: &str = "https://raw.githubusercontent.com/hiukky/uze";
+
 /// How long an answer about the latest release is trusted. Every client
 /// that opens runs the check, and this is what keeps a second terminal from
 /// asking again a minute after the first one did.
@@ -76,14 +81,15 @@ impl Notice {
         &self.0
     }
 
-    /// What the row says. Clicking it opens the release's own notes.
+    /// What the row says. Clicking it opens the release's notes.
     pub(crate) fn action(&self) -> &'static str {
         "restart uze to use it"
     }
+}
 
-    pub(crate) fn notes(&self) -> String {
-        format!("{RELEASES}/tag/v{}", self.version())
-    }
+/// The release's own page, where its notes are published.
+pub(crate) fn release_page(version: &str) -> String {
+    format!("{RELEASES}/tag/v{version}")
 }
 
 /// The notice as it stands, and a counter that moves whenever it does —
@@ -273,6 +279,7 @@ struct Ledger {
 /// without a network.
 trait Releases {
     fn latest(&self) -> Option<String>;
+    fn changelog(&self, version: &str) -> Option<String>;
     fn install(&self, version: &str, target: &Path, scratch: &Path) -> Result<(), String>;
 }
 
@@ -333,7 +340,77 @@ fn install_over(
     owned.version = latest.to_owned();
     let _ = write_json(&receipt_path(home), owned);
     amend_ledger(home, |stored| stored.installed = Some(latest.to_owned()));
+    // Fetched now, while this is already online and off anyone's frame, so
+    // the notice's notes open without a wait.
+    notes_with(home, latest, releases);
     Ok(())
+}
+
+/// One release's section of the changelog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReleaseNotes {
+    pub(crate) version: String,
+    pub(crate) date: Option<String>,
+    /// The section's Markdown, below its heading.
+    pub(crate) body: String,
+}
+
+/// `version`'s own section of the changelog published at its tag: from the
+/// cache when it already carries it, fetched and kept otherwise. It may wait
+/// on the network, so nothing that draws calls it.
+pub(crate) fn release_notes(home: &UzeHome, version: &str) -> Option<ReleaseNotes> {
+    notes_with(home, version, &Published::current())
+}
+
+fn notes_with(home: &UzeHome, version: &str, releases: &dyn Releases) -> Option<ReleaseNotes> {
+    let path = home.release_notes_cache_path();
+    let section = |text: &str| {
+        sections(text)
+            .into_iter()
+            .find(|notes| notes.version == version)
+    };
+    if let Some(cached) = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| section(&text))
+    {
+        return Some(cached);
+    }
+    let text = releases.changelog(version)?;
+    let fetched = section(&text)?;
+    let _ = uze_application::write_atomic(&path, text.as_bytes());
+    Some(fetched)
+}
+
+/// Splits a `git-cliff` changelog into its releases. A section starts at a
+/// `## [version](…) - date` heading and runs to the next one; the preamble
+/// above the first belongs to none.
+fn sections(changelog: &str) -> Vec<ReleaseNotes> {
+    let mut notes: Vec<ReleaseNotes> = Vec::new();
+    for line in changelog.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let version = heading
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once(']'))
+                .map_or(heading, |(version, _)| version)
+                .trim_start_matches('v')
+                .to_owned();
+            let date = heading
+                .rsplit_once(" - ")
+                .map(|(_, date)| date.trim().to_owned());
+            notes.push(ReleaseNotes {
+                version,
+                date,
+                body: String::new(),
+            });
+        } else if let Some(current) = notes.last_mut() {
+            current.body.push_str(line);
+            current.body.push('\n');
+        }
+    }
+    for release in &mut notes {
+        release.body = release.body.trim().to_owned();
+    }
+    notes
 }
 
 /// What `uze upgrade` did.
@@ -450,6 +527,18 @@ impl Releases for Published {
             .ok()?;
         output.status.success().then_some(())?;
         tag_version(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    fn changelog(&self, version: &str) -> Option<String> {
+        let output = Command::new("curl")
+            .args(["-fsSL", "--max-time", "15"])
+            .arg(format!("{SOURCES}/v{version}/CHANGELOG.md"))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        output.status.success().then_some(())?;
+        String::from_utf8(output.stdout).ok()
     }
 
     fn install(&self, version: &str, target: &Path, scratch: &Path) -> Result<(), String> {
@@ -871,6 +960,7 @@ mod tests {
 
     struct Fake {
         latest: Option<&'static str>,
+        changelogs: RefCell<Vec<String>>,
         installs: RefCell<Vec<(String, PathBuf)>>,
         fails: bool,
     }
@@ -878,6 +968,12 @@ mod tests {
     impl Releases for Fake {
         fn latest(&self) -> Option<String> {
             self.latest.map(str::to_owned)
+        }
+        fn changelog(&self, version: &str) -> Option<String> {
+            self.changelogs.borrow_mut().push(version.to_owned());
+            self.latest.map(|latest| {
+                format!("# Changelog\n\nIntro.\n\n## [{latest}](https://x/compare) - 2026-09-22\n\n### Fixes\n\n- one\n")
+            })
         }
         fn install(&self, version: &str, target: &Path, _: &Path) -> Result<(), String> {
             self.installs
@@ -894,6 +990,7 @@ mod tests {
     fn fake(latest: Option<&'static str>) -> Fake {
         Fake {
             latest,
+            changelogs: RefCell::default(),
             installs: RefCell::default(),
             fails: false,
         }
@@ -1065,6 +1162,60 @@ mod tests {
         let (_dir, home, binary) = world();
         receipt(&home, &binary, RUNNING);
         assert!(upgrade_with(&home, Some(&binary), &fake(None), 10_000).is_err());
+    }
+
+    #[test]
+    fn a_changelog_splits_into_its_releases_newest_first() {
+        let notes = sections(
+            "# Changelog\n\nPreamble.\n\n\
+             ## [0.0.0-alpha.8](https://x/compare/a...b) - 2026-09-22\n\n### Fixes\n\n- b\n\n\
+             ## [0.0.0-alpha.7](https://x/compare/a...b) - 2026-09-21\n\n- a\n",
+        );
+        assert_eq!(
+            notes,
+            [
+                ReleaseNotes {
+                    version: "0.0.0-alpha.8".to_owned(),
+                    date: Some("2026-09-22".to_owned()),
+                    body: "### Fixes\n\n- b".to_owned(),
+                },
+                ReleaseNotes {
+                    version: "0.0.0-alpha.7".to_owned(),
+                    date: Some("2026-09-21".to_owned()),
+                    body: "- a".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn notes_are_fetched_once_and_kept_for_the_release_they_cover() {
+        let (_dir, home, _binary) = world();
+        let releases = fake(Some("999.0.0"));
+
+        let notes = notes_with(&home, "999.0.0", &releases).expect("fetched");
+        assert_eq!(notes.version, "999.0.0");
+        assert_eq!(notes.body, "### Fixes\n\n- one");
+        notes_with(&home, "999.0.0", &releases).expect("kept");
+        assert_eq!(releases.changelogs.borrow().len(), 1, "read from the cache");
+
+        assert_eq!(
+            notes_with(&home, "1000.0.0", &releases),
+            None,
+            "a changelog that does not cover the release is not its notes"
+        );
+    }
+
+    #[test]
+    fn installing_a_release_fetches_its_notes() {
+        let (_dir, home, binary) = world();
+        receipt(&home, &binary, RUNNING);
+        let releases = fake(Some("999.0.0"));
+
+        upgrade_with(&home, Some(&binary), &releases, 10_000).unwrap();
+
+        assert_eq!(releases.changelogs.borrow().as_slice(), ["999.0.0"]);
+        assert!(home.release_notes_cache_path().is_file());
     }
 
     #[test]

@@ -54,6 +54,12 @@ Every release until v1 is an alpha. Each one ships six tarballs (four Linux,
 two macOS), a CycloneDX SBOM, `SHASUMS256.txt` and signed provenance you can
 check with `gh attestation verify <file> --repo hiukky/uze`.
 
+A `uze` the install script placed keeps itself current: the workspace checks
+for a new release when it opens and every hour after, installs it, and says so
+in the sidebar — restart uze to run it, and click the notice to read what
+changed. `uze upgrade` does the same on demand, and says why when it cannot
+replace the binary it is running from.
+
 ## Provision your harnesses
 
 `uze setup` detects every harness uze supports and provisions any that are

@@ -78,6 +78,9 @@ pub(crate) enum Intent {
     /// it spawns a process, which is not something the render thread
     /// should be doing.
     OpenLink(String),
+    /// Read the notes of this release for the modal already open on it —
+    /// off the render thread, since reading them may reach the network.
+    ReadReleaseNotes(String),
     /// Put the release notice about this version away, in both surfaces
     /// and every run after — a write, so not on the render thread.
     AcknowledgeRelease(String),
@@ -131,6 +134,7 @@ impl Intent {
             Self::Setup(_) => "setup",
             Self::AddMarketplace(_) => "add_marketplace",
             Self::OpenLink(_) => "open_link",
+            Self::ReadReleaseNotes(_) => "read_release_notes",
             Self::AcknowledgeRelease(_) => "acknowledge_release",
             Self::ContextAnalyze(_) => "context_analyze",
             Self::ContextApply(_) => "context_apply",
@@ -171,6 +175,7 @@ pub(crate) enum WorkerResult {
         super::model::PreviewQuestion,
         std::result::Result<ProfilePreview, String>,
     ),
+    ReleaseNotesRead(String, Option<crate::self_update::ReleaseNotes>),
 }
 
 pub(crate) fn dispatch(
@@ -302,6 +307,15 @@ pub(crate) fn dispatch(
             });
         }
         Intent::AcknowledgeRelease(version) => crate::self_update::acknowledge(home, &version),
+        Intent::ReadReleaseNotes(version) => {
+            let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
+            thread::spawn(move || {
+                let _parent = parent.enter();
+                let notes = crate::self_update::release_notes(&home, &version);
+                let _ = sender.send(WorkerResult::ReleaseNotesRead(version, notes));
+            });
+        }
         Intent::OpenLink(url) => {
             model.status = match open_in_browser(&url) {
                 // Present tense on purpose: the opener took the address,
@@ -740,6 +754,11 @@ pub(crate) fn drain_worker_results(
 ) {
     while let Ok(result) = receiver.try_recv() {
         match result {
+            WorkerResult::ReleaseNotesRead(version, notes) => {
+                if let Overlay::ReleaseNotes(modal) = &mut model.overlay {
+                    modal.absorb(&version, notes);
+                }
+            }
             // A pass that moved something, arriving after the screen drew.
             // Carried into the same `refreshed` path so the rows and the
             // badge come from one answer rather than two.

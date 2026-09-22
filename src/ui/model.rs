@@ -424,6 +424,9 @@ pub(crate) enum Overlay {
         filter: String,
         selected: usize,
     },
+    /// The notes of the release the sidebar's notice names, and of every
+    /// other the changelog carries.
+    ReleaseNotes(crate::ui::release_notes::ReleaseNotesModal),
     /// The Harnesses screen's own glossary — what each status/delivery/
     /// compatibility label actually means. Reference material about what
     /// the data *means*, which is a different question from what can be

@@ -52,6 +52,9 @@ pub(crate) enum Hit {
     PromptHistory(usize),
     /// One row of the open index of everything, by position in it.
     ActionIndexEntry(usize),
+    /// The release notes modal's own area: a click on it is reading, and
+    /// only one outside it closes the modal.
+    ReleaseNotesBody,
     /// A detail view's button for one of the selected row's offers.
     OfferedAction(uze_keys::Action),
     /// One line of the Keys screen.
@@ -115,6 +118,9 @@ impl TuiModel {
                 Some(Hit::OfferedAction(action)) => Some(*action),
                 _ => None,
             };
+            if matches!(self.hit_at(column, row), Some(Hit::ReleaseNotesBody)) {
+                return Intent::None;
+            }
             return match answer {
                 Some(action) => self.overlay_action(action),
                 None => {
@@ -215,10 +221,16 @@ impl TuiModel {
                 self.first_steps_closed = true;
                 Intent::None
             }
-            Hit::OpenReleaseNotes => self
-                .release
-                .as_ref()
-                .map_or(Intent::None, |notice| Intent::OpenLink(notice.notes())),
+            Hit::OpenReleaseNotes => match &self.release {
+                Some(notice) => {
+                    let version = notice.version().to_owned();
+                    self.overlay = Overlay::ReleaseNotes(
+                        crate::ui::release_notes::ReleaseNotesModal::opening(&version),
+                    );
+                    Intent::ReadReleaseNotes(version)
+                }
+                None => Intent::None,
+            },
             Hit::DismissRelease => self.release.take().map_or(Intent::None, |notice| {
                 Intent::AcknowledgeRelease(notice.version().to_owned())
             }),
@@ -232,7 +244,7 @@ impl TuiModel {
             }
             // Only reachable while the index is open, which the guarded
             // arm above already answered.
-            Hit::ActionIndexEntry(_) => Intent::None,
+            Hit::ActionIndexEntry(_) | Hit::ReleaseNotesBody => Intent::None,
             Hit::OfferedAction(action) => self.act(action),
             Hit::KeysTrack(track) => {
                 self.dragging_keys_track = Some(track);

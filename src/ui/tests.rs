@@ -2137,8 +2137,17 @@ fn the_sidebar_announces_a_release_above_the_steps() {
         .expect("the action row opens the notes");
     assert_eq!(
         model.click(row.x, row.y),
-        Intent::OpenLink("https://github.com/hiukky/uze/releases/tag/v0.0.0-alpha.14".to_owned())
+        Intent::ReadReleaseNotes("0.0.0-alpha.14".to_owned()),
+        "the notes are read for a modal, not handed to a browser"
     );
+    assert!(
+        matches!(&model.overlay, Overlay::ReleaseNotes(modal) if modal.version == "0.0.0-alpha.14"),
+        "{:?}",
+        model.overlay
+    );
+    assert!(model.scopes().contains(&uze_keys::Scope::ReleaseNotes));
+    model.overlay_action(uze_keys::Action::Dismiss);
+    assert_eq!(model.overlay, Overlay::None, "esc closes it");
     assert_eq!(
         model.click(mark.x, mark.y),
         Intent::AcknowledgeRelease("0.0.0-alpha.14".to_owned()),

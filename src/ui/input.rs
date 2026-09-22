@@ -45,6 +45,7 @@ impl TuiModel {
             Overlay::AddMarketplace(_) | Overlay::NewProfile(_) => scopes.push(Scope::TextPrompt),
             Overlay::ThemePicker { .. } => scopes.push(Scope::ThemePicker),
             Overlay::Confirm { .. } => scopes.push(Scope::Confirm),
+            Overlay::ReleaseNotes(_) => scopes.push(Scope::ReleaseNotes),
         }
         scopes
     }
@@ -543,6 +544,14 @@ impl TuiModel {
             }
             MouseEventKind::ScrollUp if matches!(self.overlay, Overlay::ActionIndex { .. }) => {
                 self.overlay_action(Action::SelectPrevious)
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if matches!(self.overlay, Overlay::ReleaseNotes(_)) =>
+            {
+                if let Overlay::ReleaseNotes(modal) = &mut self.overlay {
+                    modal.wheel(event.kind == MouseEventKind::ScrollDown);
+                }
+                Intent::None
             }
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;

@@ -50,7 +50,7 @@ pub(super) fn is_markdown(path: &Path) -> bool {
 /// `theme_name` is the host's syntax theme, used for fenced code blocks —
 /// a block of Rust inside a README is highlighted as Rust, which is most
 /// of what a preview is for in a repository.
-pub(super) fn render(text: &str, theme_name: &str) -> Vec<ContentLine> {
+pub fn render(text: &str, theme_name: &str) -> Vec<ContentLine> {
     let mut options = Options::empty();
     // The three GitHub extensions a README actually uses. They are
     // parser options rather than cargo features, so they cost nothing.
