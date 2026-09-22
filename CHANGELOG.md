@@ -4,6 +4,21 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.8](https://github.com/hiukky/uze/compare/v0.0.0-alpha.7...v0.0.0-alpha.8) - 2026-09-22
+
+### Fixes
+
+- **terminal:** End forward_events when the client's channel hangs up ([#96](https://github.com/hiukky/uze/pull/96)) ([4241541](https://github.com/hiukky/uze/commit/42415412f0db7d3a745fe38a0e24950de653aeec))
+- **observability:** Record a prompt's length in its span, not the prompt ([#97](https://github.com/hiukky/uze/pull/97)) ([ac2c822](https://github.com/hiukky/uze/commit/ac2c822af0aa5366198b7c37f74db0b084b02d23))
+
+### Refactor
+
+- **workspace:** Rework the sidebar's space column ([#98](https://github.com/hiukky/uze/pull/98)) ([cf2ca07](https://github.com/hiukky/uze/commit/cf2ca076073bcfb8735dbe3a02f60b7a5b1676a5))
+
+### CI
+
+- Borrow a macOS runner for a session a person drives ([#95](https://github.com/hiukky/uze/pull/95)) ([98214bb](https://github.com/hiukky/uze/commit/98214bbe5beac8e41ffd5d37548ec6611905c327))
+
 ## [0.0.0-alpha.7](https://github.com/hiukky/uze/compare/v0.0.0-alpha.6...v0.0.0-alpha.7) - 2026-09-21
 
 ### Features

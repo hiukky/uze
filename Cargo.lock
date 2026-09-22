@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "uze"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "anstyle",
  "bincode",
@@ -3184,7 +3184,7 @@ dependencies = [
 
 [[package]]
 name = "uze-application"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "uze-core"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "libc",
  "noyalib",
@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "uze-document"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "uze-extensions"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "pulldown-cmark",
  "syntect",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "uze-git"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "libc",
  "tracing",
@@ -3245,7 +3245,7 @@ dependencies = [
 
 [[package]]
 name = "uze-integrations"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde_json",
  "toml_edit",
@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "uze-keys"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "uze-terminal"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "alacritty_terminal",
  "bincode",
@@ -3280,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "uze-testkit"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde_json",
  "uze-git",
@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "uze-theme"
-version = "0.0.0-alpha.7"
+version = "0.0.0-alpha.8"
 dependencies = [
  "serde",
  "serde_json",
