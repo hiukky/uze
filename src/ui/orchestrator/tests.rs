@@ -33,15 +33,16 @@ mod workspace_tests {
 
     use super::WorkspaceHit;
     use super::{
-        AGENT_BEATS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentGroup, AgentIdentity,
-        AgentTabStatus, AgentView, Attach, CommitDetailPopup, CommitDetailResolution,
-        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, Flow, GitAnswer,
-        GitBadge, GitResolution, PendingDrop, PlacementResolution, PreservedOverlay, RootPicker,
-        ScrollDirection, TabDragGroup, UpstreamSync, Viewport, WorkResolution, WorkStateView,
-        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
-        answered_or, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
-        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_architect, open_code, open_commit_detail, pane_relative, pending_tab_drop,
+        AGENT_BEATS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AGENT_QUIET_AFTER, AgentGroup,
+        AgentIdentity, AgentTabStatus, AgentView, Attach, CommitDetailPopup,
+        CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
+        Flow, GitAnswer, GitBadge, GitResolution, PendingDrop, PlacementResolution,
+        PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup, UpstreamSync, Viewport,
+        WorkResolution, WorkStateView, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
+        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
+        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
+        next_shell_label, open_architect, open_code, open_commit_detail, pane_relative,
+        pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -6103,7 +6104,11 @@ mod workspace_tests {
             AgentTabStatus::Working
         );
 
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert!(!workspace_has_active_agent_operation(
             &model,
             &identities_fixture()
@@ -6202,7 +6207,11 @@ mod workspace_tests {
         // the turn showing as finished.
         let mut model = agent_session();
         model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
@@ -6291,6 +6300,69 @@ mod workspace_tests {
         );
     }
 
+    /// Not every harness keeps time at exactly a second. One that ticks
+    /// every second and a half is keeping time just as plainly, and the
+    /// rule has to read it as such.
+    ///
+    /// This is the case that decides how cadence is judged. The rule this
+    /// replaced measured the *widest gap* in the window against a
+    /// threshold, so a beat a shade slower than that threshold never
+    /// entered `Working` at all — no matter how many of them arrived, or
+    /// how regular they were. Counting them over a short window asks the
+    /// same question without having to guess a tempo.
+    #[test]
+    fn a_beat_slower_than_a_second_is_still_a_running_turn() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                start + Duration::from_millis(1600 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), true),
+            AgentTabStatus::Working,
+            "a steady beat is a turn, whatever its tempo"
+        );
+    }
+
+    /// A beat that stutters is still a beat. A harness changing phase —
+    /// one tool ending, the next starting — goes quiet for a second or
+    /// two and picks the count back up, and the status must not blink out
+    /// and back over it.
+    ///
+    /// The rule this replaced judged the *widest gap* in the window, so
+    /// one two-second pause disqualified every call until that pair aged
+    /// out of it: `Working` dropped to the plain selected dot and returned
+    /// seconds later, with the agent running and its timer on screen the
+    /// whole time. Counting beats over a short window says the same thing
+    /// about cadence and cannot be poisoned by one hiccup.
+    #[test]
+    fn a_beat_that_stutters_stays_a_running_turn() {
+        let mut model = agent_session();
+        let start = Instant::now();
+        // A second apart, then a two-second pause, then a second apart
+        // again. The first two beats are not yet a rhythm — one frame
+        // never is, which is the whole point of the threshold — so the
+        // claim starts once it is established and holds from there.
+        let beats = [0u64, 1000, 2000, 4000, 5000, 6000, 7000];
+        for beat in beats {
+            let at = start + Duration::from_millis(beat);
+            model.note_agent_output(PaneId(1), &identities_fixture(), at);
+            model.expire_agent_activity(at);
+            if beat < 2000 {
+                continue;
+            }
+            assert_eq!(
+                model.agent_tab_status(PaneId(1), true),
+                AgentTabStatus::Working,
+                "at {beat}ms the turn is still running"
+            );
+        }
+    }
+
     /// And the thing the old threshold was protecting: a pane that paints
     /// now and then is not keeping time. A rotating hint beside a banner
     /// printed half a minute earlier is two repaints, not a rhythm.
@@ -6366,7 +6438,7 @@ mod workspace_tests {
             );
         }
 
-        assert!(model.expire_agent_activity(start + Duration::from_secs(4)));
+        assert!(model.expire_agent_activity(start + (AGENT_QUIET_AFTER + Duration::from_secs(2))));
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
@@ -6414,7 +6486,11 @@ mod workspace_tests {
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Completed
@@ -6447,7 +6523,11 @@ mod workspace_tests {
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = model_of(session);
         model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Completed
@@ -6456,7 +6536,11 @@ mod workspace_tests {
         if let Some(session) = model.session.as_mut() {
             session.workspace.spaces[0].selected_tab = agent_tab;
         }
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(
+            model.expire_agent_activity(
+                Instant::now() + (AGENT_QUIET_AFTER + Duration::from_secs(2))
+            )
+        );
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
             AgentTabStatus::Idle

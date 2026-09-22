@@ -88,7 +88,10 @@ const CODE_MEASURE_FRESH: Duration = Duration::from_secs(30);
 /// never as a state the control got stuck in.
 const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// How long an agent pane must stay quiet before its work reads as
-/// finished. Agent harnesses animate while they work — a spinner, an
+/// finished. Counted in missed beats: at the once-a-second a harness
+/// keeps while it waits, this is five of them, which a phase change
+/// between tools does not reach and a finished turn passes straight
+/// through. Agent harnesses animate while they work — a spinner, an
 /// elapsed-token counter — so a pane that is genuinely busy keeps emitting
 /// damage well inside this window even across a slow tool call, and a pane
 /// that stops emitting has stopped working. Long enough to ride out a
@@ -96,7 +99,7 @@ const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// while the user still cares; unlike the previous 10s window, guessing
 /// low is no longer terminal because renewed output re-enters `Working`
 /// on its own (see [`WorkspaceModel::note_agent_output`]).
-const AGENT_QUIET_AFTER: Duration = Duration::from_secs(3);
+const AGENT_QUIET_AFTER: Duration = Duration::from_secs(5);
 
 /// What a pane's repainting has to look like before it reads as an agent
 /// at work: a *beat*, not a rate.
@@ -111,14 +114,23 @@ const AGENT_QUIET_AFTER: Duration = Duration::from_secs(3);
 /// while a tool call runs paints once a second, never reaches five, and
 /// read as stopped — with the terminal moving the whole time.
 ///
-/// So: enough beats to be a rhythm ([`AGENT_BEATS`]), spanning long
-/// enough to be one ([`AGENT_BEAT_SPAN`]), with no gap between two of
-/// them longer than [`AGENT_BEAT_GAP`]. A once-a-second counter passes.
-/// A hint that turns over every half minute does not, which is what the
-/// old threshold was protecting against — treating any single repaint as
-/// work is what left merely-open agents spinning forever.
-const AGENT_BEAT_WINDOW: Duration = Duration::from_secs(6);
-const AGENT_BEAT_GAP: Duration = Duration::from_millis(1500);
+/// So: enough beats to be a rhythm ([`AGENT_BEATS`]) inside a window
+/// short enough that only a rhythm fits in it
+/// ([`AGENT_BEAT_WINDOW`]), spanning long enough not to be one frame
+/// arriving in pieces ([`AGENT_BEAT_SPAN`]). A once-a-second counter
+/// passes. A hint that turns over every half minute does not, which is
+/// what the old threshold was protecting against — treating any single
+/// repaint as work is what left merely-open agents spinning forever.
+///
+/// Counted, deliberately, rather than measured against the widest gap in
+/// the window. Judging the gaps was tried and is worse: a harness that
+/// pauses two seconds between phases puts one wide pair in the window,
+/// and every call for as long as that pair is retained fails on it — the
+/// status dropped out of `Working` and came back once the pair aged off,
+/// which is a flicker where the old rule at least held still. A count
+/// over a short window says the same thing about cadence and cannot be
+/// poisoned by one hiccup.
+const AGENT_BEAT_WINDOW: Duration = Duration::from_millis(3500);
 const AGENT_BEAT_SPAN: Duration = Duration::from_millis(900);
 const AGENT_BEATS: usize = 3;
 
@@ -1928,18 +1940,7 @@ impl AgentActivity {
             return false;
         };
         let spread = now.duration_since(*oldest);
-        // The longest silence inside the window. One gap too long and this
-        // is a pane that happened to paint twice, not one keeping time:
-        // the rhythm has to be unbroken, or a hint turning over beside a
-        // banner half a minute earlier would read as a running turn.
-        let widest = self
-            .repaints
-            .iter()
-            .zip(self.repaints.iter().skip(1))
-            .map(|(earlier, later)| later.duration_since(*earlier))
-            .max()
-            .unwrap_or(Duration::ZERO);
-        self.repaints.len() >= AGENT_BEATS && spread >= AGENT_BEAT_SPAN && widest <= AGENT_BEAT_GAP
+        self.repaints.len() >= AGENT_BEATS && spread >= AGENT_BEAT_SPAN
     }
 
     /// Drops the deadline once it has passed, reporting whether this call
