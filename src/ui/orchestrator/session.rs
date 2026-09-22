@@ -2981,11 +2981,18 @@ impl Attach<'_> {
             self.model.remembered.preserved_work = resolution.work;
             self.model.dirty = true;
         }
+        let mut asked_again = Vec::new();
         while let Ok(resolution) = self.channels.tasks.receiver.try_recv() {
             self.model
                 .remembered
                 .task_eval_pending
                 .remove(&resolution.key);
+            asked_again.extend(
+                self.model
+                    .remembered
+                    .task_eval_again
+                    .remove(&resolution.key),
+            );
             self.model
                 .remembered
                 .evaluated
@@ -3062,6 +3069,10 @@ impl Attach<'_> {
                 }
             }
             self.model.dirty = true;
+        }
+        for cwd in asked_again {
+            self.model
+                .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
         }
         while let Ok(resolution) = self.channels.deliveries.receiver.try_recv() {
             // Released before anything is read out of the answer: an
@@ -3199,7 +3210,14 @@ impl Attach<'_> {
             // from the disk rather than from a quirk of how one kernel
             // renames what it lost.
             self.model.occupancy_stale = true;
-            if let Some(cwd) = selected_pane_cwd(&self.model) {
+            // Every space's header, not only the selected pane's: a push
+            // or a pull made from a terminal leaves nothing behind for any
+            // other trigger to notice, and a folded space's `↑1` stayed up
+            // until one of its agents happened to go quiet.
+            let directories = selected_pane_cwd(&self.model)
+                .into_iter()
+                .chain(self.model.space_directories(&self.identities));
+            for cwd in directories {
                 self.model
                     .schedule_evaluation(self.home, cwd, &self.channels.tasks.sender);
             }

@@ -2260,6 +2260,11 @@ struct Remembered {
     /// Repositories an evaluation is in flight for, so a quiet pane and
     /// the clock cannot queue the same read twice.
     task_eval_pending: BTreeSet<PathBuf>,
+    /// Repositories asked about again while their read was in flight, by
+    /// the directory asked from. That read may have started before the
+    /// push or pull the second question was about, so its answer is not
+    /// the last word: the question is asked once more when it lands.
+    task_eval_again: BTreeMap<PathBuf, PathBuf>,
     /// The directories an evaluation has answered for at least once,
     /// whatever it found — a directory that is no repository is answered
     /// too, and must not be asked again on every frame.
@@ -3388,6 +3393,22 @@ impl WorkspaceModel {
             .collect()
     }
 
+    /// The directory each space's header reads its branch and its sync
+    /// against, once per repository.
+    fn space_directories(&self, identities: &[AgentIdentity]) -> Vec<PathBuf> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        let mut seen = BTreeSet::new();
+        session
+            .workspace
+            .spaces
+            .iter()
+            .map(|space| space_cwd(space, identities))
+            .filter(|cwd| seen.insert(evaluation_key(cwd)))
+            .collect()
+    }
+
     /// Every directory the sidebar names a branch for — each space's root
     /// and each agent's own — that no evaluation has answered for yet.
     fn unread_named_directories(&self, identities: &[AgentIdentity]) -> Vec<PathBuf> {
@@ -3423,6 +3444,7 @@ impl WorkspaceModel {
     ) {
         let key = evaluation_key(&cwd);
         if !self.remembered.task_eval_pending.insert(key.clone()) {
+            self.remembered.task_eval_again.insert(key, cwd);
             return;
         }
         let occupied: Vec<PathBuf> = self.remembered.occupied_checkouts.iter().cloned().collect();
