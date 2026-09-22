@@ -2293,7 +2293,9 @@ impl Attach<'_> {
             }
             // Only reachable while the index is open, which the guarded
             // arm in `press` answers first.
-            WorkspaceHit::ActionIndexEntry(_) | WorkspaceHit::ReleaseNotesBody => {}
+            WorkspaceHit::ActionIndexEntry(_)
+            | WorkspaceHit::ReleaseNotesBody
+            | WorkspaceHit::ReleaseNotesClose => {}
             WorkspaceHit::SelectTab(tab) => {
                 // Whether this click landed on the tab already
                 // holding its space's selection — read before

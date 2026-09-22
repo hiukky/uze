@@ -23,7 +23,7 @@ use uze_keys::{Action, Scope};
 use crate::self_update::ReleaseNotes;
 use crate::ui::{
     extension_view,
-    theme::{self, Token},
+    theme::{self, Symbol, Token},
     widget::{POPUP_H_PAD, Scrollbar, Surface, hint},
 };
 
@@ -128,10 +128,19 @@ impl Layout {
 }
 
 const WIDEST: u16 = 96;
+/// Columns kept clear on each side of the modal, and rows above and below
+/// it: a box drawn two cells off the frame's edge read as the frame's own
+/// border doubled rather than as something standing over it.
+const MARGIN_X: u16 = 6;
+const MARGIN_Y: u16 = 2;
 
 fn layout(area: Rect, modal: &ReleaseNotesModal) -> Layout {
-    let width = area.width.saturating_sub(4).min(WIDEST);
-    let height = (area.height.saturating_mul(4) / 5).max(area.height.min(8));
+    let width = area.width.saturating_sub(2 * MARGIN_X).min(WIDEST);
+    let height = area
+        .height
+        .saturating_sub(2 * MARGIN_Y)
+        .min(area.height.saturating_mul(4) / 5)
+        .max(area.height.min(8));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -140,11 +149,12 @@ fn layout(area: Rect, modal: &ReleaseNotesModal) -> Layout {
     );
     let inner = surface().into_block().inner(popup);
     let header = Rect::new(inner.x, inner.y, inner.width, 1.min(inner.height));
-    // A blank row under the header, and a column kept for the scrollbar.
+    // A blank row under the header. The scrollbar takes no column of its
+    // own: it rides the right border.
     let body = Rect::new(
         inner.x,
         inner.y.saturating_add(2).min(inner.bottom()),
-        inner.width.saturating_sub(Scrollbar::width() + 1),
+        inner.width,
         inner.height.saturating_sub(2),
     );
     let lines = body_lines(modal);
@@ -162,14 +172,17 @@ fn layout(area: Rect, modal: &ReleaseNotesModal) -> Layout {
     }
 }
 
+/// No hint row: closing is the mark in the corner, and the release page is
+/// only worth offering when the notes could not be read — where the body
+/// says so itself.
+///
+/// Prose is indented one column past a floating surface's own inset, so
+/// the notes read at the column the code surface's Markdown preview puts
+/// its text: the same document shape, at the same distance from its frame.
 fn surface() -> Surface {
     Surface::floating()
         .title(" what's new ")
-        .hint(hint::line(
-            &[Scope::ReleaseNotes],
-            &[Action::Activate, Action::Dismiss],
-        ))
-        .padding(Padding::new(POPUP_H_PAD, POPUP_H_PAD, 1, 0))
+        .padding(Padding::new(POPUP_H_PAD + 1, POPUP_H_PAD + 1, 1, 1))
 }
 
 fn body_lines(modal: &ReleaseNotesModal) -> Vec<Line<'static>> {
@@ -182,7 +195,10 @@ fn body_lines(modal: &ReleaseNotesModal) -> Vec<Line<'static>> {
     match &modal.notes {
         Notes::Loading => muted("Reading the notes…"),
         Notes::Unavailable => {
-            muted("The notes could not be read. The release page has them — it opens from here.")
+            let mut lines = muted("The notes could not be read. The release page has them:");
+            lines.push(Line::default());
+            lines.push(hint::line(&[Scope::ReleaseNotes], &[Action::Activate]));
+            lines
         }
         Notes::Ready(notes) => extension_view::prose(&uze_extensions::code::markdown(
             &notes.body,
@@ -209,12 +225,34 @@ fn header_line(modal: &ReleaseNotesModal) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Draws the modal centred in `area` and answers the rectangle it took, so
-/// the host can tell a click inside it from one that closes it.
-pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, modal: &ReleaseNotesModal) -> Rect {
+/// What a drawn modal answers to.
+pub(crate) struct Targets {
+    /// The whole modal: a click inside it is reading, one outside closes it.
+    pub(crate) popup: Rect,
+    /// The mark in its top-right corner, which closes it.
+    pub(crate) close: Rect,
+}
+
+/// Draws the modal centred in `area`.
+pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, modal: &ReleaseNotesModal) -> Targets {
     let layout = layout(area, modal);
     frame.render_widget(Clear, layout.popup);
     surface().render(frame, layout.popup);
+    // On the top border, inset the way the title is from the other corner.
+    let mark = theme::width(Symbol::MarkClose);
+    let close = Rect::new(
+        layout.popup.right().saturating_sub(mark + 3),
+        layout.popup.y,
+        mark + 2,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {} ", theme::glyph(Symbol::MarkClose)),
+            theme::fg(Token::TextMuted),
+        )),
+        close,
+    );
     frame.render_widget(Paragraph::new(header_line(modal)), layout.header);
     let scroll = modal.scroll.min(layout.scroll_limit());
     modal.drawn.set(Drawn {
@@ -227,8 +265,10 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, modal: &ReleaseNotesModa
             .scroll((scroll, 0)),
         layout.body,
     );
+    // On the border itself, where the hairline thickens into the handle
+    // rather than a second line standing beside it.
     let track = Rect::new(
-        layout.body.right() + 1,
+        layout.popup.right().saturating_sub(Scrollbar::width()),
         layout.body.y,
         Scrollbar::width(),
         layout.body.height,
@@ -240,7 +280,10 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, modal: &ReleaseNotesModa
     ) {
         scrollbar.render(frame, usize::from(scroll));
     }
-    layout.popup
+    Targets {
+        popup: layout.popup,
+        close,
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +332,10 @@ mod tests {
             "{screen}"
         );
         assert!(screen.contains("the fix"), "rendered, not raw: {screen}");
+        assert!(
+            screen.contains(&theme::glyph(Symbol::MarkClose)) && !screen.contains("esc"),
+            "a mark to close it, and no row of keys: {screen}"
+        );
         assert!(!screen.contains("**terminal:**"), "{screen}");
 
         assert_eq!(

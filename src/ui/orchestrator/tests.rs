@@ -4564,15 +4564,18 @@ mod workspace_tests {
         full_frame(&mut model);
         assert!(
             matches!(
-                model.hits.first(),
-                Some((_, WorkspaceHit::ReleaseNotesBody))
+                model.hits.get(..2),
+                Some([
+                    (_, WorkspaceHit::ReleaseNotesClose),
+                    (_, WorkspaceHit::ReleaseNotesBody)
+                ])
             ),
             "its area answers before anything underneath"
         );
     }
 
     /// Clicked, the notice opens the notes of the release it names — and
-    /// no other — read off the drawing thread; a click outside puts the
+    /// no other — read off the drawing thread; the corner mark puts the
     /// modal away.
     #[test]
     fn the_notice_opens_the_notes_of_its_own_release() {
@@ -4633,10 +4636,21 @@ mod workspace_tests {
         );
 
         driven.frame();
-        driven.press(0, 0);
+        let (close, _) = *driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::ReleaseNotesClose))
+            .expect("the corner mark answers a click");
+        assert!(
+            close.y == body.y && close.right() > body.x + body.width / 2,
+            "on the top border, at the right: {close:?} of {body:?}"
+        );
+        driven.press(close.x + close.width / 2, close.y);
         assert!(
             driven.attach.model.release_notes.is_none(),
-            "a click outside closes it"
+            "the mark closes it"
         );
     }
 

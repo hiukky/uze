@@ -235,9 +235,15 @@ pub(super) fn render(
         crate::ui::widget::scrim::render(frame, frame.area());
     }
     if let Some(modal) = &model.release_notes {
-        let popup = crate::ui::release_notes::render(frame, frame.area(), modal);
+        let targets = crate::ui::release_notes::render(frame, frame.area(), modal);
         // Prepended: what is underneath must not answer a click meant here.
-        hits.insert(0, (popup, WorkspaceHit::ReleaseNotesBody));
+        hits.splice(
+            0..0,
+            [
+                (targets.close, WorkspaceHit::ReleaseNotesClose),
+                (targets.popup, WorkspaceHit::ReleaseNotesBody),
+            ],
+        );
     }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
