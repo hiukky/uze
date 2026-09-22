@@ -1274,6 +1274,7 @@ pub(crate) fn attach_workspace(
             let identities = &attach.identities;
             terminal.draw(|frame| render(frame, model, identities, &mut hits, &mut metrics))?;
             attach.model.hits = hits;
+            attach.model.marquee = metrics.marquee;
             attach.model.tree_overflow = metrics.tree_overflow;
             attach.model.remembered.tree_scroll = attach
                 .model
@@ -2295,6 +2296,12 @@ struct WorkspaceModel {
     /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
     input_echo_until: BTreeMap<PaneId, Instant>,
     hits: Vec<(Rect, WorkspaceHit)>,
+    /// Whether the last frame drew a caption sliding under the pointer
+    /// (see `render::FrameMetrics::marquee`). The clock turns for it the
+    /// way it turns for a spinner — without this the caption moved one
+    /// column and then stopped, because nothing else asked for the next
+    /// frame.
+    marquee: bool,
     /// The piece of chrome the pointer is over, read from the same hit
     /// list a click reads. Only ever set while no modal is open: what
     /// sits under an overlay is not what the pointer is on.

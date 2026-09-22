@@ -120,6 +120,11 @@ pub(super) struct FrameMetrics {
     pub(super) code: Option<crate::ui::extension_view::Rendered>,
     /// What the management modal's frame left behind, when it was open.
     pub(super) manage: Option<ManageFrame>,
+    /// Whether a caption too long for its room was drawn sliding. The one
+    /// thing on an otherwise idle frame that needs the next one: the
+    /// clock turns for spinners and for work in flight, and a caption
+    /// passing under the pointer is neither.
+    pub(super) marquee: bool,
 }
 
 /// One frame of the management modal: where it was drawn, and the hit
@@ -815,7 +820,7 @@ pub(super) fn render_sidebar(
         rows.scroll_past(0);
         rows.bottom = column_bottom;
         rows.y = column_bottom - reserved;
-        render_timeline(frame, timeline, model, &mut rows, hits);
+        metrics.marquee |= render_timeline(frame, timeline, model, &mut rows, hits);
     }
 }
 
@@ -1477,7 +1482,7 @@ fn render_timeline(
     model: &WorkspaceModel,
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
-) {
+) -> bool {
     let section = uze_extensions::code::timeline_section(
         timeline,
         model.timeline_collapsed,
@@ -1490,11 +1495,21 @@ fn render_timeline(
         rows.width,
         rows.remaining(),
     )));
-    crate::ui::extension_view::render_section(
+    // The branch name this header carries is the one caption in the
+    // column with no natural length — it is whatever somebody called the
+    // work — so it is the one that runs past its room. While the pointer
+    // is on the header, it slides instead of stopping at an "…": a
+    // branch is read from both ends, and the end is the half an "…" eats.
+    let hovered = model.hovered
+        == Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(
+            ViewHit::ToggleSection,
+        )));
+    let sliding = crate::ui::extension_view::render_section_with(
         frame,
         &section,
         &mut column,
         model.dragging_timeline,
+        hovered.then_some(model.tick),
         &mut section_hits,
     );
     hits.extend(section_hits.into_iter().map(|(rect, hit)| {
@@ -1503,6 +1518,7 @@ fn render_timeline(
             WorkspaceHit::Extension(ExtensionHit::CodeTimeline(hit)),
         )
     }));
+    sliding
 }
 
 /// Where the commit popup goes and what it says, resolved once for both
