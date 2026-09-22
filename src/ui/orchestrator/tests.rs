@@ -7896,6 +7896,39 @@ mod workspace_tests {
         );
     }
 
+    /// A question asked while the same repository's read is in flight is
+    /// kept, not dropped: that read may have started before the push the
+    /// second question is about, and its answer would stand as the last
+    /// word — a `↑1` that stayed up after the push had gone through.
+    #[test]
+    fn a_read_asked_for_while_one_is_in_flight_is_asked_again() {
+        let mut model = three_spaces();
+        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-asked-again"));
+        let (sender, _answers) = std::sync::mpsc::channel();
+        model.schedule_evaluation(&home, PathBuf::from("/one"), &sender);
+        assert!(model.remembered.task_eval_again.is_empty());
+
+        model.schedule_evaluation(&home, PathBuf::from("/one"), &sender);
+        assert_eq!(
+            model.remembered.task_eval_again.get(Path::new("/one")),
+            Some(&PathBuf::from("/one")),
+            "the second question waits for the first answer"
+        );
+    }
+
+    /// The refresh clock reads every space's header, once per repository,
+    /// not only the selected pane's.
+    #[test]
+    fn every_space_header_is_read_on_the_clock() {
+        let model = three_spaces();
+        let mut directories = model.space_directories(&identities_fixture());
+        directories.sort();
+        assert_eq!(
+            directories,
+            ["/one", "/three", "/two"].map(PathBuf::from).to_vec()
+        );
+    }
+
     /// The fold minimizes a space to its header and opens it again, on this
     /// client alone: nothing is asked of the server.
     #[test]
