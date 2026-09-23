@@ -4,6 +4,18 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.9](https://github.com/hiukky/uze/compare/v0.0.0-alpha.8...v0.0.0-alpha.9) - 2026-09-23
+
+### Features
+
+- **update:** Add `uze upgrade`, announce only an installed update, read its notes in a modal ([#100](https://github.com/hiukky/uze/pull/100)) ([b2f3ab5](https://github.com/hiukky/uze/commit/b2f3ab5889b6b3138fb6b90410c826a69d1223bf))
+- **workspace:** Run harness setup on first run and list only configured agents ([#103](https://github.com/hiukky/uze/pull/103)) ([a848e65](https://github.com/hiukky/uze/commit/a848e6502c6f75c9cca1fb7511059858073a9014))
+
+### Refactor
+
+- **ui:** Share the card grid between extensions and integrations ([#102](https://github.com/hiukky/uze/pull/102)) ([bc1ef00](https://github.com/hiukky/uze/commit/bc1ef001786476677d113688f4a3ec3961d563cd))
+- **workspace:** Tighten the sidebar's indents and space gaps ([#101](https://github.com/hiukky/uze/pull/101)) ([417c597](https://github.com/hiukky/uze/commit/417c5977fccb212c19c8077ea5fd952ea95f7866))
+
 ## [0.0.0-alpha.8](https://github.com/hiukky/uze/compare/v0.0.0-alpha.7...v0.0.0-alpha.8) - 2026-09-22
 
 ### Fixes
