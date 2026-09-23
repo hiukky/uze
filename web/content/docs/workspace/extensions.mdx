@@ -20,7 +20,7 @@ installed; `Ctrl+O → Extensions` lists what is there.
 An extension never draws and reaches nothing it was not handed: it describes a
 view, and the workspace renders it. Running Git, reading a file, resolving
 `$HOME` all arrive through a host it is given, which is why an extension is a
-different trust class from plugin bytes a harness reads (ADR-041).
+different trust class from plugin bytes a harness reads.
 
 Every Git read they make runs on a thread and answers through a channel, so
 nothing waits on a repository — a large history never blocks a keystroke.

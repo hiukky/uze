@@ -15,7 +15,7 @@ description: Install uze, provision your harnesses, share one project context, a
 
     Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected. It
     verifies a SHA-256 checksum before installing into `~/.local/bin` (or
-    `$XDG_BIN_HOME`) and refuses on mismatch — ADR-034. `UZE_VERSION` pins a
+    `$XDG_BIN_HOME`) and refuses on mismatch. `UZE_VERSION` pins a
     release, `UZE_BIN_DIR` changes where it lands.
   </Tab>
   <Tab value="macOS">
@@ -64,7 +64,7 @@ replace the binary it is running from.
 
 `uze setup` detects every harness uze supports and provisions any that are
 missing through each vendor's own official installer — never a mirror, never a
-repackaged binary (ADR-010).
+repackaged binary.
 
 ```bash
 $ uze setup
