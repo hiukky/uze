@@ -122,6 +122,15 @@ is what moves them.
   is its remote and a commit, which is what another machine can reproduce.
 </Callout>
 
+The lock records every Git source in one spelling: `git@github.com:acme/plugins.git`,
+`ssh://git@github.com/acme/plugins` and `https://github.com/acme/plugins.git` all
+become `https://github.com/acme/plugins`. That is a name, not a transport —
+each machine reaches it anonymously when it is public, and with its own
+credential helper or SSH key when it is private — so nothing in these files
+says how to authenticate, and a collaborator with no key installs a public
+marketplace as easily as you do. A marketplace you develop is read from your
+checkout with `uze market link`, which touches neither file.
+
 uze's own marketplace is not declared here. `uze-official` is built into the
 binary, its plugins are installed for every project, and an entry claiming that
 name is refused — the only thing it could express is shadowing the built-in one.

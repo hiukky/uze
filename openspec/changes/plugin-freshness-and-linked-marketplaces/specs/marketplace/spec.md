@@ -32,7 +32,8 @@ leave the Store's bytes alone until something asks for them again.
 - **WHEN** an operator links a registered marketplace to a path that does
   not exist
 - **THEN** the marketplace's source is cloned into that path as an ordinary
-  checkout the operator owns, and the link is recorded against it
+  checkout the operator owns, reached the way any fetch reaches it (the
+  `marketplace-access` transport ladder), and the link is recorded against it
 
 #### Scenario: A linked checkout is the operator's, and UZE performs no Git on it
 - **WHEN** a marketplace is linked to a checkout
@@ -145,16 +146,24 @@ which part.
   reason other than being unreachable by declaration
 - **THEN** the command fails and reports it, rather than skipping it
 
+#### Scenario: An offline machine is not unreachable by declaration
+- **WHEN** a declared remote marketplace's host does not resolve, because
+  the machine is offline
+- **THEN** the command fails and says the machine is offline — "unreachable
+  by declaration" names only a source that resolves nowhere but the machine
+  that declared it
+
 ### Requirement: An acquisition refused on credentials is reported as a credential question
 
 When acquiring from a marketplace fails because the source could not be
 authenticated or was not found under the operator's credentials, the system
-SHALL report the marketplace's name, the URL it tried, and that the failure
-is one of access — rather than surfacing the underlying tool's own output as
-the whole message.
+SHALL report the marketplace's name, its identity, each transport it tried
+with the reason each gave, and that the failure is one of access — rather
+than surfacing the underlying tool's own output as the whole message.
 
 #### Scenario: A private marketplace on a machine with no access
 - **WHEN** `uze install` resolves a marketplace whose repository refuses the
   operator's credentials
-- **THEN** the error names the marketplace, names the URL, and states that
-  it could not be accessed with this machine's credentials
+- **THEN** the error names the marketplace, names its identity and each
+  transport tried, and states that it could not be accessed with this
+  machine's credentials
