@@ -1,4 +1,5 @@
-//! Which theme is active, and where a user's own themes live.
+//! The `[appearance]` section: which theme is active, which glyph set, and
+//! where a user's own themes live.
 //!
 //! Only the *selection* lives here. What a theme is — tokens, symbols, the
 //! file format, how a partial one resolves — belongs to the design system,

@@ -34,7 +34,7 @@ becoming one more thing that interrupts.
 ## Impact
 
 - `uze-core`: `config` (the settings file, via `toml_edit`, already a
-  workspace dependency), `notification_state`, and `theme_state` reading and
+  workspace dependency), `notifications`, and `appearance` reading and
   writing its section there; `UzeHome::config_path()`.
 - `uze-application`: a `notifications()` service and the `Chime` re-export.
 - Docs: `appearance.mdx` (where the selection lives) and `workspace/index.mdx`.

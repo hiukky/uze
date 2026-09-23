@@ -1,4 +1,5 @@
-//! When the operator wants to be told that an agent finished its turn.
+//! The `[notifications]` section: when the operator wants to be told that
+//! an agent finished its turn.
 //!
 //! Only the choice lives here. How the telling is done — the terminal's own
 //! bell, rung by the client that draws the workspace — is presentation, and

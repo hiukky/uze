@@ -41,8 +41,8 @@ as a small record behind a `uze-application` service.
   own copy, so a choice written by the modal would be overwritten. Not the
   ledgers either: they have their own writers, locks and ladders.
 - **`toml_edit`'s document model, one section per concern.** `config` knows
-  files and sections; `theme_state` owns `[appearance]` and
-  `notification_state` owns `[notifications]`. A write parses, sets one key
+  files and sections; `appearance` owns `[appearance]` and
+  `notifications` owns `[notifications]`. A write parses, sets one key
   and writes atomically, so comments, ordering and unknown sections survive.
   A file that does not parse is an error on read and on write — reading it
   as empty would undo every choice, writing over it would destroy the text

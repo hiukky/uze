@@ -2,7 +2,7 @@
 
 - [x] 1.1 `uze-core::config`: `config.toml` read/set per section via `toml_edit`, preserving the rest; malformed file refused on read and write
 - [x] 1.2 `UzeHome::config_path()` at the root; `state/theme.json` no longer read (alpha: no legacy path)
-- [x] 1.3a `theme_state` reads and writes `[appearance]`; `notification_state` (`Chime`) reads and writes `[notifications]`, unknown value → Silent
+- [x] 1.3a `appearance` reads and writes `[appearance]`; `notifications` (`Chime`) reads and writes `[notifications]`, unknown value → Silent
 - [x] 1.3 `uze-application`: `notifications()` service (`agent_finished`, `set_agent_finished`) and `Chime` re-export
 
 ## 2. Ringing

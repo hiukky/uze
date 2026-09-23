@@ -56,21 +56,19 @@ pub mod prompt_history;
 /// the one client that draws it.
 pub mod client_layout;
 
-/// Which theme is active, and which theme files exist. Only the selection —
-/// what a theme *is* belongs to the design system, which this crate does
-/// not name. Root-level for the same reason [`profile_state`] is: it is
-/// UZE-owned state under `UzeHome` that belongs to no portable concern.
-pub mod theme_state;
-
-/// Whether the workspace rings when an agent finishes. Root-level for the
-/// same reason [`theme_state`] is: an operator's choice under `UzeHome`
-/// that belongs to no portable concern.
-pub mod notification_state;
-
-/// The operator's `config.toml`, where [`theme_state`] and
-/// [`notification_state`] keep their sections. Knows files and sections,
-/// never what a setting means.
+/// The operator's `config.toml`. Knows files and sections, never what a
+/// setting means: each section is owned by the module named after it.
+/// Root-level for the same reason [`profile_state`] is: UZE-owned state
+/// under `UzeHome` that belongs to no portable concern.
 pub mod config;
+
+/// `[appearance]`: which theme and glyph set are chosen, and which theme
+/// files exist. Only the selection — what a theme *is* belongs to the
+/// design system, which this crate does not name.
+pub mod appearance;
+
+/// `[notifications]`: whether the workspace rings when an agent finishes.
+pub mod notifications;
 
 // Flat public API. Each line also says which concern the module belongs to,
 // which is the second reason for keeping them: the crate root is where a

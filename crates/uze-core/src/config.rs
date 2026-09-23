@@ -7,7 +7,7 @@
 //! `theme-overrides.json` at the root, in a format with comments.
 //!
 //! This module knows files and sections, never what a setting means: a
-//! concern (`theme_state`, `notification_state`) owns its section and reads
+//! concern (`appearance`, `notifications`) owns its section and reads
 //! and writes it through here. A write touches only the key it names and
 //! leaves the rest of the document — the operator's comments, ordering and
 //! whatever sections this build does not know — exactly as it was.
