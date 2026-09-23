@@ -79,6 +79,27 @@ impl SymbolDef {
     pub fn frames(&self) -> &[String] {
         &self.frames
     }
+
+    /// Whether this is an icon a patched font supplies rather than a
+    /// character any font has.
+    ///
+    /// The one question layout needs answered about an icon: every Nerd
+    /// Font build reserves it one cell, but a plain build draws it up to
+    /// twice that wide, so an icon is drawn with a blank cell after it and
+    /// a letterform is not. Answered from the glyph rather than the
+    /// symbol's name, so the same symbol reserves nothing under a set that
+    /// draws it in plain Unicode.
+    pub fn is_icon(&self) -> bool {
+        self.frames.iter().any(|frame| is_icon_glyph(frame))
+    }
+}
+
+/// Whether any character of `glyph` sits in a private-use area — where, and
+/// only where, a patched font puts its icons.
+pub fn is_icon_glyph(glyph: &str) -> bool {
+    glyph.chars().any(|character| {
+        matches!(u32::from(character), 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)
+    })
 }
 
 vocabulary! {
@@ -331,5 +352,14 @@ mod tests {
         // draws double-wide: the only thing that can be right here is what
         // the theme's author says.
         assert_eq!(SymbolDef::new("\u{e0a0}").with_width(2).width(), 2);
+    }
+
+    #[test]
+    fn an_icon_is_a_private_use_glyph_and_nothing_else_is() {
+        assert!(SymbolDef::new("\u{eab2}").is_icon());
+        assert!(SymbolDef::new("\u{f0214}").is_icon());
+        assert!(!SymbolDef::new("✓").is_icon());
+        assert!(!SymbolDef::new("|-").is_icon());
+        assert!(!SymbolDef::new("").is_icon());
     }
 }

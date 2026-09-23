@@ -359,6 +359,61 @@ fn every_overlay_renders_without_panicking() {
     }
 }
 
+/// Every icon on every management screen has the cell after it to itself.
+///
+/// Drawn under the `nerd` set, because that is where the glyphs are icons:
+/// a plain Nerd Font build reserves one cell for an icon and paints it
+/// across two, so whatever UZE put in the second is what the icon lands on.
+#[test]
+fn every_icon_on_a_management_screen_has_its_slot() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let base = model_with_data();
+    let mut violations = Vec::new();
+    let mut icons = 0;
+    theme::drawing_with_glyph_set("nerd", || {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let overlays = [
+            Overlay::None,
+            Overlay::HarnessHelp,
+            Overlay::ActionIndex {
+                scopes: vec![uze_keys::Scope::Global, uze_keys::Scope::Management],
+                filter: String::new(),
+                selected: 0,
+            },
+        ];
+        for route in ROUTES {
+            for overlay in overlays.clone() {
+                let mut model = model_with_data();
+                model.set_route(route);
+                model.overlay = overlay;
+                model.focus = Focus::Content;
+                model.remembered.doctor = base.remembered.doctor.clone();
+                let mut hits = Vec::new();
+                terminal
+                    .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                icons += buffer
+                    .content
+                    .iter()
+                    .filter(|cell| uze_theme::is_icon_glyph(cell.symbol()))
+                    .count();
+                for violation in theme::icon_slot_violations(buffer) {
+                    violations.push(format!("{route:?}: {violation}"));
+                }
+            }
+        }
+    });
+    assert!(icons > 0, "no screen drew an icon, so nothing was checked");
+    violations.dedup();
+    assert!(
+        violations.is_empty(),
+        "icons with no slot of their own:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn sidebar_keyboard_navigation_cycles_routes() {
     let mut model = TuiModel {

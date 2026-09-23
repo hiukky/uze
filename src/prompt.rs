@@ -143,7 +143,7 @@ fn keys(own: &[(&str, &str)]) -> String {
     let mut all = vec![(
         format!(
             "{}{}",
-            progress::glyph(Symbol::ArrowUp),
+            progress::slotted(Symbol::ArrowUp),
             progress::glyph(Symbol::ArrowDown)
         ),
         "move",

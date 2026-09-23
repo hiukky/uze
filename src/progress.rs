@@ -281,6 +281,22 @@ pub fn glyph(symbol: Symbol) -> String {
     uze_theme::active().glyph(symbol).to_owned()
 }
 
+/// A glyph with the blank cell an icon needs after it, where it is one.
+///
+/// For a mark that something other than a space follows. Every Nerd Font
+/// build reserves an icon one cell but a plain build paints it across two,
+/// so an icon butted against the next character lands on it; a letterform
+/// needs nothing and gets nothing.
+pub fn slotted(symbol: Symbol) -> String {
+    let active = uze_theme::active();
+    let resolved = active.symbol(symbol);
+    if resolved.is_icon() {
+        format!("{} ", resolved.glyph())
+    } else {
+        resolved.glyph().to_owned()
+    }
+}
+
 /// The columns a glyph occupies. A caller laying a column out from a mark
 /// — an interactive prompt's cursor gutter, say — must ask rather than
 /// assume one: a theme may have replaced it with something wider.

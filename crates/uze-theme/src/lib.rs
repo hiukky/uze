@@ -35,7 +35,7 @@ mod theme;
 mod token;
 mod vocab;
 
-pub use active::{active, set_active};
+pub use active::{active, drawing_with, set_active};
 pub use color::{Rgb, contrast_ratio};
 pub use file::{CURRENT_VERSION, ColorValue, SymbolValue, SyntaxSection, ThemeFile};
 pub use load::{
@@ -44,6 +44,6 @@ pub use load::{
     parse_str, resolve_stack,
 };
 pub use schema::{SCHEMA_ID, json_schema};
-pub use symbol::{Symbol, SymbolDef};
+pub use symbol::{Symbol, SymbolDef, is_icon_glyph};
 pub use theme::Theme;
 pub use token::Token;

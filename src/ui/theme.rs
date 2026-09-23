@@ -248,9 +248,101 @@ pub(crate) fn token_of(color: Color) -> Option<Token> {
         .copied()
 }
 
+/// Draws `draw` with `set`'s glyphs over the default palette, on this
+/// thread only — what a surface looks like to an operator who chose it.
+#[cfg(test)]
+pub(crate) fn drawing_with_glyph_set<R>(set: &str, draw: impl FnOnce() -> R) -> R {
+    let identity = uze_theme::Identity::from_file("default", uze_theme::default_file());
+    let layers = [
+        uze_theme::default_file(),
+        uze_theme::glyph_set_file(set).expect("a bundled glyph set"),
+    ];
+    let loaded = uze_theme::resolve_stack(&identity, &layers).expect("a bundled set resolves");
+    uze_theme::drawing_with(loaded.theme, draw)
+}
+
+/// Every icon on a drawn frame that is not followed by a blank cell in its
+/// own ground, as `(column, row)` and what stood there instead.
+///
+/// The icon slot, checked on what was drawn rather than on how: a plain
+/// Nerd Font build draws an icon across the cell after it, so that cell is
+/// the icon's, and anything else there is what the icon lands on.
+#[cfg(test)]
+pub(crate) fn icon_slot_violations(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    let area = buffer.area;
+    let mut violations = Vec::new();
+    for row in area.top()..area.bottom() {
+        for column in area.left()..area.right() {
+            let cell = &buffer[(column, row)];
+            if !uze_theme::is_icon_glyph(cell.symbol()) {
+                continue;
+            }
+            let reason = if column + 1 >= area.right() {
+                Some("the frame's edge".to_owned())
+            } else {
+                let next = &buffer[(column + 1, row)];
+                if next.symbol() != " " {
+                    Some(format!("{:?}", next.symbol()))
+                } else if next.bg != cell.bg {
+                    Some(format!(
+                        "a blank in another ground ({:?} after {:?})",
+                        next.bg, cell.bg
+                    ))
+                } else {
+                    None
+                }
+            };
+            if let Some(reason) = reason {
+                let line: String = (area.left()..area.right())
+                    .map(|c| buffer[(c, row)].symbol())
+                    .collect();
+                violations.push(format!(
+                    "({column}, {row}) {:?} is followed by {reason}: {}",
+                    cell.symbol(),
+                    line.trim_end()
+                ));
+            }
+        }
+    }
+    violations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_icon_is_checked_for_what_follows_it_and_in_which_ground() {
+        use ratatui::{buffer::Buffer, layout::Rect};
+
+        let icon = "\u{eab2}";
+        let line = |cells: &[(&str, Color)]| {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, cells.len() as u16, 1));
+            for (column, (symbol, ground)) in cells.iter().enumerate() {
+                buffer[(column as u16, 0)]
+                    .set_symbol(symbol)
+                    .set_bg(*ground);
+            }
+            buffer
+        };
+        let ground = Color::Rgb(1, 2, 3);
+        let other = Color::Rgb(9, 9, 9);
+
+        let slotted = line(&[(icon, ground), (" ", ground), ("x", ground)]);
+        assert!(icon_slot_violations(&slotted).is_empty());
+
+        let crowded = line(&[(icon, ground), ("x", ground)]);
+        assert_eq!(icon_slot_violations(&crowded).len(), 1);
+
+        let across_an_edge = line(&[(icon, ground), (" ", other)]);
+        assert_eq!(icon_slot_violations(&across_an_edge).len(), 1);
+
+        let at_the_edge = line(&[(" ", ground), (icon, ground)]);
+        assert_eq!(icon_slot_violations(&at_the_edge).len(), 1);
+
+        let letterform = line(&[("✓", ground), ("x", ground)]);
+        assert!(icon_slot_violations(&letterform).is_empty());
+    }
 
     #[test]
     fn a_token_resolves_to_the_active_themes_colour() {

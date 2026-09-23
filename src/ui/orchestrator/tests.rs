@@ -595,6 +595,92 @@ mod workspace_tests {
             .collect()
     }
 
+    /// Every icon the workspace draws has the cell after it to itself: the
+    /// tab strip, the header's buttons, the sidebar's marks, the code
+    /// surface's tree. Drawn under the `nerd` set, where they are icons — a
+    /// plain Nerd Font build paints an icon across the cell after its own,
+    /// so whatever UZE put there is what the icon lands on.
+    #[test]
+    fn every_icon_in_the_workspace_has_its_slot() {
+        use uze_extensions::{DirEntry, code};
+
+        let draw = |model: &mut WorkspaceModel| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            let mut metrics = render::FrameMetrics::default();
+            terminal
+                .draw(|frame| {
+                    render::render(
+                        frame,
+                        model,
+                        &identities_fixture(),
+                        &mut Vec::new(),
+                        &mut metrics,
+                    )
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let with_code = |mode| {
+            let (mut model, first, _) = two_agents_with_shells();
+            model.session.as_mut().expect("session").select_tab(first);
+            open_code(&mut model, mode);
+            let view = model.code.as_mut().expect("the surface is open");
+            view.take_request();
+            view.absorb(code::FileAnswer::Listed {
+                path: PathBuf::from("/repo/.worktrees/a"),
+                entries: Ok([
+                    "src",
+                    "main.rs",
+                    "README.md",
+                    "Cargo.lock",
+                    "logo.png",
+                    "LICENSE",
+                ]
+                .into_iter()
+                .map(|name| DirEntry {
+                    directory: name == "src",
+                    name: name.to_owned(),
+                })
+                .collect()),
+            });
+            model
+        };
+
+        let mut violations = Vec::new();
+        let mut icons = 0;
+        theme::drawing_with_glyph_set("nerd", || {
+            let mut models = vec![
+                ("an agent", agent_session()),
+                ("agents with shells", two_agents_with_shells().0),
+                ("running work", agent_with_task(WorkStateView::Running, 0)),
+                ("ready work", agent_with_task(WorkStateView::Ready, 2)),
+                (
+                    "published work",
+                    agent_with_task(WorkStateView::Published, 0),
+                ),
+                ("the code's files", with_code(code::ContentMode::Contents)),
+                ("the code's changes", with_code(code::ContentMode::Diff)),
+            ];
+            for (what, model) in &mut models {
+                let buffer = draw(model);
+                icons += buffer
+                    .content
+                    .iter()
+                    .filter(|cell| uze_theme::is_icon_glyph(cell.symbol()))
+                    .count();
+                for violation in theme::icon_slot_violations(&buffer) {
+                    violations.push(format!("{what}: {violation}"));
+                }
+            }
+        });
+        assert!(icons > 0, "no frame drew an icon, so nothing was checked");
+        assert!(
+            violations.is_empty(),
+            "icons with no slot of their own:\n{}",
+            violations.join("\n")
+        );
+    }
+
     /// Glance at the code, close it, come back: the commonest gesture in
     /// the product, and the one that used to cost the whole walk down the
     /// tree again. The place is per checkout, so another agent's surface

@@ -12,6 +12,7 @@
 //! `$UZE_HOME` is resolved — [`active`] answers with the built-in default,
 //! which needs no I/O.
 
+use std::cell::RefCell;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::{Theme, load::default_theme};
@@ -21,8 +22,15 @@ fn cell() -> &'static RwLock<Arc<Theme>> {
     ACTIVE.get_or_init(|| RwLock::new(Arc::new(default_theme().clone())))
 }
 
+thread_local! {
+    static DRAWING: RefCell<Option<Arc<Theme>>> = const { RefCell::new(None) };
+}
+
 /// The theme in force. Cheap enough to call per span: it clones an `Arc`.
 pub fn active() -> Arc<Theme> {
+    if let Some(theme) = DRAWING.with(|drawing| drawing.borrow().clone()) {
+        return theme;
+    }
     match cell().read() {
         Ok(theme) => Arc::clone(&theme),
         // A panic while a theme was being swapped must not take the UI's
@@ -38,6 +46,25 @@ pub fn set_active(theme: Theme) {
         Ok(mut active) => *active = theme,
         Err(poisoned) => *poisoned.into_inner() = theme,
     }
+}
+
+/// Draws `draw` under `theme`, on this thread only, and leaves every other
+/// thread's answer alone.
+///
+/// For the one question the process-wide theme cannot be asked in a
+/// multi-threaded test binary: "what does this surface look like under
+/// *that* set?" Swapping the global to find out swaps it under every test
+/// drawing at the same moment.
+pub fn drawing_with<R>(theme: Theme, draw: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<Theme>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DRAWING.with(|drawing| *drawing.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = DRAWING.with(|drawing| drawing.borrow_mut().replace(Arc::new(theme)));
+    let _restore = Restore(previous);
+    draw()
 }
 
 #[cfg(test)]
