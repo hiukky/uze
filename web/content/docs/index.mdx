@@ -32,11 +32,27 @@ same project context four times over is how agent setups rot.
 And once you run more than one at a time, they collide: two agents editing one
 checkout, with your own uncommitted work in the middle.
 
+## The loop
+
+```bash
+$ uze setup                # detect + provision every harness through official routes
+$ uze flow@my-marketplace  # add a plugin from a marketplace to this project
+$ uze status               # context, environment and what is still owed
+$ uze doctor               # diagnostics: store, harnesses, attachment health
+```
+
+On another machine, `git clone && uze install` reproduces the same environment
+from the two committed files, `agents.yaml` and `agents.lock`.
+
+Or run `uze` with no arguments for the workspace — your agents, side by side.
+
 ## What uze does
 
 Everything below works today. The two scopes never touch each other's state:
 machine commands read and write `~/.uze`, project commands read and write the
 directory you are in.
+
+The terms used here are defined in the [glossary](/docs/glossary).
 
 ### Distribution — machine scope
 
@@ -81,20 +97,6 @@ directory you are in.
 - **One-way dependencies, enforced by tests** — the domain, the orchestration
   layer and the CLI/TUI may not name a harness. A new harness is one integration
   vertical and one registry entry, with no change to Store, Engine or Router.
-
-## The loop
-
-```bash
-$ uze setup                # detect + provision every harness through official routes
-$ uze flow@my-marketplace  # add a plugin from a marketplace to this project
-$ uze status               # context, environment and what is still owed
-$ uze doctor               # diagnostics: store, harnesses, attachment health
-```
-
-On another machine, `git clone && uze install` reproduces the same environment
-from the two committed files.
-
-Or run `uze` with no arguments for the workspace — your agents, side by side.
 
 ## Next steps
 

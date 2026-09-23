@@ -5,7 +5,7 @@ description: The canonical package layout — skills, MCP, agents, hooks — and
 
 # Creating a plugin
 
-uze is **Plugin First, Capability Aware** (ADR-013): the package you author is the distribution
+uze is **Plugin First, Capability Aware**: the package you author is the distribution
 unit, and each capability inside it is the compatibility unit. You write one canonical layout;
 uze delivers it through each harness's own native surface — see
 [Standards, not another format](/docs/concepts/standards) for why the layout looks the way it
@@ -114,7 +114,7 @@ description: Breaks a task into an ordered implementation plan.
 Everything below the frontmatter is the agent's instructions.
 ```
 
-Only `name`, `description`, and the body are claimed as the portable subset (ADR-031). Claude
+Only `name`, `description`, and the body are claimed as the portable subset. Claude
 Code, OpenCode, and Antigravity receive their documented native Markdown-agent surface; Codex has
 no on-disk Markdown agent format, so uze generates its documented standalone TOML file instead —
 `name`/`description`/`developer_instructions` mapped straight from your frontmatter and body,
@@ -124,8 +124,7 @@ best guess.
 
 ## Hooks
 
-One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plugin runtime
-(ADR-033):
+One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plugin runtime:
 
 ```json
 {
@@ -226,7 +225,7 @@ $ uze market add https://github.com/you/my-marketplace
 $ uze my-plugin@my-marketplace
 ```
 
-`marketplace.json` was briefly named `agents.json` and reverted (ADR-032) — the same manifest
+`marketplace.json` was briefly named `agents.json` and reverted — the same manifest
 under its current filename.
 
 <Cards>

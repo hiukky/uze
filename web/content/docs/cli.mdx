@@ -5,7 +5,7 @@ description: Every command, grouped by project scope and machine scope
 
 # CLI reference
 
-Two scopes, and they never touch each other's state (ADR-019). Project commands
+Two scopes, and they never touch each other's state. Project commands
 read and write the current directory's `agents.yaml`, `agents.lock` and context
 files; machine commands read and write `~/.uze`.
 
@@ -208,7 +208,7 @@ other. Machine-level, and `--format json` on `list`, `show` and `glyphs`. See
 ## Terminal session
 
 The workspace's panes belong to a local runtime server, so they outlive the
-client (ADR-038). These manage that session directly — running `uze` with no
+client. These manage that session directly — running `uze` with no
 arguments already attaches it.
 
 ```bash
@@ -224,7 +224,7 @@ uze terminal stop     # stop this workspace's session and every process in it
 ## Performance contract
 
 Every leaf command is classified in the source as `Budgeted` (low-millisecond,
-served from the harness-detection cache — ADR-018) or `JustifiedSlow` with a
+served from the harness-detection cache) or `JustifiedSlow` with a
 stated reason. An unclassified command fails `cargo test` by name, so the
 contract can't quietly rot. `uze doctor` inspects attachments through an on-disk
 cache and re-inspects only the anomalies live.

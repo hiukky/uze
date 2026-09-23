@@ -1,5 +1,10 @@
 # Context Manager
 
+The full contract, for plugin authors and contributors. The user-facing
+summary is the site's
+[Project context](../../web/content/docs/concepts/context.mdx) page; change
+both together.
+
 The boundary that owns a *project's* instructions context, distinct from the
 Package Manager that owns a *machine's* installed bytes. It exposes three
 operations — `inspect`, `plan`, `reconcile` — and nothing else.

@@ -1,0 +1,74 @@
+---
+title: Removing uze
+description: Take uze off a machine and out of a project, and what stays behind
+---
+
+# Removing uze
+
+There is no `uze uninstall` yet. Removing it is a few steps, in this order,
+because the first one needs uze still installed.
+
+## 1. Detach every plugin from your harnesses
+
+```bash
+$ uze plugin list
+$ uze plugin remove <plugin>    # once per plugin
+```
+
+`uze plugin remove` takes out everything uze placed in each harness for that
+plugin: plugin directories, config entries, hook wrappers. It removes only what
+its [receipts](/docs/glossary#delivery) say it owns, and checks each one first.
+If something drifted, it stops and says what, instead of deleting it.
+
+Skip this step and the harnesses keep what uze delivered, with nothing left to
+manage it.
+
+## 2. Stop the workspace
+
+```bash
+$ uze terminal stop    # in each project whose workspace you opened
+```
+
+This stops the terminal server and every agent still running in it.
+
+## 3. Clean each project
+
+uze writes these into a project. Decide per file, since some are committed:
+
+| What | What to do |
+| --- | --- |
+| `agents.yaml`, `agents.lock` | Delete them, or keep them for someone else who uses uze. |
+| Blocks between `<!-- uze:begin … -->` and `<!-- uze:end … -->` in `AGENTS.md` or a harness file | Delete the block. Everything outside it is yours and was never touched. |
+| `.worktrees/` | Remove each checkout with `git worktree remove .worktrees/<id>`, then its branch `agent/<id>` if you don't need it. |
+| `/.worktrees/` line in `.git/info/exclude` | Delete it. It is local to your clone, never committed. |
+
+## 4. Remove the shell `PATH` block
+
+`uze setup` may have added this block to your `.bashrc`, `.zshrc` or fish
+config:
+
+```sh
+# >>> uze shims path >>>
+…
+# <<< uze shims path <<<
+```
+
+Delete the lines between the markers, markers included.
+
+## 5. Delete the binary and `~/.uze`
+
+```bash
+$ cat ~/.uze/state/install.json   # where the installer put the binary
+$ rm ~/.local/bin/uze             # or the path it printed
+$ rm -rf ~/.uze                   # or $UZE_HOME, if you set it
+```
+
+A `uze` built with `cargo install` goes with `cargo uninstall uze`.
+
+## What stays
+
+- **The harnesses.** `uze setup` installs them through each vendor's own
+  installer, so they are ordinary installs. Remove them the way their vendor
+  says.
+- **Your own files.** `AGENTS.md`, `CLAUDE.md` and any config you wrote keep
+  everything outside uze's marked blocks.
