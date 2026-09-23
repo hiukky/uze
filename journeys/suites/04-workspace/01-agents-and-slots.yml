@@ -199,12 +199,13 @@ scenes:
         # which would let the gate pass on a stale frame. A third item on
         # the tree cannot.
         #
-        # An item is the leading column of a row the isolated group's
-        # trunk runs down: the space's own rail, then the corner that
-        # opens, carries or closes the group — or the lone arm a group of
-        # one gets. Anchored to the row's start, because the rule under
-        # the header is made of the same ─ the lone arm is.
-        expect: '(?m)(^[▏ ][┌├└─][\s\S]*?){3}'
+        # An item is a row of its own: the space's rail, the corner that
+        # opens, carries or closes the isolated group — absent for a group
+        # of one, which stands with no trunk at all — then the agent's
+        # status mark and its name. Anchored to the row's start, so the
+        # tab strip's `✦ agent 1` and the first-steps `New agent` are not
+        # items.
+        expect: '(?m)(^[▏ ][┌├└]?\S agent \d[\s\S]*?){3}'
         expect_timeout: 90
         pause: 2.0
     then:
