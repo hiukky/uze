@@ -469,7 +469,50 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
     project = root / "projects" / name
     if not project.exists():
         seed_project(project, world_spec, env)
+    if this_build_opens_first(spec) and not world_spec.get("first_run"):
+        set_up_the_machine(root, binary, env)
     return World(root=root, project=project, env=env)
+
+
+def this_build_opens_first(spec: dict) -> bool:
+    """Whether the first binary a journey opens is the one under test.
+    A world whose first `open` is the previous release is a machine that
+    release prepared, and this build writing to it first would put this
+    build's state under the claim that the release wrote it."""
+    opened = (
+        str(step["open"])
+        for scene in spec.get("scenes") or []
+        for step in scene.get("when") or []
+        if "open" in step
+    )
+    return "{uze}" in next(opened, "")
+
+
+def set_up_the_machine(root: Path, binary: Path, env: dict) -> None:
+    """A machine somebody works in is one where `uze setup` has run.
+
+    UZE asks which harnesses to set up before it opens on a machine it has
+    never run on, so a world left bare would meet that question instead of the
+    workspace in every journey about the workspace. The question is the
+    first run's own story, told by a journey whose world says
+    `first_run: true`; every other world is the machine after it. Without a
+    terminal `setup` provisions every registered harness, which in a world
+    is every stand-in.
+    """
+    if (Path(env["UZE_HOME"]) / "state").is_dir():
+        return
+    result = subprocess.run(
+        [str(binary), "setup"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        die(
+            f"`uze setup` failed while building the world: {result.stdout}{result.stderr}"
+        )
 
 
 def commit_staged_marketplaces(root: Path, env: dict) -> None:

@@ -133,6 +133,11 @@ pub struct AgentIdentity {
     /// able to continue, when that is the case. `None` is the ordinary
     /// answer; a value is meant to be said once, on the tab.
     pub continuity_gap: Option<String>,
+    /// Whether this harness has been set up on this machine. Every
+    /// identity still recognizes a running agent; only a configured one is
+    /// offered to launch, because a harness nobody set up may not even be
+    /// on `PATH`, and its pane would never start.
+    pub configured: bool,
 }
 
 /// The workspace service's own file — named for what it holds rather

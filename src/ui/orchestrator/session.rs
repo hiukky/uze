@@ -27,6 +27,7 @@
 
 use super::*;
 
+use crate::ui::model::Route;
 use crate::ui::widget::ToastKind;
 use uze_extensions::view::Command;
 use uze_keys::{Action, Resolution, Scope};
@@ -205,6 +206,15 @@ impl Attach<'_> {
             self.keyboard,
         ));
         self.model.dirty = true;
+    }
+
+    /// Opens the modal straight onto `route`, for a surface that sends the
+    /// operator somewhere specific in it.
+    fn open_manage_at(&mut self, route: Route) {
+        self.open_manage();
+        if let Some(manage) = self.model.manage.as_mut() {
+            manage.set_route(route);
+        }
     }
 
     /// Closes the modal, keeping what it arranged: its own shape for the
@@ -583,9 +593,16 @@ impl Attach<'_> {
                 self.model.agent_picker = Some(AgentPicker {
                     options: agent_options(self.home),
                     selected: 0,
-                    // Asked for with the keyboard, so there is no button to
-                    // anchor under; the popup places itself.
-                    anchor: Rect::default(),
+                    // Under the button that opens it by pointer, wherever it
+                    // was asked from: one menu, in one place.
+                    anchor: self
+                        .model
+                        .hits
+                        .iter()
+                        .find_map(|(rect, hit)| {
+                            (*hit == WorkspaceHit::NewAgentMenu).then_some(*rect)
+                        })
+                        .unwrap_or_default(),
                     resume: None,
                 });
                 self.model.dirty = true;
@@ -885,6 +902,16 @@ impl Attach<'_> {
                     picker.selected =
                         (picker.selected + 1).min(picker.options.len().saturating_sub(1));
                 }
+            }
+            Action::Activate
+                if self
+                    .model
+                    .agent_picker
+                    .as_ref()
+                    .is_some_and(|picker| picker.options.is_empty()) =>
+            {
+                self.model.agent_picker = None;
+                self.open_manage_at(Route::Harnesses);
             }
             Action::Activate => {
                 if let Some(picker) = self.model.agent_picker.take()
@@ -1540,6 +1567,10 @@ impl Attach<'_> {
                                 picker.resume.clone(),
                             );
                         }
+                    }
+                    Some(WorkspaceHit::SetUpAgent) => {
+                        self.model.agent_picker = None;
+                        self.open_manage_at(Route::Harnesses);
                     }
                     // Click outside the picker's own rows discards it —
                     // same rule `renaming` uses.
@@ -2390,7 +2421,7 @@ impl Attach<'_> {
                 // it.
                 self.model.dirty = true;
             }
-            WorkspaceHit::PickAgent(_) => {
+            WorkspaceHit::PickAgent(_) | WorkspaceHit::SetUpAgent => {
                 // Only reachable while the picker is open, which
                 // the guarded arm above already handles; a
                 // stale hit here (picker just closed) is a

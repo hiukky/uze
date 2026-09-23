@@ -151,6 +151,7 @@ world:
   harnesses: [claude, codex] # stand-in binaries on PATH
   manifest: |                # agents.yaml written into the fixture
     worktrees: { target: main, slots: 4 }
+  first_run: true            # a machine where `uze setup` never ran
 scenes:
   - scene: <what this scene proves>
     when: [ ...gestures... ]
@@ -250,6 +251,12 @@ connecting to a socket that is about to die. One run holds a world at a time:
 a second run of the same journey waits for the first to finish, because two
 runs in one world share a HOME, a terminal server and a task store, and each
 then tears the other down mid-scene.
+
+A world whose first `open` is `{uze}` is a machine where `uze setup` has
+run: on one it has never run on, `uze` asks which harnesses to set up
+before it opens, and that question is the first run's own journey — the one
+whose world says `first_run: true`. A journey that only runs commands, or
+that opens the previous release first, gets the machine that left it.
 
 A journey addresses the world through `{world}`, `{home}`, `{uze_home}`,
 `{project}`, `{repo}` and `{uze}` — plus `{shell_rc}`, which is the file the

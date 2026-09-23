@@ -748,6 +748,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             // before the alternate screen is even entered, left the
             // terminal looking frozen for however long harness detection
             // took.
+            set_up_on_first_run(&home, verbose)?;
             return uze::ui::run(home);
         }
         die_quietly_on_a_closed_pipe();
@@ -931,6 +932,31 @@ fn run_upgrade(home: &UzeHome) -> Result<()> {
             )));
         }
     }
+    Ok(())
+}
+
+/// A machine UZE has never run on has no harness set up, so nothing the
+/// workspace could launch an agent with: the first run asks which to set
+/// up before the first frame rather than leaving the operator to find out
+/// from a pane that never starts. Asked once — calling it off still opens
+/// the workspace, whose new-agent menu then leads to Integrations.
+///
+/// A setup that ran waits for `enter` before the workspace takes the
+/// screen: its report — a harness that failed, the line that reloads the
+/// shell's `PATH` — is only worth printing if it can be read.
+#[tracing::instrument(name = "tui.first_run_setup", skip_all)]
+fn set_up_on_first_run(home: &UzeHome, verbose: bool) -> Result<()> {
+    let app = UzeApplication::from_env(home.clone())?;
+    if !app.health().first_run() {
+        return Ok(());
+    }
+    let Some(chosen) = choose_harnesses(&app) else {
+        return Ok(());
+    };
+    if let Err(error) = run_setup(&app, home, &chosen, verbose) {
+        eprintln!("uze: {error}");
+    }
+    let _ = prompt::ask("Press enter to open uze");
     Ok(())
 }
 

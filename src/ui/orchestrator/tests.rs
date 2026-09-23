@@ -94,6 +94,7 @@ mod workspace_tests {
             display_name: "Agent",
             launch: std::path::PathBuf::from("agent"),
             continuity_gap: None,
+            configured: true,
         }]
     }
 
@@ -2248,6 +2249,7 @@ mod workspace_tests {
             display_name: "Long",
             launch: std::path::PathBuf::from(LONG),
             continuity_gap: None,
+            configured: true,
         }];
 
         let rows = sidebar(&model, &identities).rows;
@@ -2359,6 +2361,7 @@ mod workspace_tests {
                 display_name: "Claude Code",
                 launch: std::path::PathBuf::from("/uze/shims/claude"),
                 continuity_gap: None,
+                configured: true,
             },
             AgentIdentity {
                 binary: "codex",
@@ -2366,6 +2369,7 @@ mod workspace_tests {
                 display_name: "Codex",
                 launch: std::path::PathBuf::from("codex"),
                 continuity_gap: None,
+                configured: true,
             },
         ]
     }
@@ -4838,6 +4842,67 @@ mod workspace_tests {
         assert!(driven.attach.model.manage_chrome.is_none());
     }
 
+    /// The key opens the same menu the tab strip's button does, in the
+    /// same place — under the button, not wherever a keyboard gesture lands.
+    #[test]
+    fn the_new_agent_key_opens_the_picker_under_its_button() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-picker-by-key"));
+        let mut driven =
+            driven(agent_with_task(WorkStateView::Ready, 1), &home).on_a_roomy_terminal();
+        driven.frame();
+        let sparkle = driven.hit(|hit| *hit == WorkspaceHit::NewAgentMenu);
+        let chord = uze_keys::active()
+            .chord_for(
+                uze_keys::Action::NewAgent,
+                &[uze_keys::Scope::Global, uze_keys::Scope::Workspace],
+            )
+            .expect("the picker is reachable from the keyboard");
+
+        driven.press_key(key_event(chord));
+
+        let picker = driven
+            .attach
+            .model
+            .agent_picker
+            .as_ref()
+            .expect("the key opened the picker");
+        assert_eq!(picker.anchor, sparkle, "anchored under the ✦ button");
+    }
+
+    /// A machine where no harness was set up has nothing to launch: the
+    /// picker lists none of the harnesses it merely knows, and its one row
+    /// takes the operator to Integrations, where one is set up.
+    #[test]
+    fn with_no_harness_set_up_the_agent_picker_leads_to_integrations() {
+        let home = UzeHome::at(uze_testkit::temp::scratch(
+            "orchestrator-picker-unconfigured",
+        ));
+        let mut driven =
+            driven(agent_with_task(WorkStateView::Ready, 1), &home).on_a_roomy_terminal();
+        driven.frame();
+        let sparkle = driven.hit(|hit| *hit == WorkspaceHit::NewAgentMenu);
+        driven.press(sparkle.x, sparkle.y);
+        let picker = driven
+            .attach
+            .model
+            .agent_picker
+            .as_ref()
+            .expect("the picker opened");
+        assert!(
+            picker.options.is_empty(),
+            "no harness is offered before one is set up"
+        );
+
+        driven.frame();
+        let set_up = driven.hit(|hit| *hit == WorkspaceHit::SetUpAgent);
+        driven.press(set_up.x, set_up.y);
+        assert!(
+            driven.attach.model.agent_picker.is_none(),
+            "the picker closed"
+        );
+        assert_eq!(manage_route(&driven), crate::ui::model::Route::Harnesses);
+    }
+
     /// The header's trailing control opens the modal; a click inside it
     /// is the modal's own, a click beside it closes it.
     ///
@@ -6757,6 +6822,7 @@ mod workspace_tests {
                 display_name: "Claude Code",
                 launch: std::path::PathBuf::from("/uze/shims/claude"),
                 continuity_gap: None,
+                configured: true,
             },
             AgentIdentity {
                 binary: "codex",
@@ -6764,6 +6830,7 @@ mod workspace_tests {
                 display_name: "Codex",
                 launch: std::path::PathBuf::from("codex"),
                 continuity_gap: Some("no launcher".to_owned()),
+                configured: true,
             },
         ]
     }
@@ -7287,6 +7354,22 @@ mod workspace_tests {
                 .collect();
             assert_eq!(found.len(), 1, "exactly one such hit: {found:?}");
             found[0]
+        }
+    }
+
+    /// The picker offers only harnesses set up on this machine, so a test
+    /// that launches one sets them up first.
+    fn set_up_every_harness(home: &UzeHome) {
+        for identity in super::super::agent_identities(home) {
+            uze_core::state::record(
+                home,
+                identity.integration,
+                uze_core::state::IntegrationRecord {
+                    version: None,
+                    strategy: "test".to_owned(),
+                },
+            )
+            .unwrap();
         }
     }
 
@@ -8724,6 +8807,7 @@ mod workspace_tests {
     #[test]
     fn a_picker_row_over_the_tree_answers_its_own_click() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-picker-overlap"));
+        set_up_every_harness(&home);
         let model = agent_over_a_lost_checkout(
             Path::new("/repo/.worktrees/ai"),
             Path::new("/repo"),
@@ -8942,6 +9026,7 @@ mod workspace_tests {
         let repository = uze_testkit::git::Repository::new("orchestrator-resume");
         let root = repository.root().to_path_buf();
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-resume-home"));
+        set_up_every_harness(&home);
         let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
         let placement = app
             .workspace()
@@ -9062,6 +9147,7 @@ mod workspace_tests {
         let repository = uze_testkit::git::Repository::new("orchestrator-resume-kept");
         let root = repository.root().to_path_buf();
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-resume-kept-home"));
+        set_up_every_harness(&home);
         let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
         let placement = app
             .workspace()
