@@ -248,9 +248,12 @@ def phase_tui(cfg, prov_ip):
     t, p, m = wait_for(["connected", "tool"], tries=10, stop_on_death=True)
     snap("02b_mcp", t)
     joined = p.replace(" ", "")
+    # Up to 2.1.2xx the row said "connected"; 2.1.281 marks the same state
+    # with a check glyph before the server's name and drops the word.
+    connected = "connected" in joined or "✔plugin:uze-mcp-conformance" in joined
     check(
         "mcp-server-connected-in-tui",
-        "connected" in joined and "1tool" in joined,
+        connected and "1tool" in joined,
         "/mcp shows the UZE MCP server connected with 1 tool",
     )
     child.send("\x1b")
