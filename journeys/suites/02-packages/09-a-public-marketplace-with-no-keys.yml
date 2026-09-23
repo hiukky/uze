@@ -34,7 +34,10 @@ world:
       # A smart-HTTP Git forge on loopback: `git http-backend` behind Basic
       # auth when a credential is given, anonymous when it is not. Writes
       # the port it took, since a fixed one could collide with anything.
-      import base64, http.server, os, subprocess, sys
+      import base64, faulthandler, http.server, os, socketserver, subprocess, sys
+
+      # Where it stood, in serve.log, if it has not taken a port by then.
+      faulthandler.dump_traceback_later(8)
 
       root, port_file = sys.argv[1], sys.argv[2]
       credential = sys.argv[3] if len(sys.argv) > 3 else None
@@ -103,10 +106,19 @@ world:
               self.end_headers()
               self.wfile.write(payload)
 
-      server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Forge)
+      class Server(http.server.ThreadingHTTPServer):
+          # `HTTPServer.server_bind` asks `socket.getfqdn`, a reverse lookup
+          # that stalls on a macOS runner long enough to never take a port.
+          def server_bind(self):
+              socketserver.TCPServer.server_bind(self)
+              self.server_name = "127.0.0.1"
+              self.server_port = self.server_address[1]
+
+      server = Server(("127.0.0.1", 0), Forge)
       with open(port_file + ".partial", "w") as written:
           written.write(str(server.server_address[1]))
       os.rename(port_file + ".partial", port_file)
+      faulthandler.cancel_dump_traceback_later()
       server.serve_forever()
     forge/ssh: |
       #!/bin/sh
