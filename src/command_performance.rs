@@ -87,6 +87,7 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     ("theme set", PerformanceClass::Budgeted),
     ("theme show", PerformanceClass::Budgeted),
     ("theme glyphs", PerformanceClass::Budgeted),
+    ("theme specimen", PerformanceClass::Budgeted),
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
@@ -203,6 +204,10 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "theme glyphs",
+        "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
+    ),
+    (
+        "theme specimen",
         "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
     ),
     (

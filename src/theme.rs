@@ -32,6 +32,8 @@
 use uze_application::{Result, UzeApplication, UzeError, UzeHome};
 use uze_theme::{Loaded, ThemeFile};
 
+pub mod specimen;
+
 /// How deep a chain of variations may go before UZE stops following it.
 ///
 /// A loop is already caught by name; this catches the other shape, an

@@ -155,11 +155,13 @@ uze theme show [id]     # a theme's resolved colours and glyphs, and its warning
 
 uze theme glyphs        # the glyph sets, each drawn in its own glyphs
 uze theme glyphs <set>  # draw with that set from now on — `default`, `ascii` or `nerd`
+uze theme specimen [set] # every symbol of a set in the slot uze draws it in, to screenshot
 ```
 
 The palette and the glyph set are separate choices, and neither changes the
-other. Machine-level, and `--format json` on `list`, `show` and `glyphs`. See
-[Appearance](/docs/appearance).
+other. Machine-level, and `--format json` on `list`, `show`, `glyphs` and
+`specimen`, whose JSON is the layout the Rendering Lab's analyzer measures a
+screenshot of it against. See [Appearance](/docs/appearance).
 
 ## Terminal session
 

@@ -278,6 +278,15 @@ enum ThemeAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Draw a glyph set to see what this terminal and font make of it.
+    /// Every symbol, in the slot UZE draws it in, beside a calibration row
+    /// that `conformance/rendering/analyze.py` measures a screenshot
+    /// against. The active set by default.
+    Specimen {
+        set: Option<String>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Show a theme's resolved colours and glyphs, and anything its file
     /// got wrong. The active one by default.
     Show {
@@ -1118,6 +1127,23 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
                 progress::success(&format!("Drawing with the {set} glyphs"));
             }
         },
+        ThemeAction::Specimen { set, format } => {
+            let set = match set {
+                Some(set) => set,
+                None => app
+                    .themes()
+                    .glyph_sets(uze_theme::glyph_sets())?
+                    .into_iter()
+                    .find(|set| set.active)
+                    .map_or_else(|| uze_theme::glyph_sets()[0].to_owned(), |set| set.id),
+            };
+            let specimen = uze::theme::specimen::specimen(&set)?;
+            emit(format, &specimen, |specimen| {
+                let mut text = specimen.lines().join("\n");
+                text.push('\n');
+                text
+            });
+        }
         ThemeAction::Show { id, format } => {
             let id = match id {
                 Some(id) => id,
