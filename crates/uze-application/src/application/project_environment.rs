@@ -130,7 +130,7 @@ impl Project<'_> {
         };
         if let Ok(Some(registered)) = uze_core::state::marketplace_get(&self.0.home, marketplace)
             && let Ok(local) = uze_core::acquisition::marketplace::repository_of(&registered.source)
-            && local.identity == locked.git
+            && uze_core::acquisition::forge::same_repository(&local.identity, &locked.git)
         {
             repository.fetch = local.fetch;
         }
@@ -182,7 +182,10 @@ impl Project<'_> {
         // the machine registry another is a question only a person can
         // settle.
         if let Some(recorded) = lock.marketplaces.get(marketplace)
-            && recorded.git != request.repository.identity
+            && !uze_core::acquisition::forge::same_repository(
+                &recorded.git,
+                &request.repository.identity,
+            )
         {
             return Err(UzeError::MarketplaceSourceConflict {
                 marketplace: marketplace.to_owned(),
@@ -633,7 +636,7 @@ impl Project<'_> {
     ) -> Result<()> {
         if let Some(registered) = uze_core::state::marketplace_get(&self.0.home, marketplace)? {
             let known = uze_core::acquisition::marketplace::repository_of(&registered.source)?;
-            if known.identity == identity {
+            if uze_core::acquisition::forge::same_repository(&known.identity, identity) {
                 return Ok(());
             }
             return Err(UzeError::MarketplaceConflict {

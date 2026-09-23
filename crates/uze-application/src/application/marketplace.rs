@@ -43,6 +43,9 @@ pub(crate) fn naming_the_marketplace<T>(
                 detail: format!("marketplace `{marketplace}` at {url}\n{detail}"),
             })
         }
+        Err(UzeError::RepositoryOffline { detail }) => Err(UzeError::RepositoryOffline {
+            detail: format!("marketplace `{marketplace}` at {url}\n{detail}"),
+        }),
         other => other,
     }
 }
@@ -157,6 +160,7 @@ impl MarketplaceRequest {
         naming_the_marketplace(
             acquisition::mirror::ensure_for(
                 &self.repository.fetch,
+                &self.repository.identity,
                 &repository,
                 self.reference.as_deref(),
             ),
@@ -209,44 +213,6 @@ impl MarketplaceRequest {
     }
 }
 
-/// A marketplace source as the operator spelled it: a URL (optionally
-/// `@reference` and `#subdirectory`), or a local directory holding a
-/// marketplace manifest.
-fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
-    let looks_remote = source_str.starts_with("https://")
-        || source_str.starts_with("http://")
-        || source_str.starts_with("git://")
-        || source_str.starts_with("ssh://")
-        || source_str.starts_with("file://");
-    if !looks_remote {
-        let path = PathBuf::from(source_str)
-            .canonicalize()
-            .map_err(|_| UzeError::MissingPath(PathBuf::from(source_str)))?;
-        let manifest_path = path.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-        if !manifest_path.is_file() {
-            return Err(UzeError::MissingManifest(manifest_path));
-        }
-        return Ok(PackageSource::Local { path });
-    }
-    let (locator, subdirectory) = match source_str.split_once('#') {
-        Some((locator, sub)) => (locator, Some(PathBuf::from(sub))),
-        None => (source_str, None),
-    };
-    let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
-    let (url, reference) = match locator[scheme_end..].rfind('@') {
-        Some(at) => {
-            let at = scheme_end + at;
-            (&locator[..at], Some(locator[at + 1..].to_owned()))
-        }
-        None => (locator, None),
-    };
-    Ok(PackageSource::Git {
-        url: url.to_owned(),
-        reference,
-        subdirectory,
-    })
-}
-
 impl Marketplace<'_> {
     /// `Ok(true)` when the marketplace was newly registered, `Ok(false)`
     /// when it was already registered from the exact same source
@@ -259,7 +225,82 @@ impl Marketplace<'_> {
     /// does not pay it a second time.
     #[tracing::instrument(name = "marketplace.add", skip_all, fields(source_str = %source_str), err)]
     pub fn add(&self, source_str: &str) -> Result<bool> {
-        let source = parse_marketplace_source(source_str)?;
+        self.register(source_str)
+            .map(|registration| registration.added)
+    }
+
+    /// [`Self::add`], answering with what the input resolved to.
+    ///
+    /// A short locator names one host — its prefix, or the machine's
+    /// default — and is never tried on another: a forge answers "not
+    /// found" for a private repository the caller cannot see, so a
+    /// fallback would resolve the operator's own private name to whoever
+    /// owns it elsewhere. The failure suggests the other hosts instead.
+    #[tracing::instrument(name = "marketplace.register", skip_all, fields(source_str = %source_str), err)]
+    pub fn register(&self, source_str: &str) -> Result<MarketplaceRegistration> {
+        let hosts = uze_core::hosts::load(&self.0.home)?;
+        let (source, short) = self.parse_source(source_str, &hosts)?;
+        let registered = self.register_source(&source);
+        let added = match registered {
+            Err(error) if short => return Err(suggesting_other_hosts(error, &source, &hosts)),
+            other => other?,
+        };
+        // A local directory that is not a repository yet still registers —
+        // its installs will say what it lacks — and names only itself.
+        let identity = marketplace::repository_of(&source)
+            .map(|repository| repository.identity)
+            .unwrap_or_else(|_| source.display());
+        let resolves_here_only = match &source {
+            PackageSource::Local { path } => identity == path.display().to_string(),
+            _ => false,
+        };
+        Ok(MarketplaceRegistration {
+            added,
+            resolves_here_only,
+            identity,
+        })
+    }
+
+    /// What the operator typed, read by the one locator grammar: a path
+    /// spelled as one, a URL, `alias:owner/repo`, or `owner/repo` on the
+    /// default host. A remote is recorded in its canonical spelling.
+    fn parse_source(
+        &self,
+        source_str: &str,
+        hosts: &uze_core::hosts::Hosts,
+    ) -> Result<(PackageSource, bool)> {
+        let locator =
+            acquisition::forge::parse_locator(source_str, hosts, &|path| Path::new(path).is_dir())
+                .map_err(|refusal| UzeError::UnreadableLocator(refusal.to_string()))?;
+        match locator {
+            acquisition::forge::Locator::Path(typed) => {
+                let path = typed
+                    .canonicalize()
+                    .map_err(|_| UzeError::MissingPath(typed.clone()))?;
+                let manifest_path = path.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
+                if !manifest_path.is_file() {
+                    return Err(UzeError::MissingManifest(manifest_path));
+                }
+                Ok((PackageSource::Local { path }, false))
+            }
+            acquisition::forge::Locator::Remote {
+                url,
+                reference,
+                subdirectory,
+                short,
+            } => Ok((
+                PackageSource::Git {
+                    url: acquisition::forge::canonical(&url),
+                    reference,
+                    subdirectory,
+                },
+                short,
+            )),
+        }
+    }
+
+    fn register_source(&self, source: &PackageSource) -> Result<bool> {
+        let source = source.clone();
         // A Git source is mirrored rather than cloned: the mirror is what
         // answers the name, and it is also what every later read and every
         // install of one of its plugins works from. A local source is read
@@ -275,6 +316,34 @@ impl Marketplace<'_> {
             return Err(UzeError::ReservedMarketplace(name));
         }
         uze_core::state::marketplace_add(&self.0.home, &name, source.clone())
+    }
+
+    /// The host aliases this machine resolves, built-ins first.
+    #[tracing::instrument(name = "marketplace.hosts", skip_all, err)]
+    pub fn hosts(&self) -> Result<Vec<uze_core::hosts::HostEntry>> {
+        Ok(uze_core::hosts::load(&self.0.home)?.entries())
+    }
+
+    /// Makes `alias` the host a bare `owner/repo` resolves against.
+    #[tracing::instrument(name = "marketplace.host_default", skip_all, fields(alias = %alias), err)]
+    pub fn set_default_host(&self, alias: &str) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        uze_core::hosts::set_default(&self.0.home, alias)
+    }
+
+    /// Defines `alias` as the forge at `base`.
+    #[tracing::instrument(name = "marketplace.host_define", skip_all, fields(alias = %alias), err)]
+    pub fn define_host(&self, alias: &str, base: &str) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        uze_core::hosts::define(&self.0.home, alias, base)
+    }
+
+    /// Removes an alias the operator defined; `Ok(true)` when it was the
+    /// default, which is `github` again.
+    #[tracing::instrument(name = "marketplace.host_remove", skip_all, fields(alias = %alias), err)]
+    pub fn remove_host(&self, alias: &str) -> Result<bool> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        uze_core::hosts::remove(&self.0.home, alias)
     }
 
     /// Reads `name` from `checkout` on this machine from now on.
@@ -526,6 +595,48 @@ impl Marketplace<'_> {
                 .collect(),
             summary,
         })
+    }
+}
+
+/// A short locator's failure, with the prefixed forms to try on the other
+/// hosts this machine knows. Only suggested — never tried.
+fn suggesting_other_hosts(
+    error: UzeError,
+    source: &PackageSource,
+    hosts: &uze_core::hosts::Hosts,
+) -> UzeError {
+    use acquisition::forge::HostAliases;
+    let PackageSource::Git { url, .. } = source else {
+        return error;
+    };
+    let Some(host) = acquisition::forge::host_of(url) else {
+        return error;
+    };
+    let asked = hosts
+        .entries()
+        .into_iter()
+        .find(|entry| acquisition::forge::host_of(&entry.base).as_deref() == Some(host.as_str()));
+    let path = asked
+        .as_ref()
+        .and_then(|entry| url.strip_prefix(entry.base.trim_end_matches('/')))
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_owned();
+    if path.is_empty() {
+        return error;
+    }
+    let others: Vec<String> = hosts
+        .aliases()
+        .into_iter()
+        .filter(|alias| Some(alias) != asked.as_ref().map(|entry| &entry.alias))
+        .map(|alias| format!("{alias}:{path}"))
+        .collect();
+    let hint = format!("If it lives elsewhere: {}", others.join(", "));
+    match error {
+        UzeError::RepositoryAccessRefused { detail } => UzeError::RepositoryAccessRefused {
+            detail: format!("{detail}\n{hint}"),
+        },
+        other => other,
     }
 }
 

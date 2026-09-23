@@ -233,7 +233,7 @@ impl MarketplaceCatalogues {
         let entry = self.entry_dir(name);
         let repository = entry.join(REPOSITORY_DIR);
         super::marketplace::naming_the_marketplace(
-            acquisition::mirror::ensure(url, &repository),
+            acquisition::mirror::ensure(url, &acquisition::forge::canonical(url), &repository),
             name,
             url,
         )?;
@@ -288,7 +288,7 @@ impl MarketplaceCatalogues {
             now_unix_nanos()
         ));
         let adopted = (|| {
-            acquisition::mirror::ensure(url, &staging)?;
+            acquisition::mirror::ensure(url, &acquisition::forge::canonical(url), &staging)?;
             let commit = acquisition::mirror::resolve(&staging, reference.as_deref())?;
             let manifest = self.manifest_at(&staging, &commit)?;
             Ok((manifest.name.clone(), manifest, commit))
@@ -358,7 +358,7 @@ impl MarketplaceCatalogues {
     ) -> Option<Catalogue> {
         let entry = self.entry_dir(name);
         let meta: Meta = serde_json::from_slice(&fs::read(entry.join(META_FILE)).ok()?).ok()?;
-        if &meta.source != source {
+        if !meta.source.same_source(source) {
             return None;
         }
         let age_nanos = now_unix_nanos().saturating_sub(meta.cached_at_unix_nanos);

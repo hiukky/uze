@@ -100,7 +100,8 @@ impl LockedMarketplace {
     /// not staleness anything sees here; `uze add` re-resolves it.
     pub fn answers(&self, declared: &crate::manifest::DeclaredMarketplace) -> bool {
         if let Some(url) = &declared.git
-            && &self.git != url
+            && crate::acquisition::forge::canonical(&self.git)
+                != crate::acquisition::forge::canonical(url)
         {
             return false;
         }
@@ -337,6 +338,27 @@ mod tests {
             marketplace: marketplace.to_owned(),
             integrity: None,
         }
+    }
+
+    /// A lock written from an SSH `origin` still answers a manifest that
+    /// names the same repository over HTTPS: a spelling is not staleness.
+    #[test]
+    fn a_lock_answers_another_spelling_of_the_same_repository() {
+        let locked = LockedMarketplace {
+            git: "git@github.com:hiukky/ai.git".to_owned(),
+            r#ref: None,
+            subdirectory: None,
+            revision: "0".repeat(40),
+        };
+        let declared = |url: &str| crate::manifest::DeclaredMarketplace {
+            git: Some(url.to_owned()),
+            path: None,
+            r#ref: None,
+            subdirectory: None,
+            plugins: Vec::new(),
+        };
+        assert!(locked.answers(&declared("https://github.com/hiukky/ai")));
+        assert!(!locked.answers(&declared("https://gitlab.com/hiukky/ai")));
     }
 
     mod staleness {

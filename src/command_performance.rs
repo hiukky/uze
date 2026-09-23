@@ -96,6 +96,7 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     ("market link", PerformanceClass::Budgeted),
     ("market unlink", PerformanceClass::Budgeted),
     ("market inspect", PerformanceClass::Budgeted),
+    ("market host", PerformanceClass::Budgeted),
     (
         "market add",
         PerformanceClass::JustifiedSlow(
@@ -224,6 +225,10 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "market inspect",
         "crates/uze-application/tests/performance.rs::market_list_and_inspect_meet_the_budget_without_the_repository",
+    ),
+    (
+        "market host",
+        "crates/uze-application/tests/performance.rs::market_host_meets_the_budget",
     ),
     (
         "plugin list",

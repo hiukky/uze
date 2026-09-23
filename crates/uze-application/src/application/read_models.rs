@@ -167,6 +167,19 @@ pub struct PluginCapability {
     pub kind: CapabilityKind,
 }
 
+/// What registering a marketplace did, and what it registered.
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplaceRegistration {
+    /// `false` when the same repository was already registered.
+    pub added: bool,
+    /// What was typed resolved to — the full URL a short locator named, so
+    /// a repository of the same name on the wrong host is visible now.
+    pub identity: String,
+    /// A local checkout with no `origin`: a project declaring it resolves
+    /// on this machine and nowhere else.
+    pub resolves_here_only: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct MarketplaceSummary {
     pub name: String,

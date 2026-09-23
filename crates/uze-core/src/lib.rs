@@ -81,7 +81,7 @@ pub use delivery::{
 pub use machine::{
     detection_cache, features, harness_runtime, home, provisioning, shell_path, subprocess,
 };
-pub use package::{acquisition, naming, store, trust};
+pub use package::{acquisition, hosts, naming, store, trust};
 pub use project::{
     checkout, context, conversation, landing, manifest, project_context, project_lock,
     project_root, record, task, text_region, workspace, worktree,

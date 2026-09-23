@@ -49,14 +49,15 @@ pub struct MarketplaceRepository {
 /// not one.
 ///
 /// A local directory must be a Git work tree with at least one commit. Its
-/// identity is `origin` when it has one — the URL a teammate would clone —
-/// and otherwise the checkout's own absolute path, which is still a valid
-/// Git URL and is honest about resolving nowhere else.
+/// identity is `origin` when it has one — the URL a teammate would clone,
+/// in its canonical spelling — and otherwise the checkout's own absolute
+/// path, which is still a valid Git URL and is honest about resolving
+/// nowhere else.
 pub fn repository_of(source: &PackageSource) -> Result<MarketplaceRepository> {
     match source {
         PackageSource::Git { url, .. } => Ok(MarketplaceRepository {
             fetch: url.clone(),
-            identity: url.clone(),
+            identity: super::forge::canonical(url),
         }),
         PackageSource::Local { path } => {
             let toplevel =
@@ -72,8 +73,10 @@ pub fn repository_of(source: &PackageSource) -> Result<MarketplaceRepository> {
                     path: path.to_path_buf(),
                 });
             }
-            let identity = git_answer(path, &["remote", "get-url", "origin"])
-                .unwrap_or_else(|| toplevel.clone());
+            let identity = git_answer(path, &["remote", "get-url", "origin"]).map_or_else(
+                || toplevel.clone(),
+                |origin| super::forge::canonical(&origin),
+            );
             Ok(MarketplaceRepository {
                 fetch: toplevel,
                 identity,

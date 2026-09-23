@@ -11,7 +11,7 @@ mod shim;
 use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
-use uze_application::{PlannedAction, Result, UzeHome};
+use uze_application::{HostEntry, PlannedAction, Result, UzeHome};
 use uze_application::{
     UzeApplication,
     application::{
@@ -250,6 +250,20 @@ enum MarketAction {
     Link { name: String, checkout: PathBuf },
     /// Stop reading a marketplace from a checkout.
     Unlink { name: String },
+    /// The hosts `owner/repo` and `alias:owner/repo` resolve against.
+    ///
+    /// With no argument, lists them. With an alias, makes it the default.
+    /// With an alias and an https:// URL, defines it. With `--remove`,
+    /// removes an alias you defined. Only what you type is resolved through
+    /// these: a project records full URLs, so no project needs your aliases.
+    Host {
+        alias: Option<String>,
+        base: Option<String>,
+        #[arg(long, requires = "alias", conflicts_with = "base")]
+        remove: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Inspect one marketplace's own source and plugin count.
     ///
     /// Distinct from inspecting one plugin within a marketplace
@@ -1298,15 +1312,50 @@ fn render_theme(id: &str, layers: Vec<String>, loaded: &uze_theme::Loaded) -> St
 fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
     match action {
         MarketAction::Add { source } => {
-            let added = with_spinner("Adding marketplace...", "Failed to add marketplace", || {
-                app.marketplace().add(&source)
-            })?;
-            if added {
-                progress::success(&format!("Added marketplace from {source}"));
+            let registration =
+                with_spinner("Adding marketplace...", "Failed to add marketplace", || {
+                    app.marketplace().register(&source)
+                })?;
+            let identity = &registration.identity;
+            if registration.added {
+                progress::success(&format!("Added marketplace from {identity}"));
             } else {
-                progress::success(&format!("Marketplace from {source} is already added"));
+                progress::success(&format!("Marketplace from {identity} is already added"));
+            }
+            if registration.resolves_here_only {
+                progress::warn(
+                    "It has no origin: a project declaring it resolves on this machine only",
+                );
             }
         }
+        MarketAction::Host {
+            alias,
+            base,
+            remove,
+            format,
+        } => match (alias, base) {
+            (None, _) => {
+                let hosts = app.marketplace().hosts()?;
+                emit(format, &hosts, |hosts| render_market_hosts(hosts));
+            }
+            (Some(alias), _) if remove => {
+                if app.marketplace().remove_host(&alias)? {
+                    progress::success(&format!(
+                        "Removed host {alias}; the default is github again"
+                    ));
+                } else {
+                    progress::success(&format!("Removed host {alias}"));
+                }
+            }
+            (Some(alias), Some(base)) => {
+                app.marketplace().define_host(&alias, &base)?;
+                progress::success(&format!("Host {alias} is {}", base.trim_end_matches('/')));
+            }
+            (Some(alias), None) => {
+                app.marketplace().set_default_host(&alias)?;
+                progress::success(&format!("owner/repo now resolves against {alias}"));
+            }
+        },
         MarketAction::List { format } => {
             let marketplaces = app.marketplace().list()?;
             emit(format, &marketplaces, |marketplaces| {
@@ -2952,6 +3001,30 @@ fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
                         None => progress::label(&market.source),
                     },
                     format!("{} plugins", market.plugin_count),
+                ]
+            })
+            .collect(),
+    ));
+    text.push('\n');
+    text
+}
+
+fn render_market_hosts(hosts: &[HostEntry]) -> String {
+    let mut text =
+        progress::report_title("Hosts", Some("What owner/repo and alias:owner/repo name"));
+    text.push('\n');
+    text.push_str(&progress::aligned_rows(
+        hosts
+            .iter()
+            .map(|host| {
+                vec![
+                    progress::title(&host.alias),
+                    progress::label(&host.base),
+                    match (host.default, host.built_in) {
+                        (true, _) => progress::accent("default"),
+                        (false, true) => progress::label("built in"),
+                        (false, false) => String::new(),
+                    },
                 ]
             })
             .collect(),

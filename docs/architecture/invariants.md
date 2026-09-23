@@ -353,6 +353,37 @@ declarations; it invokes nothing.
 
 > `tests/packages/acquisition.rs::submodules_are_not_recursed_into`
 
+### A marketplace is named by its URL's shape, never by a machine
+
+`git@host:owner/repo.git`, `ssh://git@host/owner/repo` and
+`https://host/owner/repo.git` are one repository, recorded as
+`https://host/owner/repo`; an SSH URL with a port or another user is kept
+as written. The reduction reads nothing but the URL, so every machine
+records the same identity and no host alias or configuration changes it —
+and every comparison of two sources (registry, Store provenance, mirror,
+catalogue, link, lock) goes through it, so an older spelling meets its
+canonical form without a conflict.
+
+> `crates/uze-core/src/package/acquisition/forge.rs::tests::every_spelling_of_one_repository_is_one_identity`
+> `crates/uze-core/src/package/acquisition/forge.rs::tests::a_host_no_table_knows_is_reduced_the_same_way`
+> `crates/uze-core/src/project/project_lock.rs::tests::a_lock_answers_another_spelling_of_the_same_repository`
+> `tests/packages/access.rs::an_older_spelling_meets_its_canonical_form_without_conflict_or_reclone`
+
+### A repository is reached on one host, anonymously first
+
+A fetch tries anonymous HTTPS, then HTTPS with the operator's credentials,
+then SSH at `git@<host>:<path>.git` — the same host and path every time, so
+no credential is ever offered to a host the identity does not name. A host
+that does not resolve ends the ladder as offline; any other failure is that
+transport's, and the next is asked. A short `owner/repo` resolves against
+one host and is never tried on another: a forge answers a private
+repository the caller cannot see exactly as it answers a missing one.
+
+> `tests/packages/access.rs::a_public_marketplace_is_reached_with_no_credential_at_all`
+> `tests/packages/access.rs::a_private_marketplace_is_reached_over_ssh_and_ssh_is_tried_first_next_time`
+> `tests/packages/access.rs::an_offline_machine_tries_no_credential`
+> `tests/packages/access.rs::a_short_locator_asks_one_host_and_suggests_the_others`
+
 ### One machine mutation at a time, and never two
 
 The machine mutation guard is an `flock` on a permanent `state/mutation.lock`,
@@ -387,7 +418,8 @@ holding the pipe open is swept once before the reader is given up on.
 `~/.uze/cache` holds three caches, each reconstructable from a live read:
 harness detection (`harness_detection.json`), attachment inspection
 (`inspection.json`) and, for every marketplace registered by URL, a mirror
-of its repository (`marketplaces/<name>/repo`) with whatever plugins have
+of its repository (`marketplaces/<name>/repo`, which remembers in
+`transport.json` how it was last reached) with whatever plugins have
 been asked about written out beside it (`marketplaces/<name>/plugins`).
 Deleting the directory costs one probe, one inspection or one clone;
 nothing installed depends on it, and no mutating path trusts it — removal
@@ -1768,11 +1800,22 @@ and so a status view never blocks behind one.
 
 `uze-git` drives the operator's own checkout, so their configuration
 applies. `acquisition::git` clones untrusted remote repositories, so it
-strips the environment instead — `env_clear`, `GIT_CONFIG_NOSYSTEM`, hooks
-disabled, no credential prompt. Merging them would be wrong in both
-directions; a third spawn is what the rule prevents.
+strips all Git configuration instead — `GIT_CONFIG_NOSYSTEM`,
+`GIT_CONFIG_GLOBAL=/dev/null`, hooks disabled, no submodules, no prompt,
+SSH in batch mode refusing an unknown host key. What it admits is named:
+the operator's network (proxy, certificate authority) on every attempt,
+and on an authenticated one their environment minus `GIT_*` and their
+`credential.*` settings with their URL scopes, replayed through
+`GIT_CONFIG_COUNT` so nothing secret reaches argv; the authenticated HTTPS
+attempt follows no redirect, and the anonymous one has no `HOME`, so no
+`.netrc`. Plain HTTP reaches only loopback. Merging the two spawns would be
+wrong in both directions; a third is what the rule prevents.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
+> `tests/packages/access.rs::the_operators_aliases_and_filters_do_not_run`
+> `tests/packages/access.rs::a_redirect_never_carries_the_credential_to_another_host`
+> `tests/packages/access.rs::a_private_marketplace_is_reached_through_a_url_scoped_credential_helper`
+> `crates/uze-core/src/package/acquisition/git.rs::tests::the_operators_network_and_credentials_are_read_with_their_scopes`
 
 ### No command ships without a performance decision
 

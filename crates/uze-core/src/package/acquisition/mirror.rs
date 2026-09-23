@@ -23,41 +23,75 @@
 
 use std::path::Path;
 
-use super::git::{reject_option_shaped, run};
+use super::forge::{self, Transport};
+use super::git::{Reach, reject_option_shaped, run, run_as, through};
 use crate::error::{Result, UzeError};
 
 /// Blobs are what a clone spends its time on, and what answering a question
 /// about *history* never needs.
 const NO_BLOBS: &str = "--filter=blob:none";
 
-/// Makes `directory` a mirror of `url`, cloning it when there is none and
-/// fetching into it when there is.
+/// Where a mirror remembers which repository it is and how it was last
+/// reached. Inside the mirror, so it goes with it: the mirror is cache, and
+/// so is this.
+const TRANSPORT_FILE: &str = "transport.json";
+
+/// A mirror's own account of itself.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Remembered {
+    identity: String,
+    transport: Transport,
+}
+
+/// Makes `directory` a mirror of the repository `identity` names, cloning
+/// it when there is none and fetching into it when there is. `fetch` is
+/// where the bytes are read from — the identity itself, or a checkout of it
+/// on this disk.
 ///
 /// The fetch is what makes a second plugin from one marketplace free: the
 /// objects the first install brought are already here, and only what has
 /// been pushed since travels.
-pub fn ensure(url: &str, directory: &Path) -> Result<()> {
-    super::git::reject_inline_credentials(url)?;
-    reject_option_shaped(url, "repository url")?;
+///
+/// Reached through [`through`](super::git::through), starting from the
+/// transport that worked last time. `origin` is set to the transport that
+/// answered, because a blobless mirror fetches a missing blob from `origin`
+/// later, and it must reach the same place the same way.
+pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
+    super::git::reject_inline_credentials(fetch)?;
+    reject_option_shaped(fetch, "repository url")?;
 
+    let remembered = remembered(directory);
     if directory.join("HEAD").exists() {
         // A directory that is a mirror of *something else* is not this
         // marketplace's, whatever it is called on disk. Fetching into it
         // would answer questions about one repository with another's
         // history — which is exactly what a name registered against a new
-        // source must not get.
-        let origin = run(&["remote", "get-url", "origin"], Some(directory))
-            .map(|answer| answer.trim().to_owned())
-            .unwrap_or_default();
-        if origin == url {
-            // `--prune` so a ref deleted upstream stops being resolvable
-            // here, which is the honest answer to "does this ref still
-            // exist".
-            run(
-                &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
-                Some(directory),
-            )?;
-            return Ok(());
+        // source must not get. A mirror of the same repository under an
+        // older spelling is this one, and is kept.
+        let known = match &remembered {
+            Some(remembered) => remembered.identity.clone(),
+            None => run(&["remote", "get-url", "origin"], Some(directory))
+                .map(|answer| answer.trim().to_owned())
+                .unwrap_or_default(),
+        };
+        if forge::same_repository(&known, identity) || forge::same_repository(&known, fetch) {
+            let transport = remembered.as_ref().map(|remembered| &remembered.transport);
+            let ((), answered) = through(fetch, transport, |transport| {
+                run(
+                    &["remote", "set-url", "origin", &transport.url],
+                    Some(directory),
+                )?;
+                // `--prune` so a ref deleted upstream stops being resolvable
+                // here, which is the honest answer to "does this ref still
+                // exist".
+                run_as(
+                    Reach::of(transport),
+                    &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
+                    Some(directory),
+                )?;
+                super::git::holds_a_commit(directory, transport)
+            })?;
+            return remember(directory, identity, answered);
         }
         std::fs::remove_dir_all(directory).map_err(|source| UzeError::Write {
             path: directory.to_path_buf(),
@@ -73,19 +107,46 @@ pub fn ensure(url: &str, directory: &Path) -> Result<()> {
     }
     // Bare: nothing here is ever edited, and a working tree would be the
     // second materialized copy this exists to remove.
-    run(
-        &[
-            "clone",
-            "--bare",
-            NO_BLOBS,
-            "--no-recurse-submodules",
-            "--",
-            url,
-            &directory.to_string_lossy(),
-        ],
-        None,
-    )?;
-    Ok(())
+    let ((), answered) = through(fetch, None, |transport| {
+        let _ = std::fs::remove_dir_all(directory);
+        run_as(
+            Reach::of(transport),
+            &[
+                "clone",
+                "--bare",
+                NO_BLOBS,
+                "--no-recurse-submodules",
+                "--",
+                &transport.url,
+                &directory.to_string_lossy(),
+            ],
+            None,
+        )?;
+        super::git::holds_a_commit(directory, transport)
+    })?;
+    remember(directory, identity, answered)
+}
+
+fn remembered(directory: &Path) -> Option<Remembered> {
+    serde_json::from_slice(&std::fs::read(directory.join(TRANSPORT_FILE)).ok()?).ok()
+}
+
+fn remember(directory: &Path, identity: &str, transport: Transport) -> Result<()> {
+    let payload = serde_json::to_vec_pretty(&Remembered {
+        identity: identity.to_owned(),
+        transport,
+    })
+    .expect("a transport is serializable");
+    std::fs::write(directory.join(TRANSPORT_FILE), payload).map_err(|source| UzeError::Write {
+        path: directory.join(TRANSPORT_FILE),
+        source,
+    })
+}
+
+/// How a mirror is reached again for what it does not hold yet — a blob a
+/// checkout asks for — which is how it was last reached.
+fn reach_of(directory: &Path) -> Reach {
+    remembered(directory).map_or(Reach::LOCAL, |remembered| Reach::of(&remembered.transport))
 }
 
 /// Makes `directory` able to answer about `reference`, fetching only when
@@ -99,7 +160,12 @@ pub fn ensure(url: &str, directory: &Path) -> Result<()> {
 ///
 /// Everything else — a branch, a tag, no reference at all — names whatever
 /// it names *now*, and only the remote knows that.
-pub fn ensure_for(url: &str, directory: &Path, reference: Option<&str>) -> Result<()> {
+pub fn ensure_for(
+    fetch: &str,
+    identity: &str,
+    directory: &Path,
+    reference: Option<&str>,
+) -> Result<()> {
     if let Some(reference) = reference
         && is_full_commit_id(reference)
         && directory.join("HEAD").exists()
@@ -107,7 +173,7 @@ pub fn ensure_for(url: &str, directory: &Path, reference: Option<&str>) -> Resul
     {
         return Ok(());
     }
-    ensure(url, directory)
+    ensure(fetch, identity, directory)
 }
 
 /// Whether `reference` is a full 40-character commit id, which is the only
@@ -142,7 +208,7 @@ pub fn read_file(directory: &Path, commit: &str, path: &str) -> Result<Vec<u8>> 
     reject_option_shaped(commit, "commit")?;
     reject_option_shaped(path, "path")?;
     let target = format!("{commit}:{path}");
-    run(&["show", &target], Some(directory)).map(String::into_bytes)
+    run_as(reach_of(directory), &["show", &target], Some(directory)).map(String::into_bytes)
 }
 
 /// How many commits `head` is ahead of `pinned`.
@@ -200,7 +266,7 @@ pub fn materialize_subdirectory(
     // The destination goes with a failure. Left behind, it is a directory
     // holding nothing that a caller cannot tell from one holding the
     // answer.
-    if let Err(error) = run(&arguments, Some(directory)) {
+    if let Err(error) = run_as(reach_of(directory), &arguments, Some(directory)) {
         let _ = std::fs::remove_dir_all(destination);
         return Err(error);
     }
@@ -271,7 +337,12 @@ mod tests {
     fn a_mirror_answers_without_a_working_tree() {
         let (root, first, second) = origin("mirror-answers");
         let mirror = root.join("mirror");
-        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &root.join("origin").to_string_lossy(),
+            &root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         assert_eq!(resolve(&mirror, None).unwrap(), second);
         assert_eq!(resolve(&mirror, Some("main")).unwrap(), second);
@@ -295,7 +366,12 @@ mod tests {
     fn distance_counts_commits_and_refuses_to_guess() {
         let (root, first, second) = origin("mirror-distance");
         let mirror = root.join("mirror");
-        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &root.join("origin").to_string_lossy(),
+            &root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         assert_eq!(distance(&mirror, &second, &second), Some(0));
         assert_eq!(distance(&mirror, &first, &second), Some(1));
@@ -317,7 +393,12 @@ mod tests {
     fn a_subdirectory_is_materialized_and_the_rest_is_not() {
         let (root, _first, second) = origin("mirror-materialize");
         let mirror = root.join("mirror");
-        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &root.join("origin").to_string_lossy(),
+            &root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         let out = root.join("out");
         materialize_subdirectory(&mirror, &second, Some("plugins/flow"), &out).unwrap();
@@ -335,20 +416,45 @@ mod tests {
         let (root, first, second) = origin("mirror-offline");
         let origin_dir = root.join("origin");
         let mirror = root.join("mirror");
-        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &origin_dir.to_string_lossy(),
+            &origin_dir.to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         // The remote goes away entirely.
         fs::remove_dir_all(&origin_dir).unwrap();
 
         // A pinned commit still answers, because it cannot come to mean
         // anything else than what the mirror already holds.
-        ensure_for("does-not-resolve", &mirror, Some(&first)).unwrap();
+        ensure_for(
+            "does-not-resolve",
+            "does-not-resolve",
+            &mirror,
+            Some(&first),
+        )
+        .unwrap();
         assert_eq!(resolve(&mirror, Some(&first)).unwrap(), first);
-        ensure_for("does-not-resolve", &mirror, Some(&second)).unwrap();
+        ensure_for(
+            "does-not-resolve",
+            "does-not-resolve",
+            &mirror,
+            Some(&second),
+        )
+        .unwrap();
 
         // A branch does not: only the remote knows where it points now.
-        assert!(ensure_for("does-not-resolve", &mirror, Some("main")).is_err());
-        assert!(ensure_for("does-not-resolve", &mirror, None).is_err());
+        assert!(
+            ensure_for(
+                "does-not-resolve",
+                "does-not-resolve",
+                &mirror,
+                Some("main")
+            )
+            .is_err()
+        );
+        assert!(ensure_for("does-not-resolve", "does-not-resolve", &mirror, None).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -356,7 +462,12 @@ mod tests {
     fn a_commit_describes_itself_and_an_absent_one_says_nothing() {
         let (root, first, second) = origin("mirror-describe");
         let mirror = root.join("mirror");
-        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &root.join("origin").to_string_lossy(),
+            &root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         let described = describe(&mirror, &second).expect("the head is described");
         assert!(second.starts_with(&described.short));
@@ -385,7 +496,12 @@ mod tests {
         fs::write(origin_dir.join("README.md"), "unrelated").unwrap();
         run(&["add", "-A"], Some(&origin_dir)).unwrap();
         run(&["commit", "-m", "docs: unrelated"], Some(&origin_dir)).unwrap();
-        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &origin_dir.to_string_lossy(),
+            &origin_dir.to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
         let head = resolve(&mirror, Some("main")).unwrap();
 
         assert_eq!(describe(&mirror, &head).unwrap().subject, "docs: unrelated");
@@ -408,12 +524,22 @@ mod tests {
     fn a_mirror_of_another_repository_is_replaced_not_fetched_into() {
         let (root, _first, second) = origin("mirror-foreign");
         let mirror = root.join("mirror");
-        ensure(&root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &root.join("origin").to_string_lossy(),
+            &root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
         assert_eq!(resolve(&mirror, Some("main")).unwrap(), second);
 
         // A different repository, registered under the same directory.
         let (other_root, _, other_head) = origin("mirror-foreign-other");
-        ensure(&other_root.join("origin").to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &other_root.join("origin").to_string_lossy(),
+            &other_root.join("origin").to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
 
         assert_eq!(
             resolve(&mirror, Some("main")).unwrap(),
@@ -434,7 +560,12 @@ mod tests {
         let (root, _first, second) = origin("mirror-fetch");
         let origin_dir = root.join("origin");
         let mirror = root.join("mirror");
-        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &origin_dir.to_string_lossy(),
+            &origin_dir.to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
         assert_eq!(resolve(&mirror, Some("main")).unwrap(), second);
 
         // The marketplace moves.
@@ -446,7 +577,12 @@ mod tests {
             .trim()
             .to_owned();
 
-        ensure(&origin_dir.to_string_lossy(), &mirror).unwrap();
+        ensure(
+            &origin_dir.to_string_lossy(),
+            &origin_dir.to_string_lossy(),
+            &mirror,
+        )
+        .unwrap();
         assert_eq!(resolve(&mirror, Some("main")).unwrap(), third);
         assert_eq!(distance(&mirror, &second, &third), Some(1));
         fs::remove_dir_all(&root).unwrap();

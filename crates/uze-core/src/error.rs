@@ -245,6 +245,17 @@ pub enum UzeError {
     /// needs is to know which marketplace, and that it is access.
     #[error("could not access the repository with this machine's credentials\n{detail}")]
     RepositoryAccessRefused { detail: String },
+    /// The repository's host does not resolve from here. Not a question of
+    /// access, so no other transport is tried and none is blamed.
+    #[error("this machine is offline, or cannot resolve the repository's host\n{detail}")]
+    RepositoryOffline { detail: String },
+    /// A short locator matched nothing UZE can read: a bare word, an
+    /// ambiguous name, an alias this machine does not have.
+    #[error("{0}")]
+    UnreadableLocator(String),
+    /// A host alias the operator asked for cannot be recorded.
+    #[error("{0}")]
+    HostAlias(String),
     #[error("no exposure route is available: {0}")]
     ExposureUnavailable(String),
     #[error("a non-UZE managed entry already exists at {0}")]

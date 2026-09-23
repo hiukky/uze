@@ -21,6 +21,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+pub mod forge;
 pub mod git;
 pub mod marketplace;
 pub mod mirror;
@@ -115,6 +116,30 @@ impl PackageSource {
             // typed.
             Self::Git { url, .. } => !names_a_local_path(url),
             Self::Embedded { .. } => true,
+        }
+    }
+
+    /// Whether two requests name one source: equal, or the same Git
+    /// repository in another spelling at the same ref and subdirectory.
+    pub fn same_source(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Git {
+                    url,
+                    reference,
+                    subdirectory,
+                },
+                Self::Git {
+                    url: other_url,
+                    reference: other_reference,
+                    subdirectory: other_subdirectory,
+                },
+            ) => {
+                forge::canonical(url) == forge::canonical(other_url)
+                    && reference == other_reference
+                    && subdirectory == other_subdirectory
+            }
+            (left, right) => left == right,
         }
     }
 
@@ -234,9 +259,11 @@ impl Provenance {
     /// The rule lives here rather than in the Store because only this module
     /// knows what makes two origins the same. It compares the *request*, not
     /// the resolution: a branch that moved is the same origin at a new
-    /// revision, which is an update — not a conflicting package.
+    /// revision, which is an update — not a conflicting package. A Git
+    /// request is compared by the repository it names, so an older spelling
+    /// of the same URL is the same origin.
     pub fn same_origin(&self, other: &Self) -> bool {
-        self.requested == other.requested
+        self.requested.same_source(&other.requested)
     }
 }
 
@@ -553,6 +580,24 @@ mod tests {
             Err(UzeError::NotDirectory(_))
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_older_spelling_of_one_repository_is_the_same_origin() {
+        let spelled = |url: &str| Provenance {
+            requested: PackageSource::git(url),
+            resolved: ResolvedSource::Local {
+                path: PathBuf::from("/x"),
+            },
+        };
+        assert!(
+            spelled("git@github.com:hiukky/ai.git")
+                .same_origin(&spelled("https://github.com/hiukky/ai"))
+        );
+        assert!(
+            !spelled("https://github.com/hiukky/ai")
+                .same_origin(&spelled("https://gitlab.com/hiukky/ai"))
+        );
     }
 
     /// Same request is the same origin even when the resolution differs —

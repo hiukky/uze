@@ -96,9 +96,12 @@ would break a `git@` lock that works today. Failures are classified from Git's
 stderr with the "cannot reach" phrases checked before the "refused" ones,
 because `ssh` prints "Could not read from remote repository" for both.
 
-The winner is remembered in the cache tier keyed by identity
-(`UzeHome::transport_cache_path`), so a private repository's next fetch starts
-where the last one ended; a failure on the remembered transport runs the full
+The winner is remembered inside the mirror it reached (`transport.json`,
+beside the bare repository in the cache tier), so a private repository's next
+fetch starts where the last one ended; the mirror is also what fetches a
+missing blob later, and it has to reach the same place the same way, so
+`origin` is set to the transport that answered and the identity lives in
+`transport.json`. A one-shot clone that keeps no mirror remembers nothing; a failure on the remembered transport runs the full
 ladder, since access changes (a key revoked, a repository made public). A
 poisoned entry can cost only order, never destination: the ladder has one host.
 
@@ -106,12 +109,13 @@ Anonymous first, rather than "whatever worked for this host last time",
 because public/private is a property of the repository, not the host, and
 because a credential must not be offered to a request that did not need one.
 
-**The mirror keeps the identity as `origin`.** It is cloned with the identity
-as its remote name's URL and fetched with the transport given explicitly
-(`fetch <transport-url> +refs/*:refs/*`), so the `origin == url` guard in
-`mirror.rs` compares identities and never wipes a mirror because the transport
-differed. A mirror whose `origin` is an old spelling of the same identity is
-kept and its `origin` rewritten, not re-cloned.
+**The mirror is judged by the identity it remembers.** The guard in
+`mirror.rs` compares the identity in `transport.json` — or, for a mirror
+written before it existed, its `origin` — with the one asked for, through
+D1, so it never wipes a mirror because the transport or the spelling
+differed. An attempt that "succeeds" with no commit at all — a forge
+answering a login page with 200, which Git reads as an empty dumb-HTTP
+repository — is a failed attempt, and the next transport is asked.
 
 ### D3. Two environments: anonymous, and the operator's
 **Anonymous attempt** — today's stripped environment, plus the operator's
@@ -266,12 +270,16 @@ Three tiers, cheapest first, each owning what it alone can prove:
    - a test `HOME` whose `.gitconfig` names the `store` helper under a URL
      scope, plus an alias and a filter that must not take effect.
    - a loopback forward proxy that records the requests it carried.
-3. **Journey (`02-packages`)**, after the operator validates by hand: a world
-   running a real `sshd` and the HTTP server on loopback, a host alias
-   pointing at them, and the flow end to end — `market host <alias> <base>`,
-   `market add alias:owner/repo`, `install` — checked against `agents.yaml`,
-   `agents.lock`, the Store and the cache on disk. The journey image gains
-   `openssh-server`.
+3. **Journey (`02-packages`)**: a world running a smart-HTTP forge on
+   loopback (Python over `git http-backend`) and a stand-in `ssh` in the
+   world's `bin`, a host alias pointing at the forge, and the flow end to
+   end — `market host <alias> <base>`, `market add alias:owner/repo`,
+   `<plugin>@<market>`, `install` — checked against `agents.yaml`,
+   `agents.lock`, the harness tree and the mirror on disk. Not a real
+   `sshd`: a non-root one can serve only its own user, and the endpoint UZE
+   derives is always `git@<host>`; what OpenSSH does with `BatchMode` and
+   `StrictHostKeyChecking` is OpenSSH's, and the journey proves UZE asks
+   for both.
 
 The Lab is not involved: nothing here is harness-specific.
 
@@ -315,7 +323,7 @@ The Lab is not involved: nothing here is harness-specific.
 ## Migration Plan
 
 No record changes shape; `hosts.json` is new at shape 1, and the remembered
-transport is cache. Existing manifests and locks keep working: every
+transport is cache, inside the mirror. Existing manifests and locks keep working: every
 comparison goes through D1, so an old `git@…` spelling matches its canonical
 form in the registry, the Store, the mirror and the lock, and the next write
 records it canonically. This repository replaces its tracked

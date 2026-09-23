@@ -18,10 +18,41 @@ use std::{
     time::Instant,
 };
 
+use super::forge::{self, Access, Transport};
 use crate::{
     error::{Result, UzeError},
     subprocess::{kill_process_group, read_bounded, wait_with_timeout, with_process_group},
 };
+
+/// SSH that neither waits on a prompt nor offers a key to a host the
+/// operator never accepted. A passphrase or host-key question would stop
+/// the process on the terminal it shares with UZE, and an unknown host
+/// collecting the operator's public keys could identify them from a host
+/// named in somebody else's `agents.yaml`.
+const SSH_COMMAND: &str = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes";
+
+/// How this machine reaches the network, which a repository cannot
+/// influence. libcurl reads `http_proxy` only in lowercase, the others in
+/// both cases.
+const NETWORK_ENVIRONMENT: &[&str] = &[
+    "http_proxy",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+];
+
+/// The operator's network settings, with their per-URL scopes.
+const NETWORK_KEYS: &str = r"^http\.(.+\.)?(proxy|sslcainfo|sslcapath)$";
+
+/// The operator's credential settings, with their per-URL scopes.
+const CREDENTIAL_KEYS: &str = r"^credential\.";
 
 /// Wall-clock budget for any single Git invocation. A remote that never
 /// answers must fail rather than hang a `uze add` forever.
@@ -115,17 +146,24 @@ pub fn materialize(url: &str, reference: Option<&str>, destination: &Path) -> Re
     //
     // `--` is where `git clone [<options>] [--] <repo> [<dir>]` stops reading
     // options, so neither positional can be taken for one.
-    run(
-        &[
-            "clone",
-            "--no-checkout",
-            "--no-recurse-submodules",
-            "--",
-            url,
-            &destination.to_string_lossy(),
-        ],
-        None,
-    )?;
+    through(url, None, |transport| {
+        // A failed attempt may leave a partial clone behind, and the next
+        // one needs the directory absent.
+        let _ = fs::remove_dir_all(destination);
+        run_as(
+            Reach::of(transport),
+            &[
+                "clone",
+                "--no-checkout",
+                "--no-recurse-submodules",
+                "--",
+                &transport.url,
+                &destination.to_string_lossy(),
+            ],
+            None,
+        )?;
+        holds_a_commit(destination, transport)
+    })?;
 
     // Resolve to a commit *before* checking anything out. Detaching by SHA
     // removes every ambiguity a ref name carries — a branch that exists only
@@ -264,6 +302,29 @@ fn assert_within_size_budget(root: &Path) -> Result<()> {
     total(root, &mut 0)
 }
 
+/// What one Git invocation may carry beyond the stripped environment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Reach {
+    access: Access,
+    plain_http: bool,
+}
+
+impl Reach {
+    /// A repository on this disk, or a question about one: nothing to
+    /// authenticate and no network to reach.
+    pub(super) const LOCAL: Self = Self {
+        access: Access::Local,
+        plain_http: false,
+    };
+
+    pub(super) fn of(transport: &Transport) -> Self {
+        Self {
+            access: transport.access,
+            plain_http: transport.plain_http(),
+        }
+    }
+}
+
 /// Runs one `git` invocation under a deliberately minimal, non-interactive
 /// environment.
 ///
@@ -280,6 +341,29 @@ fn assert_within_size_budget(root: &Path) -> Result<()> {
 /// - `protocol.file.allow=always`: needed so a local bare repository — the
 ///   only kind the deterministic tests use — remains reachable.
 pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
+    run_as(Reach::LOCAL, arguments, working_directory)
+}
+
+/// [`run`], for an attempt that reaches the network.
+///
+/// Every attempt that leaves this machine also takes the operator's network
+/// — proxy and certificate authority, from the environment and from their
+/// Git config — because a company network is where a stripped environment
+/// fails first. A credentialed one takes the operator's environment minus
+/// every `GIT_*` variable, and their `credential.*` settings with the URL
+/// scopes `gh auth setup-git` writes: a helper needs whatever its author
+/// needed, and a whitelist would be a list of helpers that happen to work.
+/// What stays excluded is *configuration* — aliases, filters, `includeIf`,
+/// `core.sshCommand` — which is what the stripped environment is for.
+///
+/// Configuration is handed over through `GIT_CONFIG_COUNT`, never `-c`: an
+/// inline helper can carry a secret, and argv is visible in `ps` and
+/// recorded in the span below.
+pub(super) fn run_as(
+    reach: Reach,
+    arguments: &[&str],
+    working_directory: Option<&Path>,
+) -> Result<String> {
     let span = tracing::info_span!(
         "acquisition.git",
         args = %arguments.join(" "),
@@ -287,14 +371,52 @@ pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Resul
     );
     let _entered = span.enter();
     let mut command = Command::new("git");
+    match reach.access {
+        Access::Local | Access::Anonymous => {
+            command
+                .env_clear()
+                .env("PATH", std::env::var("PATH").unwrap_or_default());
+        }
+        Access::Credentialed => {
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("GIT_") {
+                    command.env_remove(key);
+                }
+            }
+        }
+    }
+    let protocols = if reach.plain_http {
+        "file:https:ssh:git:http"
+    } else {
+        "file:https:ssh:git"
+    };
     command
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "")
-        .env("GIT_ALLOW_PROTOCOL", "file:https:ssh:git")
+        .env("GIT_ALLOW_PROTOCOL", protocols);
+    let mut config = vec![("core.sshCommand".to_owned(), SSH_COMMAND.to_owned())];
+    if reach.access != Access::Local {
+        for key in NETWORK_ENVIRONMENT {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        config.extend(operator_config(NETWORK_KEYS));
+    }
+    if reach.access == Access::Credentialed {
+        config.extend(operator_config(CREDENTIAL_KEYS));
+        // A redirect must not carry the helper's answer to another host.
+        config.push(("http.followRedirects".to_owned(), "false".to_owned()));
+    }
+    command.env("GIT_CONFIG_COUNT", config.len().to_string());
+    for (index, (key, value)) in config.iter().enumerate() {
+        command
+            .env(format!("GIT_CONFIG_KEY_{index}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{index}"), value);
+    }
+    command
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(["-c", "protocol.file.allow=always"])
         .args(["-c", "submodule.recurse=false"])
@@ -376,6 +498,11 @@ pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Resul
         // into an issue.
         let complaint = String::from_utf8_lossy(&stderr_bytes);
         let complaint = complaint.trim();
+        if cannot_resolve_host(complaint) {
+            return Err(UzeError::RepositoryOffline {
+                detail: redact(complaint),
+            });
+        }
         if refused_for_access(complaint) {
             return Err(UzeError::RepositoryAccessRefused {
                 detail: redact(complaint),
@@ -388,6 +515,171 @@ pub(super) fn run(arguments: &[&str], working_directory: Option<&Path>) -> Resul
         ))));
     }
     Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
+}
+
+/// The operator's own Git settings whose keys match `pattern`, in the order
+/// Git reads them, across every scope and every `[include]`.
+///
+/// Read from a directory that is no repository, so nothing local answers,
+/// and with the operator's environment minus `GIT_*`, so an override meant
+/// for some other Git does not decide what this one reads. A path under
+/// `~/` is expanded here: the attempt it is handed to may have no `HOME`.
+///
+/// Read once per process for each home it is asked under: a listing reads a
+/// mirror's manifest with the access the mirror was last reached by, and a
+/// `git config` spawn per read is what a budgeted command cannot pay.
+fn operator_config(pattern: &str) -> Vec<(String, String)> {
+    type Settings = Vec<(String, String)>;
+    type Asked = (
+        String,
+        Option<std::ffi::OsString>,
+        Option<std::ffi::OsString>,
+    );
+    static READ: std::sync::Mutex<Vec<(Asked, Settings)>> = std::sync::Mutex::new(Vec::new());
+    let key = (
+        pattern.to_owned(),
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_CONFIG_HOME"),
+    );
+    if let Some((_, settings)) = READ
+        .lock()
+        .ok()
+        .and_then(|read| read.iter().find(|(known, _)| *known == key).cloned())
+    {
+        return settings;
+    }
+    let settings = read_operator_config(pattern);
+    if let Ok(mut read) = READ.lock() {
+        read.push((key, settings.clone()));
+    }
+    settings
+}
+
+fn read_operator_config(pattern: &str) -> Vec<(String, String)> {
+    let mut command = Command::new("git");
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    let Ok(output) = command
+        .args(["config", "--includes", "-z", "--get-regexp", pattern])
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            let value = match (value.strip_prefix("~/"), &home) {
+                (Some(rest), Some(home))
+                    if key.ends_with(".sslcainfo") || key.ends_with(".sslcapath") =>
+                {
+                    home.join(rest).to_string_lossy().into_owned()
+                }
+                _ => value.to_owned(),
+            };
+            (key.to_owned(), value)
+        })
+        .collect()
+}
+
+/// Reaches the repository `url` names by each of its transports in turn,
+/// starting from `remembered` when it is one of them, and answers with the
+/// first that works and the transport that did.
+///
+/// A host that does not resolve ends the ladder: it is offline, and no
+/// other transport will find it. Anything else — a refusal, a closed port,
+/// a TLS error — is that transport's answer, and the next is asked. When
+/// none works, one error names every transport tried and what each said.
+/// A repository with a single transport answers exactly as it always did.
+pub(super) fn through<T>(
+    url: &str,
+    remembered: Option<&Transport>,
+    mut attempt: impl FnMut(&Transport) -> Result<T>,
+) -> Result<(T, Transport)> {
+    let mut transports = forge::transports(url)?;
+    if let Some(remembered) = remembered
+        && let Some(position) = transports.iter().position(|t| t == remembered)
+    {
+        let first = transports.remove(position);
+        transports.insert(0, first);
+    }
+    if let [only] = transports.as_slice() {
+        return attempt(only).map(|answer| (answer, only.clone()));
+    }
+    let identity = forge::canonical(url);
+    let mut failures = Vec::new();
+    for transport in transports {
+        match attempt(&transport) {
+            Ok(answer) => return Ok((answer, transport)),
+            Err(UzeError::RepositoryOffline { detail }) => {
+                return Err(UzeError::RepositoryOffline {
+                    detail: format!("{identity}\n{detail}"),
+                });
+            }
+            Err(error) => failures.push(format!(
+                "  {}: {}",
+                transport.label(),
+                reason_of(&error, &transport)
+            )),
+        }
+    }
+    Err(UzeError::RepositoryAccessRefused {
+        detail: format!("{identity}\n{}", failures.join("\n")),
+    })
+}
+
+/// Whether what an attempt brought back is a repository at all.
+///
+/// A forge that answers a login page with status 200 is read by Git as a
+/// dumb HTTP server holding nothing, and the clone "succeeds" empty. That
+/// is not an answer, and the next transport must be asked.
+pub(super) fn holds_a_commit(directory: &Path, transport: &Transport) -> Result<()> {
+    let any = run(
+        &["for-each-ref", "--count=1", "--format=%(objectname)"],
+        Some(directory),
+    )?;
+    if any.trim().is_empty() {
+        return Err(UzeError::AcquisitionFailed(format!(
+            "{} answered with no repository",
+            redact(&transport.url)
+        )));
+    }
+    Ok(())
+}
+
+/// The one line of a failed attempt a person needs: Git's last word, with
+/// its `fatal:` prefix gone, and how to accept an SSH host the operator has
+/// never connected to.
+fn reason_of(error: &UzeError, transport: &Transport) -> String {
+    let message = match error {
+        UzeError::RepositoryAccessRefused { detail } => detail.clone(),
+        other => other.to_string(),
+    };
+    let line = message
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("failed");
+    let line = line.strip_prefix("fatal: ").unwrap_or(line).to_owned();
+    if line.to_lowercase().contains("host key verification failed")
+        && let Some(host) = forge::host_of(&if transport.url.contains("://") {
+            transport.url.clone()
+        } else {
+            format!("ssh://{}", transport.url.replacen(':', "/", 1))
+        })
+    {
+        return format!("{line} (accept the host once with `ssh -T git@{host}`)");
+    }
+    line
 }
 
 /// Whether Git's complaint is about *reaching* the repository rather than
@@ -411,6 +703,23 @@ fn refused_for_access(complaint: &str) -> bool {
     ];
     let lowered = complaint.to_lowercase();
     ACCESS.iter().any(|phrase| lowered.contains(phrase))
+}
+
+/// Whether Git's complaint is that the host has no address from here —
+/// the one failure no other transport can do better on. Checked before
+/// [`refused_for_access`], because `ssh` follows a resolution failure with
+/// the same "could not read from remote repository" it prints for a
+/// refused key.
+fn cannot_resolve_host(complaint: &str) -> bool {
+    const UNRESOLVED: &[&str] = &[
+        "could not resolve host",
+        "could not resolve hostname",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "nodename nor servname provided",
+    ];
+    let lowered = complaint.to_lowercase();
+    UNRESOLVED.iter().any(|phrase| lowered.contains(phrase))
 }
 
 /// Replaces anything shaped like inline credentials in a message.
@@ -469,6 +778,54 @@ pub fn resolve_subdirectory(root: &Path, subdirectory: &Path) -> Result<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A certificate authority the operator names under `~/` still reaches
+    /// an attempt that has no `HOME`, and a credential helper keeps the URL
+    /// scope `gh auth setup-git` writes it under.
+    #[test]
+    fn the_operators_network_and_credentials_are_read_with_their_scopes() {
+        let home = uze_testkit::temp::scratch("operator-config");
+        fs::write(
+            home.join(".gitconfig"),
+            "[http]\n\tsslCAInfo = ~/ca.pem\n\
+             [http \"https://git.acme.io\"]\n\tproxy = http://proxy.acme.io:3128\n\
+             [credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n\
+             [alias]\n\tco = checkout\n",
+        )
+        .unwrap();
+        let mut environment = uze_testkit::env::scope();
+        environment
+            .set("HOME", &home)
+            .set("XDG_CONFIG_HOME", home.join("xdg"))
+            .remove("GIT_CONFIG_GLOBAL")
+            .remove("GIT_CONFIG_SYSTEM");
+
+        let network = operator_config(NETWORK_KEYS);
+        assert!(
+            network.contains(&(
+                "http.sslcainfo".to_owned(),
+                home.join("ca.pem").to_string_lossy().into_owned()
+            )),
+            "{network:?}"
+        );
+        assert!(
+            network.contains(&(
+                "http.https://git.acme.io.proxy".to_owned(),
+                "http://proxy.acme.io:3128".to_owned()
+            )),
+            "{network:?}"
+        );
+        let credentials = operator_config(CREDENTIAL_KEYS);
+        assert_eq!(
+            credentials,
+            vec![(
+                "credential.https://github.com.helper".to_owned(),
+                "!gh auth git-credential".to_owned()
+            )]
+        );
+        drop(environment);
+        let _ = fs::remove_dir_all(home);
+    }
 
     #[test]
     fn inline_credentials_are_rejected_rather_than_sanitized() {
