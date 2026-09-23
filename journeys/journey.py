@@ -22,7 +22,6 @@ import glob as globlib
 import hashlib
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
@@ -203,7 +202,7 @@ class World:
             "shell_rc": str(self.home / shell_rc_name()),
         }
         # Only for a journey that asks for it: resolving it eagerly would
-        # put a download in front of every run of every chapter.
+        # put a build in front of every run of every chapter.
         released = RELEASED.get("path")
         if released:
             names["released_uze"] = str(released)
@@ -211,19 +210,21 @@ class World:
 
 
 # Where the previously released binary is kept between runs, and the one
-# resolved for this process.
+# resolved for this process. Not the `released` directory the downloaded
+# binaries were kept in, so a machine that has one builds from the tag.
 RELEASED: dict = {}
-RELEASED_CACHE = Path.home() / ".cache" / "uze-journeys" / "released"
+RELEASED_CACHE = Path.home() / ".cache" / "uze-journeys" / "released-built"
 
 
 def released_binary(tag: str) -> Path:
-    """The `uze` of a published release, downloaded once and kept.
+    """The `uze` of a published release, built once from its tag and kept.
 
     A fixture proves a ladder step. It cannot prove the claim, which is
-    about two binaries meeting on one disk: what the release process
-    actually produced, against what this build actually does. So this runs
-    what a user would have installed — which is also why the chapter that
-    uses it is nightly, since it needs the network.
+    about two binaries meeting on one disk: the code a user was running,
+    against what this build actually does. Built from the tag rather than
+    downloaded from the release, because every run of this chapter counted
+    as a download of it, and the release's download count is read as how
+    many people installed it.
     """
     RELEASED_CACHE.mkdir(parents=True, exist_ok=True)
     binary = RELEASED_CACHE / tag / "uze"
@@ -231,57 +232,45 @@ def released_binary(tag: str) -> Path:
         RELEASED["path"] = binary
         return binary
 
-    machine = platform.machine()
-    arch = {
-        "x86_64": "x86_64",
-        "amd64": "x86_64",
-        "arm64": "aarch64",
-        "aarch64": "aarch64",
-    }.get(machine)
-    if arch is None:
-        raise Failed(f"no released asset for this architecture: {machine}")
-    if platform.system() == "Darwin":
-        asset = f"uze-{arch}-macos.tar.gz"
-    else:
-        libc = (
-            "musl"
-            if "musl"
-            in subprocess.run(
-                ["ldd", "--version"], capture_output=True, text=True
-            ).stderr.lower()
-            else "gnu"
-        )
-        asset = f"uze-{arch}-linux-{libc}.tar.gz"
-
-    url = f"https://github.com/hiukky/uze/releases/download/{tag}/{asset}"
-    binary.parent.mkdir(parents=True, exist_ok=True)
-    archive = binary.parent / asset
-    fetched = subprocess.run(
-        [
-            "curl",
-            "--proto",
-            "=https",
-            "--tlsv1.2",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--output",
-            str(archive),
-            url,
-        ],
+    work = RELEASED_CACHE / tag / "build"
+    shutil.rmtree(work, ignore_errors=True)
+    source = work / "source"
+    source.mkdir(parents=True)
+    commit = f"refs/tags/{tag}^{{commit}}"
+    # A shallow clone (CI's) carries no tags; this one alone is fetched.
+    if git_in_repo("rev-parse", "--verify", "--quiet", commit).returncode != 0:
+        fetched = git_in_repo("fetch", "--quiet", "--depth", "1", "origin", "tag", tag)
+        if fetched.returncode != 0:
+            raise Failed(f"could not fetch the tag {tag}: {fetched.stderr.strip()}")
+    archive = subprocess.Popen(
+        ["git", "-C", str(REPO), "archive", "--format=tar", commit],
+        stdout=subprocess.PIPE,
+    )
+    subprocess.run(["tar", "-x", "-C", str(source)], stdin=archive.stdout, check=True)
+    if archive.wait() != 0:
+        raise Failed(f"could not read the source of {tag}")
+    built = subprocess.run(
+        ["cargo", "build", "--locked", "--quiet", "--bin", "uze"],
+        cwd=source,
+        env={**os.environ, "CARGO_TARGET_DIR": str(work / "target")},
         capture_output=True,
         text=True,
     )
-    if fetched.returncode != 0:
-        raise Failed(f"could not fetch {url}: {fetched.stderr.strip()}")
-    subprocess.run(["tar", "-xzf", str(archive), "-C", str(binary.parent)], check=True)
-    archive.unlink(missing_ok=True)
-    if not binary.exists():
-        raise Failed(f"{asset} carried no `uze`")
-    binary.chmod(0o755)
+    if built.returncode != 0:
+        raise Failed(f"could not build {tag}: {built.stderr.strip()[-2000:]}")
+    shutil.copy2(work / "target" / "debug" / "uze", binary)
+    # A debug build's symbols are six of its seven parts, and CI keeps this
+    # binary in a cache that sits near its allowance.
+    subprocess.run(["strip", str(binary)], check=True)
+    shutil.rmtree(work, ignore_errors=True)
     RELEASED["path"] = binary
     return binary
+
+
+def git_in_repo(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(REPO), *args], capture_output=True, text=True
+    )
 
 
 def shell_rc_name() -> str:
